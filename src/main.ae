@@ -1,5 +1,3 @@
-import Runtime;
-
 main() {
     print("Hello from the Aether runtime!\n");
     int x = 5;
