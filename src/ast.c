@@ -1,0 +1,231 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include "ast.h"
+
+// Type functions
+Type* create_type(TypeKind kind) {
+    Type* type = malloc(sizeof(Type));
+    type->kind = kind;
+    type->element_type = NULL;
+    type->array_size = -1;
+    return type;
+}
+
+Type* create_array_type(Type* element_type, int size) {
+    Type* type = create_type(TYPE_ARRAY);
+    type->element_type = element_type;
+    type->array_size = size;
+    return type;
+}
+
+Type* create_actor_ref_type(Type* actor_type) {
+    Type* type = create_type(TYPE_ACTOR_REF);
+    type->element_type = actor_type;
+    return type;
+}
+
+void free_type(Type* type) {
+    if (type) {
+        if (type->element_type) {
+            free_type(type->element_type);
+        }
+        free(type);
+    }
+}
+
+const char* type_to_string(Type* type) {
+    if (!type) return "UNKNOWN";
+    
+    switch (type->kind) {
+        case TYPE_INT: return "int";
+        case TYPE_FLOAT: return "float";
+        case TYPE_BOOL: return "bool";
+        case TYPE_STRING: return "string";
+        case TYPE_VOID: return "void";
+        case TYPE_ARRAY: {
+            static char buffer[256];
+            snprintf(buffer, sizeof(buffer), "%s[%d]", 
+                    type_to_string(type->element_type), 
+                    type->array_size);
+            return buffer;
+        }
+        case TYPE_ACTOR_REF: {
+            static char buffer[256];
+            snprintf(buffer, sizeof(buffer), "ActorRef<%s>", 
+                    type_to_string(type->element_type));
+            return buffer;
+        }
+        default: return "UNKNOWN";
+    }
+}
+
+int types_equal(Type* a, Type* b) {
+    if (!a || !b) return a == b;
+    if (a->kind != b->kind) return 0;
+    if (a->array_size != b->array_size) return 0;
+    return types_equal(a->element_type, b->element_type);
+}
+
+Type* clone_type(Type* type) {
+    if (!type) return NULL;
+    
+    Type* new_type = create_type(type->kind);
+    new_type->array_size = type->array_size;
+    
+    if (type->element_type) {
+        new_type->element_type = clone_type(type->element_type);
+    }
+    
+    return new_type;
+}
+
+// AST Node functions
+ASTNode* create_ast_node(ASTNodeType type, const char* value, int line, int column) {
+    ASTNode* node = malloc(sizeof(ASTNode));
+    node->type = type;
+    node->value = value ? strdup(value) : NULL;
+    node->node_type = NULL;
+    node->children = NULL;
+    node->child_count = 0;
+    node->line = line;
+    node->column = column;
+    return node;
+}
+
+void add_child(ASTNode* parent, ASTNode* child) {
+    if (!parent || !child) return;
+    
+    parent->child_count++;
+    parent->children = realloc(parent->children, parent->child_count * sizeof(ASTNode*));
+    parent->children[parent->child_count - 1] = child;
+}
+
+void free_ast_node(ASTNode* node) {
+    if (!node) return;
+    
+    if (node->value) {
+        free(node->value);
+    }
+    
+    if (node->node_type) {
+        free_type(node->node_type);
+    }
+    
+    for (int i = 0; i < node->child_count; i++) {
+        free_ast_node(node->children[i]);
+    }
+    
+    if (node->children) {
+        free(node->children);
+    }
+    
+    free(node);
+}
+
+void print_ast(ASTNode* node, int indent) {
+    if (!node) return;
+    
+    for (int i = 0; i < indent; i++) {
+        printf("  ");
+    }
+    
+    printf("%s", ast_node_type_to_string(node->type));
+    
+    if (node->value) {
+        printf(": %s", node->value);
+    }
+    
+    if (node->node_type) {
+        printf(" [%s]", type_to_string(node->node_type));
+    }
+    
+    printf(" (line %d, col %d)\n", node->line, node->column);
+    
+    for (int i = 0; i < node->child_count; i++) {
+        print_ast(node->children[i], indent + 1);
+    }
+}
+
+const char* ast_node_type_to_string(ASTNodeType type) {
+    switch (type) {
+        case AST_PROGRAM: return "PROGRAM";
+        case AST_ACTOR_DEFINITION: return "ACTOR_DEFINITION";
+        case AST_FUNCTION_DEFINITION: return "FUNCTION_DEFINITION";
+        case AST_MAIN_FUNCTION: return "MAIN_FUNCTION";
+        case AST_BLOCK: return "BLOCK";
+        case AST_VARIABLE_DECLARATION: return "VARIABLE_DECLARATION";
+        case AST_ASSIGNMENT: return "ASSIGNMENT";
+        case AST_IF_STATEMENT: return "IF_STATEMENT";
+        case AST_FOR_LOOP: return "FOR_LOOP";
+        case AST_WHILE_LOOP: return "WHILE_LOOP";
+        case AST_SWITCH_STATEMENT: return "SWITCH_STATEMENT";
+        case AST_CASE_STATEMENT: return "CASE_STATEMENT";
+        case AST_RETURN_STATEMENT: return "RETURN_STATEMENT";
+        case AST_BREAK_STATEMENT: return "BREAK_STATEMENT";
+        case AST_CONTINUE_STATEMENT: return "CONTINUE_STATEMENT";
+        case AST_EXPRESSION_STATEMENT: return "EXPRESSION_STATEMENT";
+        case AST_MATCH_STATEMENT: return "MATCH_STATEMENT";
+        case AST_RECEIVE_STATEMENT: return "RECEIVE_STATEMENT";
+        case AST_SEND_STATEMENT: return "SEND_STATEMENT";
+        case AST_SPAWN_ACTOR_STATEMENT: return "SPAWN_ACTOR_STATEMENT";
+        case AST_STATE_DECLARATION: return "STATE_DECLARATION";
+        case AST_BINARY_EXPRESSION: return "BINARY_EXPRESSION";
+        case AST_UNARY_EXPRESSION: return "UNARY_EXPRESSION";
+        case AST_FUNCTION_CALL: return "FUNCTION_CALL";
+        case AST_ACTOR_REF: return "ACTOR_REF";
+        case AST_IDENTIFIER: return "IDENTIFIER";
+        case AST_LITERAL: return "LITERAL";
+        case AST_ARRAY_ACCESS: return "ARRAY_ACCESS";
+        case AST_MEMBER_ACCESS: return "MEMBER_ACCESS";
+        case AST_TYPE_ANNOTATION: return "TYPE_ANNOTATION";
+        case AST_ACTOR_REF_TYPE: return "ACTOR_REF_TYPE";
+        case AST_ARRAY_TYPE: return "ARRAY_TYPE";
+        case AST_PRINT_STATEMENT: return "PRINT_STATEMENT";
+        default: return "UNKNOWN";
+    }
+}
+
+// Utility functions
+ASTNode* create_literal_node(Token* token) {
+    Type* type = NULL;
+    
+    switch (token->type) {
+        case TOKEN_NUMBER:
+            type = create_type(TYPE_INT); // Default to int, could be float
+            break;
+        case TOKEN_STRING_LITERAL:
+            type = create_type(TYPE_STRING);
+            break;
+        case TOKEN_TRUE:
+        case TOKEN_FALSE:
+            type = create_type(TYPE_BOOL);
+            break;
+        default:
+            type = create_type(TYPE_UNKNOWN);
+            break;
+    }
+    
+    ASTNode* node = create_ast_node(AST_LITERAL, token->value, token->line, token->column);
+    node->node_type = type;
+    return node;
+}
+
+ASTNode* create_identifier_node(Token* token) {
+    ASTNode* node = create_ast_node(AST_IDENTIFIER, token->value, token->line, token->column);
+    node->node_type = create_type(TYPE_UNKNOWN); // Will be resolved during type checking
+    return node;
+}
+
+ASTNode* create_binary_expression(ASTNode* left, ASTNode* right, Token* operator) {
+    ASTNode* node = create_ast_node(AST_BINARY_EXPRESSION, operator->value, operator->line, operator->column);
+    add_child(node, left);
+    add_child(node, right);
+    return node;
+}
+
+ASTNode* create_unary_expression(ASTNode* operand, Token* operator) {
+    ASTNode* node = create_ast_node(AST_UNARY_EXPRESSION, operator->value, operator->line, operator->column);
+    add_child(node, operand);
+    return node;
+}

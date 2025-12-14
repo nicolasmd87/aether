@@ -1,0 +1,14 @@
+main() {
+    print("Hello, Aether World!\n");
+    print("This is a clean, professional compiler.\n");
+    
+    int x = 42;
+    int y = 8;
+    
+    if (x > y) {
+        print("x (%d) is greater than y (%d)\n", x, y);
+    }
+    
+    print("Aether compilation successful!\n");
+}
+

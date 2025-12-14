@@ -1,0 +1,182 @@
+// Aether Standard Library - Actor Utilities Module
+// This module provides common actor patterns and utilities
+
+// Actor Registry for managing named actors
+actor ActorRegistry {
+    state ActorRef[] actors;
+    state string[] names;
+    state int count = 0;
+    state int capacity = 0;
+    
+    receive(msg) {
+        match msg {
+            Init(initial_capacity) => {
+                capacity = initial_capacity;
+                actors = new ActorRef[capacity];
+                names = new string[capacity];
+                count = 0;
+            }
+            Register(name, actor) => {
+                if (count < capacity) {
+                    actors[count] = actor;
+                    names[count] = name;
+                    count += 1;
+                    print("Registered actor: %s\n", name);
+                }
+            }
+            Lookup(name, sender) => {
+                for (int i = 0; i < count; i++) {
+                    if (strcmp(names[i], name) == 0) {
+                        send(sender, actors[i]);
+                        return;
+                    }
+                }
+                send(sender, null); // Not found
+            }
+            List(sender) => {
+                send(sender, count);
+                for (int i = 0; i < count; i++) {
+                    send(sender, names[i]);
+                }
+            }
+        }
+    }
+}
+
+// Timer actor for delayed execution
+actor Timer {
+    state ActorRef target = null;
+    state int delay_ms = 0;
+    state int message_type = 0;
+    
+    receive(msg) {
+        match msg {
+            SetTimer(target_actor, delay, msg_type) => {
+                target = target_actor;
+                delay_ms = delay;
+                message_type = msg_type;
+                print("Timer set for %d ms\n", delay_ms);
+            }
+            Start => {
+                // In a real implementation, this would use actual timing
+                // For now, just send the message immediately
+                if (target != null) {
+                    send(target, message_type);
+                }
+            }
+        }
+    }
+}
+
+// Actor Pool for managing worker actors
+actor ActorPool {
+    state ActorRef[] workers;
+    state bool[] available;
+    state int worker_count = 0;
+    state ActorRef[] waiting_tasks;
+    state int waiting_count = 0;
+    
+    receive(msg) {
+        match msg {
+            Init(workers_array, count) => {
+                workers = workers_array;
+                worker_count = count;
+                available = new bool[count];
+                waiting_tasks = new ActorRef[100]; // Max 100 waiting tasks
+                waiting_count = 0;
+                
+                for (int i = 0; i < count; i++) {
+                    available[i] = true;
+                }
+            }
+            SubmitTask(task) => {
+                // Find available worker
+                bool assigned = false;
+                for (int i = 0; i < worker_count; i++) {
+                    if (available[i]) {
+                        available[i] = false;
+                        send(workers[i], task);
+                        assigned = true;
+                        break;
+                    }
+                }
+                
+                if (!assigned) {
+                    // No workers available, queue task
+                    if (waiting_count < 100) {
+                        waiting_tasks[waiting_count] = task;
+                        waiting_count += 1;
+                    }
+                }
+            }
+            WorkerAvailable(worker_id) => {
+                available[worker_id] = true;
+                
+                // Assign waiting task if any
+                if (waiting_count > 0) {
+                    waiting_count -= 1;
+                    send(workers[worker_id], waiting_tasks[waiting_count]);
+                    available[worker_id] = false;
+                }
+            }
+        }
+    }
+}
+
+// Message Router for pattern matching and forwarding
+actor MessageRouter {
+    state ActorRef[] targets;
+    state int[] message_types;
+    state int route_count = 0;
+    
+    receive(msg) {
+        match msg {
+            AddRoute(target, msg_type) => {
+                if (route_count < 100) {
+                    targets[route_count] = target;
+                    message_types[route_count] = msg_type;
+                    route_count += 1;
+                }
+            }
+            RouteMessage(msg_type, data) => {
+                for (int i = 0; i < route_count; i++) {
+                    if (message_types[i] == msg_type) {
+                        send(targets[i], data);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Actor Supervisor for fault tolerance
+actor ActorSupervisor {
+    state ActorRef[] children;
+    state int child_count = 0;
+    state int[] restart_counts;
+    
+    receive(msg) {
+        match msg {
+            AddChild(child) => {
+                if (child_count < 100) {
+                    children[child_count] = child;
+                    restart_counts[child_count] = 0;
+                    child_count += 1;
+                }
+            }
+            ChildFailed(child_id) => {
+                if (child_id < child_count) {
+                    restart_counts[child_id] += 1;
+                    print("Child %d failed, restart count: %d\n", child_id, restart_counts[child_id]);
+                    
+                    if (restart_counts[child_id] < 5) { // Max 5 restarts
+                        // Restart child (simplified)
+                        send(children[child_id], Restart);
+                    } else {
+                        print("Child %d exceeded max restart attempts\n", child_id);
+                    }
+                }
+            }
+        }
+    }
+}

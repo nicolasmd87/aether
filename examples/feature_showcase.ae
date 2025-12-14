@@ -1,0 +1,193 @@
+main() {
+    print("=== Aether Language Feature Showcase ===\n");
+    print("Demonstrating all major language features with timing.\n\n");
+    
+    // 1. Basic Types and Variables
+    print("1. Basic Types and Variables:\n");
+    int integer_var = 42;
+    float float_var = 3.14159;
+    bool boolean_var = true;
+    string string_var = "Hello, Aether!";
+    
+    print("   Integer: %d\n", integer_var);
+    print("   Float: %.5f\n", float_var);
+    print("   Boolean: %s\n", boolean_var ? "true" : "false");
+    print("   String: %s\n\n", string_var);
+    
+    // 2. Control Flow
+    print("2. Control Flow Structures:\n");
+    
+    // If-else
+    int score = 85;
+    if (score >= 90) {
+        print("   Grade: A\n");
+    } else if (score >= 80) {
+        print("   Grade: B\n");
+    } else if (score >= 70) {
+        print("   Grade: C\n");
+    } else {
+        print("   Grade: F\n");
+    }
+    
+    // Switch statement
+    int day = 3;
+    switch (day) {
+        case 1:
+            print("   Day: Monday\n");
+            break;
+        case 2:
+            print("   Day: Tuesday\n");
+            break;
+        case 3:
+            print("   Day: Wednesday\n");
+            break;
+        default:
+            print("   Day: Other\n");
+            break;
+    }
+    
+    // 3. Loops
+    print("\n3. Loop Structures:\n");
+    
+    // For loop
+    print("   For loop (1 to 5): ");
+    for (int i = 1; i <= 5; i++) {
+        print("%d ", i);
+    }
+    print("\n");
+    
+    // While loop
+    print("   While loop (countdown): ");
+    int count = 3;
+    while (count > 0) {
+        print("%d ", count);
+        count--;
+    }
+    print("\n");
+    
+    // 4. Functions
+    print("\n4. Function Calls:\n");
+    int a = 10;
+    int b = 20;
+    int sum = add_numbers(a, b);
+    int product = multiply_numbers(a, b);
+    
+    print("   add_numbers(%d, %d) = %d\n", a, b, sum);
+    print("   multiply_numbers(%d, %d) = %d\n", a, b, product);
+    
+    // 5. Arrays
+    print("\n5. Array Operations:\n");
+    int numbers[5] = {10, 20, 30, 40, 50};
+    int array_sum = 0;
+    
+    print("   Array elements: ");
+    for (int i = 0; i < 5; i++) {
+        print("%d ", numbers[i]);
+        array_sum += numbers[i];
+    }
+    print("\n   Array sum: %d\n", array_sum);
+    
+    // 6. String Operations
+    print("\n6. String Operations:\n");
+    string greeting = "Hello";
+    string name = "Aether";
+    string message = format_string("%s, %s!", greeting, name);
+    print("   Formatted string: %s\n", message);
+    
+    // 7. Recursion
+    print("\n7. Recursive Functions:\n");
+    int n = 5;
+    int factorial_result = factorial(n);
+    print("   factorial(%d) = %d\n", n, factorial_result);
+    
+    // 8. Performance Timing
+    print("\n8. Performance Timing:\n");
+    int start_time = get_timestamp();
+    
+    // Perform some computation
+    int computation_result = 0;
+    for (int i = 0; i < 100000; i++) {
+        computation_result += i * i;
+    }
+    
+    int end_time = get_timestamp();
+    int execution_time = end_time - start_time;
+    
+    print("   Computation result: %d\n", computation_result);
+    print("   Execution time: %d microseconds\n", execution_time);
+    
+    // 9. Error Handling
+    print("\n9. Error Handling:\n");
+    int divisor = 0;
+    if (divisor != 0) {
+        int result = 100 / divisor;
+        print("   100 / %d = %d\n", divisor, result);
+    } else {
+        print("   Error: Division by zero prevented\n");
+    }
+    
+    // 10. Memory Management
+    print("\n10. Memory Management:\n");
+    int* dynamic_array = create_array(10);
+    if (dynamic_array) {
+        print("   Dynamic array created successfully\n");
+        for (int i = 0; i < 10; i++) {
+            dynamic_array[i] = i * 2;
+        }
+        print("   Array populated with values\n");
+        destroy_array(dynamic_array);
+        print("   Array destroyed successfully\n");
+    } else {
+        print("   Error: Failed to create dynamic array\n");
+    }
+    
+    print("\n=== Feature Showcase Complete ===\n");
+    print("Aether demonstrates:\n");
+    print("- Strong type system\n");
+    print("- Comprehensive control flow\n");
+    print("- Efficient function calls\n");
+    print("- Array and string operations\n");
+    print("- Recursive programming\n");
+    print("- Performance timing\n");
+    print("- Error handling\n");
+    print("- Memory management\n");
+}
+
+// Function definitions
+func add_numbers(a: int, b: int) -> int {
+    return a + b;
+}
+
+func multiply_numbers(a: int, b: int) -> int {
+    return a * b;
+}
+
+func factorial(n: int) -> int {
+    if (n <= 1) {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}
+
+func format_string(format: string, arg1: string, arg2: string) -> string {
+    // This would be implemented in the runtime
+    return "Hello, Aether!"; // Placeholder
+}
+
+func get_timestamp() -> int {
+    // This would be implemented in the runtime
+    return 0; // Placeholder
+}
+
+func create_array(size: int) -> int* {
+    // This would be implemented in the runtime
+    return null; // Placeholder
+}
+
+func destroy_array(ptr: int*) {
+    // This would be implemented in the runtime
+}
+
+
+
+

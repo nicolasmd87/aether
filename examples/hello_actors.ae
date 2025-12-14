@@ -1,0 +1,54 @@
+// Hello Actors - Basic actor example
+actor Counter {
+    state int count = 0;
+    
+    receive(msg) {
+        match msg {
+            Increment => {
+                count += 1;
+                print("Counter incremented to: %d\n", count);
+            }
+            GetValue(sender) => {
+                send(sender, count);
+            }
+            Stop => {
+                print("Counter stopping\n");
+                // Actor will terminate
+            }
+        }
+    }
+}
+
+actor Printer {
+    state int messages_received = 0;
+    
+    receive(msg) {
+        match msg {
+            PrintValue(value) => {
+                messages_received += 1;
+                print("Printer received value: %d (message #%d)\n", value, messages_received);
+            }
+        }
+    }
+}
+
+main() {
+    print("Starting Hello Actors example\n");
+    
+    // Spawn actors
+    let counter = spawn_actor(Counter);
+    let printer = spawn_actor(Printer);
+    
+    // Send some messages
+    send(counter, Increment);
+    send(counter, Increment);
+    send(counter, Increment);
+    
+    // Get value and print it
+    send(counter, GetValue(printer));
+    
+    // Stop the counter
+    send(counter, Stop);
+    
+    print("Hello Actors example completed\n");
+}

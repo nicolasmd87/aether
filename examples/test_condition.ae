@@ -1,0 +1,10 @@
+main() {
+    print("Testing condition parsing\n");
+    int i = 1;
+    if (i <= 3) {
+        print("Condition works\n");
+    }
+    print("Done\n");
+}
+
+

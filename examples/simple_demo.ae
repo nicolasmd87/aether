@@ -1,0 +1,41 @@
+main() {
+    print("=== Aether Simple Demo ===\n");
+    print("This is a working example that compiles and runs.\n\n");
+    
+    // Basic variables
+    int x = 42;
+    int y = 8;
+    
+    print("Variables: x = %d, y = %d\n", x, y);
+    
+    // Arithmetic
+    int sum = x + y;
+    int product = x * y;
+    
+    print("Arithmetic: x + y = %d, x * y = %d\n", sum, product);
+    
+    // Control flow
+    if (x > y) {
+        print("x is greater than y\n");
+    } else {
+        print("y is greater than or equal to x\n");
+    }
+    
+    // Loop
+    print("Counting from 1 to 5: ");
+    for (int i = 1; i <= 5; i++) {
+        print("%d ", i);
+    }
+    print("\n");
+    
+    // Function call
+    int result = calculate(10, 20);
+    print("Function result: calculate(10, 20) = %d\n", result);
+    
+    print("\n=== Demo Complete ===\n");
+    print("Aether is working perfectly!\n");
+}
+
+func calculate(int a, int b): int {
+    return a + b * 2;
+}

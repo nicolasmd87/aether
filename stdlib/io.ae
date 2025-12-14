@@ -1,0 +1,49 @@
+// Aether Standard Library - I/O Module
+// This module provides basic input/output functionality
+
+// Print functions
+func print_string(str: string) {
+    print("%s", str);
+}
+
+func print_int(value: int) {
+    print("%d", value);
+}
+
+func print_float(value: float) {
+    print("%f", value);
+}
+
+func print_bool(value: bool) {
+    if (value) {
+        print("true");
+    } else {
+        print("false");
+    }
+}
+
+func print_line(str: string) {
+    print("%s\n", str);
+}
+
+// File I/O (basic implementation)
+func read_file(filename: string): string {
+    // This would be implemented in the runtime
+    return "";
+}
+
+func write_file(filename: string, content: string): bool {
+    // This would be implemented in the runtime
+    return true;
+}
+
+// Console input (placeholder)
+func read_line(): string {
+    // This would be implemented in the runtime
+    return "";
+}
+
+func read_int(): int {
+    // This would be implemented in the runtime
+    return 0;
+}

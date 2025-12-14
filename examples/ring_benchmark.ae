@@ -1,0 +1,88 @@
+// Ring Benchmark - Performance test for actor message passing
+actor RingNode {
+    state ActorRef next = null;
+    state int id = 0;
+    state int messages_left = 0;
+    
+    receive(msg) {
+        match msg {
+            Setup(next_node, node_id) => {
+                next = next_node;
+                id = node_id;
+                print("Node %d setup with next node\n", id);
+            }
+            Start(messages) => {
+                messages_left = messages;
+                if (messages_left > 0) {
+                    messages_left -= 1;
+                    send(next, Token(id));
+                    print("Node %d sent token (messages left: %d)\n", id, messages_left);
+                }
+            }
+            Token(sender_id) => {
+                if (messages_left > 0) {
+                    messages_left -= 1;
+                    send(next, Token(sender_id));
+                    print("Node %d forwarded token from %d (messages left: %d)\n", id, sender_id, messages_left);
+                } else if (id == sender_id) {
+                    print("Ring benchmark completed! Token returned to origin node %d\n", id);
+                    // Send completion signal
+                    send(self(), BenchmarkComplete);
+                } else {
+                    send(next, Token(sender_id));
+                }
+            }
+        }
+    }
+}
+
+actor BenchmarkController {
+    state ActorRef[] nodes;
+    state int node_count = 0;
+    state int message_count = 0;
+    
+    receive(msg) {
+        match msg {
+            StartBenchmark(nodes_array, count, messages) => {
+                nodes = nodes_array;
+                node_count = count;
+                message_count = messages;
+                
+                print("Starting ring benchmark with %d nodes and %d messages\n", node_count, message_count);
+                
+                // Setup ring
+                for (int i = 0; i < node_count; i++) {
+                    ActorRef next = nodes[(i + 1) % node_count];
+                    send(nodes[i], Setup(next, i));
+                }
+                
+                // Start the benchmark
+                send(nodes[0], Start(message_count));
+            }
+            BenchmarkComplete => {
+                print("Benchmark controller received completion signal\n");
+            }
+        }
+    }
+}
+
+main() {
+    print("Starting Ring Benchmark\n");
+    
+    int node_count = 10;
+    int message_count = 1000;
+    
+    // Create nodes
+    ActorRef[] nodes = new ActorRef[node_count];
+    for (int i = 0; i < node_count; i++) {
+        nodes[i] = spawn_actor(RingNode);
+    }
+    
+    // Create controller
+    let controller = spawn_actor(BenchmarkController);
+    
+    // Start benchmark
+    send(controller, StartBenchmark(nodes, node_count, message_count));
+    
+    print("Ring benchmark setup complete\n");
+}

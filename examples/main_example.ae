@@ -22,7 +22,7 @@ main() {
     }
 
 
-    // Array example
+    // Array example (pure C)
     int numbers[3] = {10, 20, 30};
     
     print("First number: %d\n", numbers[0]);

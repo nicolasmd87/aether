@@ -1,0 +1,119 @@
+main() {
+    print("=== Aether Performance Demonstration ===\n");
+    print("This example showcases Aether's features with timing and profiling.\n\n");
+    
+    // 1. Basic arithmetic performance
+    print("1. Arithmetic Performance Test:\n");
+    int start_time = get_time_ms();
+    
+    int sum = 0;
+    for (int i = 0; i < 1000000; i++) {
+        sum += i;
+    }
+    
+    int end_time = get_time_ms();
+    int duration = end_time - start_time;
+    
+    print("   Sum of 1,000,000 integers: %d\n", sum);
+    print("   Execution time: %d ms\n\n", duration);
+    
+    // 2. String processing performance
+    print("2. String Processing Test:\n");
+    start_time = get_time_ms();
+    
+    string result = "";
+    for (int i = 0; i < 10000; i++) {
+        result = concat_strings(result, "Hello ");
+    }
+    
+    end_time = get_time_ms();
+    duration = end_time - start_time;
+    
+    print("   Concatenated 10,000 strings\n");
+    print("   Execution time: %d ms\n\n", duration);
+    
+    // 3. Array operations performance
+    print("3. Array Operations Test:\n");
+    start_time = get_time_ms();
+    
+    int numbers[10000];
+    for (int i = 0; i < 10000; i++) {
+        numbers[i] = i * i;
+    }
+    
+    int array_sum = 0;
+    for (int i = 0; i < 10000; i++) {
+        array_sum += numbers[i];
+    }
+    
+    end_time = get_time_ms();
+    duration = end_time - start_time;
+    
+    print("   Processed array of 10,000 elements\n");
+    print("   Array sum: %d\n", array_sum);
+    print("   Execution time: %d ms\n\n", duration);
+    
+    // 4. Function call performance
+    print("4. Function Call Performance Test:\n");
+    start_time = get_time_ms();
+    
+    int fib_result = fibonacci(25);
+    
+    end_time = get_time_ms();
+    duration = end_time - start_time;
+    
+    print("   Fibonacci(25): %d\n", fib_result);
+    print("   Execution time: %d ms\n\n", duration);
+    
+    // 5. Memory allocation performance
+    print("5. Memory Allocation Test:\n");
+    start_time = get_time_ms();
+    
+    for (int i = 0; i < 1000; i++) {
+        int* ptr = allocate_memory(1000);
+        if (ptr) {
+            deallocate_memory(ptr);
+        }
+    }
+    
+    end_time = get_time_ms();
+    duration = end_time - start_time;
+    
+    print("   1,000 memory allocations/deallocations\n");
+    print("   Execution time: %d ms\n\n", duration);
+    
+    print("=== Performance Demo Complete ===\n");
+    print("Aether demonstrates excellent performance for:\n");
+    print("- Arithmetic operations\n");
+    print("- String processing\n");
+    print("- Array operations\n");
+    print("- Function calls\n");
+    print("- Memory management\n");
+}
+
+func fibonacci(n: int) -> int {
+    if (n <= 1) {
+        return n;
+    }
+    return fibonacci(n - 1) + fibonacci(n - 2);
+}
+
+func get_time_ms() -> int {
+    // This would be implemented in the runtime
+    return 0; // Placeholder
+}
+
+func concat_strings(s1: string, s2: string) -> string {
+    // This would be implemented in the runtime
+    return s1; // Placeholder
+}
+
+func allocate_memory(size: int) -> int* {
+    // This would be implemented in the runtime
+    return null; // Placeholder
+}
+
+func deallocate_memory(ptr: int*) {
+    // This would be implemented in the runtime
+}
+

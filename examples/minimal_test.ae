@@ -1,0 +1,9 @@
+main() {
+    print("Testing for loop\n");
+    for (int i = 1; i <= 3; i++) {
+        print("i = %d\n", i);
+    }
+    print("Done\n");
+}
+
+

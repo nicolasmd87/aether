@@ -1,0 +1,132 @@
+// Aether Standard Library - Collections Module
+// This module provides basic collection types
+
+// Dynamic Array implementation
+actor DynamicArray {
+    state int[] data;
+    state int size = 0;
+    state int capacity = 0;
+    
+    receive(msg) {
+        match msg {
+            Init(initial_capacity) => {
+                capacity = initial_capacity;
+                data = new int[capacity];
+                size = 0;
+            }
+            Add(value) => {
+                if (size >= capacity) {
+                    // Resize array
+                    int new_capacity = capacity * 2;
+                    int[] new_data = new int[new_capacity];
+                    for (int i = 0; i < size; i++) {
+                        new_data[i] = data[i];
+                    }
+                    data = new_data;
+                    capacity = new_capacity;
+                }
+                data[size] = value;
+                size += 1;
+            }
+            Get(index, sender) => {
+                if (index >= 0 && index < size) {
+                    send(sender, data[index]);
+                } else {
+                    send(sender, -1); // Error value
+                }
+            }
+            Size(sender) => {
+                send(sender, size);
+            }
+            Clear => {
+                size = 0;
+            }
+        }
+    }
+}
+
+// HashMap implementation (basic)
+actor HashMap {
+    state int[] keys;
+    state int[] values;
+    state int size = 0;
+    state int capacity = 0;
+    
+    receive(msg) {
+        match msg {
+            Init(initial_capacity) => {
+                capacity = initial_capacity;
+                keys = new int[capacity];
+                values = new int[capacity];
+                size = 0;
+            }
+            Put(key, value) => {
+                // Simple linear probing
+                int index = key % capacity;
+                while (keys[index] != 0 && keys[index] != key) {
+                    index = (index + 1) % capacity;
+                }
+                keys[index] = key;
+                values[index] = value;
+                if (keys[index] == 0) {
+                    size += 1;
+                }
+            }
+            Get(key, sender) => {
+                int index = key % capacity;
+                while (keys[index] != 0 && keys[index] != key) {
+                    index = (index + 1) % capacity;
+                }
+                if (keys[index] == key) {
+                    send(sender, values[index]);
+                } else {
+                    send(sender, -1); // Not found
+                }
+            }
+            Size(sender) => {
+                send(sender, size);
+            }
+        }
+    }
+}
+
+// Stack implementation
+actor Stack {
+    state int[] data;
+    state int top = 0;
+    state int capacity = 0;
+    
+    receive(msg) {
+        match msg {
+            Init(initial_capacity) => {
+                capacity = initial_capacity;
+                data = new int[capacity];
+                top = 0;
+            }
+            Push(value) => {
+                if (top < capacity) {
+                    data[top] = value;
+                    top += 1;
+                }
+            }
+            Pop(sender) => {
+                if (top > 0) {
+                    top -= 1;
+                    send(sender, data[top]);
+                } else {
+                    send(sender, -1); // Empty stack
+                }
+            }
+            Peek(sender) => {
+                if (top > 0) {
+                    send(sender, data[top - 1]);
+                } else {
+                    send(sender, -1); // Empty stack
+                }
+            }
+            IsEmpty(sender) => {
+                send(sender, top == 0);
+            }
+        }
+    }
+}

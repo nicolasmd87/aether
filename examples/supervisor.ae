@@ -1,0 +1,95 @@
+// Supervisor Pattern - Fault tolerance example
+actor Worker {
+    state int id = 0;
+    state int work_done = 0;
+    state ActorRef supervisor = null;
+    
+    receive(msg) {
+        match msg {
+            SetSupervisor(sup) => {
+                supervisor = sup;
+                print("Worker %d registered with supervisor\n", id);
+            }
+            DoWork(amount) => {
+                // Simulate work with potential failure
+                if (rand() % 10 == 0) { // 10% chance of failure
+                    print("Worker %d failed while doing work!\n", id);
+                    send(supervisor, WorkerFailed(id));
+                } else {
+                    work_done += amount;
+                    print("Worker %d completed work (total: %d)\n", id, work_done);
+                    send(supervisor, WorkCompleted(id, work_done));
+                }
+            }
+            Restart => {
+                work_done = 0;
+                print("Worker %d restarted\n", id);
+                send(supervisor, WorkerRestarted(id));
+            }
+        }
+    }
+}
+
+actor Supervisor {
+    state ActorRef[] workers;
+    state int worker_count = 0;
+    state int[] work_totals;
+    state int active_workers = 0;
+    
+    receive(msg) {
+        match msg {
+            RegisterWorkers(worker_array, count) => {
+                workers = worker_array;
+                worker_count = count;
+                work_totals = new int[count];
+                active_workers = count;
+                
+                print("Supervisor registered %d workers\n", worker_count);
+                
+                // Register workers with supervisor
+                for (int i = 0; i < worker_count; i++) {
+                    send(workers[i], SetSupervisor(self()));
+                }
+                
+                // Start some work
+                for (int i = 0; i < worker_count; i++) {
+                    send(workers[i], DoWork(10));
+                }
+            }
+            WorkerFailed(worker_id) => {
+                print("Supervisor: Worker %d failed, restarting...\n", worker_id);
+                send(workers[worker_id], Restart);
+            }
+            WorkerRestarted(worker_id) => {
+                print("Supervisor: Worker %d restarted successfully\n", worker_id);
+                // Give it more work
+                send(workers[worker_id], DoWork(5));
+            }
+            WorkCompleted(worker_id, total) => {
+                work_totals[worker_id] = total;
+                print("Supervisor: Worker %d total work: %d\n", worker_id, total);
+            }
+        }
+    }
+}
+
+main() {
+    print("Starting Supervisor Pattern example\n");
+    
+    int worker_count = 5;
+    
+    // Create workers
+    ActorRef[] workers = new ActorRef[worker_count];
+    for (int i = 0; i < worker_count; i++) {
+        workers[i] = spawn_actor(Worker);
+        // Set worker ID (this would need to be handled differently in real implementation)
+    }
+    
+    // Create supervisor
+    let supervisor = spawn_actor(Supervisor);
+    
+    // Register workers with supervisor
+    send(supervisor, RegisterWorkers(workers, worker_count));
+    
+    print("Supervisor pattern example started\n");
+}
