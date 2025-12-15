@@ -48,9 +48,10 @@ Ring benchmark (1000 actors, 1M messages):
 
 ## Documentation
 
-- [Getting Started](docs/GETTING_STARTED.md)
-- [Language Specification](docs/LANGUAGE_SPEC.md)
-- [Actor Implementation](docs/ACTORS_COMPLETE.md)
+- [Getting Started](docs/getting-started.md)
+- [Language Specification](docs/language-spec.md)
+- [Actor Implementation](docs/actors-complete.md)
+- [Multi-Core Architecture](docs/multicore-architecture.md)
 - [Build Instructions](BUILD_INSTRUCTIONS.md)
 
 ## Implementation Status
