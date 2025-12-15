@@ -1,7 +1,0 @@
-actor Counter {
-    state int count = 0;
-    
-    receive(msg) {
-        count = count + 1;
-    }
-}

@@ -8,6 +8,9 @@ typedef struct {
     int indent_level;
     int actor_count;
     int function_count;
+    char* current_actor;
+    char** actor_state_vars;
+    int state_var_count;
 } CodeGenerator;
 
 // Code generation functions

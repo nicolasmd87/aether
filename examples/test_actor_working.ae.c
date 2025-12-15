@@ -1,12 +1,11 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "aether_runtime.h"
+#include "actor_state_machine.h"
 
-// Actor: Counter (State Machine)
 typedef struct Counter {
     int id;
-    int active;  // 1 = has messages, 0 = waiting
+    int active;
     Mailbox mailbox;
     
     int count;
@@ -15,23 +14,17 @@ typedef struct Counter {
 void Counter_step(Counter* self) {
     Message msg;
     
-    // Try to receive a message
     if (!mailbox_receive(&self->mailbox, &msg)) {
-        self->active = 0;  // No messages, yield
+        self->active = 0;
         return;
     }
     
-    // Process message
-    (count = (count + 1));
+    (self->count = (self->count + 1));
 }
 
 int main() {
-    aether_runtime_init(4); // Initialize with 4 worker threads
-    
     {
 printf("Actor simple assignment test\n");
     }
-    
-    aether_runtime_shutdown();
     return 0;
 }

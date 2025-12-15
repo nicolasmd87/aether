@@ -1,1 +1,0 @@
-actor A { state int count = 0; receive(msg) { count = count + 1; }}

@@ -10,11 +10,21 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->indent_level = 0;
     gen->actor_count = 0;
     gen->function_count = 0;
+    gen->current_actor = NULL;
+    gen->actor_state_vars = NULL;
+    gen->state_var_count = 0;
     return gen;
 }
 
 void free_code_generator(CodeGenerator* gen) {
     if (gen) {
+        if (gen->current_actor) free(gen->current_actor);
+        if (gen->actor_state_vars) {
+            for (int i = 0; i < gen->state_var_count; i++) {
+                free(gen->actor_state_vars[i]);
+            }
+            free(gen->actor_state_vars);
+        }
         free(gen);
     }
 }
@@ -132,9 +142,22 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             break;
             
         case AST_IDENTIFIER:
-            // In actor context, state variables need self-> prefix
-            // For now, just generate the identifier as-is
-            fprintf(gen->output, "%s", expr->value);
+            if (gen->current_actor) {
+                int is_state_var = 0;
+                for (int i = 0; i < gen->state_var_count; i++) {
+                    if (strcmp(expr->value, gen->actor_state_vars[i]) == 0) {
+                        is_state_var = 1;
+                        break;
+                    }
+                }
+                if (is_state_var) {
+                    fprintf(gen->output, "self->%s", expr->value);
+                } else {
+                    fprintf(gen->output, "%s", expr->value);
+                }
+            } else {
+                fprintf(gen->output, "%s", expr->value);
+            }
             break;
         
         case AST_MEMBER_ACCESS:
@@ -413,25 +436,34 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
 void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
     if (!actor || actor->type != AST_ACTOR_DEFINITION) return;
     
-    // Generate actor struct (state machine state)
-    print_line(gen, "// Actor: %s (State Machine)", actor->value);
+    gen->current_actor = strdup(actor->value);
+    gen->state_var_count = 0;
+    gen->actor_state_vars = NULL;
+    
+    for (int i = 0; i < actor->child_count; i++) {
+        ASTNode* child = actor->children[i];
+        if (child->type == AST_STATE_DECLARATION) {
+            gen->state_var_count++;
+            gen->actor_state_vars = realloc(gen->actor_state_vars, 
+                                           gen->state_var_count * sizeof(char*));
+            gen->actor_state_vars[gen->state_var_count - 1] = strdup(child->value);
+        }
+    }
+    
     print_line(gen, "typedef struct %s {", actor->value);
     indent(gen);
     
-    // Core state machine fields
     print_line(gen, "int id;");
-    print_line(gen, "int active;  // 1 = has messages, 0 = waiting");
+    print_line(gen, "int active;");
     print_line(gen, "Mailbox mailbox;");
     print_line(gen, "");
     
-    // User-defined state variables
     for (int i = 0; i < actor->child_count; i++) {
         ASTNode* child = actor->children[i];
         if (child->type == AST_STATE_DECLARATION) {
             print_indent(gen);
             generate_type(gen, child->node_type);
             fprintf(gen->output, " %s;\n", child->value);
-            // Note: Initializers will be set in actor_init() function
         }
     }
     
@@ -439,37 +471,28 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
     print_line(gen, "} %s;", actor->value);
     print_line(gen, "");
     
-    // Generate step function (this is the compiled "receive" block)
     print_line(gen, "void %s_step(%s* self) {", actor->value, actor->value);
     indent(gen);
     print_line(gen, "Message msg;");
     print_line(gen, "");
-    print_line(gen, "// Try to receive a message");
     print_line(gen, "if (!mailbox_receive(&self->mailbox, &msg)) {");
     indent(gen);
-    print_line(gen, "self->active = 0;  // No messages, yield");
+    print_line(gen, "self->active = 0;");
     print_line(gen, "return;");
     unindent(gen);
     print_line(gen, "}");
     print_line(gen, "");
-    print_line(gen, "// Process message");
     
-    // Find the receive statement and generate its body
     for (int i = 0; i < actor->child_count; i++) {
         ASTNode* child = actor->children[i];
         if (child->type == AST_RECEIVE_STATEMENT) {
-            // The receive block body
             if (child->child_count > 0) {
                 ASTNode* body = child->children[0];
                 if (body->type == AST_BLOCK) {
-                    // Generate block contents
                     for (int j = 0; j < body->child_count; j++) {
                         ASTNode* stmt = body->children[j];
-                        // For state machine actors, we need to prefix state vars with self->
-                        // For now, just generate the statement
                         print_indent(gen);
                         if (stmt->type == AST_EXPRESSION_STATEMENT && stmt->child_count > 0) {
-                            // Generate the expression and add semicolon
                             generate_expression(gen, stmt->children[0]);
                             fprintf(gen->output, ";\n");
                         } else {
@@ -486,6 +509,18 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
     unindent(gen);
     print_line(gen, "}");
     print_line(gen, "");
+    
+    if (gen->current_actor) free(gen->current_actor);
+    gen->current_actor = NULL;
+    if (gen->actor_state_vars) {
+        for (int i = 0; i < gen->state_var_count; i++) {
+            free(gen->actor_state_vars[i]);
+        }
+        free(gen->actor_state_vars);
+        gen->actor_state_vars = NULL;
+    }
+    gen->state_var_count = 0;
+    gen->actor_count++;
 }
 
 void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
@@ -545,15 +580,11 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
     
     print_line(gen, "int main() {");
     indent(gen);
-    print_line(gen, "aether_runtime_init(4); // Initialize with 4 worker threads");
-    print_line(gen, "");
     
     if (main->child_count > 0) {
-        generate_statement(gen, main->children[0]); // main body
+        generate_statement(gen, main->children[0]);
     }
     
-    print_line(gen, "");
-    print_line(gen, "aether_runtime_shutdown();");
     print_line(gen, "return 0;");
     unindent(gen);
     print_line(gen, "}");
@@ -571,7 +602,7 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "#include <stdio.h>");
     print_line(gen, "#include <stdlib.h>");
     print_line(gen, "#include <string.h>");
-    print_line(gen, "#include \"aether_runtime.h\"");
+    print_line(gen, "#include \"actor_state_machine.h\"");
     print_line(gen, "");
 
     // Generate all top-level definitions
