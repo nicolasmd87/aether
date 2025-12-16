@@ -2,11 +2,11 @@
 #include <assert.h>
 #include <string.h>
 #include "test_harness.h"
-#include "../src/tokens.h"
-#include "../src/lexer.c"
-#include "../src/ast.c"
-#include "../src/parser.c"
-#include "../src/typechecker.c"
+#include "../compiler/tokens.h"
+#include "../compiler/lexer.c"
+#include "../compiler/ast.c"
+#include "../compiler/parser.c"
+#include "../compiler/typechecker.c"
 
 // Test struct lexing
 void test_struct_keyword() {

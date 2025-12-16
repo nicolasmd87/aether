@@ -22,9 +22,9 @@ TEST(compile_and_run_simple_loop) {
     
     // Compile
 #ifdef _WIN32
-    int result = system(".\\src\\aetherc.exe build\\test_loop.ae build\\test_loop.c");
+    int result = system(".\\build\\aetherc.exe build\\test_loop.ae build\\test_loop.c");
 #else
-    int result = system("./src/aetherc build/test_loop.ae build/test_loop.c");
+    int result = system("./build/aetherc build/test_loop.ae build/test_loop.c");
 #endif
     ASSERT_EQ(0, result);
     
@@ -63,9 +63,9 @@ TEST(compile_and_run_while_loop) {
     fclose(f);
     
 #ifdef _WIN32
-    int result = system(".\\src\\aetherc.exe build\\test_while.ae build\\test_while.c");
+    int result = system(".\\build\\aetherc.exe build\\test_while.ae build\\test_while.c");
 #else
-    int result = system("./src/aetherc build/test_while.ae build/test_while.c");
+    int result = system("./build/aetherc build/test_while.ae build/test_while.c");
 #endif
     ASSERT_EQ(0, result);
     
@@ -97,9 +97,9 @@ TEST(runtime_shutdown_completes) {
     fclose(f);
     
 #ifdef _WIN32
-    int result = system(".\\src\\aetherc.exe build\\test_shutdown.ae build\\test_shutdown.c");
+    int result = system(".\\build\\aetherc.exe build\\test_shutdown.ae build\\test_shutdown.c");
 #else
-    int result = system("./src/aetherc build/test_shutdown.ae build/test_shutdown.c");
+    int result = system("./build/aetherc build/test_shutdown.ae build/test_shutdown.c");
 #endif
     ASSERT_EQ(0, result);
     

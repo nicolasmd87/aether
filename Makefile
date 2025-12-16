@@ -1,10 +1,10 @@
 .PHONY: all clean test compiler examples
 
 CC = gcc
-CFLAGS = -O2 -Isrc -Iruntime
+CFLAGS = -O2 -Icompiler -Iruntime
 LDFLAGS = -pthread
 
-COMPILER_SRC = src/aetherc.c src/lexer.c src/parser.c src/ast.c src/typechecker.c src/codegen.c
+COMPILER_SRC = compiler/aetherc.c compiler/lexer.c compiler/parser.c compiler/ast.c compiler/typechecker.c compiler/codegen.c
 RUNTIME_SRC = runtime/multicore_scheduler.c
 
 all: compiler
@@ -15,7 +15,7 @@ compiler:
 
 test: compiler
 	@echo "Running compiler tests..."
-	$(CC) tests/test_*.c $(COMPILER_SRC) -Isrc -o build/test_runner.exe
+	$(CC) tests/test_*.c $(COMPILER_SRC) -Icompiler -o build/test_runner.exe
 	build/test_runner.exe
 	@echo ""
 	@echo "Running actor compilation tests..."

@@ -21,9 +21,9 @@ static int file_exists(const char* filename) {
 static int compile_aether_file(const char* input_file, const char* output_file) {
     char command[512];
 #ifdef _WIN32
-    snprintf(command, sizeof(command), ".\\src\\aetherc.exe %s %s", input_file, output_file);
+    snprintf(command, sizeof(command), ".\\build\\aetherc.exe %s %s", input_file, output_file);
 #else
-    snprintf(command, sizeof(command), "./src/aetherc %s %s", input_file, output_file);
+    snprintf(command, sizeof(command), "./build/aetherc %s %s", input_file, output_file);
 #endif
     return system(command);
 }

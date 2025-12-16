@@ -73,7 +73,7 @@ main() {
 ### Compile an Example
 ```bash
 # Compile Aether to C
-./src/aetherc_new.exe examples/simple_demo.ae examples/simple_demo.c
+./build/aetherc.exe examples/simple_demo.ae examples/simple_demo.c
 
 # Compile C to executable
 gcc examples/simple_demo.c ../runtime/*.c -o simple_demo -lpthread
@@ -85,7 +85,7 @@ gcc examples/simple_demo.c ../runtime/*.c -o simple_demo -lpthread
 ### Quick Test
 ```bash
 # Test the simple demo
-./src/aetherc_new.exe examples/simple_demo.ae examples/simple_demo.c
+./build/aetherc.exe examples/simple_demo.ae examples/simple_demo.c
 gcc examples/simple_demo.c ../runtime/*.c -o simple_demo -lpthread
 ./simple_demo
 ```

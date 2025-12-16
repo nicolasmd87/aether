@@ -77,7 +77,7 @@ See [Runtime Guide](docs/runtime.md) for actor details.
 
 ## Project Structure
 
-- `src/` - Compiler source (lexer, parser, typechecker, codegen)
+- `compiler/` - Compiler source (lexer, parser, typechecker, codegen)
 - `runtime/` - Actor runtime (mailbox, scheduler, queues)
 - `examples/` - Example Aether programs
 - `tests/` - Test suite

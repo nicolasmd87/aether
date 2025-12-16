@@ -15,7 +15,7 @@ Linux/Mac:
 
 ```bash
 # Build compiler
-gcc -o build/aetherc.exe src/*.c -Isrc -O2
+gcc -o build/aetherc.exe compiler/*.c -Icompiler -O2
 
 # Compile an Aether program
 build/aetherc examples/test_actor_working.ae output.c
@@ -67,7 +67,7 @@ gcc output.c -Iruntime -o program
 
 ```bash
 # Compiler tests
-gcc tests/test_*.c src/*.c -Isrc -o build/test_runner.exe
+gcc tests/test_*.c compiler/*.c -Icompiler -o build/test_runner.exe
 build/test_runner.exe
 
 # Actor compilation tests

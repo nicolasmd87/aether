@@ -36,7 +36,7 @@ make test
 
 ```
 aether/
-├── src/           # Compiler source
+├── compiler/      # Compiler source
 ├── runtime/       # Runtime libraries
 ├── examples/      # Example programs
 ├── tests/         # Test suite

@@ -10,7 +10,7 @@ Aether uses a traditional multi-stage compiler:
 Source (.ae) → Lexer → Parser → AST → Type Checker → Code Generator → C Code
 ```
 
-### Lexer (`src/lexer.c`)
+### Lexer (`compiler/lexer.c`)
 
 Tokenizes source code into tokens:
 - Keywords: `actor`, `state`, `receive`, `send`, `spawn`
@@ -18,14 +18,14 @@ Tokenizes source code into tokens:
 - Literals: integers, strings
 - Operators: `+`, `-`, `*`, `/`, `==`, etc.
 
-### Parser (`src/parser.c`)
+### Parser (`compiler/parser.c`)
 
 Builds Abstract Syntax Tree (AST) from tokens:
 - Expression parsing with operator precedence
 - Statement parsing (if, while, for, return)
 - Declaration parsing (variables, functions, actors, structs)
 
-### Type Checker (`src/typechecker.c`)
+### Type Checker (`compiler/typechecker.c`)
 
 Validates program correctness:
 - Type checking for expressions
@@ -33,7 +33,7 @@ Validates program correctness:
 - Function call validation
 - Actor and struct field validation
 
-### Code Generator (`src/codegen.c`)
+### Code Generator (`compiler/codegen.c`)
 
 Generates C code from AST:
 - Function code generation

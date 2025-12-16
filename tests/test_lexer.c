@@ -1,6 +1,6 @@
 #include "test_harness.h"
-#include "../src/lexer.c"
-#include "../src/tokens.h"
+#include "../compiler/lexer.c"
+#include "../compiler/tokens.h"
 #include <string.h>
 
 // Note: This is a basic test structure
