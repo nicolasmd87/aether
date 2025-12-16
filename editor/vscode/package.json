@@ -1,0 +1,35 @@
+{
+  "name": "aether-language",
+  "displayName": "Aether Language Support",
+  "description": "Syntax highlighting for Aether programming language",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "aether",
+        "aliases": [
+          "Aether",
+          "aether"
+        ],
+        "extensions": [
+          ".ae"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "aether",
+        "scopeName": "source.aether",
+        "path": "./aether.tmLanguage.json"
+      }
+    ]
+  }
+}
+

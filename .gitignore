@@ -24,5 +24,7 @@ build/*.c
 Thumbs.db
 
 # Editor/IDE directories and files
+# Note: Language support files are in editor/vscode/ and are tracked
+# User-specific workspace settings are ignored below
 .vscode/
 .idea/
