@@ -9,6 +9,7 @@ typedef struct Symbol {
     int is_actor;
     int is_function;
     int is_state;
+    ASTNode* node;  // Pointer to AST node (for structs, functions, etc.)
     struct Symbol* next;
 } Symbol;
 

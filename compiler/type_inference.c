@@ -183,6 +183,19 @@ void collect_expression_constraints(ASTNode* node, InferenceContext* ctx) {
                     }
                 }
             }
+            
+            // Add variable to symbol table for later lookups (member access, etc.)
+            if (node->value && node->node_type && node->node_type->kind != TYPE_UNKNOWN && ctx->symbols) {
+                Symbol* existing = lookup_symbol_local(ctx->symbols, node->value);
+                if (existing) {
+                    // Update existing symbol's type
+                    if (existing->type) free_type(existing->type);
+                    existing->type = clone_type(node->node_type);
+                } else {
+                    // Add new symbol
+                    add_symbol(ctx->symbols, node->value, clone_type(node->node_type), 0, 0, 0);
+                }
+            }
             break;
             
         case AST_IDENTIFIER:
@@ -223,6 +236,101 @@ void collect_expression_constraints(ASTNode* node, InferenceContext* ctx) {
                     Type* expr_type = node->children[0]->node_type;
                     if (expr_type && expr_type->kind != TYPE_UNKNOWN) {
                         node->node_type = clone_type(expr_type);
+                    }
+                }
+            }
+            break;
+            
+        case AST_MEMBER_ACCESS:
+            // Member access: expr.field
+            // Infer type from the struct field
+            if (node->child_count > 0 && node->value) {
+                ASTNode* base_expr = node->children[0];
+                collect_constraints(base_expr, ctx);
+                
+                // Get the base expression's type
+                Type* base_type = base_expr->node_type;
+                
+                if (base_type && base_type->kind == TYPE_STRUCT && ctx->symbols) {
+                    // Look up the struct definition
+                    Symbol* struct_sym = lookup_symbol(ctx->symbols, base_type->struct_name);
+                    
+                    if (struct_sym && struct_sym->node) {
+                        ASTNode* struct_def = struct_sym->node;
+                        // Find the field in the struct definition
+                        for (int i = 0; i < struct_def->child_count; i++) {
+                            ASTNode* field = struct_def->children[i];
+                            if (field && field->type == AST_STRUCT_FIELD && 
+                                field->value && strcmp(field->value, node->value) == 0) {
+                                // Found matching field - use its type
+                                if (field->node_type) {
+                                    node->node_type = clone_type(field->node_type);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            break;
+            
+        case AST_ARRAY_ACCESS:
+            // Array access: arr[index]
+            // Infer element type from array type
+            if (node->child_count >= 2) {
+                ASTNode* array_expr = node->children[0];
+                ASTNode* index_expr = node->children[1];
+                
+                collect_constraints(array_expr, ctx);
+                collect_constraints(index_expr, ctx);
+                
+                // Get array type and extract element type
+                Type* array_type = array_expr->node_type;
+                if (array_type && array_type->kind == TYPE_ARRAY && array_type->element_type) {
+                    node->node_type = clone_type(array_type->element_type);
+                }
+            }
+            break;
+            
+        case AST_STRUCT_LITERAL:
+            // Struct literal: StructName{ field: value, ... }
+            // Look up struct definition to propagate field types
+            if (node->value && ctx->symbols) {
+                Symbol* struct_sym = lookup_symbol(ctx->symbols, node->value);
+                
+                if (struct_sym && struct_sym->type && struct_sym->type->kind == TYPE_STRUCT) {
+                    // Set the struct literal's type to the struct type
+                    node->node_type = clone_type(struct_sym->type);
+                }
+                
+                // Process each field initializer and propagate types to struct definition
+                for (int i = 0; i < node->child_count; i++) {
+                    ASTNode* field_init = node->children[i];
+                    if (field_init && field_init->type == AST_ASSIGNMENT && field_init->child_count > 0) {
+                        // Collect constraints from the value expression
+                        collect_constraints(field_init->children[0], ctx);
+                        
+                        Type* val_type = field_init->children[0]->node_type;
+                        
+                        // Propagate field type back to struct definition
+                        if (struct_sym && struct_sym->node && val_type && val_type->kind != TYPE_UNKNOWN) {
+                            ASTNode* struct_def = struct_sym->node;
+                            const char* field_name = field_init->value;
+                            
+                            // Find matching field in struct definition
+                            for (int j = 0; j < struct_def->child_count; j++) {
+                                ASTNode* field = struct_def->children[j];
+                                if (field && field->type == AST_STRUCT_FIELD && 
+                                    field->value && strcmp(field->value, field_name) == 0) {
+                                    // Update field type if it's unknown
+                                    if (!field->node_type || field->node_type->kind == TYPE_UNKNOWN) {
+                                        if (field->node_type) free_type(field->node_type);
+                                        field->node_type = clone_type(val_type);
+                                    }
+                                    break;
+                                }
+                            }
+                        }
                     }
                 }
             }

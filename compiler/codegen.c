@@ -69,7 +69,8 @@ const char* get_c_type(Type* type) {
         case TYPE_MESSAGE: return "Message";
         case TYPE_STRUCT: {
             static char buffer[256];
-            snprintf(buffer, sizeof(buffer), "struct %s", 
+            // Just use the struct name (typedef removes need for "struct" keyword)
+            snprintf(buffer, sizeof(buffer), "%s", 
                     type->struct_name ? type->struct_name : "unnamed");
             return buffer;
         }
@@ -227,6 +228,22 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             for (int i = 0; i < expr->child_count; i++) {
                 if (i > 0) fprintf(gen->output, ", ");
                 generate_expression(gen, expr->children[i]);
+            }
+            fprintf(gen->output, "}");
+            break;
+        
+        case AST_STRUCT_LITERAL:
+            // Struct literal: (StructName){.field1 = value1, .field2 = value2}
+            fprintf(gen->output, "(%s){", expr->value);
+            for (int i = 0; i < expr->child_count; i++) {
+                ASTNode* field_init = expr->children[i];
+                if (field_init && field_init->type == AST_ASSIGNMENT) {
+                    if (i > 0) fprintf(gen->output, ", ");
+                    fprintf(gen->output, ".%s = ", field_init->value);
+                    if (field_init->child_count > 0) {
+                        generate_expression(gen, field_init->children[0]);
+                    }
+                }
             }
             fprintf(gen->output, "}");
             break;
@@ -668,8 +685,21 @@ void generate_struct_definition(CodeGenerator* gen, ASTNode* struct_def) {
         ASTNode* field = struct_def->children[i];
         if (field->type == AST_STRUCT_FIELD) {
             print_indent(gen);
-            generate_type(gen, field->node_type);
-            fprintf(gen->output, " %s;\n", field->value);
+            
+            // Handle array types specially
+            if (field->node_type && field->node_type->kind == TYPE_ARRAY) {
+                // For arrays: type fieldname[size];
+                const char* element_type = get_c_type(field->node_type->element_type);
+                if (field->node_type->array_size > 0) {
+                    fprintf(gen->output, "%s %s[%d];\n", element_type, field->value, field->node_type->array_size);
+                } else {
+                    fprintf(gen->output, "%s* %s;\n", element_type, field->value);
+                }
+            } else {
+                // For non-arrays: type fieldname;
+                generate_type(gen, field->node_type);
+                fprintf(gen->output, " %s;\n", field->value);
+            }
         }
     }
     

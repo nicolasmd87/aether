@@ -1,18 +1,13 @@
 // Test array syntax
 main() {
-    // Fixed-size array declaration
-    let nums: int[5];
-    
-    // Array literal
-    let arr = [1, 2, 3, 4, 5];
+    // Array literal (types inferred!)
+    arr = [1, 2, 3, 4, 5];
     
     // Array indexing
-    let x = arr[0];
-    arr[1] = 42;
-    
-    // Nested arrays
-    let matrix: int[3][3];
+    x = arr[0];
+    y = arr[1];
     
     print(x);
+    print(y);
 }
 

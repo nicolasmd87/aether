@@ -1,39 +1,25 @@
-// Example: Minimal Aether Syntax (no func keyword needed!)
+// Example: Minimal Aether Syntax (Python-style, types inferred!)
 
 struct Point {
-    int x;
-    int y;
+    x,  // Type inferred from initialization
+    y
 }
 
-// Function without 'func' - just name and params!
-distance(Point p1, Point p2): int {
-    let dx = p2.x - p1.x;
-    let dy = p2.y - p1.y;
+// Function - types inferred from usage!
+distance(p1, p2) {
+    dx = p2.x - p1.x;
+    dy = p2.y - p1.y;
     return dx * dx + dy * dy;
 }
 
-// Helper function
-print_point(Point p) {
-    aether_print_int(p.x);
-    aether_print_int(p.y);
-}
-
-actor counter {
-    state int count = 0;
-    
-    receive(msg) {
-        count++;
-    }
-}
-
 main() {
-    let p1 = Point{ x: 0, y: 0 };
-    let p2 = Point{ x: 3, y: 4 };
+    p1 = Point{ x: 0, y: 0 };
+    p2 = Point{ x: 3, y: 4 };
     
-    let d = distance(p1, p2);
-    aether_print_int(d);  // 25
+    d = distance(p1, p2);
+    print(d);  // 25
     
-    let c = spawn_counter();
-    send_counter(c, 1, 0);
+    print(p1.x);
+    print(p1.y);
 }
 

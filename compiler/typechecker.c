@@ -37,6 +37,7 @@ void add_symbol(SymbolTable* table, const char* name, Type* type, int is_actor, 
     symbol->is_actor = is_actor;
     symbol->is_function = is_function;
     symbol->is_state = is_state;
+    symbol->node = NULL;  // Initialize to NULL
     symbol->next = table->symbols;
     table->symbols = symbol;
 }
@@ -142,6 +143,14 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
         
         case AST_ACTOR_REF:
             return create_type(TYPE_ACTOR_REF);
+            
+        case AST_STRUCT_LITERAL:
+            // Return the struct type from node_type (set during type inference)
+            return expr->node_type ? clone_type(expr->node_type) : create_type(TYPE_UNKNOWN);
+            
+        case AST_ARRAY_ACCESS:
+            // Return the element type from array access (set during type inference)
+            return expr->node_type ? clone_type(expr->node_type) : create_type(TYPE_UNKNOWN);
             
         default:
             return create_type(TYPE_UNKNOWN);
@@ -258,6 +267,11 @@ int typecheck_program(ASTNode* program) {
                 Type* struct_type = create_type(TYPE_STRUCT);
                 struct_type->struct_name = strdup(child->value);
                 add_symbol(global_table, child->value, struct_type, 0, 0, 0);
+                // Store AST node in symbol for later field type updates
+                Symbol* struct_sym = lookup_symbol(global_table, child->value);
+                if (struct_sym) {
+                    struct_sym->node = child;
+                }
                 break;
             }
             case AST_MAIN_FUNCTION:
@@ -616,6 +630,17 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
             for (int i = 0; i < expr->child_count; i++) {
                 typecheck_expression(expr->children[i], table);
             }
+            return 1;
+            
+        case AST_STRUCT_LITERAL:
+            // Type check struct literal field initializers
+            for (int i = 0; i < expr->child_count; i++) {
+                ASTNode* field_init = expr->children[i];
+                if (field_init && field_init->type == AST_ASSIGNMENT && field_init->child_count > 0) {
+                    typecheck_expression(field_init->children[0], table);
+                }
+            }
+            // Struct literal type is already set during type inference
             return 1;
             
         default:

@@ -1,4 +1,4 @@
-// Aether with Type Inference - Even More Minimal!
+// Aether with Type Inference - Python-style!
 
 // Structs - no type annotations needed
 struct Player {
@@ -8,53 +8,40 @@ struct Player {
     position    // int[] inferred
 }
 
+struct Point {
+    x,
+    y
+}
+
 // Functions - types inferred from usage and returns
 distance(p1, p2) {
-    let dx = p2.x - p1.x;  // compiler knows: int
-    let dy = p2.y - p1.y;
+    dx = p2.x - p1.x;  // compiler knows: int
+    dy = p2.y - p1.y;
     return dx * dx + dy * dy;  // inferred return type: int
 }
 
-// Helper with explicit type if you want
-print_player(p: Player) {
-    aether_print_line(p.name);
-    aether_print_int(p.health);
-}
-
-// Mixed: some explicit, some inferred
-calculate_damage(base, defense: int) {
+// Math function
+calculate_damage(base, defense) {
     return base - defense;  // inferred: int -> int -> int
-}
-
-actor game_server {
-    state players = [];  // inferred: Player[]
-    state count = 0;     // inferred: int
-    
-    receive(msg) {
-        let p = Player{ 
-            name: "Alice",      // string inferred
-            health: 100,        // int inferred
-            score: 0,
-            position: [0, 0, 0] // int[] inferred
-        };
-        players[count++] = p;
-        
-        let dmg = calculate_damage(50, 10);
-        p.health = p.health - dmg;
-    }
 }
 
 main() {
     // Type inference in action
-    let server = spawn_game_server();  // type inferred
-    let x = 42;                        // int inferred
-    let name = "Bob";                  // string inferred
-    let nums = [1, 2, 3];              // int[] inferred
+    x = 42;                        // int inferred
+    name = "Bob";                  // string inferred
+    nums = [1, 2, 3];              // int[] inferred
     
-    let p1 = Player{ name: "Alice", health: 100, score: 0, position: [0,0,0] };
-    let p2 = Player{ name: "Bob", health: 80, score: 50, position: [3,4,0] };
+    p1 = Player{ name: "Alice", health: 100, score: 0, position: [0,0,0] };
+    p2 = Player{ name: "Bob", health: 80, score: 50, position: [3,4,0] };
     
-    let d = distance(p1, p2);  // compiler infers everything!
-    aether_print_int(d);
+    // Points for distance calculation
+    pt1 = Point{ x: 0, y: 0 };
+    pt2 = Point{ x: 3, y: 4 };
+    
+    d = distance(pt1, pt2);  // compiler infers everything!
+    print(d);  // 25
+    
+    dmg = calculate_damage(50, 10);
+    print(dmg);  // 40
 }
 

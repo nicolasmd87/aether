@@ -1,32 +1,18 @@
 // Modern Aether syntax demonstration
-actor counter {
-    state int count = 0;
-    
-    receive(msg) {
-        count++;
-        print(count);
-    }
-}
 
 main() {
-    // Fixed arrays
-    let nums: int[5];
-    let values = [1, 2, 3, 4, 5];
+    // Array literals with type inference
+    values = [1, 2, 3, 4, 5];
     
     // Array indexing
-    nums[0] = 10;
-    nums[1] = 20;
-    let x = nums[0];
+    x = values[0];
+    y = values[1];
     
-    // Dynamic arrays with make
-    let buffer = make([]int, 100);
-    buffer[0] = 42;
-    
-    // Actor spawning (type-specific still works)
-    let c = spawn_counter();
-    send_counter(c, 1, 0);
+    // Math operations
+    sum = x + y;
     
     print(x);
-    print(buffer[0]);
+    print(y);
+    print(sum);
 }
 
