@@ -1,0 +1,21 @@
+// Test float type support
+
+main() {
+    pi = 3.14159
+    radius = 5.0
+    
+    area = pi * radius * radius
+    
+    print("Area: ")
+    // Note: print currently only supports basic types
+    // Float printing would need runtime support
+    
+    x = 1.5
+    y = 2.5
+    sum = x + y
+    
+    if (sum > 3.0) {
+        print("Sum is greater than 3\n")
+    }
+}
+

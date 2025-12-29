@@ -1,0 +1,180 @@
+// Number Guessing Game
+// A simple interactive game demonstrating Aether's capabilities
+//
+// The computer picks a number, and you try to guess it!
+
+// Game state manager using actor
+actor GameManager {
+    state secret_number = 42
+    state guesses_made = 0
+    state game_over = 0
+    state won = 0
+    
+    receive(msg) {
+        if (msg.type == 1) {
+            // Set secret number
+            secret_number = msg.payload_int
+        }
+        
+        if (msg.type == 2) {
+            // Make a guess
+            if (game_over == 0) {
+                guess = msg.payload_int
+                guesses_made = guesses_made + 1
+                
+                check_guess(guess)
+            }
+        }
+        
+        if (msg.type == 3) {
+            // Reset game
+            guesses_made = 0
+            game_over = 0
+            won = 0
+        }
+    }
+    
+    check_guess(guess) {
+        if (guess == secret_number) {
+            won = 1
+            game_over = 1
+            print("Congratulations! You won in ")
+            print(guesses_made)
+            print(" guesses!\n")
+        } else {
+            if (guess < secret_number) {
+                print("Too low! Try again.\n")
+            } else {
+                print("Too high! Try again.\n")
+            }
+        }
+    }
+}
+
+// Score tracker actor
+actor ScoreBoard {
+    state games_played = 0
+    state total_guesses = 0
+    state best_score = 999
+    
+    receive(msg) {
+        if (msg.type == 1) {
+            // Record game result
+            guesses = msg.payload_int
+            games_played = games_played + 1
+            total_guesses = total_guesses + guesses
+            
+            if (guesses < best_score) {
+                best_score = guesses
+            }
+        }
+        
+        if (msg.type == 2) {
+            // Display statistics
+            print("\n╔════════════════════════╗\n")
+            print("║   Game Statistics      ║\n")
+            print("╠════════════════════════╣\n")
+            print("║ Games Played: ")
+            print(games_played)
+            print("\n")
+            print("║ Total Guesses: ")
+            print(total_guesses)
+            print("\n")
+            
+            if (games_played > 0) {
+                avg = total_guesses / games_played
+                print("║ Average: ")
+                print(avg)
+                print("\n")
+            }
+            
+            if (best_score < 999) {
+                print("║ Best Score: ")
+                print(best_score)
+                print("\n")
+            }
+            
+            print("╚════════════════════════╝\n")
+        }
+    }
+}
+
+// Simulate a game round
+play_round(game, guess_sequence, num_guesses) {
+    print("\n--- New Round ---\n")
+    print("I'm thinking of a number between 1 and 100...\n\n")
+    
+    for (i = 0; i < num_guesses; i = i + 1) {
+        guess = guess_sequence[i]
+        
+        print("Your guess: ")
+        print(guess)
+        print("\n")
+        
+        send_GameManager(game, 2, guess)
+        GameManager_step(game)
+    }
+}
+
+main() {
+    print("╔═══════════════════════════════════╗\n")
+    print("║  NUMBER GUESSING GAME - Aether    ║\n")
+    print("╚═══════════════════════════════════╝\n")
+    print("\nWelcome! I'll pick a number, you try to guess it!\n")
+    
+    // Create game actors
+    game = spawn_GameManager()
+    scoreboard = spawn_ScoreBoard()
+    
+    // Game 1: Number is 42
+    send_GameManager(game, 1, 42)  // Set secret number
+    GameManager_step(game)
+    
+    // Simulate guesses for game 1
+    guesses1 = [50, 30, 40, 45, 42]
+    play_round(game, guesses1, 5)
+    
+    // Record score
+    send_ScoreBoard(scoreboard, 1, 5)  // 5 guesses
+    ScoreBoard_step(scoreboard)
+    
+    // Reset for game 2
+    send_GameManager(game, 3, 0)
+    GameManager_step(game)
+    
+    // Game 2: Number is 75
+    send_GameManager(game, 1, 75)
+    GameManager_step(game)
+    
+    // Simulate guesses for game 2
+    guesses2 = [50, 75]
+    play_round(game, guesses2, 2)
+    
+    // Record score
+    send_ScoreBoard(scoreboard, 1, 2)  // 2 guesses
+    ScoreBoard_step(scoreboard)
+    
+    // Reset for game 3
+    send_GameManager(game, 3, 0)
+    GameManager_step(game)
+    
+    // Game 3: Number is 10
+    send_GameManager(game, 1, 10)
+    GameManager_step(game)
+    
+    // Simulate guesses for game 3
+    guesses3 = [50, 25, 12, 8, 10]
+    play_round(game, guesses3, 5)
+    
+    // Record score
+    send_ScoreBoard(scoreboard, 1, 5)
+    ScoreBoard_step(scoreboard)
+    
+    // Show final statistics
+    print("\n=== Final Statistics ===\n")
+    send_ScoreBoard(scoreboard, 2, 0)
+    ScoreBoard_step(scoreboard)
+    
+    print("\nThanks for playing! 🎮\n")
+}
+

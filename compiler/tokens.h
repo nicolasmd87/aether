@@ -18,6 +18,7 @@ typedef enum {
     TOKEN_BREAK,
     TOKEN_CONTINUE,
     TOKEN_RETURN,
+    TOKEN_DEFER,
     TOKEN_MATCH,
     TOKEN_RECEIVE,
     TOKEN_SEND,
@@ -33,6 +34,8 @@ typedef enum {
     
     // Types
     TOKEN_INT,
+    TOKEN_INT64,
+    TOKEN_UINT64,
     TOKEN_FLOAT,
     TOKEN_BOOL,
     TOKEN_STRING,

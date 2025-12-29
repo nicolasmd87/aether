@@ -3,6 +3,10 @@
 
 #define MAX_TESTS 1000
 
+// Global test failure handling
+jmp_buf test_failure_jmp;
+int test_failure_flag = 0;
+
 static struct {
     const char* name;
     TestFunction func;
@@ -29,10 +33,24 @@ void run_all_tests(void) {
         printf("[%d/%d] Running test: %s\n", i + 1, test_count, tests[i].name);
         fflush(stdout);
         
-        tests[i].func();
+        // Reset failure flag
+        test_failure_flag = 0;
         
-        passed_count++;
-        printf("  PASSED\n");
+        // Set up jump point for test failures
+        if (setjmp(test_failure_jmp) == 0) {
+            // Run the test
+            tests[i].func();
+            
+            // If we reach here, test passed
+            if (!test_failure_flag) {
+                passed_count++;
+                printf("  PASSED\n");
+            }
+        } else {
+            // We jumped here from a failed assertion
+            failed_count++;
+            printf("  FAILED\n");
+        }
     }
     
     printf("\n");

@@ -1,0 +1,114 @@
+// Word Counter CLI Tool
+// A practical example of a command-line utility in Aether
+//
+// This program counts words, lines, and characters in text
+// Similar to Unix 'wc' command
+
+// Count words in a line (words separated by spaces)
+count_words(text, length) {
+    words = 0
+    in_word = 0
+    
+    for (i = 0; i < length; i = i + 1) {
+        // Simplified: assume space (ASCII 32) separates words
+        if (text[i] == 32) {  // space
+            if (in_word == 1) {
+                words = words + 1
+                in_word = 0
+            }
+        } else {
+            in_word = 1
+        }
+    }
+    
+    // Count last word if line doesn't end with space
+    if (in_word == 1) {
+        words = words + 1
+    }
+    
+    return words
+}
+
+// Process text statistics
+actor TextProcessor {
+    state total_lines = 0
+    state total_words = 0
+    state total_chars = 0
+    
+    receive(msg) {
+        if (msg.type == 1) {
+            // Add line stats
+            total_lines = total_lines + 1
+            total_chars = total_chars + msg.payload_int
+        }
+        if (msg.type == 2) {
+            // Add word count
+            total_words = total_words + msg.payload_int
+        }
+        if (msg.type == 3) {
+            // Print statistics
+            print_statistics()
+        }
+    }
+    
+    print_statistics() {
+        print("╔════════════════════════╗\n")
+        print("║   Text Statistics      ║\n")
+        print("╠════════════════════════╣\n")
+        print("║ Lines: ")
+        print(total_lines)
+        print("\n")
+        print("║ Words: ")
+        print(total_words)
+        print("\n")
+        print("║ Chars: ")
+        print(total_chars)
+        print("\n")
+        print("╚════════════════════════╝\n")
+    }
+}
+
+main() {
+    print("=================================\n")
+    print("  Aether Word Counter\n")
+    print("=================================\n\n")
+    
+    // Create text processor actor
+    processor = spawn_TextProcessor()
+    
+    // Simulate processing multiple lines
+    // In a real implementation, these would come from file input
+    
+    // Line 1: "Hello World"
+    line1_length = 11
+    line1_words = 2
+    send_TextProcessor(processor, 1, line1_length)  // Add line
+    send_TextProcessor(processor, 2, line1_words)   // Add words
+    
+    // Line 2: "Aether is a programming language"
+    line2_length = 33
+    line2_words = 5
+    send_TextProcessor(processor, 1, line2_length)
+    send_TextProcessor(processor, 2, line2_words)
+    
+    // Line 3: "It compiles to C"
+    line3_length = 16
+    line3_words = 4
+    send_TextProcessor(processor, 1, line3_length)
+    send_TextProcessor(processor, 2, line3_words)
+    
+    // Process all messages
+    TextProcessor_step(processor)
+    TextProcessor_step(processor)
+    TextProcessor_step(processor)
+    TextProcessor_step(processor)
+    TextProcessor_step(processor)
+    TextProcessor_step(processor)
+    
+    // Print results
+    send_TextProcessor(processor, 3, 0)
+    TextProcessor_step(processor)
+    
+    print("\nDone!\n")
+}
+

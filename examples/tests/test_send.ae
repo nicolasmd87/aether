@@ -1,0 +1,32 @@
+// Test message sending between actors
+actor Sender {
+    state sent = 0;
+    
+    receive(msg) {
+        sent = sent + 1;
+    }
+}
+
+actor Receiver {
+    state received = 0;
+    
+    receive(msg) {
+        received = received + 1;
+    }
+}
+
+main() {
+    s = spawn_Sender();
+    r = spawn_Receiver();
+    
+    send_Sender(s, 1, 0);
+    send_Receiver(r, 1, 0);
+    
+    Sender_step(s);
+    Receiver_step(r);
+    
+    print("Send test complete\n");
+}
+
+
+

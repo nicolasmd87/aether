@@ -1,0 +1,383 @@
+#include "aether_json.h"
+#include "../collections/aether_collections.h"
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <ctype.h>
+
+struct JsonValue {
+    JsonType type;
+    union {
+        int bool_value;
+        double number_value;
+        AetherString* string_value;
+        ArrayList* array_value;
+        HashMap* object_value;
+    } data;
+};
+
+static void skip_whitespace(const char** json) {
+    while (**json && isspace(**json)) (*json)++;
+}
+
+static JsonValue* parse_value(const char** json);
+
+static JsonValue* parse_null(const char** json) {
+    if (strncmp(*json, "null", 4) == 0) {
+        *json += 4;
+        return aether_json_create_null();
+    }
+    return NULL;
+}
+
+static JsonValue* parse_bool(const char** json) {
+    if (strncmp(*json, "true", 4) == 0) {
+        *json += 4;
+        return aether_json_create_bool(1);
+    }
+    if (strncmp(*json, "false", 5) == 0) {
+        *json += 5;
+        return aether_json_create_bool(0);
+    }
+    return NULL;
+}
+
+static JsonValue* parse_number(const char** json) {
+    char* end;
+    double value = strtod(*json, &end);
+    if (end == *json) return NULL;
+    *json = end;
+    return aether_json_create_number(value);
+}
+
+static JsonValue* parse_string(const char** json) {
+    if (**json != '"') return NULL;
+    (*json)++;
+    
+    char buffer[4096];
+    int i = 0;
+    
+    while (**json && **json != '"' && i < 4095) {
+        if (**json == '\\') {
+            (*json)++;
+            switch (**json) {
+                case 'n': buffer[i++] = '\n'; break;
+                case 't': buffer[i++] = '\t'; break;
+                case 'r': buffer[i++] = '\r'; break;
+                case '\\': buffer[i++] = '\\'; break;
+                case '"': buffer[i++] = '"'; break;
+                default: buffer[i++] = **json; break;
+            }
+            (*json)++;
+        } else {
+            buffer[i++] = **json;
+            (*json)++;
+        }
+    }
+    
+    if (**json == '"') (*json)++;
+    buffer[i] = '\0';
+    
+    return aether_json_create_string(aether_string_new(buffer));
+}
+
+static JsonValue* parse_array(const char** json) {
+    if (**json != '[') return NULL;
+    (*json)++;
+    
+    JsonValue* arr = aether_json_create_array();
+    skip_whitespace(json);
+    
+    if (**json == ']') {
+        (*json)++;
+        return arr;
+    }
+    
+    while (1) {
+        skip_whitespace(json);
+        JsonValue* value = parse_value(json);
+        if (value) {
+            aether_json_array_add(arr, value);
+        }
+        
+        skip_whitespace(json);
+        if (**json == ',') {
+            (*json)++;
+        } else {
+            break;
+        }
+    }
+    
+    skip_whitespace(json);
+    if (**json == ']') (*json)++;
+    
+    return arr;
+}
+
+static JsonValue* parse_object(const char** json) {
+    if (**json != '{') return NULL;
+    (*json)++;
+    
+    JsonValue* obj = aether_json_create_object();
+    skip_whitespace(json);
+    
+    if (**json == '}') {
+        (*json)++;
+        return obj;
+    }
+    
+    while (1) {
+        skip_whitespace(json);
+        
+        if (**json != '"') break;
+        JsonValue* key_val = parse_string(json);
+        if (!key_val) break;
+        
+        AetherString* key = key_val->data.string_value;
+        aether_string_retain(key);
+        aether_json_free(key_val);
+        
+        skip_whitespace(json);
+        if (**json == ':') (*json)++;
+        
+        skip_whitespace(json);
+        JsonValue* value = parse_value(json);
+        if (value) {
+            aether_json_object_set(obj, key, value);
+        }
+        aether_string_release(key);
+        
+        skip_whitespace(json);
+        if (**json == ',') {
+            (*json)++;
+        } else {
+            break;
+        }
+    }
+    
+    skip_whitespace(json);
+    if (**json == '}') (*json)++;
+    
+    return obj;
+}
+
+static JsonValue* parse_value(const char** json) {
+    skip_whitespace(json);
+    
+    if (**json == 'n') return parse_null(json);
+    if (**json == 't' || **json == 'f') return parse_bool(json);
+    if (**json == '"') return parse_string(json);
+    if (**json == '[') return parse_array(json);
+    if (**json == '{') return parse_object(json);
+    if (**json == '-' || isdigit(**json)) return parse_number(json);
+    
+    return NULL;
+}
+
+JsonValue* aether_json_parse(AetherString* json_str) {
+    if (!json_str) return NULL;
+    const char* json = json_str->data;
+    return parse_value(&json);
+}
+
+static void stringify_value(JsonValue* value, AetherString** result);
+
+static void append_string(AetherString** result, const char* str) {
+    AetherString* temp = aether_string_new(str);
+    AetherString* new_result = aether_string_concat(*result, temp);
+    aether_string_release(*result);
+    aether_string_release(temp);
+    *result = new_result;
+}
+
+AetherString* aether_json_stringify(JsonValue* value) {
+    AetherString* result = aether_string_empty();
+    stringify_value(value, &result);
+    return result;
+}
+
+static void stringify_value(JsonValue* value, AetherString** result) {
+    if (!value) {
+        append_string(result, "null");
+        return;
+    }
+    
+    switch (value->type) {
+        case JSON_NULL:
+            append_string(result, "null");
+            break;
+            
+        case JSON_BOOL:
+            append_string(result, value->data.bool_value ? "true" : "false");
+            break;
+            
+        case JSON_NUMBER: {
+            char buf[64];
+            snprintf(buf, sizeof(buf), "%g", value->data.number_value);
+            append_string(result, buf);
+            break;
+        }
+            
+        case JSON_STRING:
+            append_string(result, "\"");
+            append_string(result, value->data.string_value->data);
+            append_string(result, "\"");
+            break;
+            
+        case JSON_ARRAY: {
+            append_string(result, "[");
+            int size = aether_list_size(value->data.array_value);
+            for (int i = 0; i < size; i++) {
+                if (i > 0) append_string(result, ",");
+                JsonValue* item = (JsonValue*)aether_list_get(value->data.array_value, i);
+                stringify_value(item, result);
+            }
+            append_string(result, "]");
+            break;
+        }
+            
+        case JSON_OBJECT: {
+            append_string(result, "{");
+            MapKeys* keys = aether_map_keys(value->data.object_value);
+            for (int i = 0; i < keys->count; i++) {
+                if (i > 0) append_string(result, ",");
+                append_string(result, "\"");
+                append_string(result, keys->keys[i]->data);
+                append_string(result, "\":");
+                JsonValue* val = (JsonValue*)aether_map_get(value->data.object_value, keys->keys[i]);
+                stringify_value(val, result);
+            }
+            aether_map_keys_free(keys);
+            append_string(result, "}");
+            break;
+        }
+    }
+}
+
+void aether_json_free(JsonValue* value) {
+    if (!value) return;
+    
+    switch (value->type) {
+        case JSON_STRING:
+            aether_string_release(value->data.string_value);
+            break;
+        case JSON_ARRAY: {
+            int size = aether_list_size(value->data.array_value);
+            for (int i = 0; i < size; i++) {
+                aether_json_free((JsonValue*)aether_list_get(value->data.array_value, i));
+            }
+            aether_list_free(value->data.array_value);
+            break;
+        }
+        case JSON_OBJECT: {
+            MapKeys* keys = aether_map_keys(value->data.object_value);
+            for (int i = 0; i < keys->count; i++) {
+                aether_json_free((JsonValue*)aether_map_get(value->data.object_value, keys->keys[i]));
+            }
+            aether_map_keys_free(keys);
+            aether_map_free(value->data.object_value);
+            break;
+        }
+        default:
+            break;
+    }
+    
+    free(value);
+}
+
+JsonType aether_json_type(JsonValue* value) {
+    return value ? value->type : JSON_NULL;
+}
+
+int aether_json_is_null(JsonValue* value) {
+    return !value || value->type == JSON_NULL;
+}
+
+int aether_json_get_bool(JsonValue* value) {
+    return (value && value->type == JSON_BOOL) ? value->data.bool_value : 0;
+}
+
+double aether_json_get_number(JsonValue* value) {
+    return (value && value->type == JSON_NUMBER) ? value->data.number_value : 0.0;
+}
+
+int aether_json_get_int(JsonValue* value) {
+    return (int)aether_json_get_number(value);
+}
+
+AetherString* aether_json_get_string(JsonValue* value) {
+    return (value && value->type == JSON_STRING) ? value->data.string_value : NULL;
+}
+
+JsonValue* aether_json_object_get(JsonValue* obj, AetherString* key) {
+    if (!obj || obj->type != JSON_OBJECT || !key) return NULL;
+    return (JsonValue*)aether_map_get(obj->data.object_value, key);
+}
+
+void aether_json_object_set(JsonValue* obj, AetherString* key, JsonValue* value) {
+    if (!obj || obj->type != JSON_OBJECT || !key) return;
+    aether_map_put(obj->data.object_value, key, value);
+}
+
+int aether_json_object_has(JsonValue* obj, AetherString* key) {
+    if (!obj || obj->type != JSON_OBJECT || !key) return 0;
+    return aether_map_has(obj->data.object_value, key);
+}
+
+JsonValue* aether_json_array_get(JsonValue* arr, int index) {
+    if (!arr || arr->type != JSON_ARRAY) return NULL;
+    return (JsonValue*)aether_list_get(arr->data.array_value, index);
+}
+
+void aether_json_array_add(JsonValue* arr, JsonValue* value) {
+    if (!arr || arr->type != JSON_ARRAY) return;
+    aether_list_add(arr->data.array_value, value);
+}
+
+int aether_json_array_size(JsonValue* arr) {
+    if (!arr || arr->type != JSON_ARRAY) return 0;
+    return aether_list_size(arr->data.array_value);
+}
+
+JsonValue* aether_json_create_null() {
+    JsonValue* value = (JsonValue*)malloc(sizeof(JsonValue));
+    value->type = JSON_NULL;
+    return value;
+}
+
+JsonValue* aether_json_create_bool(int val) {
+    JsonValue* value = (JsonValue*)malloc(sizeof(JsonValue));
+    value->type = JSON_BOOL;
+    value->data.bool_value = val;
+    return value;
+}
+
+JsonValue* aether_json_create_number(double val) {
+    JsonValue* value = (JsonValue*)malloc(sizeof(JsonValue));
+    value->type = JSON_NUMBER;
+    value->data.number_value = val;
+    return value;
+}
+
+JsonValue* aether_json_create_string(AetherString* val) {
+    JsonValue* value = (JsonValue*)malloc(sizeof(JsonValue));
+    value->type = JSON_STRING;
+    value->data.string_value = val;
+    aether_string_retain(val);
+    return value;
+}
+
+JsonValue* aether_json_create_array() {
+    JsonValue* value = (JsonValue*)malloc(sizeof(JsonValue));
+    value->type = JSON_ARRAY;
+    value->data.array_value = aether_list_new();
+    return value;
+}
+
+JsonValue* aether_json_create_object() {
+    JsonValue* value = (JsonValue*)malloc(sizeof(JsonValue));
+    value->type = JSON_OBJECT;
+    value->data.object_value = aether_map_new();
+    return value;
+}
+

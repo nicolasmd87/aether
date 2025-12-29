@@ -255,8 +255,30 @@ int typecheck_program(ASTNode* program) {
         
         switch (child->type) {
             case AST_ACTOR_DEFINITION: {
-                Type* actor_type = create_type(TYPE_UNKNOWN);
+                // Create actor struct type
+                Type* actor_type = create_type(TYPE_STRUCT);
+                actor_type->struct_name = strdup(child->value);
                 add_symbol(global_table, child->value, actor_type, 1, 0, 0);
+                
+                // Add generated spawn_ActorName() function - returns pointer to actor
+                // Use TYPE_ACTOR_REF to represent pointer type
+                char spawn_name[256];
+                snprintf(spawn_name, sizeof(spawn_name), "spawn_%s", child->value);
+                Type* spawn_return_type = create_type(TYPE_ACTOR_REF);
+                spawn_return_type->element_type = clone_type(actor_type);
+                add_symbol(global_table, spawn_name, spawn_return_type, 0, 1, 0);
+                
+                // Add generated send_ActorName() function - returns void
+                char send_name[256];
+                snprintf(send_name, sizeof(send_name), "send_%s", child->value);
+                Type* send_type = create_type(TYPE_VOID);
+                add_symbol(global_table, send_name, send_type, 0, 1, 0);
+                
+                // Add generated ActorName_step() function - returns void
+                char step_name[256];
+                snprintf(step_name, sizeof(step_name), "%s_step", child->value);
+                Type* step_type = create_type(TYPE_VOID);
+                add_symbol(global_table, step_name, step_type, 0, 1, 0);
                 break;
             }
             case AST_FUNCTION_DEFINITION: {
@@ -349,6 +371,21 @@ int typecheck_actor_definition(ASTNode* actor, SymbolTable* table) {
         if (child->type == AST_STATE_DECLARATION) {
             // Add state variables to actor's symbol table
             add_symbol(actor_table, child->value, clone_type(child->node_type), 0, 0, 1);
+        } else if (child->type == AST_RECEIVE_STATEMENT) {
+            // Handle receive statement - add 'msg' parameter to scope
+            SymbolTable* receive_table = create_symbol_table(actor_table);
+            
+            // Add 'msg' as a Message type
+            Type* msg_type = create_type(TYPE_MESSAGE);
+            add_symbol(receive_table, child->value, msg_type, 0, 0, 0);
+            
+            // Type check the receive body
+            if (child->child_count > 0) {
+                typecheck_statement(child->children[0], receive_table);
+            }
+            
+            free_symbol_table(receive_table);
+            continue;
         }
         
         typecheck_node(child, actor_table);
@@ -642,6 +679,33 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
             }
             // Struct literal type is already set during type inference
             return 1;
+            
+        case AST_MEMBER_ACCESS: {
+            // Type check member access (e.g., msg.type, struct.field)
+            if (expr->child_count > 0) {
+                ASTNode* base = expr->children[0];
+                typecheck_expression(base, table);
+                
+                Type* base_type = infer_type(base, table);
+                
+                // Handle Message type member access
+                if (base_type && base_type->kind == TYPE_MESSAGE) {
+                    if (strcmp(expr->value, "type") == 0 || 
+                        strcmp(expr->value, "sender_id") == 0 || 
+                        strcmp(expr->value, "payload_int") == 0) {
+                        expr->node_type = create_type(TYPE_INT);
+                    } else if (strcmp(expr->value, "payload_ptr") == 0) {
+                        expr->node_type = create_type(TYPE_VOID);
+                    }
+                }
+                // Handle struct member access
+                else if (base_type && base_type->kind == TYPE_STRUCT) {
+                    // Type inference will handle this
+                    expr->node_type = infer_type(expr, table);
+                }
+            }
+            return 1;
+        }
             
         default:
             // Type check all children

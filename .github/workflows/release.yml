@@ -1,0 +1,121 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to release (e.g., 0.1.0)'
+        required: true
+
+jobs:
+  build-release:
+    name: Build Release Binaries
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact_name: aetherc
+            asset_name: aetherc-linux-x86_64
+          - os: macos-latest
+            artifact_name: aetherc
+            asset_name: aetherc-macos-x86_64
+          - os: windows-latest
+            artifact_name: aetherc.exe
+            asset_name: aetherc-windows-x86_64.exe
+            
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Setup GCC (Ubuntu)
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc make
+        
+    - name: Setup GCC (macOS)
+      if: matrix.os == 'macos-latest'
+      run: |
+        brew install gcc make
+        
+    - name: Setup GCC (Windows)
+      if: matrix.os == 'windows-latest'
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        install: >-
+          mingw-w64-x86_64-gcc
+          make
+          
+    - name: Build Release (Unix)
+      if: matrix.os != 'windows-latest'
+      run: |
+        make
+        strip build/${{ matrix.artifact_name }} || true
+        
+    - name: Build Release (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: msys2 {0}
+      run: |
+        make
+        strip build/${{ matrix.artifact_name }} || true
+        
+    - name: Package Runtime
+      run: |
+        mkdir -p release/runtime
+        cp -r runtime/*.c runtime/*.h release/runtime/
+        cp build/${{ matrix.artifact_name }} release/
+        cp LICENSE release/
+        cp README.md release/
+        
+    - name: Create Archive (Unix)
+      if: matrix.os != 'windows-latest'
+      run: |
+        cd release
+        tar -czf ../${{ matrix.asset_name }}.tar.gz *
+        
+    - name: Create Archive (Windows)
+      if: matrix.os == 'windows-latest'
+      shell: msys2 {0}
+      run: |
+        cd release
+        zip -r ../${{ matrix.asset_name }}.zip *
+        
+    - name: Upload Release Asset
+      uses: actions/upload-artifact@v3
+      with:
+        name: ${{ matrix.asset_name }}
+        path: |
+          ${{ matrix.asset_name }}.tar.gz
+          ${{ matrix.asset_name }}.zip
+          
+  create-release:
+    name: Create GitHub Release
+    needs: build-release
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Download all artifacts
+      uses: actions/download-artifact@v3
+      
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          */*.tar.gz
+          */*.zip
+        draft: false
+        prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+

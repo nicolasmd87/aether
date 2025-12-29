@@ -3,6 +3,19 @@
 
 #include <stddef.h>
 
+// Error codes for documentation lookup
+typedef enum {
+    AETHER_ERR_NONE = 0,
+    AETHER_ERR_SYNTAX = 100,
+    AETHER_ERR_TYPE_MISMATCH = 200,
+    AETHER_ERR_UNDEFINED_VAR = 300,
+    AETHER_ERR_UNDEFINED_FUNC = 301,
+    AETHER_ERR_UNDEFINED_TYPE = 302,
+    AETHER_ERR_REDEFINITION = 400,
+    AETHER_ERR_INVALID_OPERAND = 500,
+    AETHER_ERR_ACTOR_ERROR = 600,
+} AetherErrorCode;
+
 // Error reporting with source context
 typedef struct {
     const char* filename;
@@ -12,6 +25,7 @@ typedef struct {
     const char* message;
     const char* suggestion;
     const char* context;  // "in actor definition", "in function call", etc.
+    AetherErrorCode code;
 } AetherError;
 
 // Error reporting functions
@@ -23,6 +37,7 @@ void aether_warning_report(AetherError* warning);
 void aether_error_simple(const char* message, int line, int column);
 void aether_error_with_suggestion(const char* message, int line, int column, const char* suggestion);
 void aether_error_in_context(const char* message, int line, int column, const char* context);
+void aether_error_with_code(const char* message, int line, int column, AetherErrorCode code);
 
 // Terminal colors (ANSI escape codes)
 #define AETHER_COLOR_RESET "\033[0m"

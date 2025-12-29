@@ -244,7 +244,7 @@ void collect_expression_constraints(ASTNode* node, InferenceContext* ctx) {
             
         case AST_MEMBER_ACCESS:
             // Member access: expr.field
-            // Infer type from the struct field
+            // Infer type from the struct field or Message type
             if (node->child_count > 0 && node->value) {
                 ASTNode* base_expr = node->children[0];
                 collect_constraints(base_expr, ctx);
@@ -252,7 +252,19 @@ void collect_expression_constraints(ASTNode* node, InferenceContext* ctx) {
                 // Get the base expression's type
                 Type* base_type = base_expr->node_type;
                 
-                if (base_type && base_type->kind == TYPE_STRUCT && ctx->symbols) {
+                // Handle Message type member access
+                if (base_type && base_type->kind == TYPE_MESSAGE) {
+                    // Message has fields: type (int), sender_id (int), payload_int (int), payload_ptr (void*)
+                    if (strcmp(node->value, "type") == 0 || 
+                        strcmp(node->value, "sender_id") == 0 || 
+                        strcmp(node->value, "payload_int") == 0) {
+                        node->node_type = create_type(TYPE_INT);
+                    } else if (strcmp(node->value, "payload_ptr") == 0) {
+                        node->node_type = create_type(TYPE_VOID); // void* represented as void
+                    }
+                }
+                // Handle struct type member access
+                else if (base_type && base_type->kind == TYPE_STRUCT && ctx->symbols) {
                     // Look up the struct definition
                     Symbol* struct_sym = lookup_symbol(ctx->symbols, base_type->struct_name);
                     

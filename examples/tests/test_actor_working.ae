@@ -1,0 +1,33 @@
+// Complete actor test with spawn, send, and message processing
+actor Counter {
+    state count = 0;
+    
+    receive(msg) {
+        if (msg.type == 1) {
+            count = count + 1;
+        }
+    }
+}
+
+main() {
+    c = spawn_Counter();
+    
+    // Send 5 messages
+    send_Counter(c, 1, 0);
+    send_Counter(c, 1, 0);
+    send_Counter(c, 1, 0);
+    send_Counter(c, 1, 0);
+    send_Counter(c, 1, 0);
+    
+    // Process messages
+    Counter_step(c);
+    Counter_step(c);
+    Counter_step(c);
+    Counter_step(c);
+    Counter_step(c);
+    
+    print("Counter test complete\n");
+}
+
+
+

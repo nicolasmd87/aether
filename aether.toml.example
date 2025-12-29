@@ -1,0 +1,35 @@
+[package]
+name = "my-aether-project"
+version = "0.1.0"
+authors = ["Your Name <email@example.com>"]
+license = "MIT"
+description = "An example Aether project"
+repository = "https://github.com/user/my-aether-project"
+readme = "README.md"
+keywords = ["example", "actors", "concurrent"]
+
+[dependencies]
+# Add your dependencies here
+# aether-http = "^1.0"
+# aether-json = "0.5"
+
+[dev-dependencies]
+# Development-only dependencies
+# aether-test = "0.2"
+
+[build]
+target = "native"
+optimizations = "aggressive"
+debug-symbols = false
+
+[features]
+default = []
+
+[[bin]]
+name = "my-project"
+path = "src/main.ae"
+
+[scripts]
+test = "apkg test"
+run = "apkg run"
+

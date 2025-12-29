@@ -1,0 +1,118 @@
+// Aether Language Showcase
+// Demonstrates the major features of the language
+
+// Functions with automatic type inference
+add(a, b) {
+    return a + b
+}
+
+factorial(n) {
+    if (n <= 1) {
+        return 1
+    }
+    return n * factorial(n - 1)
+}
+
+// Structs for data organization
+struct Point {
+    int x;
+    int y;
+}
+
+struct Player {
+    int health;
+    int score;
+}
+
+// Actors for concurrent programming
+actor Counter {
+    state count = 0;
+    
+    receive(msg) {
+        if (msg.type == 1) {
+            count = count + 1;
+        }
+        if (msg.type == 2) {
+            count = count - 1;
+        }
+    }
+}
+
+actor MessageLogger {
+    state total_messages = 0;
+    
+    receive(msg) {
+        total_messages = total_messages + 1;
+    }
+}
+
+// Main program entry point
+main() {
+    print("╔══════════════════════════════════════╗\n");
+    print("║   Aether Language Showcase           ║\n");
+    print("╚══════════════════════════════════════╝\n\n");
+    
+    // 1. Type Inference
+    print("1. TYPE INFERENCE\n");
+    print("   No type annotations needed!\n");
+    x = 42;
+    name = "Aether";
+    pi = 3.14;
+    print("   x = ");
+    print(x);
+    print(" (inferred as int)\n");
+    print("   pi = ");
+    print(pi);
+    print(" (inferred as float)\n\n");
+    
+    // 2. Functions
+    print("2. FUNCTIONS\n");
+    sum = add(15, 27);
+    fact = factorial(5);
+    print("   add(15, 27) = ");
+    print(sum);
+    print("\n   factorial(5) = ");
+    print(fact);
+    print("\n\n");
+    
+    // 3. Control Flow
+    print("3. CONTROL FLOW\n");
+    i = 0;
+    print("   Counting to 5: ");
+    while (i < 5) {
+        print(i);
+        print(" ");
+        i = i + 1;
+    }
+    print("\n\n");
+    
+    // 4. Actors
+    print("4. ACTORS (Concurrency)\n");
+    counter = spawn_Counter();
+    logger = spawn_MessageLogger();
+    
+    print("   Spawning actors...\n");
+    print("   Sending messages...\n");
+    
+    // Send increment messages
+    send_Counter(counter, 1, 0);
+    send_Counter(counter, 1, 0);
+    send_Counter(counter, 1, 0);
+    
+    // Send log messages
+    send_MessageLogger(logger, 1, 0);
+    send_MessageLogger(logger, 1, 0);
+    
+    // Process messages
+    Counter_step(counter);
+    Counter_step(counter);
+    Counter_step(counter);
+    MessageLogger_step(logger);
+    MessageLogger_step(logger);
+    
+    print("   ✓ Actors processed messages!\n\n");
+    
+    print("╔══════════════════════════════════════╗\n");
+    print("║   All features working!              ║\n");
+    print("╚══════════════════════════════════════╝\n");
+}

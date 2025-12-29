@@ -496,6 +496,9 @@ ASTNode* parse_statement(Parser* parser) {
             expect_token(parser, TOKEN_SEMICOLON);
             return create_ast_node(AST_CONTINUE_STATEMENT, NULL, token->line, token->column);
             
+        case TOKEN_DEFER:
+            return parse_defer_statement(parser);
+            
         case TOKEN_PRINT:
             return parse_print_statement(parser);
             
@@ -773,6 +776,22 @@ ASTNode* parse_return_statement(Parser* parser) {
     }
     
     return return_stmt;
+}
+
+ASTNode* parse_defer_statement(Parser* parser) {
+    Token* defer_token = parser->current_token;
+    advance_token(parser);
+    
+    ASTNode* deferred_stmt = parse_statement(parser);
+    if (!deferred_stmt) {
+        aether_error(defer_token->line, defer_token->column, "Expected statement after 'defer'");
+        return NULL;
+    }
+    
+    ASTNode* defer_node = create_ast_node(AST_DEFER_STATEMENT, NULL, defer_token->line, defer_token->column);
+    add_child(defer_node, deferred_stmt);
+    
+    return defer_node;
 }
 
 ASTNode* parse_print_statement(Parser* parser) {

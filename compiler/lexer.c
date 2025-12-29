@@ -139,6 +139,7 @@ Token* read_identifier() {
     if (strcmp(buffer, "break") == 0) return create_token(TOKEN_BREAK, buffer, current_line, current_column);
     if (strcmp(buffer, "continue") == 0) return create_token(TOKEN_CONTINUE, buffer, current_line, current_column);
     if (strcmp(buffer, "return") == 0) return create_token(TOKEN_RETURN, buffer, current_line, current_column);
+    if (strcmp(buffer, "defer") == 0) return create_token(TOKEN_DEFER, buffer, current_line, current_column);
     if (strcmp(buffer, "match") == 0) return create_token(TOKEN_MATCH, buffer, current_line, current_column);
     if (strcmp(buffer, "receive") == 0) return create_token(TOKEN_RECEIVE, buffer, current_line, current_column);
     if (strcmp(buffer, "send") == 0) return create_token(TOKEN_SEND, buffer, current_line, current_column);

@@ -4,43 +4,69 @@ Complete syntax and semantics of the Aether programming language.
 
 ## Overview
 
-Aether is a statically-typed, compiled language with actor-based concurrency. It compiles to C for maximum performance.
+Aether is a statically-typed, compiled language combining Erlang-inspired actor concurrency with ML-family type inference (Hindley-Milner). It features clean, minimal syntax and compiles to optimized C code for maximum performance.
 
 ## Types
 
 ### Primitive Types
 
 - `int` - 32-bit signed integer
+- `float` - 64-bit floating point
+- `string` - UTF-8 encoded strings
+- `bool` - Boolean type
 - `void` - No value (for functions that don't return)
 
 ### User-Defined Types
 
 - `struct` - Composite data type
 - `actor` - Concurrency primitive with state and message handling
+- `array` - Fixed-size homogeneous collections
 
 ## Variables
 
+Variables support both explicit types and automatic type inference:
+
 ```aether
-int x = 10;
-int y;
-y = 20;
+// Type inference (recommended)
+x = 10
+y = 20
+name = "Alice"
+
+// Explicit types (optional)
+int z = 30
+string greeting = "Hello"
 ```
 
-Variables must be declared before use. Type is required.
+Variables are inferred from their initialization or usage context.
 
 ## Functions
 
+Functions support type inference for parameters and return types:
+
 ```aether
-int add(int a, int b) {
-    return a + b;
+// Type inference (recommended)
+add(a, b) {
+    return a + b
+}
+
+greet(name) {
+    print("Hello, ")
+    print(name)
+    print("!\n")
+}
+
+// Explicit types (optional, for clarity)
+int add_explicit(int a, int b) {
+    return a + b
 }
 
 void print_hello() {
-    print("Hello\n");
+    print("Hello\n")
 }
 ```
 
 Functions can return values or `void`. The `main()` function is the entry point.
+Types are inferred from usage when not explicitly specified.
 
 ## Control Flow
 
@@ -48,27 +74,29 @@ Functions can return values or `void`. The `main()` function is the entry point.
 
 ```aether
 if (x > 0) {
-    print("Positive\n");
+    print("Positive\n")
 } else {
-    print("Non-positive\n");
+    print("Non-positive\n")
 }
 ```
 
 ### While Loops
 
 ```aether
-int i = 0;
+i = 0
 while (i < 10) {
-    print("%d\n", i);
-    i = i + 1;
+    print(i)
+    print("\n")
+    i = i + 1
 }
 ```
 
 ### For Loops
 
 ```aether
-for (int i = 0; i < 10; i = i + 1) {
-    print("%d\n", i);
+for (i = 0; i < 10; i = i + 1) {
+    print(i)
+    print("\n")
 }
 ```
 
@@ -76,18 +104,19 @@ for (int i = 0; i < 10; i = i + 1) {
 
 ```aether
 struct Point {
-    int x;
-    int y;
+    int x
+    int y
 }
 
 main() {
-    Point p;
-    p.x = 10;
-    p.y = 20;
+    p = Point{ x: 10, y: 20 }
+    print(p.x)
+    print(p.y)
 }
 ```
 
 Structs group related data. Fields are accessed with `.` operator.
+Struct literals use the `StructName{ field: value }` syntax.
 
 ## Actors
 
@@ -109,7 +138,14 @@ actor Counter {
 
 ### Actor State
 
-State variables are declared with `state` keyword and persist across messages.
+State variables are declared with `state` keyword and persist across messages:
+
+```aether
+actor Counter {
+    state count = 0
+    state total = 0
+}
+```
 
 ### Message Handling
 
@@ -122,7 +158,7 @@ The `receive` block defines how an actor processes messages. The `msg` parameter
 ### Spawning Actors
 
 ```aether
-Counter c = spawn_Counter();
+c = spawn_Counter()
 ```
 
 The compiler generates `spawn_ActorName()` functions automatically.
@@ -130,7 +166,7 @@ The compiler generates `spawn_ActorName()` functions automatically.
 ### Sending Messages
 
 ```aether
-send_Counter(c, 1, 0);
+send_Counter(c, 1, 0)
 ```
 
 The compiler generates `send_ActorName()` functions. Parameters:
@@ -141,7 +177,7 @@ The compiler generates `send_ActorName()` functions. Parameters:
 ### Processing Messages
 
 ```aether
-Counter_step(c);
+Counter_step(c)
 ```
 
 The compiler generates `ActorName_step()` functions that process one message from the mailbox.
@@ -151,10 +187,10 @@ The compiler generates `ActorName_step()` functions that process one message fro
 ### Arithmetic
 
 ```aether
-int sum = a + b;
-int diff = a - b;
-int prod = a * b;
-int quot = a / b;
+sum = a + b
+diff = a - b
+prod = a * b
+quot = a / b
 ```
 
 ### Comparison
@@ -171,15 +207,15 @@ if (a >= b) { }
 ### Postfix Operators
 
 ```aether
-i++;
-i--;
+i++
+i--
 ```
 
 ### Member Access
 
 ```aether
-point.x = 10;
-msg.type = 1;
+point.x = 10
+msg.type = 1
 ```
 
 ## Built-in Functions

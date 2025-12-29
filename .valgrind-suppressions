@@ -1,0 +1,26 @@
+# Valgrind suppressions for Aether
+
+# Suppress known false positives from pthread
+{
+   pthread_create_leak
+   Memcheck:Leak
+   ...
+   fun:pthread_create*
+}
+
+# Suppress potential glibc internal allocations
+{
+   glibc_internal
+   Memcheck:Leak
+   ...
+   obj:*/libc-*.so
+}
+
+# Suppress dlopen related leaks
+{
+   dlopen_leak
+   Memcheck:Leak
+   ...
+   fun:dlopen*
+}
+

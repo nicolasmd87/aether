@@ -52,6 +52,15 @@ void lsp_server_run(LSPServer* server) {
                 lsp_handle_hover(server, msg->id, "file:///test.ae", 0, 0);
             } else if (strcmp(msg->method, "textDocument/definition") == 0) {
                 lsp_handle_definition(server, msg->id, "file:///test.ae", 0, 0);
+            } else if (strcmp(msg->method, "textDocument/didOpen") == 0) {
+                lsp_log(server, "Document opened");
+            } else if (strcmp(msg->method, "textDocument/didChange") == 0) {
+                lsp_log(server, "Document changed");
+            } else if (strcmp(msg->method, "textDocument/didSave") == 0) {
+                lsp_log(server, "Document saved - running diagnostics");
+                lsp_publish_diagnostics(server, "file:///test.ae");
+            } else if (strcmp(msg->method, "initialized") == 0) {
+                lsp_log(server, "Client initialized");
             } else if (strcmp(msg->method, "shutdown") == 0) {
                 server->running = 0;
                 lsp_send_response(server, msg->id, "null");
@@ -100,18 +109,34 @@ void lsp_handle_initialize(LSPServer* server, const char* id) {
 }
 
 void lsp_handle_completion(LSPServer* server, const char* id, const char* uri, int line, int character) {
-    // Return completion items for Aether keywords and stdlib
     const char* completions =
         "{"
         "\"isIncomplete\":false,"
         "\"items\":["
-        "{\"label\":\"actor\",\"kind\":14},"
-        "{\"label\":\"spawn\",\"kind\":3},"
-        "{\"label\":\"make\",\"kind\":3},"
-        "{\"label\":\"let\",\"kind\":14},"
-        "{\"label\":\"struct\",\"kind\":14},"
-        "{\"label\":\"import\",\"kind\":14},"
-        "{\"label\":\"export\",\"kind\":14}"
+        "{\"label\":\"actor\",\"kind\":14,\"detail\":\"actor definition\",\"documentation\":\"Define a new actor\"},"
+        "{\"label\":\"spawn\",\"kind\":3,\"detail\":\"spawn actor\",\"documentation\":\"Create a new actor instance\"},"
+        "{\"label\":\"send\",\"kind\":3,\"detail\":\"send message\",\"documentation\":\"Send a message to an actor\"},"
+        "{\"label\":\"receive\",\"kind\":3,\"detail\":\"receive message\",\"documentation\":\"Receive messages in actor\"},"
+        "{\"label\":\"make\",\"kind\":3,\"detail\":\"make actor\",\"documentation\":\"Create actor with initial state\"},"
+        "{\"label\":\"func\",\"kind\":14,\"detail\":\"function definition\",\"documentation\":\"Define a function\"},"
+        "{\"label\":\"main\",\"kind\":3,\"detail\":\"main function\",\"documentation\":\"Program entry point\"},"
+        "{\"label\":\"struct\",\"kind\":14,\"detail\":\"struct definition\",\"documentation\":\"Define a struct type\"},"
+        "{\"label\":\"if\",\"kind\":14,\"detail\":\"if statement\",\"documentation\":\"Conditional statement\"},"
+        "{\"label\":\"else\",\"kind\":14,\"detail\":\"else clause\",\"documentation\":\"Alternative branch\"},"
+        "{\"label\":\"for\",\"kind\":14,\"detail\":\"for loop\",\"documentation\":\"For loop iteration\"},"
+        "{\"label\":\"while\",\"kind\":14,\"detail\":\"while loop\",\"documentation\":\"While loop\"},"
+        "{\"label\":\"return\",\"kind\":14,\"detail\":\"return statement\",\"documentation\":\"Return from function\"},"
+        "{\"label\":\"break\",\"kind\":14,\"detail\":\"break statement\",\"documentation\":\"Exit loop\"},"
+        "{\"label\":\"continue\",\"kind\":14,\"detail\":\"continue statement\",\"documentation\":\"Continue to next iteration\"},"
+        "{\"label\":\"defer\",\"kind\":14,\"detail\":\"defer statement\",\"documentation\":\"Execute at scope exit\"},"
+        "{\"label\":\"true\",\"kind\":12,\"detail\":\"boolean literal\"},"
+        "{\"label\":\"false\",\"kind\":12,\"detail\":\"boolean literal\"},"
+        "{\"label\":\"print\",\"kind\":3,\"detail\":\"print(value)\",\"documentation\":\"Print to stdout\"},"
+        "{\"label\":\"println\",\"kind\":3,\"detail\":\"println(value)\",\"documentation\":\"Print with newline\"},"
+        "{\"label\":\"len\",\"kind\":3,\"detail\":\"len(array)\",\"documentation\":\"Get array length\"},"
+        "{\"label\":\"aether_string_concat\",\"kind\":3,\"detail\":\"string concat\"},"
+        "{\"label\":\"aether_http_get\",\"kind\":3,\"detail\":\"HTTP GET request\"},"
+        "{\"label\":\"aether_socket_connect\",\"kind\":3,\"detail\":\"TCP socket connect\"}"
         "]"
         "}";
     lsp_send_response(server, id, completions);
@@ -137,6 +162,41 @@ void lsp_handle_definition(LSPServer* server, const char* id, const char* uri, i
 void lsp_handle_document_symbol(LSPServer* server, const char* id, const char* uri) {
     // Return document symbols (functions, actors, etc.)
     lsp_send_response(server, id, "[]");
+}
+
+void lsp_publish_diagnostics(LSPServer* server, const char* uri) {
+    const char* source = lsp_document_get(server, uri);
+    if (!source) return;
+    
+    aether_error_init();
+    lexer_init(source);
+    Parser* parser = create_parser();
+    ASTNode* ast = parse_program(parser);
+    
+    if (ast && !aether_error_has_errors()) {
+        typecheck(ast);
+    }
+    
+    char diagnostics[8192] = "{\"uri\":\"";
+    strcat(diagnostics, uri);
+    strcat(diagnostics, "\",\"diagnostics\":[");
+    
+    if (aether_error_has_errors()) {
+        strcat(diagnostics, "{");
+        strcat(diagnostics, "\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":0,\"character\":100}},");
+        strcat(diagnostics, "\"severity\":1,");
+        strcat(diagnostics, "\"message\":\"Compilation error detected\"");
+        strcat(diagnostics, "}");
+    }
+    
+    strcat(diagnostics, "]}");
+    
+    lsp_send_notification(server, "textDocument/publishDiagnostics", diagnostics);
+    
+    if (ast) free_ast(ast);
+    free_parser(parser);
+    lexer_cleanup();
+    aether_error_cleanup();
 }
 
 // JSON-RPC (simplified implementation)

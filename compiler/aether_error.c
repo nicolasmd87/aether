@@ -1,12 +1,43 @@
+/*
+ * Aether Programming Language - Error Reporting
+ * Copyright (c) 2025 Aether Programming Language Contributors
+ * Licensed under the MIT License. See LICENSE file in the project root.
+ */
+
 #include "aether_error.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 static const char* current_filename = NULL;
 static const char* current_source = NULL;
 static int error_count_global = 0;
 static int warning_count_global = 0;
+
+// Get suggestion based on error code
+static const char* get_common_suggestion(AetherErrorCode code) {
+    switch (code) {
+        case AETHER_ERR_SYNTAX:
+            return "check for missing parentheses, braces, or keywords";
+        case AETHER_ERR_TYPE_MISMATCH:
+            return "ensure types are compatible or add explicit type conversion";
+        case AETHER_ERR_UNDEFINED_VAR:
+            return "check spelling or declare the variable before use";
+        case AETHER_ERR_UNDEFINED_FUNC:
+            return "check function name spelling or ensure it's defined before use";
+        case AETHER_ERR_UNDEFINED_TYPE:
+            return "check type name or define the struct/actor first";
+        case AETHER_ERR_REDEFINITION:
+            return "use a different name or remove the duplicate definition";
+        case AETHER_ERR_INVALID_OPERAND:
+            return "ensure operands have compatible types for this operation";
+        case AETHER_ERR_ACTOR_ERROR:
+            return "check actor definition syntax and state variables";
+        default:
+            return NULL;
+    }
+}
 
 void aether_error_init(const char* filename, const char* source) {
     current_filename = filename;
@@ -46,11 +77,19 @@ void aether_error_report(AetherError* error) {
     
     error_count_global++;
     
-    // Print error header
-    fprintf(stderr, "%serror%s: %s\n", 
-            AETHER_COLOR_RED AETHER_COLOR_BOLD,
-            AETHER_COLOR_RESET,
-            error->message);
+    // Print error header with code
+    if (error->code != AETHER_ERR_NONE) {
+        fprintf(stderr, "%serror[E%04d]%s: %s\n", 
+                AETHER_COLOR_RED AETHER_COLOR_BOLD,
+                error->code,
+                AETHER_COLOR_RESET,
+                error->message);
+    } else {
+        fprintf(stderr, "%serror%s: %s\n", 
+                AETHER_COLOR_RED AETHER_COLOR_BOLD,
+                AETHER_COLOR_RESET,
+                error->message);
+    }
     
     // Print location
     if (error->filename) {
@@ -87,11 +126,16 @@ void aether_error_report(AetherError* error) {
             fprintf(stderr, "%s^%s", AETHER_COLOR_RED AETHER_COLOR_BOLD, AETHER_COLOR_RESET);
             
             // Print suggestion on same line if available
-            if (error->suggestion) {
+            const char* suggestion = error->suggestion;
+            if (!suggestion && error->code != AETHER_ERR_NONE) {
+                suggestion = get_common_suggestion(error->code);
+            }
+            
+            if (suggestion) {
                 fprintf(stderr, " %shelp:%s %s",
                         AETHER_COLOR_CYAN,
                         AETHER_COLOR_RESET,
-                        error->suggestion);
+                        suggestion);
             }
             fprintf(stderr, "\n");
         }
@@ -172,7 +216,8 @@ void aether_error_simple(const char* message, int line, int column) {
         .column = column,
         .message = message,
         .suggestion = NULL,
-        .context = NULL
+        .context = NULL,
+        .code = AETHER_ERR_NONE
     };
     aether_error_report(&error);
 }
@@ -185,7 +230,8 @@ void aether_error_with_suggestion(const char* message, int line, int column, con
         .column = column,
         .message = message,
         .suggestion = suggestion,
-        .context = NULL
+        .context = NULL,
+        .code = AETHER_ERR_NONE
     };
     aether_error_report(&error);
 }
@@ -198,7 +244,22 @@ void aether_error_in_context(const char* message, int line, int column, const ch
         .column = column,
         .message = message,
         .suggestion = NULL,
-        .context = context
+        .context = context,
+        .code = AETHER_ERR_NONE
+    };
+    aether_error_report(&error);
+}
+
+void aether_error_with_code(const char* message, int line, int column, AetherErrorCode code) {
+    AetherError error = {
+        .filename = current_filename,
+        .source_code = current_source,
+        .line = line,
+        .column = column,
+        .message = message,
+        .suggestion = NULL,
+        .context = NULL,
+        .code = code
     };
     aether_error_report(&error);
 }

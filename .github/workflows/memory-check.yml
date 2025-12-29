@@ -1,0 +1,190 @@
+name: Memory Leak Detection
+
+on:
+  push:
+    branches: [ main, master, develop ]
+  pull_request:
+    branches: [ main, master, develop ]
+  workflow_dispatch:
+
+jobs:
+  valgrind-test:
+    name: Valgrind Memory Leak Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc make valgrind
+        
+    - name: Build with debug symbols
+      run: |
+        make CFLAGS="-O0 -g" test
+        
+    - name: Run Valgrind on test suite
+      run: |
+        valgrind --leak-check=full \
+                 --show-leak-kinds=all \
+                 --track-origins=yes \
+                 --verbose \
+                 --error-exitcode=1 \
+                 --suppressions=.valgrind-suppressions \
+                 ./build/test_runner 2>&1 | tee valgrind-output.txt
+        
+    - name: Check for leaks
+      run: |
+        if grep -q "definitely lost" valgrind-output.txt; then
+          echo "❌ Memory leaks detected!"
+          exit 1
+        fi
+        if grep -q "ERROR SUMMARY: [1-9]" valgrind-output.txt; then
+          echo "❌ Memory errors detected!"
+          exit 1
+        fi
+        echo "✓ No memory leaks detected"
+        
+    - name: Upload Valgrind report
+      if: always()
+      uses: actions/upload-artifact@v3
+      with:
+        name: valgrind-report
+        path: valgrind-output.txt
+
+  sanitizer-test:
+    name: AddressSanitizer & LeakSanitizer
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Setup GCC
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc make
+        
+    - name: Setup Clang
+      if: matrix.os == 'macos-latest'
+      run: |
+        brew install llvm
+        
+    - name: Build with AddressSanitizer
+      run: |
+        make clean
+        make CFLAGS="-fsanitize=address -fsanitize=leak -fno-omit-frame-pointer -O1 -g" \
+             LDFLAGS="-fsanitize=address -fsanitize=leak"
+        
+    - name: Run tests with ASAN
+      env:
+        ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
+        LSAN_OPTIONS: report_objects=1
+      run: |
+        make test
+        
+    - name: Build with UndefinedBehaviorSanitizer
+      run: |
+        make clean
+        make CFLAGS="-fsanitize=undefined -fno-omit-frame-pointer -O1 -g" \
+             LDFLAGS="-fsanitize=undefined"
+        
+    - name: Run tests with UBSAN
+      run: |
+        make test
+
+  memory-profiling:
+    name: Memory Usage Profiling
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Install dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc make valgrind
+        
+    - name: Build with memory tracking
+      run: |
+        make CFLAGS="-DAETHER_MEMORY_TRACKING -O2 -g"
+        
+    - name: Run memory profiling
+      run: |
+        valgrind --tool=massif \
+                 --massif-out-file=massif.out \
+                 ./build/test_runner
+        
+    - name: Generate memory profile report
+      run: |
+        ms_print massif.out > memory-profile.txt
+        cat memory-profile.txt
+        
+    - name: Check peak memory usage
+      run: |
+        peak=$(grep "peak" massif.out | head -1 | awk '{print $2}')
+        echo "Peak memory usage: $peak bytes"
+        
+        # Fail if peak memory > 100MB
+        if [ "$peak" -gt 104857600 ]; then
+          echo "❌ Peak memory usage too high: $peak bytes"
+          exit 1
+        fi
+        echo "✓ Peak memory usage acceptable"
+        
+    - name: Upload profiling report
+      uses: actions/upload-artifact@v3
+      with:
+        name: memory-profile
+        path: |
+          massif.out
+          memory-profile.txt
+
+  64bit-tests:
+    name: 64-bit Architecture Tests
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v3
+      
+    - name: Setup GCC
+      run: |
+        sudo apt-get update || brew update
+        sudo apt-get install -y gcc make || brew install gcc make
+        
+    - name: Verify 64-bit compilation
+      run: |
+        make
+        file build/aetherc | grep "64-bit"
+        
+    - name: Run tests on 64-bit
+      run: |
+        make test
+        
+    - name: Check pointer size
+      run: |
+        echo "Checking pointer and long size..."
+        echo '#include <stdio.h>' > check_sizes.c
+        echo 'int main() {' >> check_sizes.c
+        echo '  printf("sizeof(void*) = %zu\n", sizeof(void*));' >> check_sizes.c
+        echo '  printf("sizeof(long) = %zu\n", sizeof(long));' >> check_sizes.c
+        echo '  printf("sizeof(size_t) = %zu\n", sizeof(size_t));' >> check_sizes.c
+        echo '  return 0;' >> check_sizes.c
+        echo '}' >> check_sizes.c
+        gcc check_sizes.c -o check_sizes
+        ./check_sizes
+

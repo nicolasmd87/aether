@@ -1,3 +1,11 @@
+/*
+ * Aether Programming Language Compiler
+ * Copyright (c) 2025 Aether Programming Language Contributors
+ * 
+ * This file is part of Aether.
+ * Licensed under the MIT License. See LICENSE file in the project root.
+ */
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,7 +18,7 @@
 
 // Compiler limits
 #define MAX_TOKENS 10000
-#define AETHER_VERSION "0.0.1"
+#define AETHER_VERSION "0.1.0"
 
 // Constants for better maintainability
 #define DEFAULT_MAX_ACTORS 1000

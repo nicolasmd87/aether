@@ -65,7 +65,16 @@ const char* get_c_type(Type* type) {
         case TYPE_BOOL: return "int";
         case TYPE_STRING: return "AetherString*";  // Use runtime string type (pointer)
         case TYPE_VOID: return "void";
-        case TYPE_ACTOR_REF: return "ActorRef*";
+        case TYPE_ACTOR_REF: {
+            // Actor reference is a pointer to the actor struct
+            static char buffer[256];
+            if (type->element_type && type->element_type->kind == TYPE_STRUCT && type->element_type->struct_name) {
+                snprintf(buffer, sizeof(buffer), "%s*", type->element_type->struct_name);
+            } else {
+                snprintf(buffer, sizeof(buffer), "ActorRef*");
+            }
+            return buffer;
+        }
         case TYPE_MESSAGE: return "Message";
         case TYPE_STRUCT: {
             static char buffer[256];
@@ -272,27 +281,48 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
     
     switch (stmt->type) {
         case AST_VARIABLE_DECLARATION: {
-            // Handle array types specially (C syntax: int name[size])
-            if (stmt->node_type && stmt->node_type->kind == TYPE_ARRAY) {
-                const char* elem_type = get_c_type(stmt->node_type->element_type);
-                fprintf(gen->output, "%s %s", elem_type, stmt->value);
-                if (stmt->node_type->array_size > 0) {
-                    fprintf(gen->output, "[%d]", stmt->node_type->array_size);
-                } else {
-                    // Dynamic array - use pointer
-                    fprintf(gen->output, "*");
+            // Check if this is a state variable assignment in an actor
+            int is_state_var = 0;
+            if (gen->current_actor && stmt->value) {
+                for (int i = 0; i < gen->state_var_count; i++) {
+                    if (strcmp(stmt->value, gen->actor_state_vars[i]) == 0) {
+                        is_state_var = 1;
+                        break;
+                    }
                 }
+            }
+            
+            if (is_state_var) {
+                // Generate as assignment to self->field
+                fprintf(gen->output, "self->%s", stmt->value);
+                if (stmt->child_count > 0) {
+                    fprintf(gen->output, " = ");
+                    generate_expression(gen, stmt->children[0]);
+                }
+                fprintf(gen->output, ";\n");
             } else {
-                generate_type(gen, stmt->node_type);
-                fprintf(gen->output, " %s", stmt->value);
+                // Handle array types specially (C syntax: int name[size])
+                if (stmt->node_type && stmt->node_type->kind == TYPE_ARRAY) {
+                    const char* elem_type = get_c_type(stmt->node_type->element_type);
+                    fprintf(gen->output, "%s %s", elem_type, stmt->value);
+                    if (stmt->node_type->array_size > 0) {
+                        fprintf(gen->output, "[%d]", stmt->node_type->array_size);
+                    } else {
+                        // Dynamic array - use pointer
+                        fprintf(gen->output, "*");
+                    }
+                } else {
+                    generate_type(gen, stmt->node_type);
+                    fprintf(gen->output, " %s", stmt->value);
+                }
+                
+                if (stmt->child_count > 0) {
+                    fprintf(gen->output, " = ");
+                    generate_expression(gen, stmt->children[0]);
+                }
+                
+                fprintf(gen->output, ";\n");
             }
-            
-            if (stmt->child_count > 0) {
-                fprintf(gen->output, " = ");
-                generate_expression(gen, stmt->children[0]);
-            }
-            
-            fprintf(gen->output, ";\n");
             break;
         }
         
@@ -429,6 +459,13 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             
         case AST_CONTINUE_STATEMENT:
             print_line(gen, "continue;");
+            break;
+            
+        case AST_DEFER_STATEMENT:
+            if (stmt->child_count > 0) {
+                fprintf(gen->output, "// defer: ");
+                generate_statement(gen, stmt->children[0]);
+            }
             break;
             
         case AST_EXPRESSION_STATEMENT:
@@ -713,6 +750,13 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
     
     print_line(gen, "int main() {");
     indent(gen);
+    
+    // Initialize scheduler if actors were defined
+    if (gen->actor_count > 0) {
+        print_line(gen, "scheduler_init(1);  // Single-threaded for now");
+        print_line(gen, "current_core_id = 0;");
+        print_line(gen, "");
+    }
     
     if (main->child_count > 0) {
         generate_statement(gen, main->children[0]);
