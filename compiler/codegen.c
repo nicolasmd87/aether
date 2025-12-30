@@ -410,6 +410,62 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             print_line(gen, "}");
             break;
             
+        case AST_MATCH_STATEMENT:
+            // Generate match as a series of if-else statements
+            // match (x) { 1 => a, 2 => b, _ => c }
+            // becomes: if (x == 1) { a; } else if (x == 2) { b; } else { c; }
+            if (stmt->child_count > 0) {
+                ASTNode* match_expr = stmt->children[0];
+                
+                for (int i = 1; i < stmt->child_count; i++) {
+                    ASTNode* match_arm = stmt->children[i];
+                    if (match_arm->type != AST_MATCH_ARM || match_arm->child_count < 2) continue;
+                    
+                    ASTNode* pattern = match_arm->children[0];
+                    ASTNode* result = match_arm->children[1];
+                    
+                    // Check if wildcard pattern
+                    int is_wildcard = (pattern->type == AST_LITERAL && 
+                                      pattern->value && 
+                                      strcmp(pattern->value, "_") == 0);
+                    
+                    if (is_wildcard) {
+                        // else clause
+                        if (i > 1) {
+                            fprintf(gen->output, "else {\n");
+                        } else {
+                            fprintf(gen->output, "{\n");
+                        }
+                    } else {
+                        // if or else if clause
+                        if (i > 1) {
+                            fprintf(gen->output, "else if (");
+                        } else {
+                            fprintf(gen->output, "if (");
+                        }
+                        generate_expression(gen, match_expr);
+                        fprintf(gen->output, " == ");
+                        generate_expression(gen, pattern);
+                        fprintf(gen->output, ") {\n");
+                    }
+                    
+                    indent(gen);
+                    if (result->type == AST_BLOCK) {
+                        // Already a block, generate its statements
+                        for (int j = 0; j < result->child_count; j++) {
+                            generate_statement(gen, result->children[j]);
+                        }
+                    } else {
+                        // Single expression, make it a statement
+                        generate_expression(gen, result);
+                        fprintf(gen->output, ";\n");
+                    }
+                    unindent(gen);
+                    print_line(gen, "}");
+                }
+            }
+            break;
+            
         case AST_SWITCH_STATEMENT:
             fprintf(gen->output, "switch (");
             if (stmt->child_count > 0) {
@@ -686,26 +742,146 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
     generate_type(gen, func->node_type);
     fprintf(gen->output, " %s(", func->value);
 
-    // Generate parameters
+    // Generate parameters - handle pattern matching
     int param_count = 0;
-    for (int i = 0; i < func->child_count - 1; i++) { // Last child is body
-        ASTNode* param = func->children[i];
-        if (param->type == AST_VARIABLE_DECLARATION) {
+    int has_guards = 0;
+    int has_list_patterns = 0;
+    ASTNode* body = NULL;
+    
+    for (int i = 0; i < func->child_count; i++) {
+        ASTNode* child = func->children[i];
+        
+        if (child->type == AST_GUARD_CLAUSE) {
+            has_guards = 1;
+            continue;
+        }
+        
+        if (child->type == AST_BLOCK) {
+            body = child;
+            continue;
+        }
+        
+        // Handle different parameter pattern types
+        if (child->type == AST_PATTERN_VARIABLE || 
+            child->type == AST_VARIABLE_DECLARATION) {
             if (param_count > 0) fprintf(gen->output, ", ");
-            generate_type(gen, param->node_type);
-            fprintf(gen->output, " %s", param->value);
+            generate_type(gen, child->node_type);
+            fprintf(gen->output, " %s", child->value);
+            param_count++;
+        } else if (child->type == AST_PATTERN_LITERAL) {
+            // Pattern literal becomes regular parameter
+            if (param_count > 0) fprintf(gen->output, ", ");
+            generate_type(gen, child->node_type);
+            fprintf(gen->output, " _pattern_%d", param_count);
+            param_count++;
+        } else if (child->type == AST_PATTERN_STRUCT) {
+            if (param_count > 0) fprintf(gen->output, ", ");
+            fprintf(gen->output, "%s _pattern_%d", child->value, param_count);
+            param_count++;
+        } else if (child->type == AST_PATTERN_LIST || child->type == AST_PATTERN_CONS) {
+            // List pattern becomes array pointer
+            if (param_count > 0) fprintf(gen->output, ", ");
+            fprintf(gen->output, "int* _list_%d, int _len_%d", param_count, param_count);
+            has_list_patterns = 1;
             param_count++;
         }
     }
 
     fprintf(gen->output, ") {\n");
-
     indent(gen);
-    if (func->child_count > 0) {
-        generate_statement(gen, func->children[func->child_count - 1]); // body
+    
+    // Generate pattern matching checks
+    int pattern_idx = 0;
+    int list_idx = 0;
+    
+    for (int i = 0; i < func->child_count; i++) {
+        ASTNode* child = func->children[i];
+        
+        if (child->type == AST_PATTERN_LITERAL && 
+            strcmp(child->value, "_") != 0) {
+            // Generate pattern match check
+            print_indent(gen);
+            fprintf(gen->output, "if (_pattern_%d != %s) return ", 
+                    pattern_idx, child->value);
+            generate_type(gen, func->node_type);
+            fprintf(gen->output, ";\n");
+        }
+        
+        // Generate list pattern checks
+        if (child->type == AST_PATTERN_LIST) {
+            if (strcmp(child->value, "[]") == 0 && child->child_count == 0) {
+                // Empty list check
+                print_indent(gen);
+                fprintf(gen->output, "if (_len_%d != 0) return ", list_idx);
+                generate_type(gen, func->node_type);
+                fprintf(gen->output, ";\n");
+            } else {
+                // Fixed-size list check
+                print_indent(gen);
+                fprintf(gen->output, "if (_len_%d != %d) return ", 
+                        list_idx, child->child_count);
+                generate_type(gen, func->node_type);
+                fprintf(gen->output, ";\n");
+                
+                // Bind pattern variables to list elements
+                for (int j = 0; j < child->child_count; j++) {
+                    ASTNode* elem = child->children[j];
+                    if (elem->type == AST_PATTERN_VARIABLE) {
+                        print_indent(gen);
+                        fprintf(gen->output, "int %s = _list_%d[%d];\n", 
+                                elem->value, list_idx, j);
+                    }
+                }
+            }
+            list_idx++;
+        } else if (child->type == AST_PATTERN_CONS) {
+            // [H|T] pattern - check non-empty
+            print_indent(gen);
+            fprintf(gen->output, "if (_len_%d < 1) return ", list_idx);
+            generate_type(gen, func->node_type);
+            fprintf(gen->output, ";\n");
+            
+            // Bind head and tail
+            if (child->child_count >= 1 && child->children[0]->type == AST_PATTERN_VARIABLE) {
+                print_indent(gen);
+                fprintf(gen->output, "int %s = _list_%d[0];\n", 
+                        child->children[0]->value, list_idx);
+            }
+            if (child->child_count >= 2 && child->children[1]->type == AST_PATTERN_VARIABLE) {
+                print_indent(gen);
+                fprintf(gen->output, "int* %s = &_list_%d[1];\n", 
+                        child->children[1]->value, list_idx);
+                print_indent(gen);
+                fprintf(gen->output, "int %s_len = _len_%d - 1;\n",
+                        child->children[1]->value, list_idx);
+            }
+            list_idx++;
+        }
+        
+        if (child->type == AST_PATTERN_LITERAL ||
+            child->type == AST_PATTERN_VARIABLE ||
+            child->type == AST_PATTERN_STRUCT ||
+            child->type == AST_VARIABLE_DECLARATION) {
+            pattern_idx++;
+        }
+        
+        // Generate guard clause check
+        if (child->type == AST_GUARD_CLAUSE && child->child_count > 0) {
+            print_indent(gen);
+            fprintf(gen->output, "if (!(");
+            generate_expression(gen, child->children[0]);
+            fprintf(gen->output, ")) return ");
+            generate_type(gen, func->node_type);
+            fprintf(gen->output, ";\n");
+        }
     }
+    
+    // Generate body
+    if (body) {
+        generate_statement(gen, body);
+    }
+    
     unindent(gen);
-
     print_line(gen, "}");
     print_line(gen, "");
 }
@@ -795,6 +971,37 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         if (!child) continue;
         
         switch (child->type) {
+            case AST_MODULE_DECLARATION:
+                // Module declaration: just a comment in generated C
+                print_line(gen, "// Module: %s", child->value ? child->value : "unnamed");
+                print_line(gen, "");
+                break;
+            case AST_IMPORT_STATEMENT:
+                // Import statement: generate include or comment
+                print_line(gen, "// Import: %s", child->value ? child->value : "unnamed");
+                // TODO: Map to actual C includes when module system is complete
+                print_line(gen, "");
+                break;
+            case AST_EXPORT_STATEMENT:
+                // Export: just generate the item (exports are implicit in C)
+                if (child->child_count > 0) {
+                    ASTNode* exported = child->children[0];
+                    print_line(gen, "// Exported:");
+                    switch (exported->type) {
+                        case AST_FUNCTION_DEFINITION:
+                            generate_function_definition(gen, exported);
+                            break;
+                        case AST_STRUCT_DEFINITION:
+                            generate_struct_definition(gen, exported);
+                            break;
+                        case AST_ACTOR_DEFINITION:
+                            generate_actor_definition(gen, exported);
+                            break;
+                        default:
+                            break;
+                    }
+                }
+                break;
             case AST_ACTOR_DEFINITION:
                 generate_actor_definition(gen, child);
                 break;

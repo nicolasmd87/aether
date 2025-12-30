@@ -1,0 +1,185 @@
+// Aether Pattern Matching Showcase
+// Demonstrates Erlang-style pattern matching features
+
+// =============================================================================
+// FIBONACCI - Classic example with literal patterns
+// =============================================================================
+
+fib(0) -> 1
+fib(1) -> 1
+fib(n) when n > 1 -> fib(n-1) + fib(n-2)
+
+// =============================================================================
+// FACTORIAL - Guards for validation
+// =============================================================================
+
+fact(0) -> 1
+fact(n) when n > 0 -> n * fact(n-1)
+fact(_) -> 0  // Invalid input
+
+// =============================================================================
+// LIST OPERATIONS - Cons patterns [H|T]
+// =============================================================================
+
+// Length of list
+len([]) -> 0
+len([_|tail]) -> 1 + len(tail)
+
+// Sum all elements
+sum([]) -> 0
+sum([head|tail]) -> head + sum(tail)
+
+// First element
+first([h|_]) -> h
+first([]) -> 0
+
+// Last element  
+last([x]) -> x
+last([_|t]) -> last(t)
+last([]) -> 0
+
+// =============================================================================
+// PATTERN GUARDS - Complex conditions
+// =============================================================================
+
+classify(x) when x < 0 -> "negative"
+classify(x) when x == 0 -> "zero"
+classify(x) when x > 0 -> "positive"
+
+safe_div(x, y) when y != 0 -> x / y
+safe_div(_, 0) -> 0
+
+// =============================================================================
+// STRUCT PATTERNS - Destructuring
+// =============================================================================
+
+struct Point { int x int y }
+
+is_origin(Point{x: 0, y: 0}) -> true
+is_origin(_) -> false
+
+get_x(Point{x: val, y: _}) -> val
+get_y(Point{x: _, y: val}) -> val
+
+manhattan(Point{x: x1, y: y1}, Point{x: x2, y: y2}) ->
+    abs(x2 - x1) + abs(y2 - y1)
+
+// =============================================================================
+// BOOLEAN PATTERNS
+// =============================================================================
+
+not(true) -> false
+not(false) -> true
+
+and_gate(true, true) -> true
+and_gate(_, _) -> false
+
+or_gate(false, false) -> false
+or_gate(_, _) -> true
+
+// =============================================================================
+// STRING PATTERNS
+// =============================================================================
+
+greet("Alice") -> "Hello Alice!"
+greet("Bob") -> "Hello Bob!"
+greet(_) -> "Hello stranger!"
+
+// =============================================================================
+// WILDCARD PATTERNS - Ignoring values
+// =============================================================================
+
+always_42(_) -> 42
+first_of_two(x, _) -> x
+second_of_two(_, y) -> y
+ignore_all(_, _, _) -> 0
+
+// =============================================================================
+// MATCH EXPRESSIONS - Pattern matching in code
+// =============================================================================
+
+describe_number(n) {
+    result = match (n) {
+        0 => "zero"
+        1 => "one"  
+        2 => "two"
+        _ => "many"
+    }
+    return result
+}
+
+process_status(code) {
+    match (code) {
+        200 => print("OK")
+        404 => print("Not Found")
+        500 => print("Server Error")
+        _ => print("Unknown")
+    }
+}
+
+// =============================================================================
+// COMPLEX GUARDS
+// =============================================================================
+
+in_range(x, min, max) when x >= min && x <= max -> true
+in_range(_, _, _) -> false
+
+is_even(n) when n % 2 == 0 -> true
+is_even(_) -> false
+
+is_positive_even(n) when n > 0 && n % 2 == 0 -> true
+is_positive_even(_) -> false
+
+// =============================================================================
+// MIXED TRADITIONAL AND PATTERN MATCHING
+// =============================================================================
+
+// Traditional function
+square(x) {
+    return x * x
+}
+
+// Pattern matching function
+sign(x) when x > 0 -> 1
+sign(x) when x < 0 -> -1
+sign(0) -> 0
+
+// =============================================================================
+// MAIN - Testing everything
+// =============================================================================
+
+main() {
+    // Fibonacci
+    f5 = fib(5)
+    print(f5)
+    
+    // Factorial
+    f_4 = fact(4)
+    print(f_4)
+    
+    // Lists
+    my_list = [1, 2, 3, 4, 5]
+    list_len = len(my_list)
+    list_sum = sum(my_list)
+    print(list_len)
+    print(list_sum)
+    
+    // Pattern matching
+    x = 2
+    match (x) {
+        1 => print("one")
+        2 => print("two")
+        _ => print("other")
+    }
+    
+    // Struct patterns
+    p = Point{ x: 5, y: 10 }
+    x_val = get_x(p)
+    print(x_val)
+    
+    // Guards
+    num = 42
+    category = classify(num)
+    print(category)
+}
+

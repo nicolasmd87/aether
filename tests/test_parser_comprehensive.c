@@ -8,13 +8,18 @@ static ASTNode* parse_code(const char* code) {
     Token** tokens = malloc(1000 * sizeof(Token*));
     int count = 0;
     Token* tok;
-    while ((tok = next_token())->type != TOKEN_EOF && count < 999) {
+    int safety = 0;
+    const int MAX_TOKENS = 999;
+    while (safety++ < MAX_TOKENS && (tok = next_token())->type != TOKEN_EOF && count < MAX_TOKENS) {
         tokens[count++] = tok;
     }
-    tokens[count++] = tok;
+    if (tok && tok->type == TOKEN_EOF) {
+        tokens[count++] = tok;
+    }
     Parser* parser = create_parser(tokens, count);
     ASTNode* ast = parse_program(parser);
     free_parser(parser);
+    free(tokens);
     return ast;
 }
 

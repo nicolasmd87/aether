@@ -20,6 +20,7 @@ typedef enum {
     TOKEN_RETURN,
     TOKEN_DEFER,
     TOKEN_MATCH,
+    TOKEN_WHEN,
     TOKEN_RECEIVE,
     TOKEN_SEND,
     TOKEN_SPAWN_ACTOR,

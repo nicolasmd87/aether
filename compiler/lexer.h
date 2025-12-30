@@ -11,7 +11,7 @@ Token* next_token(void);
 char peek(void);
 char advance(void);
 void skip_whitespace(void);
-void skip_comment(void);
+int skip_comment(void);
 Token* read_string(void);
 Token* read_number(void);
 Token* read_identifier(void);

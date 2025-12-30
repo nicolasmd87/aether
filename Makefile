@@ -30,8 +30,23 @@ COMPILER_LIB_SRC = compiler/lexer.c compiler/parser.c compiler/ast.c compiler/ty
 RUNTIME_SRC = runtime/multicore_scheduler.c runtime/memory.c runtime/aether_arena.c runtime/aether_pool.c runtime/aether_memory_stats.c runtime/aether_tracing.c runtime/aether_bounds_check.c runtime/aether_test.c
 STD_SRC = std/string/aether_string.c std/io/aether_io.c std/math/aether_math.c std/net/aether_http.c std/net/aether_net.c std/collections/aether_collections.c std/json/aether_json.c
 
-# Exclude test files that have main() functions
-TEST_SRC = $(filter-out tests/test_runtime_manual.c, $(wildcard tests/test_*.c))
+# Only include new-style tests that use TEST() macro (exclude old tests with their own main())
+TEST_SRC = tests/test_harness.c \
+           tests/test_main.c \
+           tests/test_lexer_comprehensive.c \
+           tests/test_parser_comprehensive.c \
+           tests/test_type_inference_comprehensive.c \
+           tests/test_memory_arena.c \
+           tests/test_memory_pool.c \
+           tests/test_memory_stress.c \
+           tests/test_memory_leaks.c \
+           tests/test_64bit.c \
+           tests/test_runtime_math.c \
+           tests/test_runtime_collections.c \
+           tests/test_runtime_json.c \
+           tests/test_runtime_http.c \
+           tests/test_runtime_net.c \
+           tests/test_runtime_strings.c
 
 all: compiler
 

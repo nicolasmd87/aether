@@ -172,8 +172,12 @@ void print_ast(ASTNode* node, int indent) {
 const char* ast_node_type_to_string(ASTNodeType type) {
     switch (type) {
         case AST_PROGRAM: return "PROGRAM";
+        case AST_MODULE_DECLARATION: return "MODULE_DECLARATION";
+        case AST_IMPORT_STATEMENT: return "IMPORT_STATEMENT";
+        case AST_EXPORT_STATEMENT: return "EXPORT_STATEMENT";
         case AST_ACTOR_DEFINITION: return "ACTOR_DEFINITION";
         case AST_FUNCTION_DEFINITION: return "FUNCTION_DEFINITION";
+        case AST_FUNCTION_CLAUSE: return "FUNCTION_CLAUSE";
         case AST_MAIN_FUNCTION: return "MAIN_FUNCTION";
         case AST_STRUCT_DEFINITION: return "STRUCT_DEFINITION";
         case AST_STRUCT_FIELD: return "STRUCT_FIELD";
@@ -190,6 +194,13 @@ const char* ast_node_type_to_string(ASTNodeType type) {
         case AST_CONTINUE_STATEMENT: return "CONTINUE_STATEMENT";
         case AST_EXPRESSION_STATEMENT: return "EXPRESSION_STATEMENT";
         case AST_MATCH_STATEMENT: return "MATCH_STATEMENT";
+        case AST_MATCH_ARM: return "MATCH_ARM";
+        case AST_PATTERN_LITERAL: return "PATTERN_LITERAL";
+        case AST_PATTERN_VARIABLE: return "PATTERN_VARIABLE";
+        case AST_PATTERN_STRUCT: return "PATTERN_STRUCT";
+        case AST_PATTERN_LIST: return "PATTERN_LIST";
+        case AST_PATTERN_CONS: return "PATTERN_CONS";
+        case AST_GUARD_CLAUSE: return "GUARD_CLAUSE";
         case AST_RECEIVE_STATEMENT: return "RECEIVE_STATEMENT";
         case AST_SEND_STATEMENT: return "SEND_STATEMENT";
         case AST_SPAWN_ACTOR_STATEMENT: return "SPAWN_ACTOR_STATEMENT";

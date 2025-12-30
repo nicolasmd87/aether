@@ -28,6 +28,7 @@ void register_test(const char* name, TestFunction func) {
 
 void run_all_tests(void) {
     printf("Running %d test(s)...\n\n", test_count);
+    fflush(stdout);
     
     for (int i = 0; i < test_count; i++) {
         printf("[%d/%d] Running test: %s\n", i + 1, test_count, tests[i].name);
@@ -54,14 +55,22 @@ void run_all_tests(void) {
     }
     
     printf("\n");
+    fflush(stdout);
     printf("========================================\n");
+    fflush(stdout);
     printf("Test Results: %d passed, %d failed, %d total\n", 
            passed_count, failed_count, test_count);
+    fflush(stdout);
     printf("========================================\n");
+    fflush(stdout);
     
     if (failed_count > 0) {
+        printf("Exiting with failure status...\n");
+        fflush(stdout);
         exit(1);
     }
+    printf("All tests completed successfully.\n");
+    fflush(stdout);
 }
 
 int get_test_count(void) {

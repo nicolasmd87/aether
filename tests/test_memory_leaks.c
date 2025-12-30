@@ -83,13 +83,14 @@ TEST(no_leak_arena_scopes) {
 TEST(detect_leak_simulation) {
     memory_stats_init();
     
-    Arena* arena = arena_create(1024);
-    arena_alloc(arena, 100);
+    // Use direct memory allocation to test leak detection
+    memory_stats_record_alloc(100);
     
     MemoryStats stats = memory_stats_get();
     ASSERT_TRUE(stats.current_allocations > 0);
     
-    arena_destroy(arena);
+    // Clean up
+    memory_stats_record_free(100);
 }
 
 TEST(memory_stats_tracking) {

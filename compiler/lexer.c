@@ -50,12 +50,13 @@ void skip_whitespace() {
     }
 }
 
-void skip_comment() {
+int skip_comment() {
     if (peek() == '/' && current_pos + 1 < source_length && source[current_pos + 1] == '/') {
         // Single line comment
         while (current_pos < source_length && peek() != '\n') {
             advance();
         }
+        return 1;
     } else if (peek() == '/' && current_pos + 1 < source_length && source[current_pos + 1] == '*') {
         // Multi-line comment
         advance(); // skip /
@@ -68,7 +69,9 @@ void skip_comment() {
             }
             advance();
         }
+        return 1;
     }
+    return 0;
 }
 
 Token* read_string() {
@@ -141,6 +144,7 @@ Token* read_identifier() {
     if (strcmp(buffer, "return") == 0) return create_token(TOKEN_RETURN, buffer, current_line, current_column);
     if (strcmp(buffer, "defer") == 0) return create_token(TOKEN_DEFER, buffer, current_line, current_column);
     if (strcmp(buffer, "match") == 0) return create_token(TOKEN_MATCH, buffer, current_line, current_column);
+    if (strcmp(buffer, "when") == 0) return create_token(TOKEN_WHEN, buffer, current_line, current_column);
     if (strcmp(buffer, "receive") == 0) return create_token(TOKEN_RECEIVE, buffer, current_line, current_column);
     if (strcmp(buffer, "send") == 0) return create_token(TOKEN_SEND, buffer, current_line, current_column);
     if (strcmp(buffer, "spawn_actor") == 0) return create_token(TOKEN_SPAWN_ACTOR, buffer, current_line, current_column);
@@ -175,8 +179,7 @@ Token* next_token() {
     char c = peek();
     
     // Handle comments
-    if (c == '/') {
-        skip_comment();
+    if (c == '/' && skip_comment()) {
         return next_token(); // Recursively get next token after comment
     }
     
@@ -317,6 +320,7 @@ const char* token_type_to_string(AeTokenType type) {
         case TOKEN_CONTINUE: return "CONTINUE";
         case TOKEN_RETURN: return "RETURN";
         case TOKEN_MATCH: return "MATCH";
+        case TOKEN_WHEN: return "WHEN";
         case TOKEN_RECEIVE: return "RECEIVE";
         case TOKEN_SEND: return "SEND";
         case TOKEN_SPAWN_ACTOR: return "SPAWN_ACTOR";

@@ -483,6 +483,9 @@ ASTNode* parse_statement(Parser* parser) {
         case TOKEN_SWITCH:
             return parse_switch_statement(parser);
             
+        case TOKEN_MATCH:
+            return parse_match_statement(parser);
+            
         case TOKEN_RETURN:
             return parse_return_statement(parser);
             
@@ -762,6 +765,223 @@ ASTNode* parse_case_statement(Parser* parser) {
     return NULL;
 }
 
+// Parse match statement (pattern matching)
+// Syntax:
+//   match (expr) {
+//     pattern => expression
+//     pattern => { statements }
+//     _ => default_case
+//   }
+ASTNode* parse_match_statement(Parser* parser) {
+    advance_token(parser); // consume 'match'
+    
+    // Parse the expression to match on
+    expect_token(parser, TOKEN_LEFT_PAREN);
+    ASTNode* expression = parse_expression(parser);
+    if (!expression) return NULL;
+    expect_token(parser, TOKEN_RIGHT_PAREN);
+    
+    expect_token(parser, TOKEN_LEFT_BRACE);
+    
+    ASTNode* match_stmt = create_ast_node(AST_MATCH_STATEMENT, NULL, 0, 0);
+    add_child(match_stmt, expression);
+    
+    int iteration_count = 0;
+    const int MAX_CASES = 1000;
+    
+    // Parse match arms
+    while (!match_token(parser, TOKEN_RIGHT_BRACE) && !is_at_end(parser)) {
+        if (++iteration_count > MAX_CASES) {
+            fprintf(stderr, "Error: Too many match arms (max %d)\n", MAX_CASES);
+            return match_stmt;
+        }
+        
+        ASTNode* match_arm = parse_match_case(parser);
+        if (match_arm) {
+            add_child(match_stmt, match_arm);
+        } else {
+            fprintf(stderr, "Parse error: Expected match arm in match statement\n");
+            advance_token(parser);
+        }
+    }
+    
+    return match_stmt;
+}
+
+// Parse a single match arm
+// pattern => expression
+// pattern => { block }
+ASTNode* parse_match_case(Parser* parser) {
+    Token* current = peek_token(parser);
+    if (!current) return NULL;
+    
+    // Parse pattern (simplified: just expressions or underscore for wildcard)
+    ASTNode* pattern = NULL;
+    
+    if (current->type == TOKEN_IDENTIFIER && strcmp(current->value, "_") == 0) {
+        // Wildcard pattern
+        advance_token(parser);
+        pattern = create_ast_node(AST_LITERAL, "_", current->line, current->column);
+        pattern->node_type = create_type(TYPE_WILDCARD);
+    } else {
+        // Expression pattern (literal, identifier, etc.)
+        pattern = parse_expression(parser);
+        if (!pattern) return NULL;
+    }
+    
+    // Expect => arrow
+    expect_token(parser, TOKEN_ARROW);
+    
+    // Parse the result (expression or block)
+    ASTNode* result = NULL;
+    Token* next = peek_token(parser);
+    
+    if (next && next->type == TOKEN_LEFT_BRACE) {
+        // Block result
+        result = parse_block(parser);
+    } else {
+        // Expression result
+        result = parse_expression(parser);
+    }
+    
+    if (!result) return NULL;
+    
+    // Optional comma or newline
+    Token* separator = peek_token(parser);
+    if (separator && separator->type == TOKEN_COMMA) {
+        advance_token(parser);
+    }
+    
+    // Create match arm node
+    ASTNode* match_arm = create_ast_node(AST_MATCH_ARM, NULL, 0, 0);
+    add_child(match_arm, pattern);
+    add_child(match_arm, result);
+    
+    return match_arm;
+}
+
+// Parse module declaration
+// Syntax: module name.subname
+ASTNode* parse_module_declaration(Parser* parser) {
+    Token* module_token = advance_token(parser);  // consume 'module'
+    
+    Token* name_token = expect_token(parser, TOKEN_IDENTIFIER);
+    if (!name_token) return NULL;
+    
+    // Build full module name (handle dotted notation)
+    char module_name[256] = {0};
+    strncpy(module_name, name_token->value, sizeof(module_name) - 1);
+    
+    while (match_token(parser, TOKEN_DOT)) {
+        Token* part = expect_token(parser, TOKEN_IDENTIFIER);
+        if (!part) break;
+        strncat(module_name, ".", sizeof(module_name) - strlen(module_name) - 1);
+        strncat(module_name, part->value, sizeof(module_name) - strlen(module_name) - 1);
+    }
+    
+    ASTNode* module_decl = create_ast_node(AST_MODULE_DECLARATION, module_name, 
+                                          module_token->line, module_token->column);
+    return module_decl;
+}
+
+// Parse import statement
+// Syntax: import module.name
+// Syntax: import module.name (symbol1, symbol2)
+// Syntax: import module.name as alias
+ASTNode* parse_import_statement(Parser* parser) {
+    Token* import_token = advance_token(parser);  // consume 'import'
+    
+    Token* name_token = expect_token(parser, TOKEN_IDENTIFIER);
+    if (!name_token) return NULL;
+    
+    // Build module name (handle dotted notation)
+    char module_name[256] = {0};
+    strncpy(module_name, name_token->value, sizeof(module_name) - 1);
+    
+    while (match_token(parser, TOKEN_DOT)) {
+        Token* part = expect_token(parser, TOKEN_IDENTIFIER);
+        if (!part) break;
+        strncat(module_name, ".", sizeof(module_name) - strlen(module_name) - 1);
+        strncat(module_name, part->value, sizeof(module_name) - strlen(module_name) - 1);
+    }
+    
+    ASTNode* import_stmt = create_ast_node(AST_IMPORT_STATEMENT, module_name,
+                                          import_token->line, import_token->column);
+    
+    // Check for selective import: import mod (a, b, c)
+    if (match_token(parser, TOKEN_LEFT_PAREN)) {
+        do {
+            Token* symbol = expect_token(parser, TOKEN_IDENTIFIER);
+            if (!symbol) break;
+            
+            ASTNode* symbol_node = create_ast_node(AST_IDENTIFIER, symbol->value, 
+                                                  symbol->line, symbol->column);
+            add_child(import_stmt, symbol_node);
+        } while (match_token(parser, TOKEN_COMMA));
+        
+        expect_token(parser, TOKEN_RIGHT_PAREN);
+    }
+    
+    // Check for alias: import mod as alias
+    Token* next = peek_token(parser);
+    if (next && next->type == TOKEN_IDENTIFIER && strcmp(next->value, "as") == 0) {
+        advance_token(parser);  // consume 'as'
+        Token* alias = expect_token(parser, TOKEN_IDENTIFIER);
+        if (alias) {
+            ASTNode* alias_node = create_ast_node(AST_IDENTIFIER, alias->value,
+                                                 alias->line, alias->column);
+            // Store alias as last child
+            add_child(import_stmt, alias_node);
+        }
+    }
+    
+    return import_stmt;
+}
+
+// Parse export statement
+// Syntax: export func_name
+// Syntax: export struct Point { ... }
+// Syntax: export actor Worker { ... }
+ASTNode* parse_export_statement(Parser* parser) {
+    Token* export_token = advance_token(parser);  // consume 'export'
+    
+    ASTNode* export_stmt = create_ast_node(AST_EXPORT_STATEMENT, NULL,
+                                          export_token->line, export_token->column);
+    
+    Token* next = peek_token(parser);
+    if (!next) return NULL;
+    
+    ASTNode* exported_item = NULL;
+    
+    switch (next->type) {
+        case TOKEN_FUNC:
+            advance_token(parser);
+            exported_item = parse_function_definition(parser);
+            break;
+        case TOKEN_STRUCT:
+            exported_item = parse_struct_definition(parser);
+            break;
+        case TOKEN_ACTOR:
+            exported_item = parse_actor_definition(parser);
+            break;
+        case TOKEN_IDENTIFIER:
+            // Export existing symbol: export my_func
+            exported_item = create_ast_node(AST_IDENTIFIER, next->value,
+                                          next->line, next->column);
+            advance_token(parser);
+            break;
+        default:
+            parser_error(parser, "Expected function, struct, actor, or identifier after 'export'");
+            return NULL;
+    }
+    
+    if (exported_item) {
+        add_child(export_stmt, exported_item);
+    }
+    
+    return export_stmt;
+}
+
 ASTNode* parse_return_statement(Parser* parser) {
     advance_token(parser); // return
     ASTNode* value = NULL;
@@ -953,9 +1173,13 @@ ASTNode* parse_receive_statement(Parser* parser) {
 }
 
 ASTNode* parse_function_definition(Parser* parser) {
-    // Functions work without types - they're inferred!
-    // Syntax: name(param1, param2) { ... }
-    // Or: name(param1: type, param2) { ... }  (mixed)
+    // Erlang-style pattern matching functions!
+    // Syntax: 
+    //   fib(0) -> 1
+    //   fib(1) -> 1
+    //   fib(n) when n > 1 -> fib(n-1) + fib(n-2)
+    // Or traditional:
+    //   name(param1, param2) { ... }
     
     Token* name = expect_token(parser, TOKEN_IDENTIFIER);
     if (!name) return NULL;
@@ -964,52 +1188,224 @@ ASTNode* parse_function_definition(Parser* parser) {
     
     ASTNode* func = create_ast_node(AST_FUNCTION_DEFINITION, name->value, name->line, name->column);
     
-    // Parse parameters (types optional!)
+    // Parse parameters - can be patterns!
     if (!match_token(parser, TOKEN_RIGHT_PAREN)) {
         do {
-            Token* param_name = expect_token(parser, TOKEN_IDENTIFIER);
-            if (!param_name) break;
-            
-            ASTNode* param = create_ast_node(AST_VARIABLE_DECLARATION, param_name->value, 
-                                            param_name->line, param_name->column);
-            
-            // Optional type annotation: param: type
-            if (match_token(parser, TOKEN_COLON)) {
-                Type* param_type = parse_type(parser);
-                if (param_type) {
-                    param->node_type = param_type;
-                }
-            } else {
-                // No type annotation - will be inferred
-                param->node_type = create_type(TYPE_UNKNOWN);
-            }
-            
+            ASTNode* param = parse_pattern(parser);
+            if (!param) break;
             add_child(func, param);
-            
         } while (match_token(parser, TOKEN_COMMA));
         
-        // Consume closing paren
         expect_token(parser, TOKEN_RIGHT_PAREN);
     }
     
-    // Optional return type annotation: -> type
-    Type* return_type = create_type(TYPE_UNKNOWN);  // Will be inferred if not specified
-    if (match_token(parser, TOKEN_ARROW)) {
+    // Check for guard clause: when condition
+    ASTNode* guard = NULL;
+    if (match_token(parser, TOKEN_WHEN)) {
+        ASTNode* guard_expr = parse_expression(parser);
+        if (guard_expr) {
+            guard = create_ast_node(AST_GUARD_CLAUSE, NULL, 0, 0);
+            add_child(guard, guard_expr);
+            add_child(func, guard);
+        }
+    }
+    
+    // Optional return type annotation: -> type (before arrow body)
+    Type* return_type = create_type(TYPE_UNKNOWN);
+    Token* next = peek_token(parser);
+    if (next && next->type == TOKEN_COLON) {
+        advance_token(parser);  // consume ':'
         Type* parsed_type = parse_type(parser);
         if (parsed_type) {
             free_type(return_type);
             return_type = parsed_type;
         }
+        next = peek_token(parser);
     }
-    
     func->node_type = return_type;
     
-    ASTNode* body = parse_block(parser);
-    if (body) {
-        add_child(func, body);
+    // Check for Erlang-style arrow body: -> expr
+    if (match_token(parser, TOKEN_ARROW)) {
+        ASTNode* body_expr = parse_expression(parser);
+        if (body_expr) {
+            // Wrap in a return statement
+            ASTNode* return_stmt = create_ast_node(AST_RETURN_STATEMENT, NULL, 0, 0);
+            add_child(return_stmt, body_expr);
+            
+            ASTNode* body_block = create_ast_node(AST_BLOCK, NULL, 0, 0);
+            add_child(body_block, return_stmt);
+            add_child(func, body_block);
+        }
+    } else {
+        // Traditional block body
+        ASTNode* body = parse_block(parser);
+        if (body) {
+            add_child(func, body);
+        }
     }
     
     return func;
+}
+
+// Parse pattern for function parameters and match expressions
+// Supports: literals (0, "foo"), variables (n), wildcards (_), structs
+ASTNode* parse_pattern(Parser* parser) {
+    Token* token = peek_token(parser);
+    if (!token) return NULL;
+    
+    switch (token->type) {
+        case TOKEN_NUMBER: {
+            advance_token(parser);
+            ASTNode* pattern = create_ast_node(AST_PATTERN_LITERAL, token->value, 
+                                              token->line, token->column);
+            pattern->node_type = create_type(TYPE_INT);
+            return pattern;
+        }
+        
+        case TOKEN_STRING_LITERAL: {
+            advance_token(parser);
+            ASTNode* pattern = create_ast_node(AST_PATTERN_LITERAL, token->value,
+                                              token->line, token->column);
+            pattern->node_type = create_type(TYPE_STRING);
+            return pattern;
+        }
+        
+        case TOKEN_TRUE:
+        case TOKEN_FALSE: {
+            advance_token(parser);
+            ASTNode* pattern = create_ast_node(AST_PATTERN_LITERAL, token->value,
+                                              token->line, token->column);
+            pattern->node_type = create_type(TYPE_BOOL);
+            return pattern;
+        }
+        
+        case TOKEN_IDENTIFIER: {
+            // Check if it's a wildcard _
+            if (strcmp(token->value, "_") == 0) {
+                advance_token(parser);
+                ASTNode* pattern = create_ast_node(AST_PATTERN_LITERAL, "_", 
+                                                  token->line, token->column);
+                pattern->node_type = create_type(TYPE_WILDCARD);
+                return pattern;
+            }
+            
+            // Check if it's a struct pattern: Point{x: 0, y: 0}
+            Token* next = peek_ahead(parser, 1);
+            if (next && next->type == TOKEN_LEFT_BRACE) {
+                return parse_struct_pattern(parser);
+            }
+            
+            // Regular variable pattern
+            advance_token(parser);
+            ASTNode* pattern = create_ast_node(AST_PATTERN_VARIABLE, token->value,
+                                              token->line, token->column);
+            
+            // Optional type annotation: param: type
+            if (match_token(parser, TOKEN_COLON)) {
+                Type* param_type = parse_type(parser);
+                if (param_type) {
+                    pattern->node_type = param_type;
+                } else {
+                    pattern->node_type = create_type(TYPE_UNKNOWN);
+                }
+            } else {
+                pattern->node_type = create_type(TYPE_UNKNOWN);
+            }
+            
+            return pattern;
+        }
+        
+        case TOKEN_LEFT_BRACKET: {
+            // List pattern: [], [x], [H|T]
+            return parse_list_pattern(parser);
+        }
+        
+        default:
+            // Fallback to expression
+            return parse_expression(parser);
+    }
+}
+
+// Parse struct pattern: Point{x: 0, y: _}
+ASTNode* parse_struct_pattern(Parser* parser) {
+    Token* name = expect_token(parser, TOKEN_IDENTIFIER);
+    if (!name) return NULL;
+    
+    expect_token(parser, TOKEN_LEFT_BRACE);
+    
+    ASTNode* pattern = create_ast_node(AST_PATTERN_STRUCT, name->value, 
+                                      name->line, name->column);
+    
+    if (!match_token(parser, TOKEN_RIGHT_BRACE)) {
+        do {
+            Token* field = expect_token(parser, TOKEN_IDENTIFIER);
+            if (!field) break;
+            
+            expect_token(parser, TOKEN_COLON);
+            
+            ASTNode* field_pattern = parse_pattern(parser);
+            if (field_pattern) {
+                // Store field name in pattern
+                ASTNode* field_node = create_ast_node(AST_ASSIGNMENT, field->value,
+                                                     field->line, field->column);
+                add_child(field_node, field_pattern);
+                add_child(pattern, field_node);
+            }
+        } while (match_token(parser, TOKEN_COMMA));
+        
+        expect_token(parser, TOKEN_RIGHT_BRACE);
+    }
+    
+    return pattern;
+}
+
+// Parse list pattern: [], [x], [x, y], [H|T]
+ASTNode* parse_list_pattern(Parser* parser) {
+    Token* bracket = expect_token(parser, TOKEN_LEFT_BRACKET);
+    if (!bracket) return NULL;
+    
+    // Empty list: []
+    if (match_token(parser, TOKEN_RIGHT_BRACKET)) {
+        ASTNode* pattern = create_ast_node(AST_PATTERN_LIST, "[]", 
+                                          bracket->line, bracket->column);
+        pattern->node_type = create_array_type(create_type(TYPE_UNKNOWN), -1);
+        return pattern;
+    }
+    
+    // Parse first element
+    ASTNode* first = parse_pattern(parser);
+    if (!first) return NULL;
+    
+    // Check for cons pattern: [H|T]
+    if (match_token(parser, TOKEN_PIPE)) {
+        ASTNode* tail = parse_pattern(parser);
+        if (!tail) return NULL;
+        
+        expect_token(parser, TOKEN_RIGHT_BRACKET);
+        
+        // Create cons pattern node
+        ASTNode* cons = create_ast_node(AST_PATTERN_CONS, "[|]", 
+                                       bracket->line, bracket->column);
+        cons->node_type = create_array_type(create_type(TYPE_UNKNOWN), -1);
+        add_child(cons, first);   // Head
+        add_child(cons, tail);    // Tail
+        return cons;
+    }
+    
+    // Regular list pattern: [x, y, z]
+    ASTNode* list = create_ast_node(AST_PATTERN_LIST, "[]",
+                                   bracket->line, bracket->column);
+    list->node_type = create_array_type(create_type(TYPE_UNKNOWN), -1);
+    add_child(list, first);
+    
+    while (match_token(parser, TOKEN_COMMA)) {
+        ASTNode* elem = parse_pattern(parser);
+        if (!elem) break;
+        add_child(list, elem);
+    }
+    
+    expect_token(parser, TOKEN_RIGHT_BRACKET);
+    return list;
 }
 
 ASTNode* parse_main_function(Parser* parser) {
@@ -1091,6 +1487,15 @@ ASTNode* parse_program(Parser* parser) {
         ASTNode* node = NULL;
         
         switch (token->type) {
+            case TOKEN_MODULE:
+                node = parse_module_declaration(parser);
+                break;
+            case TOKEN_IMPORT:
+                node = parse_import_statement(parser);
+                break;
+            case TOKEN_EXPORT:
+                node = parse_export_statement(parser);
+                break;
             case TOKEN_ACTOR:
                 node = parse_actor_definition(parser);
                 break;

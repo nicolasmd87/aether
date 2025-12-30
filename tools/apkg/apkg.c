@@ -104,17 +104,34 @@ int apkg_install(const char* package) {
     }
     fclose(manifest);
     
-    printf("Resolving dependencies...\n");
-    printf("Downloading '%s'...\n", package);
+    // Check if package is in cache
+    PackageInfo info = apkg_find_package(package);
+    
+    if (!info.exists) {
+        printf("Package not found in cache, downloading...\n");
+        if (apkg_download_package(package, "latest") != 0) {
+            fprintf(stderr, "Failed to download package\n");
+            free(info.name);
+            free(info.path);
+            return 1;
+        }
+    } else {
+        printf("Using cached package: %s\n", info.path);
+    }
+    
+    // Add to aether.toml dependencies
+    FILE* toml = fopen("aether.toml", "a");
+    if (toml) {
+        fprintf(toml, "\n# Added by apkg install\n");
+        fprintf(toml, "%s = \"latest\"\n", package);
+        fclose(toml);
+        printf("✓ Added %s to dependencies\n", package);
+    }
+    
+    free(info.name);
+    free(info.path);
     
     printf("✓ Package '%s' installed\n", package);
-    printf("\nTODO: Full dependency resolution not yet implemented.\n");
-    printf("Package manager will:\n");
-    printf("  1. Parse aether.toml\n");
-    printf("  2. Resolve version constraints\n");
-    printf("  3. Download from registry (GitHub-based initially)\n");
-    printf("  4. Update aether.lock\n");
-    
     return 0;
 }
 
@@ -262,10 +279,123 @@ int apkg_save_manifest(Package* pkg, const char* path) {
 
 PackageInfo apkg_find_package(const char* name) {
     PackageInfo info = {0};
+    info.name = strdup(name);
+    
+    // Determine cache location
+    char cache_dir[512];
+    #ifdef _WIN32
+        const char* home = getenv("USERPROFILE");
+        snprintf(cache_dir, sizeof(cache_dir), "%s\\.aether\\packages", home ? home : ".");
+    #else
+        const char* home = getenv("HOME");
+        snprintf(cache_dir, sizeof(cache_dir), "%s/.aether/packages", home ? home : ".");
+    #endif
+    
+    // Build full path
+    char full_path[1024];
+    snprintf(full_path, sizeof(full_path), "%s/%s", cache_dir, name);
+    
+    info.path = strdup(full_path);
+    info.exists = (access(full_path, F_OK) == 0);
+    
     return info;
 }
 
 int apkg_download_package(const char* name, const char* version) {
+    // Parse GitHub URL from package name
+    // Expected format: github.com/user/repo
+    if (strncmp(name, "github.com/", 11) != 0) {
+        fprintf(stderr, "Error: Only GitHub packages supported currently\n");
+        fprintf(stderr, "Package name must start with 'github.com/'\n");
+        return 1;
+    }
+    
+    const char* repo_path = name + 11;  // Skip "github.com/"
+    
+    // Create package cache directory
+    char cache_dir[512];
+    #ifdef _WIN32
+        const char* home = getenv("USERPROFILE");
+        snprintf(cache_dir, sizeof(cache_dir), "%s\\.aether\\packages", home ? home : ".");
+    #else
+        const char* home = getenv("HOME");
+        snprintf(cache_dir, sizeof(cache_dir), "%s/.aether/packages", home ? home : ".");
+    #endif
+    
+    // Create nested directories for github.com/user/repo structure
+    char full_path[1024];
+    snprintf(full_path, sizeof(full_path), "%s/%s", cache_dir, name);
+    
+    // Check if already downloaded
+    if (access(full_path, F_OK) == 0) {
+        printf("Package already cached: %s\n", full_path);
+        return 0;
+    }
+    
+    printf("Fetching package: %s\n", name);
+    
+    // Create parent directories
+    char mkdir_cmd[1024];
+    char parent_dir[1024];
+    snprintf(parent_dir, sizeof(parent_dir), "%s/github.com", cache_dir);
+    
+    #ifdef _WIN32
+        snprintf(mkdir_cmd, sizeof(mkdir_cmd), "if not exist \"%s\" mkdir \"%s\"", cache_dir, cache_dir);
+        system(mkdir_cmd);
+        snprintf(mkdir_cmd, sizeof(mkdir_cmd), "if not exist \"%s\" mkdir \"%s\"", parent_dir, parent_dir);
+        system(mkdir_cmd);
+    #else
+        snprintf(mkdir_cmd, sizeof(mkdir_cmd), "mkdir -p \"%s\"", parent_dir);
+        system(mkdir_cmd);
+    #endif
+    
+    // Extract user part for parent directory
+    char user_dir[1024];
+    const char* slash = strchr(repo_path, '/');
+    if (slash) {
+        int user_len = slash - repo_path;
+        snprintf(user_dir, sizeof(user_dir), "%s/github.com/%.*s", cache_dir, user_len, repo_path);
+        #ifdef _WIN32
+            snprintf(mkdir_cmd, sizeof(mkdir_cmd), "if not exist \"%s\" mkdir \"%s\"", user_dir, user_dir);
+        #else
+            snprintf(mkdir_cmd, sizeof(mkdir_cmd), "mkdir -p \"%s\"", user_dir);
+        #endif
+        system(mkdir_cmd);
+    }
+    
+    // Clone repository
+    char clone_cmd[1024];
+    if (version && strcmp(version, "latest") != 0) {
+        // Clone specific version/tag
+        snprintf(clone_cmd, sizeof(clone_cmd), 
+                 "git clone --depth 1 --branch %s https://%s \"%s\"",
+                 version, name, full_path);
+    } else {
+        // Clone latest
+        snprintf(clone_cmd, sizeof(clone_cmd), 
+                 "git clone --depth 1 https://%s \"%s\"",
+                 name, full_path);
+    }
+    
+    printf("Running: %s\n", clone_cmd);
+    int result = system(clone_cmd);
+    
+    if (result != 0) {
+        fprintf(stderr, "Error: Failed to clone package\n");
+        return 1;
+    }
+    
+    printf("✓ Package downloaded to: %s\n", full_path);
+    
+    // Check for aether.toml
+    char manifest_path[1024];
+    snprintf(manifest_path, sizeof(manifest_path), "%s/aether.toml", full_path);
+    if (access(manifest_path, F_OK) == 0) {
+        printf("✓ Found aether.toml\n");
+    } else {
+        fprintf(stderr, "Warning: No aether.toml found in package\n");
+    }
+    
     return 0;
 }
 

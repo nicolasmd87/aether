@@ -9,6 +9,16 @@ AetherString* aether_string_from_literal(const char* cstr) {
     return aether_string_new(cstr);
 }
 
+// Alias for from_cstr
+AetherString* aether_string_from_cstr(const char* cstr) {
+    return aether_string_new(cstr);
+}
+
+// Alias for free
+void aether_string_free(AetherString* str) {
+    aether_string_release(str);
+}
+
 // String creation
 AetherString* aether_string_new(const char* cstr) {
     if (!cstr) return aether_string_empty();
