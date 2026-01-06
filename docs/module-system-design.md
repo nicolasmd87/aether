@@ -1,17 +1,19 @@
 # Aether Module System Design
 
-## Status: Planned for v0.2.0
+## Status: ✅ Implemented in v0.4.0
 
-This document outlines the design for Aether's module system.
+This document outlines the design and implementation of Aether's module system.
 
 ## Overview
 
-The module system will provide:
-- Code organization into reusable modules
-- Namespace management
-- Import/export syntax
-- Standard library as modules
-- Third-party package support (future)
+The module system provides:
+- ✅ Code organization into reusable modules
+- ✅ Namespace management
+- ✅ Import/export syntax
+- ✅ Standard library as modules (std.collections, std.log, std.net, etc.)
+- ✅ Module resolution with automatic file loading
+- ✅ Circular import detection
+- ⚠️ Third-party package support (via apkg package manager - in progress)
 
 ## Syntax
 

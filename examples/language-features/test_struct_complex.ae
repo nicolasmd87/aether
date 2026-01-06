@@ -1,0 +1,16 @@
+struct Vector2D {
+    int x;
+    int y;
+}
+
+struct Player {
+    int health;
+    int score;
+}
+
+main() {
+    int x = 10;
+    int y = 20;
+    print("Testing structs...\n");
+    print("x=%d, y=%d\n", x, y);
+}

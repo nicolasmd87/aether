@@ -31,16 +31,16 @@ actor RingNode {
 actor HashMapBench {
     receive {
         "run" => {
-            let map = HashMap.new()
+            map = HashMap.new()
             
             // Insert 100k entries
-            for (let i = 0; i < 100000; i = i + 1) {
+            for (int i = 0; i < 100000; i = i + 1) {
                 map.insert("key" + i, i)
             }
             
             // Lookup all entries
-            let sum = 0
-            for (let i = 0; i < 100000; i = i + 1) {
+            int sum = 0
+            for (int i = 0; i < 100000; i = i + 1) {
                 sum = sum + map.get("key" + i)
             }
             
@@ -53,16 +53,16 @@ actor HashMapBench {
 actor VectorBench {
     receive {
         "run" => {
-            let vec = Vector.new()
+            vec = Vector.new()
             
             // Push 50k elements
-            for (let i = 0; i < 50000; i = i + 1) {
+            for (int i = 0; i < 50000; i = i + 1) {
                 vec.push(i)
             }
             
             // Access elements
-            let sum = 0
-            for (let i = 0; i < 50000; i = i + 1) {
+            int sum = 0
+            for (int i = 0; i < 50000; i = i + 1) {
                 sum = sum + vec.get(i)
             }
             
@@ -82,7 +82,7 @@ func fib_tail(n: int, a: int, b: int): int {
 actor FibBench {
     receive {
         "run" => {
-            let result = fib_tail(10000, 0, 1)
+            int result = fib_tail(10000, 0, 1)
             print("Fibonacci(10000): " + result)
         }
     }
@@ -93,11 +93,11 @@ actor ConstantBench {
     receive {
         "run" => {
             // These should be folded at compile time
-            let a = 2 + 3 * 4
-            let b = 100 / 5 + 20
-            let c = (10 * 10) - (5 * 5)
+            int a = 2 + 3 * 4
+            int b = 100 / 5 + 20
+            int c = (10 * 10) - (5 * 5)
             
-            let result = a + b + c
+            int result = a + b + c
             print("Constant folding: " + result)
         }
     }
@@ -108,11 +108,11 @@ main {
     print("")
     
     print("1. Actor Ring Benchmark (10k messages)")
-    let first = spawn RingNode
-    let prev = first
+    first = spawn RingNode
+    prev = first
     
-    for (let i = 0; i < 100; i = i + 1) {
-        let node = spawn RingNode
+    for (int i = 0; i < 100; i = i + 1) {
+        node = spawn RingNode
         send prev, "next" -> node
         send node, "init"
         prev = node
@@ -122,22 +122,22 @@ main {
     
     print("")
     print("2. HashMap Benchmark")
-    let mapbench = spawn HashMapBench
+    mapbench = spawn HashMapBench
     send mapbench, "run"
     
     print("")
     print("3. Vector Benchmark")
-    let vecbench = spawn VectorBench
+    vecbench = spawn VectorBench
     send vecbench, "run"
     
     print("")
     print("4. Tail Call Optimization")
-    let fibbench = spawn FibBench
+    fibbench = spawn FibBench
     send fibbench, "run"
     
     print("")
     print("5. Constant Folding")
-    let constbench = spawn ConstantBench
+    constbench = spawn ConstantBench
     send constbench, "run"
     
     print("")

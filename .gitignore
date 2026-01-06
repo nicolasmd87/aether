@@ -1,45 +1,33 @@
-# Build artifacts
+# Build outputs
 /build/*.exe
-!/build/aetherc.exe
-!/build/test_runner.exe
-/build/*.c
-/build/*.ae
 /build/*.o
-/bin/
-/out/
-
-# Compiled object files, executables, and generated binaries
-*.o
+/build/*.obj
+/build/*.a
+/build/hello_actors.c
+/target/
 *.exe
-aether_program
-aetherc
+*.o
+*.obj
+*.a
+*.so
+*.dll
+*.dylib
 
-# Generated C files from the Aether compiler (if not tracked)
-build/*.c
+# Generated C code (from .ae compilation)
+output.c
+generated_*.c
 
-# Examples compiled
-examples/**/*.exe
+# Package lock files
+aether.lock
 
-# Compiler temps
-compiler/*.tmp
-compiler/*.exe
-
-# Debug files
-debug_*.c
-
-
-# Temporary files and logs
-*.tmp
-*.log
+# Editor
+.vscode/
+.cursor/
 *.swp
 *.swo
+*~
 
-# OS generated files
+# OS
 .DS_Store
 Thumbs.db
-
-# Editor/IDE directories and files
-# Note: Language support files are in editor/vscode/ and are tracked
-# User-specific workspace settings are ignored below
-.vscode/
-.idea/
+desktop.ini

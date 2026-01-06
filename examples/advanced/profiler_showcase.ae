@@ -1,0 +1,128 @@
+// Comprehensive Profiler Showcase
+// Demonstrates all profiler features: memory, actors, messages
+
+actor Worker {
+    state id: int
+    state processed: int
+    
+    func init(worker_id: int) {
+        id = worker_id
+        processed = 0
+        print("Worker " + str(id) + " initialized")
+    }
+    
+    receive {
+        "process" -> {
+            processed = processed + 1
+            print("Worker " + str(id) + " processed task #" + str(processed))
+            
+            // Simulate work with allocations
+            data = [1, 2, 3, 4, 5]
+            int sum = 0
+            for i in 0..5 {
+                sum = sum + data[i]
+            }
+        }
+        
+        "status" -> {
+            print("Worker " + str(id) + " status: " + str(processed) + " tasks")
+        }
+        
+        "shutdown" -> {
+            print("Worker " + str(id) + " shutting down")
+        }
+    }
+}
+
+actor Coordinator {
+    state workers: [ActorRef]
+    state total_tasks: int
+    
+    func init() {
+        workers = []
+        total_tasks = 0
+        print("Coordinator initialized")
+    }
+    
+    receive {
+        "add_worker" -> {
+            worker = spawn Worker(len(workers) + 1)
+            workers = append(workers, worker)
+            print("Added worker, total: " + str(len(workers)))
+        }
+        
+        "distribute_work" -> {
+            if len(workers) > 0 {
+                for i in 0..len(workers) {
+                    send(workers[i], "process")
+                    total_tasks = total_tasks + 1
+                }
+                print("Distributed work to " + str(len(workers)) + " workers")
+            }
+        }
+        
+        "check_status" -> {
+            for i in 0..len(workers) {
+                send(workers[i], "status")
+            }
+        }
+        
+        "shutdown_all" -> {
+            for i in 0..len(workers) {
+                send(workers[i], "shutdown")
+            }
+            print("Shutdown initiated for all workers")
+        }
+    }
+}
+
+func main() {
+    print("===========================================")
+    print("Aether Profiler Showcase")
+    print("===========================================")
+    print("")
+    print("Open your browser to: http://localhost:8080")
+    print("Watch real-time updates as actors work!")
+    print("")
+    
+    // Create coordinator
+    coord = spawn Coordinator()
+    
+    // Add 5 workers
+    print("Creating workers...")
+    for i in 0..5 {
+        send(coord, "add_worker")
+    }
+    
+    // Distribute work in rounds
+    print("")
+    print("Starting work distribution...")
+    for round in 0..10 {
+        send(coord, "distribute_work")
+        print("Round " + str(round + 1) + " dispatched")
+        
+        // Pause between rounds
+        sleep(500)  // 500ms delay
+    }
+    
+    // Check status
+    print("")
+    print("Checking worker status...")
+    send(coord, "check_status")
+    
+    // Keep running for profiler observation
+    print("")
+    print("Workers active. Check the profiler dashboard!")
+    print("(Program will run for 30 seconds)")
+    
+    sleep(30000)  // 30 seconds
+    
+    // Cleanup
+    print("")
+    print("Shutting down...")
+    send(coord, "shutdown_all")
+    
+    sleep(1000)  // Wait for cleanup
+    print("Done! Check profiler for statistics.")
+}
+

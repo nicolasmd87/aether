@@ -1,6 +1,32 @@
-# Aether Test Suite
+# Tests
 
-This directory contains the test suite for the Aether language compiler and runtime.
+Cross-platform test suite for Aether runtime.
+
+## Running Tests
+
+```bash
+# PowerShell (all platforms)
+./run_tests.ps1
+
+# Bash (Unix/Linux/macOS)
+./run_tests.sh
+```
+
+## Test Organization
+
+```
+tests/
+├── compiler/      # Compiler tests
+├── runtime/       # Runtime tests
+├── integration/   # Integration tests
+├── memory/        # Memory tests
+└── stdlib/        # Standard library tests
+```
+
+## Requirements
+
+- GCC or Clang
+- AVX2 support (optional, auto-detected)
 
 ## Test Organization
 

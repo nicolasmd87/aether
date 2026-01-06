@@ -1,0 +1,113 @@
+{
+  "name": "Aether Erlang",
+  "type": "dark",
+  "colors": {
+    "editor.background": "#1e1e1e",
+    "editor.foreground": "#d4d4d4",
+    "editorLineNumber.foreground": "#858585",
+    "editorCursor.foreground": "#aeafad",
+    "editor.selectionBackground": "#264f78",
+    "editor.lineHighlightBackground": "#2a2a2a"
+  },
+  "tokenColors": [
+    {
+      "name": "Comments",
+      "scope": [
+        "comment",
+        "comment.line",
+        "comment.block"
+      ],
+      "settings": {
+        "foreground": "#6a9955",
+        "fontStyle": "italic"
+      }
+    },
+    {
+      "name": "Strings",
+      "scope": [
+        "string",
+        "string.quoted"
+      ],
+      "settings": {
+        "foreground": "#6a8759"
+      }
+    },
+    {
+      "name": "Numbers and Constants",
+      "scope": [
+        "constant.numeric",
+        "constant.language.boolean"
+      ],
+      "settings": {
+        "foreground": "#d19a66"
+      }
+    },
+    {
+      "name": "Control Keywords",
+      "scope": [
+        "keyword.control.aether",
+        "keyword.control.flow.aether",
+        "keyword.control",
+        "keyword.control.flow",
+        "storage.type.aether",
+        "storage.type",
+        "keyword.other.aether",
+        "keyword.declaration.aether"
+      ],
+      "settings": {
+        "foreground": "#e06c75",
+        "fontStyle": "bold"
+      }
+    },
+    {
+      "name": "Function Names",
+      "scope": [
+        "entity.name.function",
+        "entity.name.tag",
+        "support.function"
+      ],
+      "settings": {
+        "foreground": "#e06c75"
+      }
+    },
+    {
+      "name": "Main Function",
+      "scope": [
+        "entity.name.function.main",
+        "support.function.main"
+      ],
+      "settings": {
+        "foreground": "#d19a66"
+      }
+    },
+    {
+      "name": "Variables",
+      "scope": [
+        "variable",
+        "variable.other"
+      ],
+      "settings": {
+        "foreground": "#d4d4d4"
+      }
+    },
+    {
+      "name": "Operators",
+      "scope": [
+        "keyword.operator"
+      ],
+      "settings": {
+        "foreground": "#d4d4d4"
+      }
+    },
+    {
+      "name": "Types",
+      "scope": [
+        "entity.name.type",
+        "support.type"
+      ],
+      "settings": {
+        "foreground": "#56b6c2"
+      }
+    }
+  ]
+}

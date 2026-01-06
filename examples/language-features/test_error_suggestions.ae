@@ -1,0 +1,19 @@
+// Test program to demonstrate enhanced error reporting
+
+actor MyActor {
+    state count: int
+    
+    func process_message(msg: int) {
+        // Typo: should be 'count'
+        cont = cont + msg;  // Error: undefined variable
+        
+        // Another typo
+        proces_message(10);  // Error: undefined function
+    }
+}
+
+func main() {
+    actor = MyActor(0);
+    sendd(actor, 42);  // Typo: should be 'send'
+}
+

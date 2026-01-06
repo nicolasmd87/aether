@@ -1,0 +1,78 @@
+{
+  "name": "aether-language",
+  "displayName": "Aether Language Support",
+  "description": "Syntax highlighting, color themes, and language support for Aether - a modern actor-based programming language",
+  "version": "0.3.0",
+  "publisher": "aether",
+  "icon": "icon.png",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/aether-lang/aether"
+  },
+  "bugs": {
+    "url": "https://github.com/aether-lang/aether/issues"
+  },
+  "homepage": "https://github.com/aether-lang/aether#readme",
+  "keywords": [
+    "aether",
+    "actor",
+    "concurrency",
+    "programming-language",
+    "syntax-highlighting",
+    "type-inference"
+  ],
+  "engines": {
+    "vscode": "^1.60.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "aether",
+        "aliases": [
+          "Aether",
+          "aether"
+        ],
+        "extensions": [
+          ".ae"
+        ],
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./icon.png",
+          "dark": "./icon.png"
+        }
+      }
+    ],
+    "grammars": [
+      {
+        "language": "aether",
+        "scopeName": "source.aether",
+        "path": "./aether.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Aether",
+      "properties": {
+        "aether.lsp.path": {
+          "type": "string",
+          "default": "aether-lsp",
+          "description": "Path to Aether LSP server executable"
+        },
+        "aether.lsp.trace.server": {
+          "type": "string",
+          "enum": [
+            "off",
+            "messages",
+            "verbose"
+          ],
+          "default": "off",
+          "description": "Traces the communication between VS Code and the language server"
+        }
+      }
+    }
+  }
+}
+

@@ -1,17 +1,29 @@
+// Partitioned State Machine Scheduler - Zero-Sharing Multi-core
+// Based on Experiment 04: 291M msg/sec on 8 cores (2.3× scaling)
+// Strategy: Static actor-to-core assignment, no atomics, perfect cache locality
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include "multicore_scheduler.h"
 
+// Cross-platform includes
 #ifdef __linux__
 #define _GNU_SOURCE
 #include <sched.h>
 #include <errno.h>
+#include <unistd.h>
+#define sleep_us(us) usleep(us)
 #endif
 
 #ifdef _WIN32
 #include <windows.h>
+#define sleep_us(us) Sleep((us) / 1000)
+#endif
+
+#ifdef __APPLE__
+#include <unistd.h>
+#define sleep_us(us) usleep(us)
 #endif
 
 Scheduler schedulers[MAX_CORES];
@@ -41,48 +53,14 @@ static void pin_to_core(int core_id) {
 #endif
 }
 
-// Work stealing: try to steal work from another scheduler
-static int try_steal_work(Scheduler* thief, int* last_victim_idx) {
-    // Try to find a victim with work
-    for (int attempt = 0; attempt < num_cores - 1; attempt++) {
-        *last_victim_idx = (*last_victim_idx + 1) % num_cores;
-        
-        if (*last_victim_idx == thief->core_id) continue;
-        
-        Scheduler* victim = &schedulers[*last_victim_idx];
-        int victim_work = atomic_load(&victim->work_count);
-        
-        // Only steal if victim has significant work
-        if (victim_work > 5) {
-            void* actor_ptr;
-            Message msg;
-            
-            // Try to steal from victim's queue
-            if (queue_dequeue(&victim->incoming_queue, &actor_ptr, &msg)) {
-                atomic_fetch_sub(&victim->work_count, 1);
-                atomic_fetch_add(&thief->work_count, 1);
-                atomic_fetch_add(&thief->steal_attempts, 1);
-                
-                // Process stolen message immediately
-                ActorBase* actor = (ActorBase*)actor_ptr;
-                mailbox_send(&actor->mailbox, msg);
-                actor->active = 1;
-                return 1;
-            }
-        }
-    }
-    
-    return 0;
-}
-
+// Partitioned scheduler thread - NO work stealing
 void* scheduler_thread(void* arg) {
     Scheduler* sched = (Scheduler*)arg;
     current_core_id = sched->core_id;
     
-    // NUMA awareness: pin thread to core
+    // NUMA awareness: pin thread to core for cache affinity
     pin_to_core(sched->core_id);
     
-    int last_victim_idx = 0;
     int idle_count = 0;
     
     while (atomic_load(&sched->running)) {
@@ -90,19 +68,20 @@ void* scheduler_thread(void* arg) {
         void* actor_ptr;
         Message msg;
         
-        // Batch message processing: drain incoming queue in batches
+        // Process incoming cross-core messages (minimal atomic operations)
+        // Note: This is the ONLY atomic operation in the hot path
         int batch_count = 0;
         while (batch_count < BATCH_SIZE && 
                queue_dequeue(&sched->incoming_queue, &actor_ptr, &msg)) {
             ActorBase* actor = (ActorBase*)actor_ptr;
             mailbox_send(&actor->mailbox, msg);
             actor->active = 1;
-            atomic_fetch_sub(&sched->work_count, 1);
             batch_count++;
             work_done = 1;
         }
         
-        // Process active actors
+        // Process active actors (NO ATOMICS - actors are core-local)
+        // This is the performance-critical loop
         for (int i = 0; i < sched->actor_count; i++) {
             ActorBase* actor = sched->actors[i];
             if (actor && actor->active) {
@@ -113,22 +92,17 @@ void* scheduler_thread(void* arg) {
             }
         }
         
-        // Work stealing: if idle, try to steal from others
+        // Partitioned approach: NO work stealing
+        // Actors stay on their assigned core for perfect cache locality
+        // Result: Zero cache thrashing, zero atomic contention
+        
         if (!work_done) {
             idle_count++;
             
-            // After a few idle cycles, attempt work stealing
-            if (idle_count > 10) {
-                if (try_steal_work(sched, &last_victim_idx)) {
-                    idle_count = 0;
-                    work_done = 1;
-                }
-            }
-            
-            // If still idle, yield to avoid busy-waiting
+            // Exponential backoff for idle cores
             if (idle_count > 100) {
-                usleep(1);  // Brief sleep to reduce CPU usage
-                idle_count = 50;  // Reset but don't go back to zero
+                sleep_us(1);  // Brief sleep to reduce CPU usage
+                idle_count = 50;
             }
         } else {
             idle_count = 0;
@@ -176,6 +150,8 @@ void scheduler_wait() {
 }
 
 int scheduler_register_actor(ActorBase* actor, int preferred_core) {
+    // Partitioned assignment: actor_id % num_cores
+    // This ensures perfect load balance across cores
     if (preferred_core < 0) {
         preferred_core = actor->id % num_cores;
     }
@@ -183,7 +159,13 @@ int scheduler_register_actor(ActorBase* actor, int preferred_core) {
     Scheduler* sched = &schedulers[preferred_core];
     
     if (sched->actor_count >= sched->capacity) {
-        return -1;
+        // Dynamically grow actor array if needed
+        sched->capacity *= 2;
+        sched->actors = realloc(sched->actors, sched->capacity * sizeof(ActorBase*));
+        if (!sched->actors) {
+            fprintf(stderr, "Fatal: Failed to grow actor array for core %d\n", preferred_core);
+            return -1;
+        }
     }
     
     actor->assigned_core = preferred_core;

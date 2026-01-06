@@ -44,18 +44,80 @@ Actors compiled to state machines stored in structs. Single scheduler thread ite
 
 ### 03 - Work-Stealing Scheduler (M:N Threading)
 **Model**: Actor queue per worker thread, steal-on-idle  
-**Status**: 🚧 Planned  
+**Status**: ✅ Implemented, benchmarked  
 **Location**: `03_work_stealing/`
 
 Hybrid between 1:1 and state machines. Multiple OS worker threads share a pool of lightweight actor tasks. When idle, workers steal from other queues.
 
-**Expected Metrics**:
-- Memory: ~1-2KB per actor (small stack)
+**Key Metrics**:
+- Memory: ~168 bytes per actor
 - Scalability: 100,000+ concurrent actors
-- Throughput: 10-50M messages/second
-- Multi-core utilization: High
+- Throughput: 43M messages/second (4 cores)
+- Multi-core utilization: Good but atomic overhead
 
-**Similar to**: Go goroutines, Tokio runtime (Rust)
+**Trade-off**: Atomic operations reduce performance vs partitioned approach.
+
+### 04 - Partitioned State Machines (Zero-Sharing Multi-Core)
+**Model**: One scheduler per core, actors statically assigned  
+**Status**: ✅ Implemented, benchmarked  
+**Location**: `04_partitioned/`
+
+Each core runs independent state machine scheduler with no sharing. Actors assigned by `actor_id % num_cores`. No atomics, no work stealing.
+
+**Key Metrics**:
+- Memory: 128 bytes per actor
+- Scalability: 1,000,000+ concurrent actors
+- Throughput: 291M messages/second (8 cores)
+- Multi-core utilization: Excellent (near-linear scaling)
+
+**Winner**: Best performance, simplest implementation.
+
+### 05 - SIMD Vectorization (AVX2/AVX-512)
+**Model**: Process 8-16 actors simultaneously with SIMD instructions  
+**Status**: ✅ Implemented, benchmarked  
+**Location**: `05_simd_vectorization/`
+
+Use AVX2 to process 8 actors per CPU instruction, AVX-512 for 16 actors.
+
+**Key Metrics**:
+- Memory: Same as state machine
+- Scalability: Same as state machine
+- Throughput: 41B messages/second (3× vs scalar)
+- Requirements: AVX2 CPU (Intel Haswell 2013+)
+
+**Trade-off**: Requires Structure-of-Arrays layout, best for uniform actor types.
+
+### 06 - Message Batching
+**Model**: Send multiple messages at once to reduce overhead  
+**Status**: ✅ Implemented, benchmarked  
+**Location**: `06_message_batching/`
+
+Batch message sending reduces function call overhead and improves cache locality.
+
+**Key Metrics**:
+- Memory: Same as base
+- Scalability: Same as base
+- Throughput: 397M messages/second (1.78× vs single-message)
+- Complexity: Trivial
+
+**Easy Win**: Always beneficial, zero complexity cost.
+
+### 07 - GPU Acceleration (CUDA/OpenCL)
+**Model**: Offload actors to GPU for massive parallelism  
+**Status**: ✅ Code ready, requires CUDA toolkit  
+**Location**: `07_gpu/`
+
+Use GPU's thousands of cores for actor processing. Best for 100K+ actors with simple logic.
+
+**Expected Metrics**:
+- Memory: Same but on GPU VRAM
+- Scalability: 1,000,000+ concurrent actors
+- Throughput: 10-100B messages/second (kernel only)
+- Requirements: NVIDIA GPU with CUDA support
+
+**Similar to**: GPU compute shaders, CUDA kernels, OpenCL
+
+**Trade-off**: PCIe transfer overhead, only beneficial for large scale or persistent GPU actors.
 
 ## Benchmarks
 
@@ -82,11 +144,15 @@ python3 analyze_results.py > RESULTS.md
 
 ## Performance Comparison Table
 
-| Model | Memory/Actor | Max Actors | Throughput | Latency | CPU Cores |
-|-------|--------------|------------|------------|---------|-----------|
-| Pthread (01) | 1-8 MB | 1K-10K | 1M msg/s | 1-10μs | 1 per actor |
-| State Machine (02) | 128 B | 1M+ | 125M msg/s | <100ns | 1 (single thread) |
-| Work-Stealing (03) | 1-2 KB | 100K+ | 10-50M msg/s | ~500ns | N (configurable) |
+| Model | Memory/Actor | Max Actors | Throughput (Single) | Throughput (8 cores) | CPU Cores | Status |
+|-------|--------------|------------|---------------------|----------------------|-----------|--------|
+| Pthread (01) | 1-8 MB | 1K-10K | 1M msg/s | - | 1 per actor | ✅ Baseline |
+| State Machine (02) | 128 B | 1M+ | 125M msg/s | - | 1 | ✅ Excellent |
+| Work-Stealing (03) | 168 B | 100K+ | 51M msg/s | 42M msg/s | N | ✅ Good |
+| Partitioned (04) | 128 B | 1M+ | 124M msg/s | 291M msg/s | N | ✅ **Winner** |
+| SIMD (05) | 128 B | 1M+ | 372M msg/s | ~1.1B msg/s | 1-N | ✅ Advanced |
+| Batching (06) | 128 B | 1M+ | 397M msg/s | ~950M msg/s | 1-N | ✅ Easy Win |
+| GPU (07) | 128 B | 10M+ | - | 10-100B msg/s | GPU | ⚠️ Specialized |
 
 ## Research Questions
 

@@ -1,0 +1,12 @@
+{
+  "iconDefinitions": {
+    "_file_aether": {
+      "iconPath": "./icon.png"
+    }
+  },
+  "fileExtensions": {
+    "ae": "_file_aether"
+  },
+  "file": "_file",
+  "folder": "_folder"
+}

@@ -1,0 +1,8 @@
+struct Point {
+    int x;
+    int y;
+}
+
+main() {
+    print("Struct test\n");
+}

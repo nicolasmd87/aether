@@ -1,0 +1,20 @@
+// Test module import system
+// This demonstrates the import syntax
+
+import std.collections.HashMap
+import std.log as Log
+
+actor TestImports {
+    receive {
+        "test" => {
+            Log.info("Testing imports")
+            print("Import test complete")
+        }
+    }
+}
+
+main {
+    test = spawn TestImports
+    send test, "test"
+}
+
