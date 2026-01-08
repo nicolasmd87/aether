@@ -40,6 +40,9 @@ static inline int __attribute__((hot)) lockfree_mailbox_send(
     int tail = atomic_load_explicit(&mbox->tail, memory_order_relaxed);
     int next_tail = (tail + 1) & LOCKFREE_MAILBOX_MASK;
     
+    // Note: No manual prefetch - benchmarks showed negative impact
+    // Hardware prefetcher handles sequential access pattern efficiently
+    
     // Check if full (need acquire to see consumer's head update)
     int head = atomic_load_explicit(&mbox->head, memory_order_acquire);
     if (__builtin_expect(next_tail == head, 0)) {
@@ -60,6 +63,8 @@ static inline int __attribute__((hot)) lockfree_mailbox_receive(
     Message* __restrict__ out_msg) 
 {
     int head = atomic_load_explicit(&mbox->head, memory_order_relaxed);
+    
+    // Note: No manual prefetch - sequential pattern already optimal
     
     // Check if empty (need acquire to see producer's tail update)
     int tail = atomic_load_explicit(&mbox->tail, memory_order_acquire);

@@ -343,6 +343,13 @@ bench-dispatch:
 	@echo "Running benchmark..."
 	@./build/bench_computed_goto$(EXE_EXT)
 
+# Benchmark manual prefetch hints
+bench-prefetch:
+	@echo "Building prefetch benchmark..."
+	@$(CC) -O3 experiments/concurrency/bench_prefetch.c -o build/bench_prefetch$(EXE_EXT)
+	@echo "Running benchmark..."
+	@./build/bench_prefetch$(EXE_EXT)
+
 # Interactive REPL (requires linenoise or equivalent)
 repl: compiler
 	@echo "Starting Aether REPL..."

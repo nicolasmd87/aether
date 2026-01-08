@@ -71,15 +71,56 @@ make bench-dispatch
 
 ---
 
-## 2. Inline Assembly for Ultra-Hot Paths
+## 2. Manual Prefetch Investigation ❌ NEGATIVE RESULT
+
+**Hypothesis:** Manual `__builtin_prefetch()` could improve ring buffer performance by 5-10%.
+
+**Result:** **16% PERFORMANCE LOSS** - Hardware prefetcher already optimal.
+
+**Benchmark Results (100M message ops, GCC -O3):**
+```
+Without prefetch:  633.65 M ops/sec  ✅ FASTER
+With prefetch:     531.14 M ops/sec  ❌ SLOWER (-16.2%)
+
+Batch operations:
+Without prefetch:  364.95 M ops/sec  ✅ FASTER
+With prefetch:     328.82 M ops/sec  ❌ SLOWER (-9.9%)
+```
+
+**Why it failed:**
+- Ring buffer access is **sequential and predictable**
+- CPU hardware prefetcher already detects this pattern
+- Manual prefetch adds instruction overhead without benefit
+- For small data structures (256 entries), spatial locality is high
+
+**Code tested:**
+```c
+int next_head = (mbox->head + 1) % MAILBOX_SIZE;
+__builtin_prefetch(&mbox->messages[next_head], 0, 1);  // ❌ Hurts perf
+```
+
+**When prefetch DOES help:**
+- Random/irregular access patterns (hash tables, skip lists)
+- Pointer chasing in linked structures with large gaps
+- Large datasets where hardware can't predict far ahead
+
+**Conclusion:** Trust the hardware prefetcher for sequential ring buffers.
+
+**Run benchmark:**
+```bash
+make bench-prefetch
+```
+
+---
+
+## 3. Inline Assembly for Ultra-Hot Paths
 
 **Problem:** Some operations are so hot they need **direct hardware access**.
 
 **Where:**
 1. **RDTSC** for high-precision timing (profiling)
 2. **PAUSE** in spin loops (better than `sched_yield()`)
-3. **PREFETCHT0** for manual prefetching
-4. **MFENCE** for precise memory ordering
+3. **MFENCE** for precise memory ordering
 
 **Example:**
 
@@ -111,7 +152,7 @@ mailbox_receive_optimized(Mailbox* mbox, Message* out) {
 
 ---
 
-## 3. Type-Specific Memory Pools (Zero Malloc Overhead)
+## 4. Type-Specific Memory Pools (Zero Malloc Overhead)
 
 **Problem:** Even TLS pools have *some* overhead. Type-specific pools are **faster**.
 
@@ -150,7 +191,7 @@ static inline void free_increment_message(IncrementMessage* msg) {
 
 ---
 
-## 4. Compile-Time Constant Folding (Beat C at Its Own Game)
+## 5. Compile-Time Constant Folding (Beat C at Its Own Game)
 
 **Problem:** C compilers fold constants. But we control the **whole program**.
 
@@ -207,7 +248,7 @@ void Counter_receive(Counter* self, Message* msg) {
 
 ---
 
-## 5. Profile-Guided Optimization (PGO) - Production Speed
+## 6. Profile-Guided Optimization (PGO) - Production Speed
 
 **Problem:** We don't know which paths are hot until runtime.
 
@@ -241,7 +282,7 @@ gcc -fprofile-use ...         # Optimize
 
 ---
 
-## 6. Zero-Copy Message Passing (Ultimate Efficiency)
+## 7. Zero-Copy Message Passing (Ultimate Efficiency)
 
 **Problem:** Even with TLS pools, we still **copy** message data.
 
@@ -276,7 +317,7 @@ process(msg);  // Already in my memory
 
 ---
 
-## 7. Hardware Transactional Memory (TSX)
+## 8. Hardware Transactional Memory (TSX)
 
 **Problem:** Lock-free is fast, but **transactions** can be faster for complex operations.
 
@@ -307,7 +348,7 @@ if ((status = _xbegin()) == _XBEGIN_STARTED) {
 
 ---
 
-## 8. NUMA-Aware Actor Placement
+## 9. NUMA-Aware Actor Placement
 
 **Problem:** On multi-socket systems, **remote memory** is 2-3x slower.
 
@@ -333,7 +374,7 @@ Actor* spawn_actor_numa(int numa_node) {
 
 ---
 
-## 9. Huge Pages (2MB/1GB pages)
+## 10. Huge Pages (2MB/1GB pages)
 
 **Problem:** TLB misses on large allocations slow down memory access.
 
@@ -355,7 +396,7 @@ void* pool = mmap(NULL, 1024*1024*1024,  // 1GB
 
 ---
 
-## 10. JIT Compilation for Hot Actors (Ambitious)
+## 11. JIT Compilation for Hot Actors (Ambitious)
 
 **Ultimate optimization:** Compile hot actor paths to native code **at runtime**.
 
