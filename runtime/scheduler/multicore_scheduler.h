@@ -8,6 +8,7 @@
 #include "../actors/lockfree_mailbox.h"
 #include "../actors/aether_adaptive_batch.h"
 #include "../actors/aether_message_dedup.h"
+#include "../actors/aether_spsc_queue.h"
 #include "../config/aether_optimization_config.h"
 #include "lockfree_queue.h"
 
@@ -48,6 +49,7 @@ typedef struct {
     int active;
     int assigned_core;
     Mailbox mailbox;
+    SPSCQueue spsc_queue;  // Lock-free same-core messaging
     void (*step)(void*);
 } ActorBase;
 

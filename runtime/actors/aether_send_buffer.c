@@ -1,4 +1,5 @@
 #include "aether_send_buffer.h"
+#include "aether_spsc_queue.h"
 #include "../scheduler/multicore_scheduler.h"
 #include "../scheduler/lockfree_queue.h"
 #include <string.h>
@@ -18,14 +19,24 @@ void send_buffer_flush(void) {
     ActorBase* actor = (ActorBase*)g_send_buffer.target;
     int target_core = actor->assigned_core;
     
-    // Fast path: same core, direct batch send to mailbox
-    if (g_send_buffer.core_id == target_core) {
-        int sent = mailbox_send_batch(&actor->mailbox, g_send_buffer.buffer, g_send_buffer.count);
+    // Fast path: same core, use lock-free SPSC queue
+    if (g_send_buffer.core_id == target_core && g_send_buffer.core_id >= 0) {
+        // Try SPSC queue first (lock-free, fastest path)
+        int sent = spsc_enqueue_batch(&actor->spsc_queue, g_send_buffer.buffer, g_send_buffer.count);
         if (sent == g_send_buffer.count) {
             actor->active = 1;
             g_send_buffer.count = 0;
             return;
         }
+        
+        // SPSC queue full, fall back to mailbox
+        sent = mailbox_send_batch(&actor->mailbox, g_send_buffer.buffer, g_send_buffer.count);
+        if (sent == g_send_buffer.count) {
+            actor->active = 1;
+            g_send_buffer.count = 0;
+            return;
+        }
+        
         // Partial send - move unsent messages to front
         int unsent = g_send_buffer.count - sent;
         memmove(g_send_buffer.buffer, g_send_buffer.buffer + sent, unsent * sizeof(Message));

@@ -133,7 +133,15 @@ void* __attribute__((hot)) scheduler_thread(void* arg) {
             
             if (likely(actor && actor->active)) {
                 if (likely(actor->step)) {
-                    // Process ALL messages in mailbox to prevent buildup
+                    // FIRST: Drain SPSC queue (lock-free same-core messages)
+                    Message spsc_msgs[128];
+                    int spsc_count = spsc_dequeue_batch(&actor->spsc_queue, spsc_msgs, 128);
+                    if (spsc_count > 0) {
+                        // Batch send to mailbox for processing
+                        mailbox_send_batch(&actor->mailbox, spsc_msgs, spsc_count);
+                    }
+                    
+                    // THEN: Process ALL messages in mailbox to prevent buildup
                     int processed = 0;
                     while (actor->mailbox.count > 0 && processed < 64) {
                         actor->step(actor);
@@ -399,6 +407,7 @@ ActorBase* scheduler_spawn_pooled(int preferred_core, void (*step)(void*)) {
         actor = aether_numa_alloc(sizeof(ActorBase), numa_node);
         if (!actor) return NULL;
         mailbox_init(&actor->mailbox);
+        spsc_queue_init(&actor->spsc_queue);
         AETHER_STAT_INC(actors_malloced);
     }
     
