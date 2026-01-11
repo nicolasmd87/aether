@@ -5,18 +5,21 @@
 #include <stdlib.h>
 #include "../actors/actor_state_machine.h"
 
-#define QUEUE_SIZE 1024
+#define QUEUE_SIZE 65536  // Large queue for high cross-core traffic
+#define QUEUE_MASK (QUEUE_SIZE - 1)
 
 typedef struct {
     void* actor;
     Message msg;
 } QueueItem;
 
-typedef struct {
-    QueueItem items[QUEUE_SIZE];
+// Cache-line aligned to prevent false sharing between cores
+typedef struct __attribute__((aligned(64))) {
     atomic_int head;
+    char padding1[60];  // Pad to 64 bytes
     atomic_int tail;
-    char padding[128];
+    char padding2[60];  // Pad to 64 bytes
+    QueueItem items[QUEUE_SIZE];
 } LockFreeQueue;
 
 static inline void queue_init(LockFreeQueue* q) {
@@ -26,10 +29,10 @@ static inline void queue_init(LockFreeQueue* q) {
 
 static inline int queue_enqueue(LockFreeQueue* q, void* actor, Message msg) {
     int tail = atomic_load_explicit(&q->tail, memory_order_relaxed);
-    int next_tail = (tail + 1) % QUEUE_SIZE;
+    int next_tail = (tail + 1) & QUEUE_MASK;  // Fast power-of-2 masking
     int head = atomic_load_explicit(&q->head, memory_order_acquire);
     
-    if (next_tail == head) {
+    if (__builtin_expect(next_tail == head, 0)) {  // Full is unlikely
         return 0;
     }
     
@@ -43,14 +46,37 @@ static inline int queue_dequeue(LockFreeQueue* q, void** actor, Message* msg) {
     int head = atomic_load_explicit(&q->head, memory_order_relaxed);
     int tail = atomic_load_explicit(&q->tail, memory_order_acquire);
     
-    if (head == tail) {
+    if (__builtin_expect(head == tail, 0)) {  // Empty is unlikely
         return 0;
     }
     
     *actor = q->items[head].actor;
     *msg = q->items[head].msg;
-    atomic_store_explicit(&q->head, (head + 1) % QUEUE_SIZE, memory_order_release);
+    atomic_store_explicit(&q->head, (head + 1) & QUEUE_MASK, memory_order_release);  // Fast power-of-2 masking
     return 1;
+}
+
+// Batch enqueue - reduces atomic operations from N to 1
+static inline int queue_enqueue_batch(LockFreeQueue* q, void** actors, Message* msgs, int count) {
+    int tail = atomic_load_explicit(&q->tail, memory_order_relaxed);
+    int head = atomic_load_explicit(&q->head, memory_order_acquire);
+    
+    // Check space for entire batch
+    int space = (head - tail - 1) & QUEUE_MASK;
+    if (space < count) {
+        return 0;  // Not enough space for batch
+    }
+    
+    // Copy batch into queue
+    for (int i = 0; i < count; i++) {
+        q->items[tail].actor = actors[i];
+        q->items[tail].msg = msgs[i];
+        tail = (tail + 1) & QUEUE_MASK;
+    }
+    
+    // Single atomic update for entire batch
+    atomic_store_explicit(&q->tail, tail, memory_order_release);
+    return count;
 }
 
 #endif
