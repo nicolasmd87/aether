@@ -538,4 +538,12 @@ test-build: $(TEST_OBJS) $(COMPILER_LIB_OBJS) $(RUNTIME_OBJS) $(STD_OBJS) $(COLL
 	@echo "Building test runner..."
 	@$(CC) $(TEST_OBJS) $(COMPILER_LIB_OBJS) $(RUNTIME_OBJS) $(STD_OBJS) $(COLLECTIONS_OBJS) -o build/test_runner$(EXE_EXT) $(LDFLAGS)
 
-.PHONY: all compiler lsp apkg ae profiler test test-build test-valgrind test-asan test-memory test-manual-runtime benchmark examples run compile repl clean help self-test release install stats stdlib
+.PHONY: all compiler lsp apkg ae profiler test test-build test-valgrind test-asan test-memory test-manual-runtime benchmark benchmark-ui examples run compile repl clean help self-test release install stats stdlib
+
+# Cross-language benchmark UI
+benchmark-ui:
+	@echo ""
+	@echo "=========================================="
+	@echo "  Launching Benchmark UI"
+	@echo "=========================================="
+	@cd benchmarks/cross-language && $(MAKE) benchmark-ui

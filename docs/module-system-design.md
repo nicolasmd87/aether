@@ -1,19 +1,16 @@
-# Aether Module System Design
+# Aether Module System
 
-## Status: ✅ Implemented in v0.4.0
-
-This document outlines the design and implementation of Aether's module system.
+This document describes Aether's module system for code organization and namespace management.
 
 ## Overview
 
 The module system provides:
-- ✅ Code organization into reusable modules
-- ✅ Namespace management
-- ✅ Import/export syntax
-- ✅ Standard library as modules (std.collections, std.log, std.net, etc.)
-- ✅ Module resolution with automatic file loading
-- ✅ Circular import detection
-- ⚠️ Third-party package support (via apkg package manager - in progress)
+- Code organization into reusable modules
+- Namespace management
+- Import/export syntax
+- Standard library as modules (std.collections, std.log, std.net, etc.)
+- Module resolution with automatic file loading
+- Circular import detection
 
 ## Syntax
 
@@ -126,65 +123,6 @@ main() {
 }
 ```
 
-## Implementation Plan
-
-### Phase 1: Basic Modules (v0.2.0)
-
-- [x] Design syntax and semantics
-- [ ] Add `module` and `import` keywords to lexer
-- [ ] Parse module and import statements
-- [ ] Implement module resolution
-- [ ] Add export/public visibility
-- [ ] Update type checker for module scope
-- [ ] Update code generator for modules
-- [ ] Reorganize stdlib as modules
-
-### Phase 2: Advanced Features (v0.3.0)
-
-- [ ] Module caching for faster compilation
-- [ ] Circular dependency detection
-- [ ] Selective imports
-- [ ] Module aliases
-- [ ] Re-exports
-
-### Phase 3: Package Management (v0.4.0)
-
-- [ ] Package manifest (aether.json)
-- [ ] Package repository
-- [ ] Version management
-- [ ] Dependency resolution
-- [ ] `aether get` command
-
-## Compiler Changes
-
-### Lexer
-
-Add tokens:
-- `TOKEN_MODULE`
-- `TOKEN_IMPORT`
-- `TOKEN_EXPORT`
-- `TOKEN_AS`
-
-### Parser
-
-New AST nodes:
-- `AST_MODULE_DECLARATION`
-- `AST_IMPORT_STATEMENT`
-- `AST_EXPORT_STATEMENT`
-
-### Type Checker
-
-- Module-level symbol tables
-- Cross-module type checking
-- Export/visibility validation
-- Import resolution
-
-### Code Generator
-
-- Module-prefixed C names
-- Header file generation
-- Link-time dependencies
-
 ## Example: Full Module
 
 ### Module: `std/io.ae`
@@ -235,39 +173,7 @@ main() {
 }
 ```
 
-## Backward Compatibility
+## Notes
 
 - Single-file programs continue to work without modules
-- Gradual migration path
-- Standard library provides both old and new APIs during transition
-
-## Testing Strategy
-
-1. **Unit tests:** Module resolution, import parsing
-2. **Integration tests:** Multi-file programs
-3. **Regression tests:** Ensure single-file programs still work
-4. **Stdlib tests:** All standard library modules
-
-## Documentation Updates
-
-- Language reference chapter on modules
-- Tutorial on organizing code with modules
-- Migration guide from single-file to modules
-- Standard library API docs per module
-
-## Timeline
-
-- **v0.2.0 (Q2 2025):** Basic module system
-- **v0.3.0 (Q3 2025):** Advanced features
-- **v0.4.0 (Q4 2025):** Package management
-
-## References
-
-Similar module systems in other languages:
-- **OCaml/SML:** ML-style modules with signatures and functors
-- **Rust:** Explicit `mod` and `use`, cargo packages  
-- **Go:** Package-based, implicit from directory
-- **Erlang:** Module attributes with export lists
-
-Aether's design draws from ML-family module systems while incorporating Rust's explicit exports and Erlang's pragmatic approach.
-
+- Third-party package management is limited (apkg provides basic init and build commands only)

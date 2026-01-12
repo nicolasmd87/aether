@@ -10,7 +10,7 @@ Aether's type inference can deduce types automatically in most cases.
 
 ### When to Use Type Inference
 
-✅ **Local variables**
+IMPLEMENTED **Local variables**
 ```aether
 // Type inference - clean and concise
 x = 42              // Inferred as int
@@ -18,21 +18,21 @@ name = "Alice"      // Inferred as string
 points = [1, 2, 3]  // Inferred as int array
 ```
 
-✅ **Simple computations**
+IMPLEMENTED **Simple computations**
 ```aether
 sum = a + b
 product = x * y
 result = compute_value()
 ```
 
-✅ **Loop variables**
+IMPLEMENTED **Loop variables**
 ```aether
 for i in 0..10 {
     total = total + i
 }
 ```
 
-✅ **Struct field access**
+IMPLEMENTED **Struct field access**
 ```aether
 point = Point{ x: 5, y: 10 }
 x_value = point.x  // Inferred from struct definition
@@ -44,7 +44,7 @@ Use explicit type annotations when they improve code clarity or are required.
 
 ### When to Use Explicit Types
 
-✅ **Function signatures** (highly recommended)
+IMPLEMENTED **Function signatures** (highly recommended)
 ```aether
 // Function parameters and return types
 func add(int a, int b): int {
@@ -62,7 +62,7 @@ func find_user(int id): User {
 
 **Why**: Makes function contracts clear, improves documentation, helps catch errors at call sites.
 
-✅ **Public APIs and library functions**
+IMPLEMENTED **Public APIs and library functions**
 ```aether
 // Export functions should have explicit types
 export func calculate_distance(Point p1, Point p2): float {
@@ -72,7 +72,7 @@ export func calculate_distance(Point p1, Point p2): float {
 }
 ```
 
-✅ **Complex types or ambiguous cases**
+IMPLEMENTED **Complex types or ambiguous cases**
 ```aether
 // When type inference might fail or be unclear
 HashMap map = HashMap.new()
@@ -82,7 +82,7 @@ Vector[User] users = Vector.new()
 int result = parse_number(input)  // Clarifies we want int, not float
 ```
 
-✅ **Actor state declarations**
+IMPLEMENTED **Actor state declarations**
 ```aether
 actor Counter {
     state count: int           // Explicit for clarity
@@ -94,7 +94,7 @@ actor Counter {
 }
 ```
 
-✅ **Struct field definitions**
+IMPLEMENTED **Struct field definitions**
 ```aether
 struct User {
     int id
@@ -125,7 +125,7 @@ int sum = x + y
 
 **Don't mix** styles randomly:
 ```aether
-// ❌ Inconsistent - avoid
+// NOT IMPLEMENTED Inconsistent - avoid
 int x = 10
 y = 20           // Sudden switch to inference
 int sum = x + y  // Back to explicit
@@ -206,15 +206,15 @@ counter = spawn Counter()
 **Don't use `let`** - it's redundant in Aether:
 
 ```aether
-// ❌ Deprecated - avoid
+// NOT IMPLEMENTED Deprecated - avoid
 let x = 42
 let name = "Alice"
 
-// ✅ Use type inference instead
+// IMPLEMENTED Use type inference instead
 x = 42
 name = "Alice"
 
-// ✅ Or explicit types
+// IMPLEMENTED Or explicit types
 int x = 42
 string name = "Alice"
 ```
@@ -296,23 +296,23 @@ func process_data(string filename): int {
 Sometimes explicit types are **required**:
 
 ```aether
-// ❌ This fails - type can't be inferred
+// NOT IMPLEMENTED This fails - type can't be inferred
 x = undefined()
 y = get_value()  // If get_value() return type is unknown
 
-// ✅ Solution: Provide explicit type
+// IMPLEMENTED Solution: Provide explicit type
 int x = undefined()
 int y = get_value()
 ```
 
 ```aether
-// ❌ Recursive functions need return type
+// NOT IMPLEMENTED Recursive functions need return type
 fibonacci(n) {
     if n <= 1 { return n }
     return fibonacci(n - 1) + fibonacci(n - 2)  // ERROR
 }
 
-// ✅ Explicit return type
+// IMPLEMENTED Explicit return type
 func fibonacci(int n): int {
     if n <= 1 { return n }
     return fibonacci(n - 1) + fibonacci(n - 2)
@@ -359,10 +359,10 @@ HashMap map = HashMap.new()
 ## Tooling Support
 
 The Aether LSP provides:
-- ✅ Type inference on hover
-- ✅ Type error diagnostics
-- ⚠️ Auto-completion for type annotations (planned)
-- ⚠️ "Add type annotation" quick fix (planned)
+- IMPLEMENTED Type inference on hover
+- IMPLEMENTED Type error diagnostics
+- PARTIAL Auto-completion for type annotations (planned)
+- PARTIAL "Add type annotation" quick fix (planned)
 
 ---
 

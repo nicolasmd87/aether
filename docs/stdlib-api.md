@@ -73,7 +73,7 @@ print("Value: %d\n", x)
 print("Float: %f\n", pi)
 ```
 
-### File Operations (✅ Implemented in std/fs/)
+### File Operations (IMPLEMENTED Implemented in std/fs/)
 
 Complete filesystem library with file and directory operations:
 

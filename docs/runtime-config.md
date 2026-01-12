@@ -25,21 +25,21 @@ Multiple threads work simultaneously. Like having multiple bathrooms - no waitin
 
 ---
 
-## Full Integration Complete ✓
+## Full Integration Complete SUPPORTED
 
 ### What Was Implemented
 
-1. **Lock-Free Message Pools** ✓
+1. **Lock-Free Message Pools** SUPPORTED
    - TLS pools have no mutex
    - Zero contention on hot path
    - Automatic per-thread allocation
 
-2. **Lock-Free Mailboxes** ✓
+2. **Lock-Free Mailboxes** SUPPORTED
    - SPSC (Single Producer Single Consumer) atomic queue
    - 64-byte cache line padding
    - Runtime switchable
 
-3. **Runtime Configuration API** ✓
+3. **Runtime Configuration API** SUPPORTED
    - Control optimizations via flags
    - Auto-detect CPU features
    - Best out-of-the-box experience
@@ -63,10 +63,10 @@ int main() {
 ```
 
 **Example result on modern CPU:**
-- Lock-free mailboxes: ✓ ENABLED
-- Lock-free pools: ✓ ENABLED  
-- MWAIT idle: ✓ ENABLED
-- AVX2 SIMD: ✓ ENABLED
+- Lock-free mailboxes: SUPPORTED ENABLED
+- Lock-free pools: SUPPORTED ENABLED  
+- MWAIT idle: SUPPORTED ENABLED
+- AVX2 SIMD: SUPPORTED ENABLED
 - **Optimal performance configuration**
 
 ---
@@ -133,12 +133,13 @@ aether_runtime_init(8, flags);
 
 ## Performance Expectations
 
-| Configuration | Throughput (8 cores) | Latency | Use Case |
-|--------------|---------------------|---------|----------|
-| **Maximum** (all optimizations) | 2.3B msg/sec | Sub-μs | Modern CPUs (2013+) |
-| **High** (lock-free + SIMD) | 2.1B msg/sec | ~1μs | AVX2 without MWAIT |
-| **Moderate** (lock-free only) | 350M msg/sec | ~1μs | Non-x86 platforms |
-| **Baseline** (no optimizations) | 125M msg/sec | ~10μs | Old CPUs, compatibility |
+| Configuration | Throughput | Latency | Use Case |
+|--------------|------------|---------|----------|
+| **Maximum** (all optimizations) | 3.1B msg/sec (skynet) | 0.96 cycles/msg | Modern CPUs (2013+) |
+| **High** (TIER 1 + TIER 2) | 418M msg/sec (ring) | 7.18 cycles/msg | AVX2-capable CPUs |
+| **Moderate** (TIER 1 only) | 226M msg/sec (ping-pong) | 13.29 cycles/msg | All platforms |
+
+See [benchmarks/cross-language](../benchmarks/cross-language/) for detailed measurements.
 
 ---
 
@@ -264,11 +265,11 @@ if (pool->is_thread_local) {
 
 | Platform | Lock-Free | MWAIT | SIMD | Status |
 |----------|-----------|-------|------|--------|
-| **Intel x86** (2013+) | ✓ | ✓ | AVX2 | Full support |
-| **AMD Ryzen** | ✓ | ✓ | AVX2 | Full support |
-| **Old x86** (pre-2013) | ✓ | ✗ | SSE4.2 | Partial |
-| **ARM** | ✓ | ✗ (uses WFE) | NEON | Fallbacks active |
-| **Other** | ✓ | ✗ | ✗ | Baseline |
+| **Intel x86** (2013+) | SUPPORTED | SUPPORTED | AVX2 | Full support |
+| **AMD Ryzen** | SUPPORTED | SUPPORTED | AVX2 | Full support |
+| **Old x86** (pre-2013) | SUPPORTED | NO | SSE4.2 | Partial |
+| **ARM** | SUPPORTED | NO (uses WFE) | NEON | Fallbacks active |
+| **Other** | SUPPORTED | NO | NO | Baseline |
 
 Runtime automatically uses best available optimizations for each platform.
 

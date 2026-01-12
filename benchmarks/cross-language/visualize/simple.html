@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<title>Aether Benchmarks</title>
+<script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+<style>
+body{font-family:Arial;margin:0;padding:20px;background:linear-gradient(135deg,#667eea 0%,#764ba2 100%);}
+.container{max-width:1200px;margin:0 auto;background:#fff;padding:30px;border-radius:12px;box-shadow:0 20px 60px rgba(0,0,0,0.3);}
+h1{color:#667eea;margin-top:0;}
+.chart{margin:30px 0;padding:20px;background:#f9f9f9;border-radius:8px;}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>🚀 Aether Cross-Language Benchmarks</h1>
+<div id="status">Loading...</div>
+<div class="chart"><div id="chart1"></div></div>
+<div class="chart"><div id="chart2"></div></div>
+</div>
+<script>
+fetch('/results_ping_pong.json').then(r=>r.json()).then(data=>{
+document.getElementById('status').innerHTML='✓ Loaded '+Object.keys(data.benchmarks).length+' languages';
+const langs=Object.keys(data.benchmarks).sort((a,b)=>data.benchmarks[b].msg_per_sec-data.benchmarks[a].msg_per_sec);
+const throughput=langs.map(l=>data.benchmarks[l].msg_per_sec/1e6);
+const latency=langs.map(l=>data.benchmarks[l].cycles_per_msg);
+Plotly.newPlot('chart1',[{x:langs,y:throughput,type:'bar',marker:{color:'#667eea'}}],{title:'Throughput (M msg/sec)',yaxis:{title:'Million messages/sec'}});
+Plotly.newPlot('chart2',[{x:langs,y:latency,type:'bar',marker:{color:'#764ba2'}}],{title:'Latency (cycles/msg)',yaxis:{title:'CPU cycles per message'}});
+}).catch(e=>document.getElementById('status').innerHTML='Error: '+e);
+</script>
+</body>
+</html>

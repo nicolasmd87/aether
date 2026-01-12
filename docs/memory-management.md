@@ -8,9 +8,8 @@ Instead of heavy runtime GC (mark-sweep, generational), Aether combines:
 
 1. **Arena Allocators** - Fast bulk allocation/deallocation
 2. **Memory Pools** - Fixed-size object pools
-3. **Reference Counting** - For shared data (strings, actors)
-4. **Defer Statements** - Scope-based cleanup
-5. **Compile-time Analysis** - Future: lifetime tracking
+3. **Reference Counting** - For shared strings
+4. **Compile-time Analysis** - Future: lifetime tracking
 
 ## Arena Allocators
 
@@ -115,21 +114,6 @@ standard_pools_free(pools, obj, 50);
 standard_pools_destroy(pools);
 ```
 
-## Defer Statement
-
-Automatic cleanup at scope exit (like Go's defer or C++'s RAII):
-
-```aether
-func process_file(path) {
-    file = open(path)
-    defer close(file)  // Executes when function returns
-    
-    data = read(file)
-    return parse(data)
-    // close(file) called automatically here
-}
-```
-
 ## Memory Tracking
 
 Enable memory statistics tracking:
@@ -162,7 +146,7 @@ Bytes:
   Peak:      51200 (0.05 MB)
 
 Leak Detection:
-  ✓ No memory leaks detected
+  SUPPORTED No memory leaks detected
 =======================================
 ```
 
@@ -269,9 +253,8 @@ Benchmarks show:
 
 1. **Use arenas for temporary data** - Compilation, message processing, string operations
 2. **Use pools for fixed-size objects** - Common data structures
-3. **Use defer for cleanup** - File handles, network connections
-4. **Profile memory usage** - Use memory tracking in development
-5. **Test for leaks** - Run Valgrind/ASAN in CI/CD
+3. **Profile memory usage** - Use memory tracking in development
+4. **Test for leaks** - Run Valgrind/ASAN in CI/CD
 
 ## CI/CD Integration
 

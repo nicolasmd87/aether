@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Aether Benchmarks - Simple Test</title>
+    <style>
+        body { font-family: Arial; padding: 40px; background: #f0f0f0; }
+        h1 { color: #667eea; }
+        .results { background: white; padding: 20px; border-radius: 8px; margin: 20px 0; }
+        pre { background: #f5f5f5; padding: 15px; overflow: auto; }
+        .lang { margin: 10px 0; padding: 10px; background: #e3f2fd; }
+    </style>
+</head>
+<body>
+    <h1>🚀 Aether Benchmark Results</h1>
+    <div class="results" id="results">Loading...</div>
+    
+    <script>
+        async function load() {
+            try {
+                const res = await fetch('/results_ping_pong.json');
+                const data = await res.json();
+                
+                let html = `<h2>Ping-Pong Results (${data.timestamp})</h2>`;
+                html += `<p><strong>CPU:</strong> ${data.hardware.cpu} (${data.hardware.cores} cores)</p>`;
+                html += `<h3>Performance Rankings:</h3>`;
+                
+                const langs = Object.entries(data.benchmarks)
+                    .sort((a, b) => b[1].msg_per_sec - a[1].msg_per_sec);
+                
+                langs.forEach(([lang, bench]) => {
+                    const throughput = (bench.msg_per_sec / 1000000).toFixed(1);
+                    html += `<div class="lang"><strong>${lang}:</strong> ${throughput}M msg/sec (${bench.cycles_per_msg} cycles/msg) - ${bench.runtime}</div>`;
+                });
+                
+                document.getElementById('results').innerHTML = html;
+            } catch (e) {
+                document.getElementById('results').innerHTML = `<p style="color:red">Error: ${e.message}</p>`;
+            }
+        }
+        load();
+    </script>
+</body>
+</html>

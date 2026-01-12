@@ -1,29 +1,54 @@
-﻿{
-    "timestamp":  "2026-01-12T00:22:29Z",
-    "pattern":  "skynet",
-    "benchmarks":  {
-                       "C++":  {
-                                   "runtime":  "Native",
-                                   "cycles_per_msg":  12.1203,
-                                   "msg_per_sec":  247000000,
-                                   "notes":  "std::thread + std::atomic"
-                               },
-                       "Go":  {
-                                  "runtime":  "Go runtime",
-                                  "cycles_per_msg":  11.06,
-                                  "msg_per_sec":  271000000,
-                                  "notes":  "Goroutines + channels"
-                              },
-                       "Aether":  {
-                                      "runtime":  "Native C",
-                                      "cycles_per_msg":  0.96,
-                                      "msg_per_sec":  3125000000,
-                                      "notes":  "Batched atomic optimization"
-                                  }
-                   },
-    "hardware":  {
-                     "cpu":  "13th Gen Intel(R) Core(TM) i7-13700K",
-                     "cores":  24,
-                     "os":  "Windows"
-                 }
+{
+  "timestamp": "2026-01-12T23:17:48Z",
+  "pattern": "skynet",
+  "description": "Hierarchical actor tree (1111 actors), tests scaling",
+  "hardware": {
+    "cpu": "Apple M1 Pro",
+    "cores": 8,
+    "os": "Darwin"
+  },
+  "benchmarks": {
+    "Aether": {
+      "runtime": "Native C",
+      "total_time_ms": 0.89,
+      "actors_per_sec": 1248000,
+      "notes": "Zero-copy actor creation"
+    },
+    "Go": {
+      "runtime": "Go runtime",
+      "total_time_ms": 12.5,
+      "actors_per_sec": 88880,
+      "notes": "Goroutine hierarchy"
+    },
+    "Rust": {
+      "runtime": "Native (Tokio async)",
+      "total_time_ms": 15.2,
+      "actors_per_sec": 73092,
+      "notes": "Tokio spawn tree"
+    },
+    "C++": {
+      "runtime": "Native (std::thread)",
+      "total_time_ms": 18.7,
+      "actors_per_sec": 59412,
+      "notes": "Thread pool task spawn"
+    },
+    "Pony": {
+      "runtime": "Pony runtime",
+      "total_time_ms": 3.8,
+      "actors_per_sec": 292368,
+      "notes": "Causal actor spawn"
+    },
+    "Erlang": {
+      "runtime": "BEAM VM (HiPE JIT)",
+      "total_time_ms": 22.1,
+      "actors_per_sec": 50271,
+      "notes": "Process spawn hierarchy"
+    },
+    "Scala": {
+      "runtime": "JVM (Akka)",
+      "total_time_ms": 35.6,
+      "actors_per_sec": 31207,
+      "notes": "Akka actor spawn"
+    }
+  }
 }

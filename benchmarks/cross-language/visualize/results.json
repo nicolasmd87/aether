@@ -1,29 +1,9 @@
-﻿{
-    "timestamp":  "2026-01-12T00:22:28Z",
-    "pattern":  "ping_pong",
-    "benchmarks":  {
-                       "C++":  {
-                                   "runtime":  "Native",
-                                   "cycles_per_msg":  189.535,
-                                   "msg_per_sec":  15000000,
-                                   "notes":  "std::thread + std::atomic"
-                               },
-                       "Go":  {
-                                  "runtime":  "Go runtime",
-                                  "cycles_per_msg":  156.9,
-                                  "msg_per_sec":  19000000,
-                                  "notes":  "Goroutines + channels"
-                              },
-                       "Aether":  {
-                                      "runtime":  "Native C",
-                                      "cycles_per_msg":  13.29,
-                                      "msg_per_sec":  226000000,
-                                      "notes":  "Batched atomic optimization"
-                                  }
-                   },
-    "hardware":  {
-                     "cpu":  "13th Gen Intel(R) Core(TM) i7-13700K",
-                     "cores":  24,
-                     "os":  "Windows"
-                 }
+{
+  "timestamp": "2026-01-12T14:15:54Z",
+  "hardware": {
+    "cpu": "arm",
+    "cores": 8,
+    "os": "Darwin"
+  },
+  "benchmarks": {}
 }

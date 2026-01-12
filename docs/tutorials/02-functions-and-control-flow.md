@@ -393,12 +393,12 @@ main() {
 ### 1. Keep Functions Small
 
 ```aether
-// ✅ Good: One clear purpose
+// IMPLEMENTED Good: One clear purpose
 calculate_area(width, height) {
     return width * height
 }
 
-// ❌ Bad: Doing too much
+// NOT IMPLEMENTED Bad: Doing too much
 process_everything(a, b, c, d, e) {
     // ... 100 lines of code
 }
@@ -407,11 +407,11 @@ process_everything(a, b, c, d, e) {
 ### 2. Use Meaningful Names
 
 ```aether
-// ✅ Good
+// IMPLEMENTED Good
 calculate_average(numbers) { }
 is_valid_email(email) { }
 
-// ❌ Bad
+// NOT IMPLEMENTED Bad
 calc(n) { }
 check(e) { }
 ```
@@ -419,7 +419,7 @@ check(e) { }
 ### 3. Avoid Deep Nesting
 
 ```aether
-// ❌ Bad: Too nested
+// NOT IMPLEMENTED Bad: Too nested
 if (a) {
     if (b) {
         if (c) {
@@ -430,7 +430,7 @@ if (a) {
     }
 }
 
-// ✅ Good: Early returns
+// IMPLEMENTED Good: Early returns
 process(a, b, c, d) {
     if (!a) { return 0 }
     if (!b) { return 0 }
@@ -444,11 +444,11 @@ process(a, b, c, d) {
 ## Next Steps
 
 You've learned:
-- ✅ How to write functions
-- ✅ Type inference for functions
-- ✅ If/else conditionals
-- ✅ While and for loops
-- ✅ Recursive functions
+- IMPLEMENTED How to write functions
+- IMPLEMENTED Type inference for functions
+- IMPLEMENTED If/else conditionals
+- IMPLEMENTED While and for loops
+- IMPLEMENTED Recursive functions
 
 **Next Tutorial:** [Structs and Data Modeling](03-structs-and-data.md)
 

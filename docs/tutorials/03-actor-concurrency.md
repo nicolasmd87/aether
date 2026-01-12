@@ -422,29 +422,29 @@ actor ScoreTracker {
 
 ### When to Use Actors
 
-- ✅ Independent concurrent tasks
-- ✅ State machines
-- ✅ Event processing
-- ✅ Game entities (players, NPCs, items)
-- ✅ Microservices patterns
+- IMPLEMENTED Independent concurrent tasks
+- IMPLEMENTED State machines
+- IMPLEMENTED Event processing
+- IMPLEMENTED Game entities (players, NPCs, items)
+- IMPLEMENTED Microservices patterns
 
 ### When NOT to Use Actors
 
-- ❌ Simple sequential code
-- ❌ High-speed data sharing
-- ❌ Tight coupling between components
+- NOT IMPLEMENTED Simple sequential code
+- NOT IMPLEMENTED High-speed data sharing
+- NOT IMPLEMENTED Tight coupling between components
 
 ## Best Practices
 
 ### 1. Keep State Small
 
 ```aether
-// ✅ Good: Minimal state
+// IMPLEMENTED Good: Minimal state
 actor Counter {
     state count = 0
 }
 
-// ❌ Avoid: Too much state
+// NOT IMPLEMENTED Avoid: Too much state
 actor Everything {
     state count = 0
     state name = ""
@@ -495,11 +495,11 @@ Counter_step(c)  // Process message 3
 ## Next Steps
 
 You've learned:
-- ✅ What actors are
-- ✅ Actor state and messages
-- ✅ Spawning and messaging
-- ✅ Multiple concurrent actors
-- ✅ Actor design patterns
+- IMPLEMENTED What actors are
+- IMPLEMENTED Actor state and messages
+- IMPLEMENTED Spawning and messaging
+- IMPLEMENTED Multiple concurrent actors
+- IMPLEMENTED Actor design patterns
 
 **Next Tutorial:** [Advanced Topics](04-advanced-topics.md)
 

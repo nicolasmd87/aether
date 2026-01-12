@@ -4,7 +4,7 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 
-An experimental actor-based programming language with gradual typing. Aether compiles to C and explores concurrent systems design through a native actor runtime.
+An experimental actor-based programming language with optional type annotations and type inference. Aether compiles to C and explores concurrent systems design through a native actor runtime.
 
 **Project Status:** Early development. Not recommended for production use.
 
@@ -14,7 +14,7 @@ Aether is a compiled language that brings actor-based concurrency to systems pro
 
 **Design Goals:**
 - Actor-based concurrency with multi-core scheduling
-- Gradual type system for flexible development
+- Type inference with optional annotations
 - Native code generation through C compilation
 - Zero-cost abstractions for performance-critical code
 
@@ -347,7 +347,7 @@ bash run_statistical_bench.sh
 ### Current Status
 - Core compiler pipeline functional
 - Native actor runtime with multi-core scheduling
-- Type checker with gradual typing
+- Type inference with optional annotations
 - Standard library (collections, I/O, networking)
 - Cross-language benchmarks
 

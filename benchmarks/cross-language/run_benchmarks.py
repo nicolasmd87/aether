@@ -188,30 +188,30 @@ class BenchmarkRunner:
     def benchmark_go(self):
         """Run Go benchmark"""
         print("\n=== Benchmarking Go ===")
-        
+
         go_file = Path("go/ping_pong.go")
         if not go_file.exists():
             print("Go benchmark not found, skipping...")
             return
-        
+
         print("Building Go benchmark...")
         exe = Path("go/ping_pong")
         if platform.system() == "Windows":
             exe = Path("go/ping_pong.exe")
-        
+
         _, rc = self.run_command(f"go build -o {exe} {go_file}", cwd=Path("go"))
-        
+
         if rc != 0:
             print("Failed to build Go benchmark")
             return
-        
+
         print("Running Go benchmark...")
         output, rc = self.run_command(str(exe))
-        
+
         if rc == 0 and output:
             print(output)
             msg_per_sec, cycles_per_msg = self.parse_output(output)
-            
+
             if msg_per_sec:
                 self.results["benchmarks"]["Go"] = {
                     "runtime": "Go runtime",
@@ -220,6 +220,45 @@ class BenchmarkRunner:
                     "notes": "Goroutine scheduler overhead"
                 }
                 print(f"✓ Go: {msg_per_sec/1e6:.0f}M msg/sec")
+
+    def benchmark_erlang(self):
+        """Run Erlang benchmark"""
+        print("\n=== Benchmarking Erlang ===")
+
+        # Check if Erlang is installed
+        _, rc = self.run_command("which erlc")
+        if rc != 0:
+            print("Erlang not installed, skipping...")
+            print("  Install with: brew install erlang  # macOS")
+            return
+
+        erlang_dir = Path("erlang")
+        if not (erlang_dir / "ping_pong.erl").exists():
+            print("Erlang benchmark not found, skipping...")
+            return
+
+        print("Building Erlang benchmark...")
+        _, rc = self.run_command("make", cwd=erlang_dir)
+
+        if rc != 0:
+            print("Failed to build Erlang benchmark")
+            return
+
+        print("Running Erlang benchmark...")
+        output, rc = self.run_command("make run_ping_pong", cwd=erlang_dir)
+
+        if rc == 0 and output:
+            print(output)
+            msg_per_sec, cycles_per_msg = self.parse_output(output)
+
+            if msg_per_sec:
+                self.results["benchmarks"]["Erlang"] = {
+                    "runtime": "BEAM VM (HiPE JIT)",
+                    "msg_per_sec": int(msg_per_sec),
+                    "cycles_per_msg": cycles_per_msg or 20.0,
+                    "notes": "Process-based actor model"
+                }
+                print(f"✓ Erlang: {msg_per_sec/1e6:.0f}M msg/sec")
     
     def save_results(self):
         """Save results to JSON file"""
@@ -245,7 +284,8 @@ class BenchmarkRunner:
         self.benchmark_cpp()
         self.benchmark_rust()
         self.benchmark_go()
-        
+        self.benchmark_erlang()
+
         self.save_results()
         
         print("\n" + "=" * 60)

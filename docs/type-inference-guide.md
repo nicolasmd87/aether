@@ -206,10 +206,10 @@ identity(x: int): int {
 
 Type inference happens at **compile-time only**:
 
-- ✅ Zero runtime overhead
-- ✅ Same generated C code as explicit types
-- ✅ Full type safety maintained
-- ✅ No performance difference
+- IMPLEMENTED Zero runtime overhead
+- IMPLEMENTED Same generated C code as explicit types
+- IMPLEMENTED Full type safety maintained
+- IMPLEMENTED No performance difference
 
 ## Limitations
 
@@ -222,13 +222,13 @@ Current limitations (v1.0):
 
 ## Best Practices
 
-### ✅ Do:
+### IMPLEMENTED Do:
 - Let inference handle obvious cases (literals, simple expressions)
 - Use explicit types for public APIs and exports
 - Use explicit types when it improves readability
 - Mix explicit/inferred for balance
 
-### ❌ Don't:
+### NOT IMPLEMENTED Don't:
 - Over-annotate everything (defeats the purpose)
 - Rely on inference for complex logic (document with types)
 - Leave ambiguous types un-annotated

@@ -102,17 +102,17 @@ gcc -o build\bench_actor_pool.exe tests\runtime\bench_actor_pool.c \
 ## Best Practices
 
 ### Do:
-- ✅ Use message coalescing for high-throughput scenarios (automatic)
-- ✅ Use zero-copy for messages >256 bytes (automatic)
-- ✅ Use actor pools for frequent allocation/deallocation
-- ✅ Batch actor allocations when possible (391x faster)
-- ✅ Let scheduler handle core assignment (partitioned for cache locality)
+- IMPLEMENTED Use message coalescing for high-throughput scenarios (automatic)
+- IMPLEMENTED Use zero-copy for messages >256 bytes (automatic)
+- IMPLEMENTED Use actor pools for frequent allocation/deallocation
+- IMPLEMENTED Batch actor allocations when possible (391x faster)
+- IMPLEMENTED Let scheduler handle core assignment (partitioned for cache locality)
 
 ### Don't:
-- ❌ Access actor state from multiple threads (use messages)
-- ❌ Call mailbox_send directly (use scheduler_send_remote)
-- ❌ Free zero-copy message data manually (use message_free)
-- ❌ Exceed actor pool capacity (check return values)
+- NOT IMPLEMENTED Access actor state from multiple threads (use messages)
+- NOT IMPLEMENTED Call mailbox_send directly (use scheduler_send_remote)
+- NOT IMPLEMENTED Free zero-copy message data manually (use message_free)
+- NOT IMPLEMENTED Exceed actor pool capacity (check return values)
 
 ## Configuration
 

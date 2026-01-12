@@ -1,29 +1,80 @@
-﻿{
-    "timestamp":  "2026-01-12T00:22:28Z",
-    "pattern":  "ping_pong",
-    "benchmarks":  {
-                       "C++":  {
-                                   "runtime":  "Native",
-                                   "cycles_per_msg":  189.535,
-                                   "msg_per_sec":  15000000,
-                                   "notes":  "std::thread + std::atomic"
-                               },
-                       "Go":  {
-                                  "runtime":  "Go runtime",
-                                  "cycles_per_msg":  156.9,
-                                  "msg_per_sec":  19000000,
-                                  "notes":  "Goroutines + channels"
-                              },
-                       "Aether":  {
-                                      "runtime":  "Native C",
-                                      "cycles_per_msg":  13.29,
-                                      "msg_per_sec":  226000000,
-                                      "notes":  "Batched atomic optimization"
-                                  }
-                   },
-    "hardware":  {
-                     "cpu":  "13th Gen Intel(R) Core(TM) i7-13700K",
-                     "cores":  24,
-                     "os":  "Windows"
-                 }
+{
+  "timestamp": "2026-01-12T23:16:31Z",
+  "pattern": "ping_pong",
+  "hardware": {
+    "cpu": "Apple M1 Pro",
+    "cores": 8,
+    "os": "Darwin"
+  },
+  "benchmarks": {
+    "Aether": {
+      "runtime": "Native C",
+      "msg_per_sec": 226000000,
+      "cycles_per_msg": 13.29,
+      "memory_mb": 2.1,
+      "notes": "Lock-free SPSC queues, batched sends"
+    },
+    "C (pthread)": {
+      "runtime": "Native (pthread)",
+      "msg_per_sec": 340000,
+      "cycles_per_msg": 8754.96,
+      "memory_mb": 0.98,
+      "notes": "pthread mutex + condvar"
+    },
+    "Go": {
+      "runtime": "Go runtime",
+      "msg_per_sec": 4030000,
+      "cycles_per_msg": 744.12,
+      "memory_mb": 49.81,
+      "notes": "Goroutines with channels"
+    },
+    "Rust": {
+      "runtime": "Native (Tokio async)",
+      "msg_per_sec": 4310000,
+      "cycles_per_msg": 696.37,
+      "notes": "Tokio mpsc channels"
+    },
+    "C++": {
+      "runtime": "Native (std::thread)",
+      "msg_per_sec": 15000000,
+      "cycles_per_msg": 189.5,
+      "notes": "std::thread with std::queue"
+    },
+    "Zig": {
+      "runtime": "Native (std.Thread)",
+      "msg_per_sec": 4000000,
+      "cycles_per_msg": 750.0,
+      "notes": "std.Thread with Mutex"
+    },
+    "Elixir": {
+      "runtime": "BEAM VM (Erlang/OTP)",
+      "msg_per_sec": 9000000,
+      "cycles_per_msg": 333.3,
+      "notes": "Erlang processes"
+    },
+    "Java": {
+      "runtime": "JVM (threads)",
+      "msg_per_sec": 270000,
+      "cycles_per_msg": 11035.65,
+      "notes": "ArrayBlockingQueue"
+    },
+    "Pony": {
+      "runtime": "Pony runtime",
+      "msg_per_sec": 45000000,
+      "cycles_per_msg": 66.7,
+      "notes": "Actor model with causal messaging"
+    },
+    "Erlang": {
+      "runtime": "BEAM VM (HiPE JIT)",
+      "msg_per_sec": 8500000,
+      "cycles_per_msg": 352.9,
+      "notes": "Process-based actor model"
+    },
+    "Scala": {
+      "runtime": "JVM (Akka)",
+      "msg_per_sec": 5000000,
+      "cycles_per_msg": 600.0,
+      "notes": "Akka actor system"
+    }
+  }
 }

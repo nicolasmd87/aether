@@ -28,6 +28,11 @@ char* get_exe_dir() {
         GetModuleFileNameA(NULL, dir, sizeof(dir));
         char* last_slash = strrchr(dir, '\\');
         if (last_slash) *last_slash = '\0';
+        #elif defined(__APPLE__)
+        // On macOS, just use current directory
+        if (getcwd(dir, sizeof(dir)) == NULL) {
+            strcpy(dir, ".");
+        }
         #else
         readlink("/proc/self/exe", dir, sizeof(dir));
         char* last_slash = strrchr(dir, '/');
@@ -37,11 +42,18 @@ char* get_exe_dir() {
     return dir;
 }
 
-// Serve index.html
+// Serve index.html or stats.html
 void serve_index(HttpRequest* req, HttpServerResponse* res, void* user_data) {
     char path[1024];
-    snprintf(path, sizeof(path), "%s\\index.html", get_exe_dir());
-    
+    const char* req_path = req->path ? req->path : "/";
+    const char* filename = "index.html";
+
+    if (strstr(req_path, "stats.html")) {
+        filename = "stats.html";
+    }
+
+    snprintf(path, sizeof(path), "%s/%s", get_exe_dir(), filename);
+
     FILE* f = fopen(path, "rb");
     if (!f) {
         aether_http_response_set_status(res, 404);
@@ -65,11 +77,20 @@ void serve_index(HttpRequest* req, HttpServerResponse* res, void* user_data) {
     free(content);
 }
 
-// Serve results.json
+// Serve results.json or results_*.json files
 void serve_results(HttpRequest* req, HttpServerResponse* res, void* user_data) {
     char path[1024];
-    snprintf(path, sizeof(path), "%s\\results.json", get_exe_dir());
-    
+    // Get the requested path (e.g., "/results_ping_pong.json" or "/results.json")
+    const char* req_path = req->path ? req->path : "/results.json";
+    const char* filename = strrchr(req_path, '/');
+    if (filename) {
+        filename++; // Skip the '/'
+    } else {
+        filename = "results.json";
+    }
+
+    snprintf(path, sizeof(path), "%s/%s", get_exe_dir(), filename);
+
     FILE* f = fopen(path, "rb");
     if (!f) {
         // Return empty results if file doesn't exist yet
@@ -78,16 +99,16 @@ void serve_results(HttpRequest* req, HttpServerResponse* res, void* user_data) {
         aether_http_response_set_body(res, empty);
         return;
     }
-    
+
     fseek(f, 0, SEEK_END);
     long size = ftell(f);
     fseek(f, 0, SEEK_SET);
-    
+
     char* content = malloc(size + 1);
     fread(content, 1, size, f);
     content[size] = '\0';
     fclose(f);
-    
+
     aether_http_response_set_header(res, "Content-Type", "application/json");
     aether_http_response_set_header(res, "Access-Control-Allow-Origin", "*");
     aether_http_response_set_body(res, content);
@@ -128,14 +149,22 @@ int main(int argc, char* argv[]) {
     // Register routes
     aether_http_server_get(server, "/", serve_index, NULL);
     aether_http_server_get(server, "/index.html", serve_index, NULL);
+    aether_http_server_get(server, "/stats.html", serve_index, NULL);
     aether_http_server_get(server, "/results.json", serve_results, NULL);
+    aether_http_server_get(server, "/results_ping_pong.json", serve_results, NULL);
+    aether_http_server_get(server, "/results_ring.json", serve_results, NULL);
+    aether_http_server_get(server, "/results_skynet.json", serve_results, NULL);
+    aether_http_server_get(server, "/results_statistical.json", serve_results, NULL);
     aether_http_server_get(server, "/api/sysinfo", serve_sysinfo, NULL);
-    
+
     printf("Server starting on http://localhost:%d\n", port);
     printf("\nAvailable endpoints:\n");
-    printf("  GET  /                - Benchmark dashboard\n");
-    printf("  GET  /results.json    - Benchmark results (JSON)\n");
-    printf("  GET  /api/sysinfo     - Server information\n");
+    printf("  GET  /                         - Benchmark dashboard\n");
+    printf("  GET  /results.json             - All benchmark results (JSON)\n");
+    printf("  GET  /results_ping_pong.json   - Ping-pong pattern results\n");
+    printf("  GET  /results_ring.json        - Ring pattern results\n");
+    printf("  GET  /results_skynet.json      - Skynet pattern results\n");
+    printf("  GET  /api/sysinfo              - Server information\n");
     printf("\nPress Ctrl+C to stop\n\n");
     
     // Start server (blocking)

@@ -245,11 +245,11 @@ main() {
 ```
 
 **Performance**:
-- **Single-core**: 125 million messages/second
-- **Multi-core**: 125M × N messages/second
-  - 2 cores: 250M msg/s
-  - 4 cores: 500M msg/s
-  - 8 cores: 1000M msg/s (1 billion!)
+- **Ping-pong** (2 actors): 226M msg/sec
+- **Ring** (100 actors): 418M msg/sec
+- **Skynet** (1111 actors): 3.1B msg/sec
+
+See [benchmarks/cross-language](../benchmarks/cross-language/) for methodology and comparisons.
 
 ### How It Works
 
@@ -375,17 +375,17 @@ gcc output.c -Iruntime runtime/multicore_scheduler.c runtime/memory.c -o my_prog
 ## Summary
 
 You've learned:
-- ✅ Actors and message passing
-- ✅ Arrays (fixed and dynamic)
-- ✅ Control flow (if, for, while, switch)
-- ✅ Multi-core performance
-- ✅ Complete applications
+- IMPLEMENTED Actors and message passing
+- IMPLEMENTED Arrays (fixed and dynamic)
+- IMPLEMENTED Control flow (if, for, while, switch)
+- IMPLEMENTED Multi-core performance
+- IMPLEMENTED Complete applications
 
 **Aether gives you**:
-- **Performance**: 125M msg/s per core (beats Go by 12x, Erlang by 50x)
-- **Lightweight**: 128 bytes per actor (16-20x less than Go/Erlang)
+- **Performance**: 226M msg/sec (ping-pong), 418M msg/sec (ring), 3.1B msg/sec (skynet)
+- **Lightweight**: Actor pooling and arena allocation reduce overhead
 - **Simple**: No locks, no shared memory, just messages
 - **Fast**: Compiles to C, no VM overhead
 
-**Now start building!** 🚀
+See [benchmarks/cross-language](../benchmarks/cross-language/) for detailed comparisons.
 

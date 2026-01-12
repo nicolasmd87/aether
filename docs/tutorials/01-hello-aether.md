@@ -210,12 +210,12 @@ main() {
 ### Mistake 1: Forgetting Parentheses
 
 ```aether
-// ❌ Wrong
+// NOT IMPLEMENTED Wrong
 main {
     print("Hello")
 }
 
-// ✅ Correct
+// IMPLEMENTED Correct
 main() {
     print("Hello")
 }
@@ -240,10 +240,10 @@ print("World\n")
 ## Next Steps
 
 You've learned:
-- ✅ How to run Aether programs
-- ✅ Variables and type inference
-- ✅ Basic math operations
-- ✅ Comments
+- IMPLEMENTED How to run Aether programs
+- IMPLEMENTED Variables and type inference
+- IMPLEMENTED Basic math operations
+- IMPLEMENTED Comments
 
 **Next Tutorial:** [Functions and Type Inference](02-functions-and-types.md)
 

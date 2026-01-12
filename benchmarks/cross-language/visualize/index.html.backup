@@ -1,0 +1,471 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aether Cross-Language Benchmarks</title>
+    <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            overflow: hidden;
+        }
+        
+        header {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 40px;
+            text-align: center;
+        }
+        
+        header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            font-weight: 700;
+        }
+        
+        header p {
+            font-size: 1.2em;
+            opacity: 0.9;
+        }
+        
+        .metadata {
+            background: #f8f9fa;
+            padding: 20px 40px;
+            border-bottom: 1px solid #e9ecef;
+            display: flex;
+            justify-content: space-between;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+        
+        .metadata-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        
+        .metadata-label {
+            font-weight: 600;
+            color: #495057;
+        }
+        
+        .metadata-value {
+            color: #212529;
+        }
+        
+        .content {
+            padding: 40px;
+        }
+        
+        .section {
+            margin-bottom: 50px;
+        }
+        
+        .section-title {
+            font-size: 1.8em;
+            color: #212529;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 3px solid #667eea;
+        }
+        
+        .chart-container {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 30px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .chart-title {
+            font-size: 1.3em;
+            color: #495057;
+            margin-bottom: 15px;
+            font-weight: 600;
+        }
+        
+        .export-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+            flex-wrap: wrap;
+        }
+        
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9em;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+        
+        .btn-primary {
+            background: #667eea;
+            color: white;
+        }
+        
+        .btn-primary:hover {
+            background: #5568d3;
+            transform: translateY(-1px);
+            box-shadow: 0 4px 8px rgba(102, 126, 234, 0.3);
+        }
+        
+        .btn-secondary {
+            background: #6c757d;
+            color: white;
+        }
+        
+        .btn-secondary:hover {
+            background: #5a6268;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        
+        th, td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #dee2e6;
+        }
+        
+        th {
+            background: #f8f9fa;
+            font-weight: 600;
+            color: #495057;
+        }
+        
+        tr:hover {
+            background: #f8f9fa;
+        }
+        
+        .winner {
+            color: #28a745;
+            font-weight: 600;
+        }
+        
+        .status {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 0.85em;
+            font-weight: 500;
+        }
+        
+        .status-success {
+            background: #d4edda;
+            color: #155724;
+        }
+        
+        .status-loading {
+            background: #fff3cd;
+            color: #856404;
+        }
+        
+        footer {
+            background: #f8f9fa;
+            padding: 30px;
+            text-align: center;
+            color: #6c757d;
+            border-top: 1px solid #dee2e6;
+        }
+        
+        .methodology {
+            background: #e7f3ff;
+            border-left: 4px solid #0066cc;
+            padding: 20px;
+            margin: 20px 0;
+            border-radius: 4px;
+        }
+        
+        .methodology h3 {
+            color: #0066cc;
+            margin-bottom: 10px;
+        }
+        
+        @media (max-width: 768px) {
+            header h1 {
+                font-size: 1.8em;
+            }
+            
+            .metadata {
+                flex-direction: column;
+            }
+            
+            .content {
+                padding: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🚀 Aether Cross-Language Benchmarks</h1>
+            <p>Actor Message Passing Performance Comparison</p>
+        </header>
+        
+        <div class="metadata" id="metadata">
+            <div class="metadata-item">
+                <span class="metadata-label">� Pattern:</span>
+                <select id="pattern-selector" onchange="changePattern()" style="padding: 8px; font-size: 14px; border-radius: 4px; border: 1px solid #ddd;">
+                    <option value="ping_pong">Ping-Pong (2 actors)</option>
+                    <option value="ring">Ring (100 actors)</option>
+                    <option value="skynet">Skynet (1000 actors)</option>
+                </select>
+            </div>
+            <div class="metadata-item">
+                <span class="metadata-label">�📅 Last Run:</span>
+                <span class="metadata-value" id="timestamp">Loading...</span>
+            </div>
+            <div class="metadata-item">
+                <span class="metadata-label">💻 CPU:</span>
+                <span class="metadata-value" id="cpu">Loading...</span>
+            </div>
+            <div class="metadata-item">
+                <span class="metadata-label">🔧 Cores:</span>
+                <span class="metadata-value" id="cores">Loading...</span>
+            </div>
+            <div class="metadata-item">
+                <span class="metadata-label">🖥️ OS:</span>
+                <span class="metadata-value" id="os">Loading...</span>
+            </div>
+            <div class="metadata-item">
+                <span class="status status-loading" id="status">Loading results...</span>
+            </div>
+        </div>
+        
+        <div class="content">
+            <div class="methodology">
+                <h3>📊 Methodology</h3>
+                <p><strong>Fair Comparison:</strong> Same hardware, optimized compilers (-O3), RDTSC cycle counting. Idiomatic code per language using native concurrency primitives.</p>
+                <p id="pattern-description"><strong>Test:</strong> Ping-pong between 2 actors (10M messages). Measures raw actor message passing latency.</p>
+            </div>
+            
+            <section class="section">
+                <h2 class="section-title">📈 Throughput Comparison</h2>
+                <div class="chart-container">
+                    <div class="chart-title">Messages per Second (Higher is Better)</div>
+                    <div id="throughput-chart"></div>
+                    <div class="export-buttons">
+                        <button class="btn btn-primary" onclick="exportChart('throughput-chart', 'throughput.png')">💾 Export PNG</button>
+                        <button class="btn btn-secondary" onclick="exportChart('throughput-chart', 'throughput.svg')">📄 Export SVG</button>
+                    </div>
+                </div>
+            </section>
+            
+            <section class="section">
+                <h2 class="section-title">⚡ Latency Comparison</h2>
+                <div class="chart-container">
+                    <div class="chart-title">Cycles per Message (Lower is Better)</div>
+                    <div id="latency-chart"></div>
+                    <div class="export-buttons">
+                        <button class="btn btn-primary" onclick="exportChart('latency-chart', 'latency.png')">💾 Export PNG</button>
+                        <button class="btn btn-secondary" onclick="exportChart('latency-chart', 'latency.svg')">📄 Export SVG</button>
+                    </div>
+                </div>
+            </section>
+            
+            <section class="section">
+                <h2 class="section-title">📋 Detailed Results</h2>
+                <div class="chart-container">
+                    <table id="results-table">
+                        <thead>
+                            <tr>
+                                <th>Language</th>
+                                <th>Runtime</th>
+                                <th>Msg/Sec</th>
+                                <th>Cycles/Msg</th>
+                                <th>Speedup</th>
+                                <th>Relative</th>
+                                <th>Notes</th>
+                            </tr>
+                        </thead>
+                        <tbody id="table-body">
+                            <tr><td colspan="6" style="text-align:center; padding: 40px;">Loading results...</td></tr>
+                        </tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+        
+        <footer>
+            <p><strong>Served by:</strong> Aether HTTP Server (Native C) | <strong>Graphs:</strong> Plotly.js</p>
+            <p style="margin-top: 10px;">All measurements use RDTSC cycle counting for accuracy. Results are reproducible.</p>
+            <p style="margin-top: 10px; font-size: 0.9em;">
+                <a href="https://github.com/yourusername/aether" style="color: #667eea; text-decoration: none;">View on GitHub</a>
+            </p>
+        </footer>
+    </div>
+    
+    <script>
+        const patternDescriptions = {
+            'ping_pong': '<strong>Test:</strong> Ping-pong between 2 actors (10M messages). Pure message passing latency test.',
+            'ring': '<strong>Test:</strong> 100 actors passing token in circle (100K rounds = 10M messages). Tests message routing efficiency.',
+            'skynet': '<strong>Test:</strong> 1000 actors each processing 1K messages. Tests actor creation and coordination at scale.'
+        };
+        
+        let currentPattern = 'ping_pong';
+        
+        function changePattern() {
+            const selector = document.getElementById('pattern-selector');
+            currentPattern = selector.value;
+            document.getElementById('pattern-description').innerHTML = patternDescriptions[currentPattern];
+            loadResults();
+        }
+        
+        async function loadResults() {
+            try {
+                const pattern = currentPattern || 'ping_pong';
+                const response = await fetch(`/results_${pattern}.json`);
+                const data = await response.json();
+                
+                if (!data.benchmarks || Object.keys(data.benchmarks).length === 0) {
+                    document.getElementById('status').textContent = 'No results yet';
+                    document.getElementById('status').className = 'status status-loading';
+                    return;
+                }
+                
+                // Update metadata
+                document.getElementById('timestamp').textContent = data.timestamp || 'Unknown';
+                document.getElementById('cpu').textContent = data.hardware?.cpu || 'Unknown';
+                document.getElementById('cores').textContent = data.hardware?.cores || 'Unknown';
+                document.getElementById('os').textContent = data.hardware?.os || 'Unknown';
+                document.getElementById('status').textContent = 'Results loaded';
+                document.getElementById('status').className = 'status status-success';
+                
+                // Process benchmark data
+                const languages = Object.keys(data.benchmarks).sort((a, b) => 
+                    (data.benchmarks[b].msg_per_sec || 0) - (data.benchmarks[a].msg_per_sec || 0)
+                );
+                
+                const throughput = languages.map(lang => data.benchmarks[lang].msg_per_sec / 1000000);
+                const latency = languages.map(lang => data.benchmarks[lang].cycles_per_msg);
+                
+                // Create throughput chart (higher is better)
+                const maxThroughput = Math.max(...throughput);
+                const throughputData = [{
+                    x: languages,
+                    y: throughput,
+                    type: 'bar',
+                    marker: {
+                        color: throughput.map(val => {
+                            const ratio = val / maxThroughput;
+                            if (ratio > 0.8) return '#28a745'; // Green - excellent
+                            if (ratio > 0.5) return '#ffc107'; // Yellow - good
+                            if (ratio > 0.2) return '#fd7e14'; // Orange - ok
+                            return '#dc3545'; // Red - poor
+                        })
+                    },
+                    text: throughput.map(t => t.toFixed(0) + 'M'),
+                    textposition: 'outside'
+                }];
+                
+                const throughputLayout = {
+                    yaxis: {title: 'Messages per Second (Millions)'},
+                    xaxis: {title: 'Language'},
+                    showlegend: false,
+                    height: 500,
+                    margin: {t: 30, b: 80}
+                };
+                
+                Plotly.newPlot('throughput-chart', throughputData, throughputLayout, {responsive: true});
+                
+                // Create latency chart (lower is better)
+                const minLatency = Math.min(...latency);
+                const latencyData = [{
+                    x: languages,
+                    y: latency,
+                    type: 'bar',
+                    marker: {
+                        color: latency.map(val => {
+                            const ratio = val / minLatency;
+                            if (ratio < 2) return '#28a745'; // Green - excellent
+                            if (ratio < 5) return '#ffc107'; // Yellow - good
+                            if (ratio < 10) return '#fd7e14'; // Orange - ok
+                            return '#dc3545'; // Red - poor
+                        })
+                    },
+                    text: latency.map(l => l.toFixed(2)),
+                    textposition: 'outside'
+                }];
+                
+                const latencyLayout = {
+                    yaxis: {title: 'Cycles per Message'},
+                    xaxis: {title: 'Language'},
+                    showlegend: false,
+                    height: 500,
+                    margin: {t: 30, b: 80}
+                };
+                
+                Plotly.newPlot('latency-chart', latencyData, latencyLayout, {responsive: true});
+                
+                // Populate table
+                const tableBody = document.getElementById('table-body');
+                const bestThroughput = Math.max(...throughput) * 1000000;
+                
+                tableBody.innerHTML = languages.map((lang, i) => {
+                    const bench = data.benchmarks[lang];
+                    const speedup = bench.msg_per_sec / Math.min(...languages.map(l => data.benchmarks[l].msg_per_sec));
+                    const relative = (bench.msg_per_sec / bestThroughput) * 100;
+                    const isWinner = i === 0;
+                    
+                    return `
+                        <tr>
+                            <td ${isWinner ? 'class="winner"' : ''}>${lang}</td>
+                            <td>${bench.runtime || 'Native'}</td>
+                            <td>${(bench.msg_per_sec / 1000000).toFixed(1)}M</td>
+                            <td>${bench.cycles_per_msg.toFixed(2)}</td>
+                            <td>${speedup.toFixed(1)}x</td>
+                            <td>${relative.toFixed(0)}%</td>
+                            <td>${bench.notes || ''}</td>
+                        </tr>
+                    `;
+                }).join('');
+                
+            } catch (error) {
+                console.error('Error loading results:', error);
+                document.getElementById('status').textContent = 'Error loading results';
+                document.getElementById('status').className = 'status status-loading';
+            }
+        }
+        
+        function exportChart(chartId, filename) {
+            Plotly.downloadImage(chartId, {
+                format: filename.endsWith('.png') ? 'png' : 'svg',
+                width: 1200,
+                height: 600,
+                filename: filename.replace(/\.\w+$/, '')
+            });
+        }
+        
+        // Load results on page load
+        loadResults();
+        
+        // Auto-refresh every 30 seconds
+        setInterval(loadResults, 30000);
+    </script>
+</body>
+</html>

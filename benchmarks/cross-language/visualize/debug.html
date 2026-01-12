@@ -1,26 +1,49 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Debug Test</title>
+    <title>Debug - Benchmark Results</title>
+    <style>
+        body { font-family: Arial; padding: 20px; background: #f5f5f5; }
+        h1 { color: #333; }
+        pre { background: #fff; padding: 15px; border: 1px solid #ddd; overflow: auto; }
+        .success { color: green; font-weight: bold; }
+        .error { color: red; font-weight: bold; }
+    </style>
 </head>
 <body>
-    <h1>Debug Test</h1>
-    <pre id="output">Loading...</pre>
+    <h1>Benchmark Results Debug Page</h1>
+    <div id="status">Loading...</div>
+    <h2>Ping-Pong Results:</h2>
+    <pre id="data"></pre>
     
     <script>
-        const output = document.getElementById('output');
+        async function load() {
+            const status = document.getElementById('status');
+            const data = document.getElementById('data');
+            
+            try {
+                status.innerHTML = 'Fetching /results_ping_pong.json...';
+                const response = await fetch('/results_ping_pong.json');
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                }
+                
+                const json = await response.json();
+                status.innerHTML = '<span class="success">✓ Data loaded successfully!</span>';
+                data.textContent = JSON.stringify(json, null, 2);
+                
+                // Show quick summary
+                const langs = Object.keys(json.benchmarks || {});
+                status.innerHTML += `<br><br>Found ${langs.length} languages: ${langs.join(', ')}`;
+                
+            } catch (e) {
+                status.innerHTML = `<span class="error">✗ Error: ${e.message}</span>`;
+                data.textContent = e.stack;
+            }
+        }
         
-        fetch('/results.json')
-            .then(response => {
-                output.textContent = 'Status: ' + response.status + '\n';
-                return response.text();
-            })
-            .then(text => {
-                output.textContent += 'Response:\n' + text;
-            })
-            .catch(err => {
-                output.textContent = 'Error: ' + err.message;
-            });
+        load();
     </script>
 </body>
 </html>
