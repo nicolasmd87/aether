@@ -114,14 +114,14 @@ bool is_complete_statement(const char* line) {
     // Check if the line looks like a complete statement
     int len = strlen(line);
     if (len == 0) return true;
-    
+
     // Trim trailing whitespace
     while (len > 0 && (line[len-1] == ' ' || line[len-1] == '\t' || line[len-1] == '\n')) {
         len--;
     }
-    
+
     if (len == 0) return true;
-    
+
     // Check for block starters that need continuation
     const char* block_starters[] = {"actor", "func", "struct", "if", "while", "for", "match", NULL};
     for (int i = 0; block_starters[i] != NULL; i++) {
@@ -135,66 +135,113 @@ bool is_complete_statement(const char* line) {
             if (open_braces > 0) return false;
         }
     }
-    
+
     // Check for unclosed braces
     int braces = 0;
     for (int i = 0; i < len; i++) {
         if (line[i] == '{') braces++;
         if (line[i] == '}') braces--;
     }
-    
+
     return braces == 0;
 }
 
-bool compile_and_run(REPLState* state, const char* code, bool is_expression) {
+bool is_assignment(const char* code) {
+    // Check if contains '=' but not '==', '!=', '<=', '>='
+    const char* eq = strchr(code, '=');
+    if (!eq) return false;
+
+    // Check it's not ==, !=, <=, >=
+    if (eq > code && (eq[-1] == '=' || eq[-1] == '!' || eq[-1] == '<' || eq[-1] == '>'))
+        return false;
+    if (eq[1] == '=')
+        return false;
+
+    return true;
+}
+
+bool compile_and_run(REPLState* state, const char* code, bool is_expression, InputBuffer* session_buf) {
     // Write code to temporary file
     FILE* temp_file = fopen(state->temp_file, "w");
     if (!temp_file) {
         fprintf(stderr, "%sError: Cannot create temp file%s\n", COLOR_RED, COLOR_RESET);
         return false;
     }
-    
-    // Wrap in main if it's just an expression
-    if (is_expression) {
-        fprintf(temp_file, "func main() {\n");
-        fprintf(temp_file, "    result = %s\n", code);
-        fprintf(temp_file, "    print(result)\n");
-        fprintf(temp_file, "}\n");
-    } else {
-        // Check if it has main, if not wrap it
-        if (strstr(code, "main") == NULL) {
-            fprintf(temp_file, "%s\n", code);
-            fprintf(temp_file, "\nfunc main() {\n");
-            fprintf(temp_file, "    print(\"OK\")\n");
-            fprintf(temp_file, "}\n");
-        } else {
-            fprintf(temp_file, "%s\n", code);
-        }
+
+    // Wrap in main - all session code and current code goes inside
+    fprintf(temp_file, "func main() {\n");
+
+    // Write accumulated session code (previous assignments/definitions)
+    for (int i = 0; i < session_buf->count; i++) {
+        fprintf(temp_file, "    %s\n", session_buf->lines[i]);
     }
-    
+
+    // Now add current code
+    if (is_expression) {
+        // Check if it's an assignment
+        if (is_assignment(code)) {
+            // Just write the assignment, don't print
+            fprintf(temp_file, "    %s\n", code);
+        } else {
+            // It's an expression, wrap in result and print
+            fprintf(temp_file, "    result = %s\n", code);
+            fprintf(temp_file, "    print(result)\n");
+            fprintf(temp_file, "    print(\"\\n\")\n");
+        }
+    } else {
+        // Statement/definition
+        fprintf(temp_file, "    %s\n", code);
+        fprintf(temp_file, "    print(\"OK\\n\")\n");
+    }
+
+    fprintf(temp_file, "}\n");
     fclose(temp_file);
-    
-    // Compile
+
+    // Compile Aether to C (aetherc takes input.ae output.c)
+    char c_file[256];
+    snprintf(c_file, sizeof(c_file), "%s.c", state->output_file);
+
     char compile_cmd[512];
-    snprintf(compile_cmd, sizeof(compile_cmd), 
-             "aetherc %s -o %s 2>&1", state->temp_file, state->output_file);
-    
+    snprintf(compile_cmd, sizeof(compile_cmd),
+             "./build/aetherc %s %s 2>&1", state->temp_file, c_file);
+
     FILE* compile_proc = popen(compile_cmd, "r");
     if (!compile_proc) {
         fprintf(stderr, "%sError: Cannot run compiler%s\n", COLOR_RED, COLOR_RESET);
         return false;
     }
-    
+
     char compile_output[4096] = {0};
     fread(compile_output, 1, sizeof(compile_output) - 1, compile_proc);
     int compile_status = pclose(compile_proc);
-    
+
     if (compile_status != 0) {
         // Compilation error
         printf("%s%s%s", COLOR_RED, compile_output, COLOR_RESET);
         return false;
     }
-    
+
+    // Compile C to executable
+    char gcc_cmd[512];
+    snprintf(gcc_cmd, sizeof(gcc_cmd),
+             "gcc %s runtime/aether_runtime.c -o %s 2>&1", c_file, state->output_file);
+
+    FILE* gcc_proc = popen(gcc_cmd, "r");
+    if (!gcc_proc) {
+        fprintf(stderr, "%sError: Cannot run gcc%s\n", COLOR_RED, COLOR_RESET);
+        return false;
+    }
+
+    char gcc_output[4096] = {0};
+    fread(gcc_output, 1, sizeof(gcc_output) - 1, gcc_proc);
+    int gcc_status = pclose(gcc_proc);
+
+    if (gcc_status != 0) {
+        // GCC error
+        printf("%s%s%s", COLOR_RED, gcc_output, COLOR_RESET);
+        return false;
+    }
+
     // Run the compiled program
     char run_cmd[512];
 #ifdef _WIN32
@@ -202,22 +249,22 @@ bool compile_and_run(REPLState* state, const char* code, bool is_expression) {
 #else
     snprintf(run_cmd, sizeof(run_cmd), "./%s 2>&1", state->output_file);
 #endif
-    
+
     FILE* run_proc = popen(run_cmd, "r");
     if (!run_proc) {
         fprintf(stderr, "%sError: Cannot run program%s\n", COLOR_RED, COLOR_RESET);
         return false;
     }
-    
+
     char run_output[4096] = {0};
     fread(run_output, 1, sizeof(run_output) - 1, run_proc);
     pclose(run_proc);
-    
+
     // Print output
     if (strlen(run_output) > 0) {
         printf("%s%s%s", COLOR_YELLOW, run_output, COLOR_RESET);
     }
-    
+
     return true;
 }
 
@@ -352,20 +399,20 @@ int main(int argc, char** argv) {
                 for (int i = 0; i < multiline_buffer.count; i++) {
                     total_len += strlen(multiline_buffer.lines[i]) + 1;
                 }
-                
+
                 char* code = (char*)malloc(total_len + 1);
                 code[0] = '\0';
                 for (int i = 0; i < multiline_buffer.count; i++) {
                     strcat(code, multiline_buffer.lines[i]);
                     strcat(code, "\n");
                 }
-                
+
                 // Add to session
                 add_line(&session_buffer, code);
-                
+
                 // Compile and run
-                compile_and_run(&state, code, false);
-                
+                compile_and_run(&state, code, false, &session_buffer);
+
                 free(code);
                 clear_buffer(&multiline_buffer);
             }
@@ -408,14 +455,18 @@ int main(int argc, char** argv) {
         
         // Execute single line
         if (is_expr) {
-            // It's an expression
-            compile_and_run(&state, line, true);
+            // Check if it's an assignment - add to session
+            if (is_assignment(line)) {
+                add_line(&session_buffer, line);
+            }
+            // Compile and run
+            compile_and_run(&state, line, true, &session_buffer);
         } else {
             // It's a statement/definition
             add_line(&session_buffer, line);
-            compile_and_run(&state, line, false);
+            compile_and_run(&state, line, false, &session_buffer);
         }
-        
+
         free(line);
     }
     
