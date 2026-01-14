@@ -413,13 +413,12 @@ pgo-clean:
 # Interactive REPL (requires readline library)
 repl: compiler
 	@echo "Starting Aether REPL..."
-	@if [ -f tools/aether_repl.c ]; then \
-		$(CC) $(CFLAGS) -I/opt/homebrew/include tools/aether_repl.c -o build/aether_repl$(EXE_EXT) -L/opt/homebrew/lib -lreadline; \
-		./build/aether_repl$(EXE_EXT); \
-	else \
-		echo "Error: REPL not implemented yet"; \
-		echo "You can run programs with: make run FILE=yourfile.ae"; \
-	fi
+ifeq ($(DETECTED_OS),Darwin)
+	@$(CC) $(CFLAGS) -I/opt/homebrew/include tools/aether_repl.c -o build/aether_repl$(EXE_EXT) -L/opt/homebrew/lib -lreadline
+else
+	@$(CC) $(CFLAGS) tools/aether_repl.c -o build/aether_repl$(EXE_EXT) -lreadline
+endif
+	@./build/aether_repl$(EXE_EXT)
 
 # Build statistics
 stats:
