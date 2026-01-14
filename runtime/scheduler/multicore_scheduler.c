@@ -47,6 +47,7 @@ __thread int current_core_id = -1;
 // Silently degrades if platform doesn't support affinity
 static void pin_to_core(int core_id) {
 #ifdef __linux__
+    #include <sched.h>
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(core_id, &cpuset);
@@ -75,16 +76,16 @@ void* __attribute__((hot)) scheduler_thread(void* arg) {
 
     while (atomic_load_explicit(&sched->running, memory_order_acquire)) {
         int work_done = 0;
-        
+
         // TIER 1 ALWAYS ON: Adaptive batch sizing
         int batch_size = sched->batch_state.current_batch_size;
         if (batch_size > COALESCE_THRESHOLD) batch_size = COALESCE_THRESHOLD;
-        
+
         // TIER 1 ALWAYS ON: Message coalescing
         sched->coalesce_buffer.count = 0;
         void* actor_ptr;
         Message msg;
-        
+
         // Drain up to batch_size messages in one batch (adaptive)
         while (sched->coalesce_buffer.count < batch_size &&
                queue_dequeue(&sched->incoming_queue, &actor_ptr, &msg)) {
@@ -92,12 +93,12 @@ void* __attribute__((hot)) scheduler_thread(void* arg) {
             sched->coalesce_buffer.messages[sched->coalesce_buffer.count] = msg;
             sched->coalesce_buffer.count++;
         }
-        
+
         // Process coalesced batch with minimal overhead
         for (int i = 0; i < sched->coalesce_buffer.count; i++) {
             ActorBase* actor = (ActorBase*)sched->coalesce_buffer.actors[i];
             Message msg = sched->coalesce_buffer.messages[i];
-            
+
             // Drain actor mailbox aggressively BEFORE trying to add new message
             if (actor->mailbox.count > MAILBOX_SIZE / 2) {
                 // Mailbox getting full - drain it NOW
@@ -107,7 +108,7 @@ void* __attribute__((hot)) scheduler_thread(void* arg) {
                     drained++;
                 }
             }
-            
+
             // Now try to deliver message
             if (!mailbox_send(&actor->mailbox, msg)) {
                 // Still full - re-queue for later
@@ -118,20 +119,20 @@ void* __attribute__((hot)) scheduler_thread(void* arg) {
                 work_done = 1;
             }
         }
-        
+
         // TIER 1 ALWAYS ON: Adjust adaptive batch size based on what we received
         adaptive_batch_adjust(&sched->batch_state, sched->coalesce_buffer.count);
-        
+
         // Process active actors (NO ATOMICS - actors are core-local)
         // This is the performance-critical loop
         for (int i = 0; i < sched->actor_count; i++) {
             ActorBase* actor = sched->actors[i];
-            
+
             // Prefetch next actor for better pipeline utilization
             if (i + 1 < sched->actor_count) {
                 __builtin_prefetch(sched->actors[i + 1], 0, 3);
             }
-            
+
             if (likely(actor && actor->active)) {
                 if (likely(actor->step)) {
                     // FIRST: Drain SPSC queue (lock-free same-core messages)
@@ -156,15 +157,15 @@ void* __attribute__((hot)) scheduler_thread(void* arg) {
                 work_done = 1;
             }
         }
-        
+
         // Partitioned approach: NO work stealing
         // Actors stay on their assigned core for perfect cache locality
         // Result: Zero cache thrashing, zero atomic contention
-        
+
         if (!work_done) {
             idle_count++;
             atomic_fetch_add(&sched->idle_cycles, 1);
-            
+
             // WORK STEALING: After significant idle time, try to steal work
             if (idle_count > 5000 && idle_count % 1000 == 0) {
                 // Find busiest core
@@ -178,17 +179,17 @@ void* __attribute__((hot)) scheduler_thread(void* arg) {
                         busiest_core = i;
                     }
                 }
-                
+
                 // If found a busy core, try to steal an actor
                 if (busiest_core >= 0 && max_work > 100) {
                     Scheduler* victim = &schedulers[busiest_core];
-                    
+
                     // Try to lock victim's actor list (non-blocking)
                     if (atomic_flag_test_and_set_explicit(&victim->actor_lock.lock, memory_order_acquire) == 0) {
                         // Steal last actor if victim has multiple actors
                         if (victim->actor_count > 4) {
                             ActorBase* stolen = victim->actors[--victim->actor_count];
-                            
+
                             // Add to our core
                             spinlock_lock(&sched->actor_lock);
                             if (sched->actor_count < sched->capacity) {
@@ -206,7 +207,7 @@ void* __attribute__((hot)) scheduler_thread(void* arg) {
                     }
                 }
             }
-            
+
             // Keep spinning aggressively for high-throughput workloads
             if (idle_count < 10000) {
                 // Tight spin with pause
@@ -222,13 +223,13 @@ void* __attribute__((hot)) scheduler_thread(void* arg) {
             idle_count = 0;
             atomic_store(&sched->idle_cycles, 0);
         }
-        
+
         // Explicit check to ensure timely exit on all platforms
         if (!atomic_load_explicit(&sched->running, memory_order_acquire)) {
             break;
         }
     }
-    
+
     return NULL;
 }
 
@@ -238,17 +239,17 @@ void scheduler_init(int cores) {
 
     // Initialize NUMA topology detection
     (void)aether_numa_init();  // NUMA topology initialized for future use
-    
+
     if (cores <= 0 || cores > MAX_CORES) {
         // Use auto-detected core count if not specified
         cores = cpu_recommend_cores();
         if (cores <= 0 || cores > MAX_CORES) cores = 4;
     }
     num_cores = cores;
-    
+
     for (int i = 0; i < num_cores; i++) {
         schedulers[i].core_id = i;
-        
+
         // NUMA-aware allocation: allocate scheduler data on same NUMA node as core
         int numa_node = aether_numa_node_of_cpu(i);
         schedulers[i].actors = aether_numa_alloc(MAX_ACTORS_PER_CORE * sizeof(ActorBase*), numa_node);
@@ -264,7 +265,7 @@ void scheduler_init(int cores) {
         atomic_store(&schedulers[i].steal_attempts, 0);
         atomic_store(&schedulers[i].idle_cycles, 0);
         spinlock_init(&schedulers[i].actor_lock);
-        
+
         // TIER 1 ALWAYS ON: Initialize actor pool with NUMA-aware allocation
         schedulers[i].actor_pool = aether_numa_alloc(sizeof(ActorPool), numa_node);
         if (schedulers[i].actor_pool) {
@@ -296,7 +297,7 @@ void scheduler_stop() {
     for (int i = 0; i < num_cores; i++) {
         atomic_store_explicit(&schedulers[i].running, 0, memory_order_release);
     }
-    
+
     // Wake threads by writing to monitored addresses (wakes MWAIT)
     // On non-MWAIT platforms, threads wake quickly from short sleep
     for (int i = 0; i < num_cores; i++) {
@@ -337,32 +338,32 @@ int scheduler_register_actor(ActorBase* actor, int preferred_core) {
     if (preferred_core < 0) {
         preferred_core = actor->id % num_cores;
     }
-    
+
     Scheduler* sched = &schedulers[preferred_core];
-    
+
     if (sched->actor_count >= sched->capacity) {
         // Dynamically grow actor array with NUMA-aware reallocation
         int numa_node = aether_numa_node_of_cpu(preferred_core);
         size_t old_size = sched->capacity * sizeof(ActorBase*);
         size_t new_size = sched->capacity * 2 * sizeof(ActorBase*);
-        
+
         ActorBase** new_actors = aether_numa_alloc(new_size, numa_node);
         if (!new_actors) {
             fprintf(stderr, "Fatal: Failed to grow actor array for core %d\n", preferred_core);
             return -1;
         }
-        
+
         // Copy old data and free old array
         memcpy(new_actors, sched->actors, old_size);
         aether_numa_free(sched->actors, old_size);
-        
+
         sched->actors = new_actors;
         sched->capacity *= 2;
     }
-    
+
     actor->assigned_core = preferred_core;
     sched->actors[sched->actor_count++] = actor;
-    
+
     return preferred_core;
 }
 
@@ -373,7 +374,7 @@ void scheduler_send_local(ActorBase* actor, Message msg) {
 
 void scheduler_send_remote(ActorBase* actor, Message msg, int from_core) {
     int target_core = actor->assigned_core;
-    
+
     // TIER 1 ALWAYS ON: Direct send for same-core actors (bypasses queue)
     if (from_core >= 0 && from_core == target_core) {
         // Same core - direct mailbox delivery, no queue overhead
@@ -382,7 +383,7 @@ void scheduler_send_remote(ActorBase* actor, Message msg, int from_core) {
         AETHER_STAT_INC(direct_sends);
         return;
     }
-    
+
     // Retry with backoff if queue full
     int retries = 0;
     while (!queue_enqueue(&schedulers[target_core].incoming_queue, actor, msg)) {
@@ -394,7 +395,7 @@ void scheduler_send_remote(ActorBase* actor, Message msg, int from_core) {
         __asm__ __volatile__("pause" ::: "memory");
         #endif
     }
-    
+
     atomic_fetch_add(&schedulers[target_core].work_count, 1);
     AETHER_STAT_INC(queue_sends);
 }
@@ -404,10 +405,10 @@ ActorBase* scheduler_spawn_pooled(int preferred_core, void (*step)(void*)) {
     if (preferred_core < 0 || preferred_core >= num_cores) {
         preferred_core = atomic_fetch_add(&next_actor_id, 1) % num_cores;
     }
-    
+
     Scheduler* sched = &schedulers[preferred_core];
     ActorBase* actor = NULL;
-    
+
     // TIER 1 ALWAYS ON: Try to get from pool first
     if (sched->actor_pool) {
         PooledActor* pooled = actor_pool_acquire(sched->actor_pool);
@@ -416,7 +417,7 @@ ActorBase* scheduler_spawn_pooled(int preferred_core, void (*step)(void*)) {
             AETHER_STAT_INC(actors_pooled);
         }
     }
-    
+
     // Fallback to malloc if pool exhausted - use NUMA-aware allocation
     if (!actor) {
         int numa_node = aether_numa_node_of_cpu(preferred_core);
@@ -426,21 +427,21 @@ ActorBase* scheduler_spawn_pooled(int preferred_core, void (*step)(void*)) {
         spsc_queue_init(&actor->spsc_queue);
         AETHER_STAT_INC(actors_malloced);
     }
-    
+
     actor->id = atomic_fetch_add(&next_actor_id, 1);
     actor->step = step;
     actor->active = 1;
     actor->assigned_core = preferred_core;
-    
+
     scheduler_register_actor(actor, preferred_core);
-    
+
     return actor;
 }
 
 // TIER 1 ALWAYS ON: Release actor back to pool
 void scheduler_release_pooled(ActorBase* actor) {
     if (!actor) return;
-    
+
     int core = actor->assigned_core;
     if (core >= 0 && core < num_cores && schedulers[core].actor_pool) {
         PooledActor* pooled = (PooledActor*)actor;
@@ -449,7 +450,7 @@ void scheduler_release_pooled(ActorBase* actor) {
             return;
         }
     }
-    
+
     // Not from pool, free with NUMA-aware deallocation
     aether_numa_free(actor, sizeof(ActorBase));
 }
@@ -460,7 +461,7 @@ void scheduler_enable_features(int use_pool, int use_lockfree, int use_adaptive,
     (void)use_pool;      // Actor pooling is always on
     (void)use_adaptive;  // Adaptive batching is always on
     (void)use_direct;    // Direct send is always on
-    
+
     // TIER 3 opt-in: Lock-free mailbox
     if (use_lockfree) {
         aether_enable_opt(AETHER_OPT_LOCKFREE_MAILBOX);
