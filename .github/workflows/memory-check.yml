@@ -11,20 +11,20 @@ jobs:
   valgrind-test:
     name: Valgrind Memory Leak Check
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
-      
+      uses: actions/checkout@v4
+
     - name: Install dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y gcc make valgrind
-        
+
     - name: Build with debug symbols
       run: |
         make CFLAGS="-O0 -g" test
-        
+
     - name: Run Valgrind on test suite
       run: |
         valgrind --leak-check=full \
@@ -34,7 +34,7 @@ jobs:
                  --error-exitcode=1 \
                  --suppressions=.valgrind-suppressions \
                  ./build/test_runner 2>&1 | tee valgrind-output.txt
-        
+
     - name: Check for leaks
       run: |
         if grep -q "definitely lost" valgrind-output.txt; then
@@ -46,10 +46,10 @@ jobs:
           exit 1
         fi
         echo "SUCCESS: No memory leaks detected"
-        
+
     - name: Upload Valgrind report
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: valgrind-report
         path: valgrind-output.txt
@@ -57,46 +57,46 @@ jobs:
   sanitizer-test:
     name: AddressSanitizer & LeakSanitizer
     runs-on: ${{ matrix.os }}
-    
+
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
-        
+
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
-      
+      uses: actions/checkout@v4
+
     - name: Setup GCC
       if: matrix.os == 'ubuntu-latest'
       run: |
         sudo apt-get update
         sudo apt-get install -y gcc make
-        
+
     - name: Setup Clang
       if: matrix.os == 'macos-latest'
       run: |
         brew install llvm
-        
+
     - name: Build with AddressSanitizer
       run: |
         make clean
         make CFLAGS="-fsanitize=address -fsanitize=leak -fno-omit-frame-pointer -O1 -g" \
              LDFLAGS="-fsanitize=address -fsanitize=leak -pthread -lm"
-        
+
     - name: Run tests with ASAN
       env:
         ASAN_OPTIONS: detect_leaks=1:halt_on_error=1:abort_on_error=1
         LSAN_OPTIONS: report_objects=1
       run: |
         make test
-        
+
     - name: Build with UndefinedBehaviorSanitizer
       run: |
         make clean
         make CFLAGS="-fsanitize=undefined -fno-omit-frame-pointer -O1 -g" \
              LDFLAGS="-fsanitize=undefined -pthread -lm"
-        
+
     - name: Run tests with UBSAN
       run: |
         make test
@@ -104,31 +104,31 @@ jobs:
   memory-profiling:
     name: Memory Usage Profiling
     runs-on: ubuntu-latest
-    
+
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
-      
+      uses: actions/checkout@v4
+
     - name: Install dependencies
       run: |
         sudo apt-get update
         sudo apt-get install -y gcc make valgrind
-        
+
     - name: Build with memory tracking
       run: |
         make CFLAGS="-DAETHER_MEMORY_TRACKING -O2 -g"
-        
+
     - name: Run memory profiling
       run: |
         valgrind --tool=massif \
                  --massif-out-file=massif.out \
                  ./build/test_runner
-        
+
     - name: Generate memory profile report
       run: |
         ms_print massif.out > memory-profile.txt
         cat memory-profile.txt
-        
+
     - name: Check peak memory usage
       run: |
         peak=$(grep "peak" massif.out | head -1 | awk '{print $2}')
@@ -140,9 +140,9 @@ jobs:
           exit 1
         fi
         echo "SUCCESS: Peak memory usage acceptable"
-        
+
     - name: Upload profiling report
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: memory-profile
         path: |
@@ -152,29 +152,29 @@ jobs:
   architecture-tests:
     name: 64-bit Architecture Tests
     runs-on: ${{ matrix.os }}
-    
+
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest]
-        
+
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
-      
+      uses: actions/checkout@v4
+
     - name: Setup GCC
       run: |
         sudo apt-get update || brew update
         sudo apt-get install -y gcc make || brew install gcc make
-        
+
     - name: Verify 64-bit compilation
       run: |
         make
         file build/aetherc | grep "64-bit"
-        
+
     - name: Run tests on 64-bit
       run: |
         make test
-        
+
     - name: Check pointer size
       run: |
         echo "Checking pointer and long size..."
