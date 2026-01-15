@@ -3,10 +3,10 @@
 #include <string.h>
 #include "../runtime/test_harness.h"
 #include "../../compiler/tokens.h"
-#include "../../compiler/lexer.h"
+#include "../../compiler/frontend/lexer.h"
 #include "../../compiler/ast.h"
-#include "../../compiler/parser.h"
-#include "../../compiler/typechecker.h"
+#include "../../compiler/frontend/parser.h"
+#include "../../compiler/analysis/typechecker.h"
 
 // Helper function to create parser with error suppression
 static Parser* create_test_parser(Token** tokens, int token_count) {

@@ -233,7 +233,7 @@ lsp: compiler
 	@echo "==================================="
 	@echo "Building Aether LSP Server ($(DETECTED_OS))"
 	@echo "==================================="
-	$(CC) $(CFLAGS) lsp/main.c lsp/aether_lsp.c $(COMPILER_SRC) $(RUNTIME_SRC) $(STD_SRC) $(LDFLAGS) -Icompiler -Istd -o build/aether-lsp$(EXE_EXT)
+	$(CC) $(CFLAGS) lsp/main.c lsp/aether_lsp.c $(COMPILER_LIB_SRC) $(RUNTIME_SRC) $(STD_SRC) $(LDFLAGS) -Icompiler -Istd -o build/aether-lsp$(EXE_EXT)
 	@echo "✓ LSP Server built successfully: build/aether-lsp$(EXE_EXT)"
 
 apkg:
@@ -538,6 +538,19 @@ test-parallel:
 clean:
 	$(RM_DIR) build
 
+# Pre-commit validation checks
+check: quick-check
+
+quick-check:
+	@echo "Running quick pre-commit checks..."
+	@chmod +x scripts/quick-check.sh
+	@./scripts/quick-check.sh
+
+check-full:
+	@echo "Running comprehensive CI/CD checks..."
+	@chmod +x scripts/pre-commit-check.sh
+	@./scripts/pre-commit-check.sh
+
 help:
 	@echo "Aether Build System ($(DETECTED_OS))"
 	@echo ""
@@ -573,6 +586,10 @@ help:
 	@echo "  make test-memory    - Run tests with memory tracking enabled"
 	@echo "  make self-test      - Test compiler on complex examples"
 	@echo ""
+	@echo "Pre-Commit Checks:"
+	@echo "  make check          - Quick check (build + tests, ~30s)"
+	@echo "  make check-full     - Full CI/CD check (includes memory checks, ~2min)"
+	@echo ""
 	@echo "Tool Targets:"
 	@echo "  make lsp            - Build LSP server"
 	@echo "  make apkg           - Build package manager"
@@ -598,7 +615,7 @@ test-build: $(TEST_OBJS) $(COMPILER_LIB_OBJS) $(RUNTIME_OBJS) $(STD_OBJS) $(COLL
 	@echo "Building test runner..."
 	@$(CC) $(TEST_OBJS) $(COMPILER_LIB_OBJS) $(RUNTIME_OBJS) $(STD_OBJS) $(COLLECTIONS_OBJS) -o build/test_runner$(EXE_EXT) $(LDFLAGS)
 
-.PHONY: all compiler lsp apkg ae profiler test test-build test-valgrind test-asan test-memory test-manual-runtime benchmark benchmark-ui examples run compile repl clean help self-test release install stats stdlib
+.PHONY: all compiler lsp apkg ae profiler test test-build test-valgrind test-asan test-memory test-manual-runtime benchmark benchmark-ui examples run compile repl clean help self-test release install stats stdlib check quick-check check-full
 
 # Cross-language benchmark UI
 benchmark-ui:
