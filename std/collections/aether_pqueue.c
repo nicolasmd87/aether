@@ -1,6 +1,7 @@
 #include "aether_pqueue.h"
 #include <stdlib.h>
 #include <string.h>
+#include <stdint.h>
 
 #define DEFAULT_CAPACITY 16
 #define GROWTH_FACTOR 2

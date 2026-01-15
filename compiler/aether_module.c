@@ -236,9 +236,15 @@ AetherModule* module_load_from_file(const char* import_path, const char* base_di
     fseek(f, 0, SEEK_SET);
     
     char* content = malloc(size + 1);
-    fread(content, 1, size, f);
-    content[size] = '\0';
+    size_t bytes_read = fread(content, 1, size, f);
+    content[bytes_read] = '\0';
     fclose(f);
+
+    if (bytes_read != (size_t)size) {
+        free(content);
+        free(file_path);
+        return NULL;
+    }
     
     // Create module entry
     AetherModule* module = module_create(import_path, file_path);
