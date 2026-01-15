@@ -2,9 +2,17 @@
 // Based on Experiment 04: 291M msg/sec on 8 cores (2.3× scaling)
 // Strategy: Static actor-to-core assignment, no atomics, perfect cache locality
 
+// Platform defines must come first
+#ifdef __linux__
+#define _GNU_SOURCE
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
+#include <sched.h>
+#include <errno.h>
 #include "multicore_scheduler.h"
 #include "../utils/aether_cpu_detect.h"
 #include "../config/aether_optimization_config.h"
@@ -24,13 +32,6 @@
 #else
 #define HAS_X86_INTRINSICS 0
 #endif
-
-// Platform includes (standard)
-#ifdef __linux__
-#define _GNU_SOURCE
-#endif
-#include <sched.h>
-#include <errno.h>
 
 #ifdef _WIN32
 #include <windows.h>
