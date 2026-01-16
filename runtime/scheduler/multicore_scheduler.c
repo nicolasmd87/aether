@@ -319,14 +319,22 @@ void scheduler_wait() {
 void scheduler_cleanup() {
     // Free allocated scheduler resources
     for (int i = 0; i < num_cores; i++) {
+        // Clean up thread resources
+        schedulers[i].thread = 0;
+
         if (schedulers[i].actors != NULL) {
-            aether_numa_free(schedulers[i].actors, schedulers[i].capacity * sizeof(ActorBase*));
+            // Free with the size we allocated, not current capacity
+            aether_numa_free(schedulers[i].actors, MAX_ACTORS_PER_CORE * sizeof(ActorBase*));
             schedulers[i].actors = NULL;
         }
         if (schedulers[i].actor_pool != NULL) {
             aether_numa_free(schedulers[i].actor_pool, sizeof(ActorPool));
             schedulers[i].actor_pool = NULL;
         }
+
+        // Reset counters
+        schedulers[i].actor_count = 0;
+        schedulers[i].capacity = 0;
     }
     num_cores = 0;
 }

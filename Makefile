@@ -10,7 +10,16 @@ ifeq ($(OS),Windows_NT)
     RM_DIR := rd /S /Q
 else
     DETECTED_OS := $(shell uname -s)
-    EXE_EXT :=
+    # Check if we're in MSYS2/MinGW (common on GitHub Actions Windows)
+    ifneq ($(findstring MINGW,$(DETECTED_OS)),)
+        EXE_EXT := .exe
+    else ifneq ($(findstring MSYS,$(DETECTED_OS)),)
+        EXE_EXT := .exe
+    else ifneq ($(findstring CYGWIN,$(DETECTED_OS)),)
+        EXE_EXT := .exe
+    else
+        EXE_EXT :=
+    endif
     PATH_SEP := /
     MKDIR := mkdir -p
     RM := rm -f
@@ -70,21 +79,6 @@ TEST_SRC = tests/runtime/test_harness.c \
            tests/memory/test_memory_arena.c \
            tests/memory/test_memory_pool.c \
            tests/compiler/test_lexer.c
-# Temporarily disabled - need to fix includes
-#           tests/compiler/test_lexer.c \
-#           tests/compiler/test_lexer_comprehensive.c \
-#           tests/compiler/test_parser.c \
-#           tests/compiler/test_parser_comprehensive.c \
-#           tests/compiler/test_typechecker.c \
-#           tests/compiler/test_type_inference_comprehensive.c \
-#           tests/compiler/test_codegen.c \
-#           tests/compiler/test_structs.c \
-#           tests/compiler/test_switch_statements.c \
-#           tests/compiler/test_pattern_matching_comprehensive.c \
-#           tests/memory/test_memory_arena.c \
-#           tests/memory/test_memory_pool.c \
-#           tests/memory/test_memory_leaks.c \
-#           tests/memory/test_memory_stress.c \
 
 # Standalone test programs with their own main() - build separately
 STANDALONE_TESTS = tests/test_runtime_implementations.c \

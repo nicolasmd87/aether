@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-01-16T03:31:36Z",
+  "timestamp": "2026-01-16T04:20:55Z",
   "pattern": "ping_pong",
   "hardware": {
     "cpu": "Apple M1 Pro",
@@ -16,16 +16,16 @@
     },
     "C (pthread)": {
       "runtime": "Native (pthread)",
-      "msg_per_sec": 310000,
-      "cycles_per_msg": 9640.62,
-      "memory_mb": 1.12,
+      "msg_per_sec": 220000,
+      "cycles_per_msg": 13621.95,
+      "memory_mb": 1.25,
       "notes": "pthread mutex + condvar"
     },
     "Go": {
       "runtime": "Go runtime",
-      "msg_per_sec": 4070000,
-      "cycles_per_msg": 737.95,
-      "memory_mb": 51.90,
+      "msg_per_sec": 3910000,
+      "cycles_per_msg": 767.33,
+      "memory_mb": 51.75,
       "notes": "Goroutines with channels"
     },
     "Rust": {
@@ -54,8 +54,8 @@
     },
     "Java": {
       "runtime": "JVM (threads)",
-      "msg_per_sec": 250000,
-      "cycles_per_msg": 11840.91,
+      "msg_per_sec": 180000,
+      "cycles_per_msg": 16246.57,
       "notes": "ArrayBlockingQueue"
     },
     "Pony": {

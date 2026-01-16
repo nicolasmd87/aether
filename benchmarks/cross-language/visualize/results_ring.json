@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-01-16T03:32:58Z",
+  "timestamp": "2026-01-16T04:22:40Z",
   "pattern": "ring",
   "description": "100 actors in ring topology, 100K rounds (10M total messages)",
   "hardware": {
@@ -16,8 +16,8 @@
     },
     "Go": {
       "runtime": "Go runtime",
-      "msg_per_sec": 139000000,
-      "cycles_per_msg": 21.62,
+      "msg_per_sec": 140000000,
+      "cycles_per_msg": 21.41,
       "notes": "Ring topology with goroutines"
     },
     "Rust": {
