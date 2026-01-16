@@ -53,10 +53,10 @@ static JsonValue* parse_number(const char** json) {
 static JsonValue* parse_string(const char** json) {
     if (**json != '"') return NULL;
     (*json)++;
-    
+
     char buffer[4096];
     int i = 0;
-    
+
     while (**json && **json != '"' && i < 4095) {
         if (**json == '\\') {
             (*json)++;
@@ -74,11 +74,16 @@ static JsonValue* parse_string(const char** json) {
             (*json)++;
         }
     }
-    
+
     if (**json == '"') (*json)++;
     buffer[i] = '\0';
-    
-    return aether_json_create_string(aether_string_new(buffer));
+
+    // Create JsonValue directly without extra retain
+    JsonValue* value = (JsonValue*)malloc(sizeof(JsonValue));
+    value->type = JSON_STRING;
+    value->data.string_value = aether_string_new(buffer);
+    // String starts with refcount=1, JsonValue owns it
+    return value;
 }
 
 static JsonValue* parse_array(const char** json) {
@@ -132,19 +137,19 @@ static JsonValue* parse_object(const char** json) {
         if (**json != '"') break;
         JsonValue* key_val = parse_string(json);
         if (!key_val) break;
-        
+
         AetherString* key = key_val->data.string_value;
-        aether_string_retain(key);
-        aether_json_free(key_val);
-        
+        free(key_val);  // Free the JsonValue wrapper, but not the string
+
         skip_whitespace(json);
         if (**json == ':') (*json)++;
-        
+
         skip_whitespace(json);
         JsonValue* value = parse_value(json);
         if (value) {
             aether_json_object_set(obj, key, value);
         }
+        // Map retains the key, so release our reference
         aether_string_release(key);
         
         skip_whitespace(json);
@@ -363,7 +368,7 @@ JsonValue* aether_json_create_string(AetherString* val) {
     JsonValue* value = (JsonValue*)malloc(sizeof(JsonValue));
     value->type = JSON_STRING;
     value->data.string_value = val;
-    aether_string_retain(val);
+    aether_string_retain(val);  // Retain for reference counting
     return value;
 }
 

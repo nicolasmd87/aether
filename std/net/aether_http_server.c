@@ -238,7 +238,7 @@ const char* aether_http_get_query_param(HttpRequest* req, const char* key) {
     char* value_end = strchr(value_start, '&');
     
     static char value_buf[256];
-    int value_len = value_end ? (value_end - value_start) : strlen(value_start);
+    size_t value_len = value_end ? (size_t)(value_end - value_start) : strlen(value_start);
     strncpy(value_buf, value_start, value_len);
     value_buf[value_len] = '\0';
     

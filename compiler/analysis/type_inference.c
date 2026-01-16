@@ -564,6 +564,7 @@ void propagate_call_types_in_tree(ASTNode* tree, const char* func_name, ASTNode*
 
 // Propagate types from function call sites to function definitions
 void propagate_function_call_types(ASTNode* program, SymbolTable* table) {
+    (void)table;  // Unused for now
     if (!program) return;
     
     // Find all function calls and match them with definitions

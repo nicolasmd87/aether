@@ -88,6 +88,10 @@ int main(int argc, char** argv) {
     register_scheduler_optimization_tests();
     
     run_all_tests();
-    
+
+    // Flush all output before exit (helps on Windows)
+    fflush(stdout);
+    fflush(stderr);
+
     return 0;
 }

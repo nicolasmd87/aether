@@ -101,7 +101,9 @@ Token* read_string() {
     }
     
     buffer[i] = '\0';
-    return create_token(TOKEN_STRING_LITERAL, buffer, current_line, current_column);
+    Token* token = create_token(TOKEN_STRING_LITERAL, buffer, current_line, current_column);
+    free(buffer);
+    return token;
 }
 
 Token* read_number() {
@@ -113,7 +115,9 @@ Token* read_number() {
     }
     
     buffer[i] = '\0';
-    return create_token(TOKEN_NUMBER, buffer, current_line, current_column);
+    Token* token = create_token(TOKEN_NUMBER, buffer, current_line, current_column);
+    free(buffer);
+    return token;
 }
 
 Token* read_identifier() {
@@ -125,50 +129,53 @@ Token* read_identifier() {
     }
     
     buffer[i] = '\0';
-    
-    // Check if it's a keyword
-    if (strcmp(buffer, "actor") == 0) return create_token(TOKEN_ACTOR, buffer, current_line, current_column);
-    if (strcmp(buffer, "main") == 0) return create_token(TOKEN_MAIN, buffer, current_line, current_column);
-    if (strcmp(buffer, "func") == 0) return create_token(TOKEN_FUNC, buffer, current_line, current_column);
-    if (strcmp(buffer, "let") == 0) return create_token(TOKEN_LET, buffer, current_line, current_column);
-    if (strcmp(buffer, "var") == 0) return create_token(TOKEN_VAR, buffer, current_line, current_column);
-    if (strcmp(buffer, "if") == 0) return create_token(TOKEN_IF, buffer, current_line, current_column);
-    if (strcmp(buffer, "else") == 0) return create_token(TOKEN_ELSE, buffer, current_line, current_column);
-    if (strcmp(buffer, "for") == 0) return create_token(TOKEN_FOR, buffer, current_line, current_column);
-    if (strcmp(buffer, "while") == 0) return create_token(TOKEN_WHILE, buffer, current_line, current_column);
-    if (strcmp(buffer, "switch") == 0) return create_token(TOKEN_SWITCH, buffer, current_line, current_column);
-    if (strcmp(buffer, "case") == 0) return create_token(TOKEN_CASE, buffer, current_line, current_column);
-    if (strcmp(buffer, "default") == 0) return create_token(TOKEN_DEFAULT, buffer, current_line, current_column);
-    if (strcmp(buffer, "break") == 0) return create_token(TOKEN_BREAK, buffer, current_line, current_column);
-    if (strcmp(buffer, "continue") == 0) return create_token(TOKEN_CONTINUE, buffer, current_line, current_column);
-    if (strcmp(buffer, "return") == 0) return create_token(TOKEN_RETURN, buffer, current_line, current_column);
-    if (strcmp(buffer, "defer") == 0) return create_token(TOKEN_DEFER, buffer, current_line, current_column);
-    if (strcmp(buffer, "match") == 0) return create_token(TOKEN_MATCH, buffer, current_line, current_column);
-    if (strcmp(buffer, "when") == 0) return create_token(TOKEN_WHEN, buffer, current_line, current_column);
-    if (strcmp(buffer, "receive") == 0) return create_token(TOKEN_RECEIVE, buffer, current_line, current_column);
-    if (strcmp(buffer, "send") == 0) return create_token(TOKEN_SEND, buffer, current_line, current_column);
-    if (strcmp(buffer, "spawn_actor") == 0) return create_token(TOKEN_SPAWN_ACTOR, buffer, current_line, current_column);
-    if (strcmp(buffer, "spawn") == 0) return create_token(TOKEN_SPAWN, buffer, current_line, current_column);
-    if (strcmp(buffer, "make") == 0) return create_token(TOKEN_MAKE, buffer, current_line, current_column);
-    if (strcmp(buffer, "self") == 0) return create_token(TOKEN_SELF, buffer, current_line, current_column);
-    if (strcmp(buffer, "state") == 0) return create_token(TOKEN_STATE, buffer, current_line, current_column);
-    if (strcmp(buffer, "struct") == 0) return create_token(TOKEN_STRUCT, buffer, current_line, current_column);
-    if (strcmp(buffer, "import") == 0) return create_token(TOKEN_IMPORT, buffer, current_line, current_column);
-    if (strcmp(buffer, "export") == 0) return create_token(TOKEN_EXPORT, buffer, current_line, current_column);
-    if (strcmp(buffer, "module") == 0) return create_token(TOKEN_MODULE, buffer, current_line, current_column);
-    if (strcmp(buffer, "message") == 0) return create_token(TOKEN_MESSAGE_KEYWORD, buffer, current_line, current_column);
-    if (strcmp(buffer, "reply") == 0) return create_token(TOKEN_REPLY, buffer, current_line, current_column);
-    if (strcmp(buffer, "int") == 0) return create_token(TOKEN_INT, buffer, current_line, current_column);
-    if (strcmp(buffer, "float") == 0) return create_token(TOKEN_FLOAT, buffer, current_line, current_column);
-    if (strcmp(buffer, "bool") == 0) return create_token(TOKEN_BOOL, buffer, current_line, current_column);
-    if (strcmp(buffer, "string") == 0) return create_token(TOKEN_STRING, buffer, current_line, current_column);
-    if (strcmp(buffer, "ActorRef") == 0) return create_token(TOKEN_ACTOR_REF, buffer, current_line, current_column);
-    if (strcmp(buffer, "Message") == 0) return create_token(TOKEN_MESSAGE, buffer, current_line, current_column);
-    if (strcmp(buffer, "true") == 0) return create_token(TOKEN_TRUE, buffer, current_line, current_column);
-    if (strcmp(buffer, "false") == 0) return create_token(TOKEN_FALSE, buffer, current_line, current_column);
-    if (strcmp(buffer, "print") == 0) return create_token(TOKEN_PRINT, buffer, current_line, current_column);
-    
-    return create_token(TOKEN_IDENTIFIER, buffer, current_line, current_column);
+
+    // Check if it's a keyword - create token then free buffer
+    Token* token;
+    if (strcmp(buffer, "actor") == 0) token = create_token(TOKEN_ACTOR, buffer, current_line, current_column);
+    else if (strcmp(buffer, "main") == 0) token = create_token(TOKEN_MAIN, buffer, current_line, current_column);
+    else if (strcmp(buffer, "func") == 0) token = create_token(TOKEN_FUNC, buffer, current_line, current_column);
+    else if (strcmp(buffer, "let") == 0) token = create_token(TOKEN_LET, buffer, current_line, current_column);
+    else if (strcmp(buffer, "var") == 0) token = create_token(TOKEN_VAR, buffer, current_line, current_column);
+    else if (strcmp(buffer, "if") == 0) token = create_token(TOKEN_IF, buffer, current_line, current_column);
+    else if (strcmp(buffer, "else") == 0) token = create_token(TOKEN_ELSE, buffer, current_line, current_column);
+    else if (strcmp(buffer, "for") == 0) token = create_token(TOKEN_FOR, buffer, current_line, current_column);
+    else if (strcmp(buffer, "while") == 0) token = create_token(TOKEN_WHILE, buffer, current_line, current_column);
+    else if (strcmp(buffer, "switch") == 0) token = create_token(TOKEN_SWITCH, buffer, current_line, current_column);
+    else if (strcmp(buffer, "case") == 0) token = create_token(TOKEN_CASE, buffer, current_line, current_column);
+    else if (strcmp(buffer, "default") == 0) token = create_token(TOKEN_DEFAULT, buffer, current_line, current_column);
+    else if (strcmp(buffer, "break") == 0) token = create_token(TOKEN_BREAK, buffer, current_line, current_column);
+    else if (strcmp(buffer, "continue") == 0) token = create_token(TOKEN_CONTINUE, buffer, current_line, current_column);
+    else if (strcmp(buffer, "return") == 0) token = create_token(TOKEN_RETURN, buffer, current_line, current_column);
+    else if (strcmp(buffer, "defer") == 0) token = create_token(TOKEN_DEFER, buffer, current_line, current_column);
+    else if (strcmp(buffer, "match") == 0) token = create_token(TOKEN_MATCH, buffer, current_line, current_column);
+    else if (strcmp(buffer, "when") == 0) token = create_token(TOKEN_WHEN, buffer, current_line, current_column);
+    else if (strcmp(buffer, "receive") == 0) token = create_token(TOKEN_RECEIVE, buffer, current_line, current_column);
+    else if (strcmp(buffer, "send") == 0) token = create_token(TOKEN_SEND, buffer, current_line, current_column);
+    else if (strcmp(buffer, "spawn_actor") == 0) token = create_token(TOKEN_SPAWN_ACTOR, buffer, current_line, current_column);
+    else if (strcmp(buffer, "spawn") == 0) token = create_token(TOKEN_SPAWN, buffer, current_line, current_column);
+    else if (strcmp(buffer, "make") == 0) token = create_token(TOKEN_MAKE, buffer, current_line, current_column);
+    else if (strcmp(buffer, "self") == 0) token = create_token(TOKEN_SELF, buffer, current_line, current_column);
+    else if (strcmp(buffer, "state") == 0) token = create_token(TOKEN_STATE, buffer, current_line, current_column);
+    else if (strcmp(buffer, "struct") == 0) token = create_token(TOKEN_STRUCT, buffer, current_line, current_column);
+    else if (strcmp(buffer, "import") == 0) token = create_token(TOKEN_IMPORT, buffer, current_line, current_column);
+    else if (strcmp(buffer, "export") == 0) token = create_token(TOKEN_EXPORT, buffer, current_line, current_column);
+    else if (strcmp(buffer, "module") == 0) token = create_token(TOKEN_MODULE, buffer, current_line, current_column);
+    else if (strcmp(buffer, "message") == 0) token = create_token(TOKEN_MESSAGE_KEYWORD, buffer, current_line, current_column);
+    else if (strcmp(buffer, "reply") == 0) token = create_token(TOKEN_REPLY, buffer, current_line, current_column);
+    else if (strcmp(buffer, "int") == 0) token = create_token(TOKEN_INT, buffer, current_line, current_column);
+    else if (strcmp(buffer, "float") == 0) token = create_token(TOKEN_FLOAT, buffer, current_line, current_column);
+    else if (strcmp(buffer, "bool") == 0) token = create_token(TOKEN_BOOL, buffer, current_line, current_column);
+    else if (strcmp(buffer, "string") == 0) token = create_token(TOKEN_STRING, buffer, current_line, current_column);
+    else if (strcmp(buffer, "ActorRef") == 0) token = create_token(TOKEN_ACTOR_REF, buffer, current_line, current_column);
+    else if (strcmp(buffer, "Message") == 0) token = create_token(TOKEN_MESSAGE, buffer, current_line, current_column);
+    else if (strcmp(buffer, "true") == 0) token = create_token(TOKEN_TRUE, buffer, current_line, current_column);
+    else if (strcmp(buffer, "false") == 0) token = create_token(TOKEN_FALSE, buffer, current_line, current_column);
+    else if (strcmp(buffer, "print") == 0) token = create_token(TOKEN_PRINT, buffer, current_line, current_column);
+    else token = create_token(TOKEN_IDENTIFIER, buffer, current_line, current_column);
+
+    free(buffer);
+    return token;
 }
 
 Token* next_token() {

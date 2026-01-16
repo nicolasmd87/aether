@@ -126,14 +126,7 @@ void test_scheduler_init_cleanup(void) {
     ASSERT_EQ(0, schedulers[1].actor_count);
     
     // Cleanup
-    for (int i = 0; i < 2; i++) {
-        if (schedulers[i].actor_pool) {
-            free(schedulers[i].actor_pool);
-            schedulers[i].actor_pool = NULL;
-        }
-        // Freed by scheduler_cleanup()
-        schedulers[i].actors = NULL;
-    }
+    scheduler_cleanup();
 }
 
 void test_scheduler_basic_messaging(void) {
@@ -166,6 +159,7 @@ void test_scheduler_basic_messaging(void) {
     
     scheduler_stop();
     scheduler_wait();
+    scheduler_cleanup();
     scheduler_cleanup();
     
     ASSERT_EQ(100, final_count);
@@ -211,6 +205,7 @@ void test_scheduler_high_throughput(void) {
     
     scheduler_stop();
     scheduler_wait();
+    scheduler_cleanup();
     scheduler_cleanup();
     
     ASSERT_EQ(TOTAL, final_count);
@@ -269,6 +264,7 @@ void test_scheduler_message_ordering(void) {
     scheduler_stop();
     scheduler_wait();
     scheduler_cleanup();
+    scheduler_cleanup();
     
     ASSERT_TRUE(ordered);
     
@@ -316,6 +312,7 @@ void test_scheduler_cross_core(void) {
     scheduler_stop();
     scheduler_wait();
     scheduler_cleanup();
+    scheduler_cleanup();
     
     ASSERT_EQ(0, count0);
     ASSERT_EQ(100, count1);
@@ -339,6 +336,7 @@ void test_scheduler_exit_clean(void) {
     
     scheduler_stop();
     scheduler_wait();
+    scheduler_cleanup();
     scheduler_cleanup();
     
     long end = get_time_ms();
@@ -379,6 +377,7 @@ void test_scheduler_backpressure(void) {
     
     scheduler_stop();
     scheduler_wait();
+    scheduler_cleanup();
     scheduler_cleanup();
     
     // With backpressure, should process all or nearly all messages

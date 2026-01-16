@@ -83,8 +83,8 @@ void run_all_tests(void) {
         
         printf("%s%s Tests (%d tests)%s\n", COLOR_YELLOW, get_category_name(cat), cat_tests, COLOR_RESET);
         fflush(stdout);
-        
-        for (int i = 0; i < test_count; i++) {
+
+        for (volatile int i = 0; i < test_count; i++) {
             if (tests[i].category != cat) continue;
             
             // Reset failure flag

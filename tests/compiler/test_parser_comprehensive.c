@@ -1,6 +1,6 @@
 #include "../runtime/test_harness.h"
-#include "../../compiler/lexer.h"
-#include "../../compiler/parser.h"
+#include "../../compiler/frontend/lexer.h"
+#include "../../compiler/frontend/parser.h"
 #include <string.h>
 
 static ASTNode* parse_code(const char* code) {

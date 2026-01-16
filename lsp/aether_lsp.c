@@ -2,6 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
+#include "../compiler/frontend/lexer.h"
+#include "../compiler/ast.h"
 
 // LSP Server lifecycle
 LSPServer* lsp_server_create() {
@@ -167,36 +169,15 @@ void lsp_handle_document_symbol(LSPServer* server, const char* id, const char* u
 void lsp_publish_diagnostics(LSPServer* server, const char* uri) {
     const char* source = lsp_document_get(server, uri);
     if (!source) return;
-    
-    aether_error_init();
-    lexer_init(source);
-    Parser* parser = create_parser();
-    ASTNode* ast = parse_program(parser);
-    
-    if (ast && !aether_error_has_errors()) {
-        typecheck(ast);
-    }
-    
+
+    // TODO: Implement proper lexing/parsing/type checking
+    // For now, just send empty diagnostics
     char diagnostics[8192] = "{\"uri\":\"";
     strcat(diagnostics, uri);
     strcat(diagnostics, "\",\"diagnostics\":[");
-    
-    if (aether_error_has_errors()) {
-        strcat(diagnostics, "{");
-        strcat(diagnostics, "\"range\":{\"start\":{\"line\":0,\"character\":0},\"end\":{\"line\":0,\"character\":100}},");
-        strcat(diagnostics, "\"severity\":1,");
-        strcat(diagnostics, "\"message\":\"Compilation error detected\"");
-        strcat(diagnostics, "}");
-    }
-    
     strcat(diagnostics, "]}");
-    
+
     lsp_send_notification(server, "textDocument/publishDiagnostics", diagnostics);
-    
-    if (ast) free_ast(ast);
-    free_parser(parser);
-    lexer_cleanup();
-    aether_error_cleanup();
 }
 
 // JSON-RPC (simplified implementation)

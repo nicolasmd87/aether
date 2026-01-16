@@ -2,9 +2,17 @@
 // Based on Experiment 04: 291M msg/sec on 8 cores (2.3× scaling)
 // Strategy: Static actor-to-core assignment, no atomics, perfect cache locality
 
+// Platform defines must come first
+#ifdef __linux__
+#define _GNU_SOURCE
+#endif
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <pthread.h>
+#include <sched.h>
+#include <errno.h>
 #include "multicore_scheduler.h"
 #include "../utils/aether_cpu_detect.h"
 #include "../config/aether_optimization_config.h"
@@ -24,13 +32,6 @@
 #else
 #define HAS_X86_INTRINSICS 0
 #endif
-
-// Platform includes (standard)
-#ifdef __linux__
-#define _GNU_SOURCE
-#endif
-#include <sched.h>
-#include <errno.h>
 
 #ifdef _WIN32
 #include <windows.h>
@@ -308,7 +309,9 @@ void scheduler_stop() {
 
 void scheduler_wait() {
     for (int i = 0; i < num_cores; i++) {
-        pthread_join(schedulers[i].thread, NULL);
+        // Silently ignore join errors on Windows (threads may already be cleaned up)
+        int result = pthread_join(schedulers[i].thread, NULL);
+        (void)result;  // Suppress unused warning
     }
 
     // Cleanup NUMA resources
@@ -318,10 +321,22 @@ void scheduler_wait() {
 void scheduler_cleanup() {
     // Free allocated scheduler resources
     for (int i = 0; i < num_cores; i++) {
+        // Clean up thread resources
+        schedulers[i].thread = 0;
+
         if (schedulers[i].actors != NULL) {
-            free(schedulers[i].actors);
+            // Free with the size we allocated, not current capacity
+            aether_numa_free(schedulers[i].actors, MAX_ACTORS_PER_CORE * sizeof(ActorBase*));
             schedulers[i].actors = NULL;
         }
+        if (schedulers[i].actor_pool != NULL) {
+            aether_numa_free(schedulers[i].actor_pool, sizeof(ActorPool));
+            schedulers[i].actor_pool = NULL;
+        }
+
+        // Reset counters
+        schedulers[i].actor_count = 0;
+        schedulers[i].capacity = 0;
     }
     num_cores = 0;
 }

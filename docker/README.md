@@ -79,6 +79,34 @@ docker-compose -f docker/docker-compose.yml down
 - Size: ~500MB
 - Use for: development, debugging, profiling
 
+### CI Testing (Dockerfile.ci)
+- Based on Ubuntu 22.04
+- Includes: gcc, clang, valgrind, sanitizers
+- Size: ~400MB
+- Use for: local CI testing, memory leak detection
+
+## Local CI Testing
+
+Run the same CI checks as GitHub Actions:
+
+```bash
+# Easy way - using the script
+./scripts/run-ci-local.sh
+
+# Or using Make
+make docker-build-ci  # Build CI image
+make docker-ci        # Run full CI suite
+
+# Run specific checks
+make ci              # Run CI without Docker (native)
+make valgrind-check  # Run Valgrind (Linux only)
+```
+
+**Why use Docker for CI?**
+- Valgrind only works on Linux
+- macOS and Windows users can test with Valgrind via Docker
+- Ensures identical environment to GitHub Actions CI
+
 ## Testing Docker Setup
 
 ```bash

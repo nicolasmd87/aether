@@ -110,9 +110,9 @@ static inline int spsc_dequeue_batch(SPSCQueue* q, Message* out_msgs, int max_co
         available = SPSC_QUEUE_SIZE - (head - tail);
     }
     
-    int to_dequeue = (available < (uint32_t)max_count) ? available : max_count;
-    
-    for (int i = 0; i < to_dequeue; i++) {
+    uint32_t to_dequeue = (available < (uint32_t)max_count) ? available : (uint32_t)max_count;
+
+    for (uint32_t i = 0; i < to_dequeue; i++) {
         out_msgs[i] = q->buffer[head];
         head = (head + 1) & SPSC_QUEUE_MASK;
     }

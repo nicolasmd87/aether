@@ -2,7 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
-#include "aether_runtime.h"
+#include "../aether_runtime.h"
 
 // Memory pool for efficient allocation
 typedef struct MemoryPool {

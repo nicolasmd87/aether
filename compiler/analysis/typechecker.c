@@ -431,6 +431,7 @@ int typecheck_function_definition(ASTNode* func, SymbolTable* table) {
 }
 
 int typecheck_struct_definition(ASTNode* struct_def, SymbolTable* table) {
+    (void)table;  // Unused for now
     if (!struct_def || struct_def->type != AST_STRUCT_DEFINITION) return 0;
     
     // Type check all fields

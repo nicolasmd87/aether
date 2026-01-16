@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <setjmp.h>
 #include <time.h>
+#include <stdint.h>
 
 // ANSI color codes
 #ifdef _WIN32
@@ -85,8 +86,8 @@ const char* get_category_name(TestCategory category);
 #define ASSERT_EQ(expected, actual) \
     do { \
         if ((expected) != (actual)) { \
-            fprintf(stderr, "ASSERT_EQ failed at %s:%d: expected %ld, got %ld\n", \
-                    __FILE__, __LINE__, (long)(expected), (long)(actual)); \
+            fprintf(stderr, "ASSERT_EQ failed at %s:%d: expected %lld, got %lld\n", \
+                    __FILE__, __LINE__, (long long)(intptr_t)(expected), (long long)(intptr_t)(actual)); \
             test_failure_flag = 1; \
             longjmp(test_failure_jmp, 1); \
         } \
@@ -95,8 +96,8 @@ const char* get_category_name(TestCategory category);
 #define ASSERT_NE(expected, actual) \
     do { \
         if ((expected) == (actual)) { \
-            fprintf(stderr, "ASSERT_NE failed at %s:%d: both values are %ld\n", \
-                    __FILE__, __LINE__, (long)(expected)); \
+            fprintf(stderr, "ASSERT_NE failed at %s:%d: both values are %lld\n", \
+                    __FILE__, __LINE__, (long long)(intptr_t)(expected)); \
             test_failure_flag = 1; \
             longjmp(test_failure_jmp, 1); \
         } \

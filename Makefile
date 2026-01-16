@@ -10,7 +10,16 @@ ifeq ($(OS),Windows_NT)
     RM_DIR := rd /S /Q
 else
     DETECTED_OS := $(shell uname -s)
-    EXE_EXT :=
+    # Check if we're in MSYS2/MinGW (common on GitHub Actions Windows)
+    ifneq ($(findstring MINGW,$(DETECTED_OS)),)
+        EXE_EXT := .exe
+    else ifneq ($(findstring MSYS,$(DETECTED_OS)),)
+        EXE_EXT := .exe
+    else ifneq ($(findstring CYGWIN,$(DETECTED_OS)),)
+        EXE_EXT := .exe
+    else
+        EXE_EXT :=
+    endif
     PATH_SEP := /
     MKDIR := mkdir -p
     RM := rm -f
@@ -20,13 +29,20 @@ endif
 # Compiler configuration with ccache support
 CC := $(shell command -v ccache 2>/dev/null && echo "ccache gcc" || echo "gcc")
 CFLAGS = -O2 -Icompiler -Iruntime -Iruntime/config -Istd -Istd/string -Istd/io -Istd/math -Istd/net -Istd/collections -Istd/json -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -MMD -MP
-LDFLAGS = -pthread
+LDFLAGS = -pthread -lm
 
 # Zero warnings achieved - ready for -Werror
 BUILD_DIR = build
 OBJ_DIR = $(BUILD_DIR)/obj
 
+# Windows-specific libraries (check both OS variable and uname for MSYS2)
 ifeq ($(OS),Windows_NT)
+    LDFLAGS += -lws2_32
+else ifneq ($(findstring MINGW,$(DETECTED_OS)),)
+    LDFLAGS += -lws2_32
+else ifneq ($(findstring MSYS,$(DETECTED_OS)),)
+    LDFLAGS += -lws2_32
+else ifneq ($(findstring CYGWIN,$(DETECTED_OS)),)
     LDFLAGS += -lws2_32
 endif
 
@@ -70,21 +86,6 @@ TEST_SRC = tests/runtime/test_harness.c \
            tests/memory/test_memory_arena.c \
            tests/memory/test_memory_pool.c \
            tests/compiler/test_lexer.c
-# Temporarily disabled - need to fix includes
-#           tests/compiler/test_lexer.c \
-#           tests/compiler/test_lexer_comprehensive.c \
-#           tests/compiler/test_parser.c \
-#           tests/compiler/test_parser_comprehensive.c \
-#           tests/compiler/test_typechecker.c \
-#           tests/compiler/test_type_inference_comprehensive.c \
-#           tests/compiler/test_codegen.c \
-#           tests/compiler/test_structs.c \
-#           tests/compiler/test_switch_statements.c \
-#           tests/compiler/test_pattern_matching_comprehensive.c \
-#           tests/memory/test_memory_arena.c \
-#           tests/memory/test_memory_pool.c \
-#           tests/memory/test_memory_leaks.c \
-#           tests/memory/test_memory_stress.c \
 
 # Standalone test programs with their own main() - build separately
 STANDALONE_TESTS = tests/test_runtime_implementations.c \
@@ -106,34 +107,7 @@ all: compiler
 
 # Create object directories
 $(OBJ_DIR)/compiler $(OBJ_DIR)/compiler/frontend $(OBJ_DIR)/compiler/backend $(OBJ_DIR)/compiler/analysis $(OBJ_DIR)/runtime $(OBJ_DIR)/runtime/actors $(OBJ_DIR)/runtime/scheduler $(OBJ_DIR)/runtime/memory $(OBJ_DIR)/runtime/config $(OBJ_DIR)/runtime/simd $(OBJ_DIR)/runtime/utils $(OBJ_DIR)/std $(OBJ_DIR)/std/string $(OBJ_DIR)/std/io $(OBJ_DIR)/std/math $(OBJ_DIR)/std/net $(OBJ_DIR)/std/fs $(OBJ_DIR)/std/log $(OBJ_DIR)/std/collections $(OBJ_DIR)/std/json $(OBJ_DIR)/tests $(OBJ_DIR)/tests/compiler $(OBJ_DIR)/tests/memory $(OBJ_DIR)/tests/runtime:
-ifeq ($(OS),Windows_NT)
-	@if not exist "$(OBJ_DIR)" mkdir "$(OBJ_DIR)"
-	@if not exist "$(OBJ_DIR)\compiler" mkdir "$(OBJ_DIR)\compiler"
-	@if not exist "$(OBJ_DIR)\compiler\frontend" mkdir "$(OBJ_DIR)\compiler\frontend"
-	@if not exist "$(OBJ_DIR)\compiler\backend" mkdir "$(OBJ_DIR)\compiler\backend"
-	@if not exist "$(OBJ_DIR)\compiler\analysis" mkdir "$(OBJ_DIR)\compiler\analysis"
-	@if not exist "$(OBJ_DIR)\runtime" mkdir "$(OBJ_DIR)\runtime"
-	@if not exist "$(OBJ_DIR)\runtime\actors" mkdir "$(OBJ_DIR)\runtime\actors"
-	@if not exist "$(OBJ_DIR)\runtime\scheduler" mkdir "$(OBJ_DIR)\runtime\scheduler"
-	@if not exist "$(OBJ_DIR)\runtime\memory" mkdir "$(OBJ_DIR)\runtime\memory"
-	@if not exist "$(OBJ_DIR)\runtime\simd" mkdir "$(OBJ_DIR)\runtime\simd"
-	@if not exist "$(OBJ_DIR)\runtime\utils" mkdir "$(OBJ_DIR)\runtime\utils"
-	@if not exist "$(OBJ_DIR)\std" mkdir "$(OBJ_DIR)\std"
-	@if not exist "$(OBJ_DIR)\std\string" mkdir "$(OBJ_DIR)\std\string"
-	@if not exist "$(OBJ_DIR)\std\io" mkdir "$(OBJ_DIR)\std\io"
-	@if not exist "$(OBJ_DIR)\std\math" mkdir "$(OBJ_DIR)\std\math"
-	@if not exist "$(OBJ_DIR)\std\net" mkdir "$(OBJ_DIR)\std\net"
-	@if not exist "$(OBJ_DIR)\std\fs" mkdir "$(OBJ_DIR)\std\fs"
-	@if not exist "$(OBJ_DIR)\std\log" mkdir "$(OBJ_DIR)\std\log"
-	@if not exist "$(OBJ_DIR)\std\collections" mkdir "$(OBJ_DIR)\std\collections"
-	@if not exist "$(OBJ_DIR)\std\json" mkdir "$(OBJ_DIR)\std\json"
-	@if not exist "$(OBJ_DIR)\tests" mkdir "$(OBJ_DIR)\tests"
-	@if not exist "$(OBJ_DIR)\tests\compiler" mkdir "$(OBJ_DIR)\tests\compiler"
-	@if not exist "$(OBJ_DIR)\tests\memory" mkdir "$(OBJ_DIR)\tests\memory"
-	@if not exist "$(OBJ_DIR)\tests\runtime" mkdir "$(OBJ_DIR)\tests\runtime"
-else
-	@$(MKDIR) $@
-endif
+	@mkdir -p $@
 
 # Pattern rule for object files
 $(OBJ_DIR)/%.o: %.c | $(OBJ_DIR)/compiler $(OBJ_DIR)/compiler/frontend $(OBJ_DIR)/compiler/backend $(OBJ_DIR)/compiler/analysis $(OBJ_DIR)/runtime $(OBJ_DIR)/runtime/actors $(OBJ_DIR)/runtime/scheduler $(OBJ_DIR)/runtime/memory $(OBJ_DIR)/runtime/config $(OBJ_DIR)/runtime/simd $(OBJ_DIR)/runtime/utils $(OBJ_DIR)/std $(OBJ_DIR)/std/string $(OBJ_DIR)/std/io $(OBJ_DIR)/std/math $(OBJ_DIR)/std/net $(OBJ_DIR)/std/fs $(OBJ_DIR)/std/log $(OBJ_DIR)/std/collections $(OBJ_DIR)/std/json $(OBJ_DIR)/tests $(OBJ_DIR)/tests/compiler $(OBJ_DIR)/tests/memory $(OBJ_DIR)/tests/runtime
@@ -165,7 +139,13 @@ test: $(TEST_OBJS) $(COMPILER_LIB_OBJS) $(RUNTIME_OBJS) $(STD_OBJS) $(COLLECTION
 	@echo "==================================="
 	@echo "Running Tests"
 	@echo "==================================="
+ifneq ($(findstring MINGW,$(DETECTED_OS)),)
+	@bash -c './build/test_runner$(EXE_EXT); exit $$?'
+else ifneq ($(findstring MSYS,$(DETECTED_OS)),)
+	@bash -c './build/test_runner$(EXE_EXT); exit $$?'
+else
 	./build/test_runner$(EXE_EXT)
+endif
 
 # Fast test target (monolithic)
 test-fast: compiler-fast
@@ -183,21 +163,21 @@ test-valgrind: compiler
 	@echo "==================================="
 	@echo "Running Tests with Valgrind"
 	@echo "==================================="
-	$(CC) $(CFLAGS) -O0 -g $(TEST_SRC) $(COMPILER_SRC) $(RUNTIME_SRC) $(STD_SRC) -Icompiler -Istd -o build/test_runner$(EXE_EXT)
+	$(CC) $(CFLAGS) -O0 -g $(TEST_SRC) $(COMPILER_SRC) $(RUNTIME_SRC) $(STD_SRC) -Icompiler -Istd -o build/test_runner$(EXE_EXT) $(LDFLAGS)
 	valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1 ./build/test_runner$(EXE_EXT)
 
 test-asan: compiler
 	@echo "==================================="
 	@echo "Running Tests with AddressSanitizer"
 	@echo "==================================="
-	$(CC) -fsanitize=address -fsanitize=leak -fno-omit-frame-pointer -O1 -g $(TEST_SRC) $(COMPILER_SRC) $(RUNTIME_SRC) $(STD_SRC) -Icompiler -Istd -o build/test_runner_asan$(EXE_EXT) -lpthread
+	$(CC) -fsanitize=address -fsanitize=leak -fno-omit-frame-pointer -O1 -g $(TEST_SRC) $(COMPILER_SRC) $(RUNTIME_SRC) $(STD_SRC) -Icompiler -Istd -o build/test_runner_asan$(EXE_EXT) -lpthread -lm
 	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 ./build/test_runner_asan$(EXE_EXT)
 
 test-memory: compiler
 	@echo "==================================="
 	@echo "Running Memory Tracking Tests"
 	@echo "==================================="
-	$(CC) $(CFLAGS) -DAETHER_MEMORY_TRACKING $(TEST_SRC) $(COMPILER_SRC) $(RUNTIME_SRC) $(STD_SRC) -Icompiler -Istd -o build/test_runner_mem$(EXE_EXT)
+	$(CC) $(CFLAGS) -DAETHER_MEMORY_TRACKING $(TEST_SRC) $(COMPILER_SRC) $(RUNTIME_SRC) $(STD_SRC) -Icompiler -Istd -o build/test_runner_mem$(EXE_EXT) $(LDFLAGS)
 	./build/test_runner_mem$(EXE_EXT)
 
 test-manual-runtime: compiler
@@ -208,7 +188,7 @@ test-manual-runtime: compiler
 
 benchmark: compiler
 	@echo "Single-core benchmark..."
-	$(CC) runtime/examples/ring_benchmark_manual.c -Iruntime -Iruntime/actors -O2 -o build/ring_bench$(EXE_EXT)
+	$(CC) runtime/examples/ring_benchmark_manual.c -Iruntime -Iruntime/actors -O2 -o build/ring_bench$(EXE_EXT) $(LDFLAGS)
 	./build/ring_bench$(EXE_EXT)
 	@echo ""
 	@echo "Multi-core benchmark..."
@@ -233,7 +213,7 @@ lsp: compiler
 	@echo "==================================="
 	@echo "Building Aether LSP Server ($(DETECTED_OS))"
 	@echo "==================================="
-	$(CC) $(CFLAGS) lsp/main.c lsp/aether_lsp.c $(COMPILER_SRC) $(RUNTIME_SRC) $(STD_SRC) $(LDFLAGS) -Icompiler -Istd -o build/aether-lsp$(EXE_EXT)
+	$(CC) $(CFLAGS) lsp/main.c lsp/aether_lsp.c $(COMPILER_LIB_SRC) $(RUNTIME_SRC) $(STD_SRC) $(LDFLAGS) -Icompiler -Istd -o build/aether-lsp$(EXE_EXT)
 	@echo "✓ LSP Server built successfully: build/aether-lsp$(EXE_EXT)"
 
 apkg:
@@ -356,16 +336,16 @@ endif
 	@echo "✓ Built: build/$(OUTPUT)$(EXE_EXT)"
 
 # Benchmark computed goto dispatch
-bench-dispatch: 
+bench-dispatch:
 	@echo "Building computed goto benchmark..."
-	@$(CC) -O3 experiments/concurrency/bench_computed_goto.c -o build/bench_computed_goto$(EXE_EXT)
+	@$(CC) -O3 experiments/concurrency/bench_computed_goto.c -o build/bench_computed_goto$(EXE_EXT) $(LDFLAGS)
 	@echo "Running benchmark..."
 	@./build/bench_computed_goto$(EXE_EXT)
 
 # Benchmark manual prefetch hints
 bench-prefetch:
 	@echo "Building prefetch benchmark..."
-	@$(CC) -O3 experiments/concurrency/bench_prefetch.c -o build/bench_prefetch$(EXE_EXT)
+	@$(CC) -O3 experiments/concurrency/bench_prefetch.c -o build/bench_prefetch$(EXE_EXT) $(LDFLAGS)
 	@echo "Running benchmark..."
 	@./build/bench_prefetch$(EXE_EXT)
 
@@ -374,22 +354,22 @@ pgo-generate:
 	@echo "==================================="
 	@echo "PGO Step 1: Building with instrumentation..."
 	@echo "==================================="
-	@$(CC) -O3 -fprofile-generate experiments/concurrency/pgo_workload.c -o build/pgo_workload$(EXE_EXT)
+	@$(CC) -O3 -fprofile-generate experiments/concurrency/pgo_workload.c -o build/pgo_workload$(EXE_EXT) $(LDFLAGS)
 	@echo "Running workload to collect profile data..."
 	@./build/pgo_workload$(EXE_EXT)
-	@echo "✓ Profile data collected in *.gcda files"
+	@echo "Profile data collected in *.gcda files"
 
 pgo-build:
 	@echo "==================================="
 	@echo "PGO Step 2: Building with profile data..."
 	@echo "==================================="
-	@$(CC) -O3 -fprofile-use -D__PGO__ experiments/concurrency/bench_pgo.c -o build/bench_pgo_optimized$(EXE_EXT)
-	@echo "✓ PGO-optimized benchmark built"
+	@$(CC) -O3 -fprofile-use -D__PGO__ experiments/concurrency/bench_pgo.c -o build/bench_pgo_optimized$(EXE_EXT) $(LDFLAGS)
+	@echo "PGO-optimized benchmark built"
 
 pgo-baseline:
 	@echo "Building baseline (no PGO)..."
-	@$(CC) -O3 experiments/concurrency/bench_pgo.c -o build/bench_pgo_baseline$(EXE_EXT)
-	@echo "✓ Baseline benchmark built"
+	@$(CC) -O3 experiments/concurrency/bench_pgo.c -o build/bench_pgo_baseline$(EXE_EXT) $(LDFLAGS)
+	@echo "Baseline benchmark built"
 
 pgo-benchmark: pgo-baseline pgo-generate pgo-build
 	@echo "==================================="
@@ -503,24 +483,6 @@ stats:
 	fi
 	@echo "==================================="
 
-# Code quality checks
-check: test
-	@echo "==================================="
-	@echo "Running Code Quality Checks"
-	@echo "==================================="
-	@echo "Checking for TODO/FIXME comments..."
-	@grep -rn "TODO\|FIXME" compiler runtime std --color=auto || echo "  ✓ No TODOs found"
-	@echo ""
-	@echo "Checking for debug prints..."
-	@grep -rn "printf.*DEBUG\|fprintf.*DEBUG" compiler runtime std --color=auto || echo "  ✓ No debug prints found"
-	@echo ""
-	@echo "Checking test coverage..."
-	@echo "  Test files: $$(find tests -name '*.c' | wc -l)"
-	@echo "  Source files: $$(find compiler runtime std -name '*.c' | wc -l)"
-	@echo "  Test ratio: $$(echo "scale=2; $$(find tests -name '*.c' | wc -l) / $$(find compiler runtime std -name '*.c' | wc -l)" | bc)x"
-	@echo ""
-	@echo "All checks passed!"
-
 # Parallel test execution
 test-parallel:
 	@echo "==================================="
@@ -573,6 +535,17 @@ help:
 	@echo "  make test-memory    - Run tests with memory tracking enabled"
 	@echo "  make self-test      - Test compiler on complex examples"
 	@echo ""
+	@echo "Pre-Commit Checks:"
+	@echo "  make check          - Quick check (build + tests, ~30s)"
+	@echo "  make check-full     - Full CI/CD check (includes memory checks, ~2min)"
+	@echo ""
+	@echo "CI/CD Targets:"
+	@echo "  make ci             - Run full CI suite (native)"
+	@echo "  make docker-ci      - Run CI in Docker (with Valgrind)"
+	@echo "  make docker-build-ci- Build Docker CI image"
+	@echo "  make valgrind-check - Run Valgrind memory leak detection (Linux only)"
+	@echo "  ./scripts/run-ci-local.sh - Full CI with Docker (recommended)"
+	@echo ""
 	@echo "Tool Targets:"
 	@echo "  make lsp            - Build LSP server"
 	@echo "  make apkg           - Build package manager"
@@ -598,7 +571,60 @@ test-build: $(TEST_OBJS) $(COMPILER_LIB_OBJS) $(RUNTIME_OBJS) $(STD_OBJS) $(COLL
 	@echo "Building test runner..."
 	@$(CC) $(TEST_OBJS) $(COMPILER_LIB_OBJS) $(RUNTIME_OBJS) $(STD_OBJS) $(COLLECTIONS_OBJS) -o build/test_runner$(EXE_EXT) $(LDFLAGS)
 
-.PHONY: all compiler lsp apkg ae profiler test test-build test-valgrind test-asan test-memory test-manual-runtime benchmark benchmark-ui examples run compile repl clean help self-test release install stats stdlib
+# Docker CI/CD targets
+docker-build-ci:
+	@echo "Building Docker CI image..."
+	docker build -f docker/Dockerfile.ci -t aether-ci:latest .
+
+docker-ci: docker-build-ci
+	@echo "Running CI tests in Docker..."
+	docker run --rm -v $(PWD):/aether -w /aether aether-ci make ci
+
+ci: clean
+	@echo "==================================="
+	@echo "Running Full CI Suite"
+	@echo "==================================="
+	@echo "Building compiler..."
+	@$(MAKE) compiler CFLAGS="-O2 -Wall -Wextra -Werror"
+	@echo ""
+	@echo "Building tests..."
+	@$(MAKE) test-build CFLAGS="-O0 -g"
+	@echo ""
+	@echo "Running tests..."
+	@./build/test_runner$(EXE_EXT)
+	@echo ""
+	@echo "Building Docker CI image..."
+	@$(MAKE) docker-build-ci
+	@echo ""
+	@echo "Running Valgrind in Docker..."
+	@docker run --rm -v $(PWD):/aether -w /aether aether-ci bash -c "\
+		make clean && \
+		make compiler CFLAGS='-O0 -g' && \
+		make test-build CFLAGS='-O0 -g' && \
+		valgrind --leak-check=full \
+			--show-leak-kinds=all \
+			--track-origins=yes \
+			--error-exitcode=1 \
+			--suppressions=.valgrind-suppressions \
+			./build/test_runner || (echo 'Memory leaks detected!' && exit 1)"
+	@echo ""
+	@echo "✓ CI passed with no memory leaks"
+
+valgrind-check: clean
+	@echo "==================================="
+	@echo "Running Valgrind Memory Check"
+	@echo "==================================="
+	@$(MAKE) compiler CFLAGS="-O0 -g"
+	@$(MAKE) test-build CFLAGS="-O0 -g"
+	@valgrind --leak-check=full \
+		--show-leak-kinds=all \
+		--track-origins=yes \
+		--error-exitcode=1 \
+		--suppressions=.valgrind-suppressions \
+		./build/test_runner$(EXE_EXT) || (echo "Memory leaks detected!" && exit 1)
+	@echo "✓ No memory leaks detected"
+
+.PHONY: all compiler lsp apkg ae profiler test test-build test-valgrind test-asan test-memory test-manual-runtime benchmark benchmark-ui examples run compile repl clean help self-test release install stats stdlib ci docker-ci docker-build-ci valgrind-check
 
 # Cross-language benchmark UI
 benchmark-ui:
