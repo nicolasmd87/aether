@@ -22,12 +22,15 @@ void __attribute__((constructor)) init_thread_local_pool() {
     }
 }
 
+// Don't use destructor on Windows - causes issues with thread cleanup ordering
+#ifndef _WIN32
 void __attribute__((destructor)) cleanup_thread_local_pool() {
     if (tls_message_pool) {
         message_pool_destroy(tls_message_pool);
         tls_message_pool = NULL;
     }
 }
+#endif
 
 MessagePool* message_pool_create() {
     MessagePool* pool = (MessagePool*)malloc(sizeof(MessagePool));
