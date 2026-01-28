@@ -186,22 +186,12 @@ test-manual-runtime: compiler
 	@echo "Running manual runtime test..."
 	./build/test_runtime_manual$(EXE_EXT)
 
-benchmark: compiler
-	@echo "Single-core benchmark..."
-	$(CC) runtime/examples/ring_benchmark_manual.c -Iruntime -Iruntime/actors -O2 -o build/ring_bench$(EXE_EXT) $(LDFLAGS)
-	./build/ring_bench$(EXE_EXT)
+benchmark:
+	@echo "============================================"
+	@echo "  Running Cross-Language Benchmark Suite"
+	@echo "============================================"
 	@echo ""
-	@echo "Multi-core benchmark..."
-	$(CC) runtime/examples/multicore_bench.c $(RUNTIME_SRC) -Iruntime -Iruntime/actors -Iruntime/config -Iruntime/scheduler $(LDFLAGS) -O2 -o build/mc_bench$(EXE_EXT)
-	./build/mc_bench$(EXE_EXT)
-
-benchmark-optimizations: compiler
-	@echo "==================================="
-	@echo "Running Scheduler Optimizations Benchmark"
-	@echo "==================================="
-	$(CC) benchmarks/bench_all_optimizations.c $(RUNTIME_SRC) -Iruntime $(LDFLAGS) -O2 -mavx2 -o build/bench_opts$(EXE_EXT) 2>/dev/null || \
-	$(CC) benchmarks/bench_all_optimizations.c $(RUNTIME_SRC) -Iruntime $(LDFLAGS) -O2 -o build/bench_opts$(EXE_EXT)
-	./build/bench_opts$(EXE_EXT)
+	@cd benchmarks/cross-language && $(MAKE) benchmark-ui
 
 examples: compiler
 	@echo "Compiling examples..."

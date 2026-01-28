@@ -1,8 +1,8 @@
 .PHONY: all clean ping_pong
 
-# Use native compilation with HiPE optimization for best performance
+# Use standard Erlang compilation for fair baseline comparison
 ERLC = erlc
-ERLC_FLAGS = +native +'{hipe, [o3]}'
+ERLC_FLAGS =
 ERL = erl
 ERL_FLAGS = -noshell
 

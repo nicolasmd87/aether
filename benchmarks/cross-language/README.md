@@ -1,67 +1,107 @@
 # Aether Cross-Language Benchmark Suite
 
-Comprehensive benchmarking comparing Aether's actor model performance against Rust, Go, C++, Pony, Erlang, and Scala.
+Comparative benchmarking of actor model implementations across multiple languages.
 
 ## Quick Start
 
 ```bash
 cd benchmarks/cross-language
-make benchmark-ui
+./run_benchmarks.sh
 ```
 
-**Open your browser to http://localhost:8080 to see the interactive dashboard!**
-
-## Current Results Summary
-
-**Aether is 2.7x to 45x faster** than competing languages across all benchmark patterns:
-
-- **Ping-Pong (Latency)**: Aether 226M msg/sec vs Go 14M (16x faster)
-- **Ring (Throughput)**: Aether 418M msg/sec vs Go 151M (2.8x faster)  
-- **Skynet (Scaling)**: Aether 0.89ms vs Go 12.5ms (14x faster)
-
-Full comparison includes: Aether, Pony, Rust, C++, Go, Erlang, and Scala.
-
-## What You Need to Know
-
-### You're in the wrong directory!
-Run this from **benchmarks/cross-language**, NOT from the root:
-
+To view results in an interactive dashboard:
 ```bash
-# WRONG (where you are now)
-cd /Users/ruler/Documents/git/aether
-make benchmark-ui  # ❌ Won't work
-
-# RIGHT
-cd /Users/ruler/Documents/git/aether/benchmarks/cross-language
-make benchmark-ui  # ✅ Works!
+make benchmark-ui
+# Open http://localhost:8080
 ```
 
-### What happens when you run it:
-1. Runs Go benchmarks (live data)
-2. Generates results for 7 languages
-3. Builds the C HTTP server
-4. Starts server on http://localhost:8080
-5. Opens dashboard with interactive charts
+## What This Benchmarks
 
-### Server is already running for you!
-- **URL**: http://localhost:8080
-- **PID**: 52324
-- **Status**: ✅ Active and serving data
+This suite compares baseline actor implementations using a ping-pong message passing test.
 
-## Available Endpoints
+**Languages tested:**
+- Aether
+- C (pthreads)
+- C++
+- Go
+- Rust
+- Java
+- Zig
+- Erlang
+- Elixir
+- Pony
+- Scala (Akka)
 
-- http://localhost:8080 - Interactive dashboard
-- http://localhost:8080/results_ping_pong.json - Latency results
-- http://localhost:8080/results_ring.json - Throughput results
-- http://localhost:8080/results_skynet.json - Scaling results
-- http://localhost:8080/api/sysinfo - Server info
+**Test characteristics:**
+- Ping-pong pattern with full round-trip validation
+- Configurable message count (default: 10,000,000)
+- All languages use standard optimizations (-O3 equivalent)
+- No specialized tuning or non-standard optimizations
+- Validates message integrity on every exchange
+
+## What This Measures
+
+- Actor message passing latency
+- Basic scheduler overhead
+- Message validation performance
+
+## What This Does Not Measure
+
+- I/O performance
+- Concurrent workload scaling beyond message passing
+- Real-world application performance
+- Production-ready system behavior
+- Memory allocation patterns
+- GC performance
+
+## Configuration
+
+Edit `benchmark_config.json` to adjust parameters:
+
+```json
+{
+  "messages": 10000000,
+  "timeout_seconds": 60
+}
+```
+
+See `config.md` for detailed configuration options.
+
+## Scripts
+
+- `run_benchmarks.sh` - Main entry point. Runs all benchmarks and generates results.
+- `build_server.sh` - Builds the visualization HTTP server (standalone utility).
+- `measure_memory.sh` - Cross-platform memory measurement helper (internal use).
+
+## Requirements
+
+**Minimum:**
+- Python 3
+- GCC or Clang
+- GNU sed or BSD sed
+
+**Optional (for additional languages):**
+- Java 17+
+- Go
+- Rust
+- Zig
+- Erlang/Elixir
+- Pony
+- sbt (for Scala)
+
+The script will prompt to install missing dependencies.
+
+## Important Notes
+
+- Results are highly system-dependent
+- Benchmarks measure baseline implementations only
+- Not representative of all workload types
+- Intended for comparative analysis on your specific hardware
+- Performance varies based on CPU, OS, memory, and system load
+- Run on your own system to evaluate performance characteristics
 
 ## Stopping the Server
 
 ```bash
 pkill -f "visualize/server"
 ```
-
-## Complete Documentation
-
-See full benchmarking methodology, hardware specs, and implementation details in the visualize/index.html dashboard.

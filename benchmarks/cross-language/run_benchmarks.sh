@@ -57,10 +57,94 @@ detect_java() {
     return 1
 }
 
+# Interactive dependency checking and installation
+check_and_install() {
+    local tool_name=$1
+    local check_cmd=$2
+    local macos_install=$3
+    local linux_install=$4
+    local description=$5
+
+    if ! command -v "$check_cmd" >/dev/null 2>&1; then
+        echo "=================================================================="
+        echo "  $tool_name: Not found"
+        echo "=================================================================="
+        echo ""
+        echo "$description"
+        echo ""
+        echo "Installation command:"
+        echo "  macOS:  $macos_install"
+        echo "  Linux:  $linux_install"
+        echo ""
+        read -p "Install now? (y/n): " response
+
+        if [[ "$response" =~ ^[Yy]$ ]]; then
+            echo "Installing $tool_name..."
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                eval "$macos_install"
+            elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+                eval "$linux_install"
+            fi
+
+            if command -v "$check_cmd" >/dev/null 2>&1; then
+                echo "$tool_name installed successfully."
+                return 0
+            else
+                echo "Installation failed. Skipping $tool_name benchmark."
+                return 1
+            fi
+        else
+            echo "Skipping $tool_name benchmark."
+            return 1
+        fi
+    fi
+    return 0
+}
+
+echo "Checking dependencies..."
+echo ""
+
+# Check Java first (already has detect function)
 if ! detect_java; then
-    echo "Warning: Java 17+ not found. Scala benchmark will be skipped."
-    echo "Install Java 17+ for full benchmark suite."
+    echo "=================================================================="
+    echo "  Java 17+: Not found"
+    echo "=================================================================="
+    echo ""
+    echo "Required for Java and Scala benchmarks."
+    echo ""
+    echo "Installation command:"
+    echo "  macOS:  brew install openjdk@17"
+    echo "  Linux:  sudo apt-get install openjdk-17-jdk"
+    echo ""
+    read -p "Install now? (y/n): " response
+    if [[ "$response" =~ ^[Yy]$ ]]; then
+        echo "Installing Java 17..."
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            brew install openjdk@17
+        elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
+            sudo apt-get install openjdk-17-jdk
+        fi
+        if detect_java; then
+            echo "Java 17+ installed successfully."
+        else
+            echo "Installation failed. Skipping Java and Scala benchmarks."
+        fi
+    else
+        echo "Skipping Java and Scala benchmarks."
+    fi
 fi
+
+# Check other languages
+check_and_install "Go" "go" "brew install go" "sudo apt-get install golang" "Required for Go benchmark"
+check_and_install "Rust" "cargo" "brew install rust" "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh" "Required for Rust benchmark"
+check_and_install "Zig" "zig" "brew install zig" "sudo snap install zig --classic --beta" "Required for Zig benchmark"
+check_and_install "Erlang" "erl" "brew install erlang" "sudo apt-get install erlang" "Required for Erlang benchmark"
+check_and_install "Elixir" "elixir" "brew install elixir" "sudo apt-get install elixir" "Required for Elixir benchmark"
+check_and_install "Pony" "ponyc" "brew install ponyc" "sudo add-apt-repository ppa:ponylang/ponylang && sudo apt-get update && sudo apt-get install ponyc" "Required for Pony benchmark"
+
+echo ""
+echo "Starting benchmarks..."
+echo ""
 
 # Load benchmark configuration from JSON
 CONFIG_FILE="benchmark_config.json"
@@ -158,12 +242,12 @@ if [ -f "aether/ping_pong.ae" ]; then
       "notes": "Lock-free SPSC queues, batched sends"
     }
 EOF
-        echo "✓ Aether: ${AETHER_THROUGHPUT}M msg/sec (${AETHER_MEMORY_MB}MB)"
+        echo "[OK] Aether: ${AETHER_THROUGHPUT}M msg/sec (${AETHER_MEMORY_MB}MB)"
     else
-        echo "✗ Aether: Build failed (skipped)"
+        echo "[SKIP] Aether: Build failed (skipped)"
     fi
 else
-    echo "✗ Aether: Not found (skipped)"
+    echo "[SKIP] Aether: Not found (skipped)"
 fi
 
 # 1. C (pthread) - Baseline
@@ -188,9 +272,9 @@ if (cd c && make clean &>/dev/null && make ping_pong &>/dev/null); then
       "notes": "pthread mutex + condvar (baseline)"
     }
 EOF
-    echo "✓ C (pthread): ${C_THROUGHPUT}M msg/sec (${C_MEMORY_MB}MB)"
+    echo "[OK] C (pthread): ${C_THROUGHPUT}M msg/sec (${C_MEMORY_MB}MB)"
 else
-    echo "✗ C (pthread): Build failed (skipped)"
+    echo "[SKIP] C (pthread): Build failed (skipped)"
 fi
 
 # 2. C++ (std::mutex + condition_variable)
@@ -214,9 +298,9 @@ if (cd cpp && g++ -O3 -std=c++17 -march=native ping_pong.cpp -o ping_pong -pthre
       "notes": "std::mutex + std::condition_variable (fair)"
     }
 EOF
-    echo "✓ C++: ${CPP_THROUGHPUT}M msg/sec (${CPP_MEMORY_MB}MB)"
+    echo "[OK] C++: ${CPP_THROUGHPUT}M msg/sec (${CPP_MEMORY_MB}MB)"
 else
-    echo "✗ C++: Build failed (skipped)"
+    echo "[SKIP] C++: Build failed (skipped)"
 fi
 
 # 3. Go
@@ -240,9 +324,9 @@ if command -v go &> /dev/null; then
       "notes": "Goroutines with channels"
     }
 EOF
-    echo "✓ Go: ${GO_THROUGHPUT}M msg/sec (${GO_MEMORY_MB}MB)"
+    echo "[OK] Go: ${GO_THROUGHPUT}M msg/sec (${GO_MEMORY_MB}MB)"
 else
-    echo "✗ Go: Not installed (skipped)"
+    echo "[SKIP] Go: Not installed (skipped)"
 fi
 
 # 4. Rust
@@ -267,12 +351,12 @@ if command -v cargo &> /dev/null; then
       "notes": "std::sync::mpsc::sync_channel"
     }
 EOF
-        echo "✓ Rust: ${RUST_THROUGHPUT}M msg/sec (${RUST_MEMORY_MB}MB)"
+        echo "[OK] Rust: ${RUST_THROUGHPUT}M msg/sec (${RUST_MEMORY_MB}MB)"
     else
-        echo "✗ Rust: Build failed (skipped)"
+        echo "[SKIP] Rust: Build failed (skipped)"
     fi
 else
-    echo "✗ Rust: Cargo not installed (skipped)"
+    echo "[SKIP] Rust: Cargo not installed (skipped)"
 fi
 
 # 5. Java
@@ -297,12 +381,12 @@ if command -v javac &> /dev/null && command -v java &> /dev/null; then
       "notes": "ArrayBlockingQueue"
     }
 EOF
-        echo "✓ Java: ${JAVA_THROUGHPUT}M msg/sec (${JAVA_MEMORY_MB}MB)"
+        echo "[OK] Java: ${JAVA_THROUGHPUT}M msg/sec (${JAVA_MEMORY_MB}MB)"
     else
-        echo "✗ Java: Build failed (skipped)"
+        echo "[SKIP] Java: Build failed (skipped)"
     fi
 else
-    echo "✗ Java: Not installed (skipped)"
+    echo "[SKIP] Java: Not installed (skipped)"
 fi
 
 # 6. Zig (if available)
@@ -326,15 +410,15 @@ if command -v zig &> /dev/null; then
       "notes": "std::Thread with Mutex"
     }
 EOF
-            echo "✓ Zig: ${ZIG_THROUGHPUT}M msg/sec"
+            echo "[OK] Zig: ${ZIG_THROUGHPUT}M msg/sec"
         else
-            echo "✗ Zig: Benchmark failed (no valid output)"
+            echo "[SKIP] Zig: Benchmark failed (no valid output)"
         fi
     else
-        echo "✗ Zig: Build failed (skipped)"
+        echo "[SKIP] Zig: Build failed (skipped)"
     fi
 else
-    echo "✗ Zig: Not installed (skipped)"
+    echo "[SKIP] Zig: Not installed (skipped)"
 fi
 
 # 7. Elixir (if available)
@@ -358,15 +442,15 @@ if command -v elixir &> /dev/null; then
       "notes": "Native process messaging"
     }
 EOF
-            echo "✓ Elixir: ${ELIXIR_THROUGHPUT}M msg/sec"
+            echo "[OK] Elixir: ${ELIXIR_THROUGHPUT}M msg/sec"
         else
-            echo "✗ Elixir: Benchmark failed (no valid output)"
+            echo "[SKIP] Elixir: Benchmark failed (no valid output)"
         fi
     else
-        echo "✗ Elixir: Benchmark not found (skipped)"
+        echo "[SKIP] Elixir: Benchmark not found (skipped)"
     fi
 else
-    echo "✗ Elixir: Not installed (skipped)"
+    echo "[SKIP] Elixir: Not installed (skipped)"
 fi
 
 # 8. Erlang (if available)
@@ -390,15 +474,15 @@ if command -v erlc &> /dev/null; then
       "notes": "Native process messaging"
     }
 EOF
-            echo "✓ Erlang: ${ERLANG_THROUGHPUT}M msg/sec"
+            echo "[OK] Erlang: ${ERLANG_THROUGHPUT}M msg/sec"
         else
-            echo "✗ Erlang: Benchmark failed (no valid output)"
+            echo "[SKIP] Erlang: Benchmark failed (no valid output)"
         fi
     else
-        echo "✗ Erlang: Build failed (skipped)"
+        echo "[SKIP] Erlang: Build failed (skipped)"
     fi
 else
-    echo "✗ Erlang: Not installed (skipped)"
+    echo "[SKIP] Erlang: Not installed (skipped)"
 fi
 
 # 9. Pony (if available)
@@ -422,15 +506,15 @@ if command -v ponyc &> /dev/null; then
       "notes": "Actor model language"
     }
 EOF
-            echo "✓ Pony: $(printf "%.2f" $PONY_THROUGHPUT)M msg/sec"
+            echo "[OK] Pony: $(printf "%.2f" $PONY_THROUGHPUT)M msg/sec"
         else
-            echo "✗ Pony: Benchmark failed (no valid output)"
+            echo "[SKIP] Pony: Benchmark failed (no valid output)"
         fi
     else
-        echo "✗ Pony: Build failed (skipped)"
+        echo "[SKIP] Pony: Build failed (skipped)"
     fi
 else
-    echo "✗ Pony: Not installed (skipped)"
+    echo "[SKIP] Pony: Not installed (skipped)"
 fi
 
 # 10. Scala (if available)
@@ -454,15 +538,15 @@ if command -v sbt &> /dev/null; then
       "notes": "Akka actors"
     }
 EOF
-            echo "✓ Scala: $(printf "%.2f" $SCALA_THROUGHPUT)M msg/sec"
+            echo "[OK] Scala: $(printf "%.2f" $SCALA_THROUGHPUT)M msg/sec"
         else
-            echo "✗ Scala: Benchmark failed (no valid output)"
+            echo "[SKIP] Scala: Benchmark failed (no valid output)"
         fi
     else
-        echo "✗ Scala: Build failed (skipped)"
+        echo "[SKIP] Scala: Build failed (skipped)"
     fi
 else
-    echo "✗ Scala: Not installed (skipped)"
+    echo "[SKIP] Scala: Not installed (skipped)"
 fi
 
 # Close JSON

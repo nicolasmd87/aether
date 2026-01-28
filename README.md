@@ -47,13 +47,11 @@ The Aether runtime implements a native actor system with optimized message passi
 - **Performance profiling** with per-core cycle counting
 - **Message tracing** for debugging
 
-### Performance Characteristics
-- **226M messages/sec** (ping-pong, 2 actors)
-- **418M messages/sec** (ring, 100 actors)
-- **3,125M msg/sec** (skynet, 1111 actors)
-- **Sub-nanosecond latency** (0.96 cycles/msg on skynet)
+### Benchmarks
 
-See [benchmarks/cross-language/methodology.md](benchmarks/cross-language/methodology.md) for detailed methodology and [benchmarks/cross-language/](benchmarks/cross-language/) for comparisons with Go, Rust, C++, Erlang, and other languages.
+Aether includes a comprehensive cross-language benchmark suite comparing actor implementations across 11 languages. Run `make benchmark` to evaluate performance on your system.
+
+See [benchmarks/cross-language/](benchmarks/cross-language/) for methodology and implementation details.
 
 ## Quick Start
 
@@ -285,7 +283,7 @@ The runtime employs a tiered optimization strategy:
 - [Architecture Overview](docs/architecture.md) - Runtime and compiler design
 - [Memory Management](docs/memory-management.md) - Arena GC and pooling strategies
 - [Runtime Optimizations](docs/runtime-optimizations.md) - Performance techniques
-- [Benchmark Methodology](benchmarks/cross-language/methodology.md) - Fair comparison principles
+- [Cross-Language Benchmarks](benchmarks/cross-language/README.md) - Comparative performance analysis
 - [Docker Setup](docker/README.md) - Container development environment
 
 ## Development
@@ -305,17 +303,16 @@ make test
 ### Running Benchmarks
 
 ```bash
-# Quick benchmark (1 run per language)
+# Run cross-language benchmark suite with interactive UI
+make benchmark
+# Open http://localhost:8080 to view results
+
+# Or run directly
 cd benchmarks/cross-language
-./quick_bench.sh
-
-# Start web UI
-make benchmark-ui
-# Open http://localhost:8080
-
-# Statistical analysis (5 runs + warmup)
-bash run_statistical_bench.sh
+./run_benchmarks.sh
 ```
+
+The benchmark suite compares Aether against C, C++, Go, Rust, Java, Zig, Erlang, Elixir, Pony, and Scala using baseline actor implementations. Results are system-dependent.
 
 ## Project Status
 
@@ -326,7 +323,7 @@ bash run_statistical_bench.sh
 - Native actor runtime with multi-core scheduling
 - Lock-free message passing optimizations
 - Standard library (collections, I/O, networking)
-- Cross-language benchmarks showing competitive performance
+- Cross-language benchmark suite for comparative analysis
 
 **Limitations:**
 - No distribution (single-node only)
