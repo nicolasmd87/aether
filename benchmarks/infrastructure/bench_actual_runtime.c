@@ -29,6 +29,7 @@ static int get_num_processors() {
 
 // Simple ping actor
 typedef struct {
+    // MUST match ActorBase layout exactly!
     int active;
     int id;
     Mailbox mailbox;
@@ -36,7 +37,8 @@ typedef struct {
     pthread_t thread;
     int auto_process;
     int assigned_core;
-    
+    SPSCQueue spsc_queue;
+    // Benchmark-specific fields below
     atomic_int messages_processed;
     int target_count;
 } PingActor;
@@ -57,17 +59,19 @@ void ping_step(PingActor* self) {
 PingActor* spawn_ping_actor(int target_count) {
     PingActor* actor = (PingActor*)malloc(sizeof(PingActor));
     if (!actor) return NULL;
-    
+
+    memset(actor, 0, sizeof(PingActor));  // Zero all fields including pthread_t
+
     actor->id = atomic_fetch_add(&next_actor_id, 1);
     actor->active = 1;
     actor->assigned_core = -1;
     actor->step = (void (*)(void*))ping_step;
     actor->auto_process = 0;  // Manual processing for benchmark
     mailbox_init(&actor->mailbox);
-    
+
     atomic_store(&actor->messages_processed, 0);
     actor->target_count = target_count;
-    
+
     return actor;
 }
 

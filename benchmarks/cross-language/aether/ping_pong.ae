@@ -14,17 +14,24 @@ actor PingActor {
     state expected_count = 0;
     state total_messages = 10000000;
     state errors = 0;
+    state completed = 0;
 
     receive {
         Pong { count } -> {
             // VALIDATE: The pong must echo back our expected count
             if (count != expected_count) {
+                print("ERROR: Ping validation failed - expected ");
+                print(expected_count);
+                print(" but got ");
+                print(count);
                 errors = errors + 1;
             }
 
             expected_count = expected_count + 1;
             if (expected_count < total_messages) {
                 pong_ref ! Ping { count: expected_count };
+            } else {
+                completed = 1;
             }
         }
     }
@@ -32,9 +39,19 @@ actor PingActor {
 
 actor PongActor {
     state ping_ref = 0;
+    state expected_count = 0;
 
     receive {
         Ping { count } -> {
+            // VALIDATE: Must receive messages in sequence
+            if (count != expected_count) {
+                print("ERROR: Pong validation failed - expected ");
+                print(expected_count);
+                print(" but got ");
+                print(count);
+            }
+            expected_count = expected_count + 1;
+
             // Echo back the EXACT count we received
             ping_ref ! Pong { count: count };
         }
@@ -57,6 +74,16 @@ main() {
     i = 0;
     while (i < 100000000) {
         i = i + 1;
+    }
+
+    // Report validation results
+    int error_count = ping.errors;
+    if (error_count > 0) {
+        print("VALIDATION FAILED: ");
+        print(error_count);
+        print(" errors detected");
+    } else {
+        print("VALIDATION PASSED: All messages verified");
     }
 
     print("Benchmark complete");
