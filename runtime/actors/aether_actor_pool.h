@@ -7,7 +7,8 @@
 #include <stdatomic.h>
 #include "actor_state_machine.h"
 
-#define ACTOR_POOL_SIZE 256
+// Reduced from 256 to 64 - still enough for most workloads (saves ~20MB per core)
+#define ACTOR_POOL_SIZE 64
 #define ACTOR_POOL_MASK (ACTOR_POOL_SIZE - 1)
 
 // Pooled actor with reset capability

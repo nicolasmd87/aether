@@ -37,7 +37,8 @@ typedef struct {
 } Message;
 
 // Ring buffer mailbox for actors (power-of-2 for fast masking)
-#define MAILBOX_SIZE 2048  // Large buffer for cross-core messaging
+// Reduced from 2048 to 512 - still handles bursts well (saves ~75KB per actor)
+#define MAILBOX_SIZE 512  // Buffer for actor message queue
 #define MAILBOX_MASK (MAILBOX_SIZE - 1)
 typedef struct {
     Message messages[MAILBOX_SIZE];

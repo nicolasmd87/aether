@@ -5,7 +5,8 @@
 #include <stdlib.h>
 #include "../actors/actor_state_machine.h"
 
-#define QUEUE_SIZE 65536  // Large queue for high cross-core traffic
+// Reduced from 65536 to 16384 - still handles high throughput (saves ~2MB per core)
+#define QUEUE_SIZE 16384  // Queue for cross-core message passing
 #define QUEUE_MASK (QUEUE_SIZE - 1)
 
 typedef struct {
