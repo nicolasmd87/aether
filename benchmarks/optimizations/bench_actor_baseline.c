@@ -32,6 +32,7 @@ void counter_step(CounterActor* actor) {
 
 CounterActor* create_counter_actor() {
     CounterActor* actor = malloc(sizeof(CounterActor));
+    memset(actor, 0, sizeof(CounterActor));  // Zero all fields
     mailbox_init(&actor->mailbox);
     actor->counter = 0;
     actor->active = 1;

@@ -18,6 +18,7 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->message_registry = create_message_registry();
     gen->declared_vars = NULL;
     gen->declared_var_count = 0;
+    gen->generating_lvalue = 0;  // Not generating lvalue by default
     return gen;
 }
 
@@ -218,11 +219,35 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             // expr.field becomes expr.field in C (or expr->field for actor refs)
             if (expr->child_count > 0) {
                 ASTNode* child = expr->children[0];
-                generate_expression(gen, child);
-                // Check if the child is an actor reference
+
+                // Check if this is a cross-actor atomic access
+                // (accessing an actor's state from outside that actor)
+                int needs_atomic = 0;
                 if (child->node_type && child->node_type->kind == TYPE_ACTOR_REF) {
+                    // This is accessing a field of an actor reference
+                    // If we're not inside an actor, we need atomic operations for thread safety
+                    // But NOT for lvalues (assignment targets) or _ref fields (pointers)
+                    size_t name_len = strlen(expr->value);
+                    int is_ref_field = (name_len > 4 && strcmp(expr->value + name_len - 4, "_ref") == 0);
+
+                    if (!gen->current_actor && !gen->generating_lvalue && !is_ref_field) {
+                        // We're in main() reading an actor's state - need atomic read
+                        needs_atomic = 1;
+                    }
+                }
+
+                if (needs_atomic) {
+                    // Generate atomic_load for cross-actor read
+                    fprintf(gen->output, "atomic_load(&");
+                    generate_expression(gen, child);
+                    fprintf(gen->output, "->%s)", expr->value);
+                } else if (child->node_type && child->node_type->kind == TYPE_ACTOR_REF) {
+                    // Normal actor field access
+                    generate_expression(gen, child);
                     fprintf(gen->output, "->%s", expr->value);
                 } else {
+                    // Normal struct field access
+                    generate_expression(gen, child);
                     fprintf(gen->output, ".%s", expr->value);
                 }
             }
@@ -523,8 +548,14 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
         
         case AST_ASSIGNMENT:
             if (stmt->child_count >= 2) {
+                // Left side is lvalue (assignment target) - no atomic operations
+                gen->generating_lvalue = 1;
                 generate_expression(gen, stmt->children[0]);
+                gen->generating_lvalue = 0;
+
                 fprintf(gen->output, " = ");
+
+                // Right side is rvalue (read) - may need atomic operations
                 generate_expression(gen, stmt->children[1]);
                 fprintf(gen->output, ";\n");
             }
@@ -869,9 +900,11 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
     print_line(gen, "pthread_t thread;        // Warm: thread handle");
     print_line(gen, "int auto_process;        // Warm: auto-processing flag");
     print_line(gen, "int assigned_core;       // Cold: core assignment");
+    print_line(gen, "SPSCQueue spsc_queue;    // Lock-free same-core messaging");
     print_line(gen, "");
-    
+
     // State fields (user-defined)
+    // NOTE: All state fields are atomic to allow safe cross-thread access
     for (int i = 0; i < actor->child_count; i++) {
         ASTNode* child = actor->children[i];
         if (child->type == AST_STATE_DECLARATION) {
@@ -881,8 +914,13 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
             if (name_len > 4 && strcmp(child->value + name_len - 4, "_ref") == 0) {
                 fprintf(gen->output, "void* %s;\n", child->value);
             } else {
-                generate_type(gen, child->node_type);
-                fprintf(gen->output, " %s;\n", child->value);
+                // Use atomic types for int to enable safe concurrent access
+                if (child->node_type && child->node_type->kind == TYPE_INT) {
+                    fprintf(gen->output, "atomic_int %s;\n", child->value);
+                } else {
+                    generate_type(gen, child->node_type);
+                    fprintf(gen->output, " %s;\n", child->value);
+                }
             }        }
     }
     

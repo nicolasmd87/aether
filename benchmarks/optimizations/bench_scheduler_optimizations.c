@@ -33,11 +33,16 @@ static inline uint64_t get_nanos() {
 
 // Baseline actor (no optimizations)
 typedef struct {
-    int id;
+    // MUST match ActorBase layout exactly!
     int active;
-    int assigned_core;
+    int id;
     Mailbox mailbox;
     void (*step)(void*);
+    pthread_t thread;
+    int auto_process;
+    int assigned_core;
+    SPSCQueue spsc_queue;
+    // Benchmark-specific fields below
     atomic_int counter;
 } BaselineActor;
 
@@ -68,13 +73,15 @@ double benchmark_baseline() {
     BaselineActor* actors[NUM_ACTORS];
     for (int i = 0; i < NUM_ACTORS; i++) {
         actors[i] = malloc(sizeof(BaselineActor));
+        memset(actors[i], 0, sizeof(BaselineActor));  // Zero all fields including pthread_t
         actors[i]->id = i;
         actors[i]->active = 1;
+        actors[i]->auto_process = 0;
         actors[i]->assigned_core = i % 4;
         mailbox_init(&actors[i]->mailbox);
         actors[i]->step = (void(*)(void*))baseline_actor_step;
         atomic_store(&actors[i]->counter, 0);
-        
+
         scheduler_register_actor((ActorBase*)actors[i]);
     }
     

@@ -15,6 +15,7 @@ typedef struct {
     MessageRegistry* message_registry;
     char** declared_vars;  // Track variables declared in current function
     int declared_var_count;
+    int generating_lvalue;  // Track if we're generating an assignment target (lvalue)
 } CodeGenerator;
 
 // Code generation functions

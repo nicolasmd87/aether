@@ -15,11 +15,16 @@
 #endif
 
 typedef struct {
-    int id;
+    // MUST match ActorBase layout exactly!
     int active;
-    int assigned_core;
+    int id;
     Mailbox mailbox;
     void (*step)(void*);
+    pthread_t thread;
+    int auto_process;
+    int assigned_core;
+    SPSCQueue spsc_queue;
+    // Test-specific fields below
     atomic_int count;
 } TestActor;
 
@@ -42,8 +47,10 @@ int main() {
     // Create actor
     printf("2. Creating test actor...\n");
     TestActor* actor = malloc(sizeof(TestActor));
+    memset(actor, 0, sizeof(TestActor));  // Zero all fields including pthread_t
     actor->id = 1;
     actor->active = 1;
+    actor->auto_process = 0;
     actor->assigned_core = -1;
     actor->step = (void (*)(void*))test_step;
     atomic_store(&actor->count, 0);

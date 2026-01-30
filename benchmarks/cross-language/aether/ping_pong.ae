@@ -14,17 +14,25 @@ actor PingActor {
     state expected_count = 0;
     state total_messages = 10000000;
     state errors = 0;
+    state completed = 0;
 
     receive {
         Pong { count } -> {
             // VALIDATE: The pong must echo back our expected count
             if (count != expected_count) {
+                print("ERROR: Ping validation failed - expected ");
+                print(expected_count);
+                print(" but got ");
+                print(count);
+                print("\n");
                 errors = errors + 1;
             }
 
             expected_count = expected_count + 1;
             if (expected_count < total_messages) {
                 pong_ref ! Ping { count: expected_count };
+            } else {
+                completed = 1;
             }
         }
     }
@@ -32,9 +40,19 @@ actor PingActor {
 
 actor PongActor {
     state ping_ref = 0;
+    state expected_count = 0;
 
     receive {
         Ping { count } -> {
+            // VALIDATE: Must receive messages in sequence
+            if (count != expected_count) {
+                print("ERROR: Pong validation failed - expected ");
+                print(expected_count);
+                print(" but got ");
+                print(count);
+            }
+            expected_count = expected_count + 1;
+
             // Echo back the EXACT count we received
             ping_ref ! Pong { count: count };
         }
@@ -42,7 +60,7 @@ actor PongActor {
 }
 
 main() {
-    print("=== Aether Ping-Pong (Validated) ===");
+    print("=== Aether Ping-Pong (Validated) ===\n");
 
     ping = spawn PingActor();
     pong = spawn PongActor();
@@ -53,11 +71,48 @@ main() {
     // Start with count=0
     pong ! Ping { count: 0 };
 
-    // Wait for completion
-    i = 0;
-    while (i < 100000000) {
-        i = i + 1;
+    // Wait for completion - poll until ping actor signals done
+    // NOTE: Loop must not be optimized away - ping.completed is modified by actor thread
+    int is_complete = 0;
+    int iterations = 0;
+    while (is_complete == 0) {
+        is_complete = ping.completed;
+        iterations = iterations + 1;
+        // Prevent compiler optimization by checking iterations periodically
+        if (iterations == 10000000) {
+            iterations = 0;
+        }
     }
 
-    print("Benchmark complete");
+    // Report validation results
+    int error_count = ping.errors;
+    int final_count = ping.expected_count;
+    int target_count = ping.total_messages;
+
+    print("\n=== VALIDATION REPORT ===");
+    print("Messages sent:      ");
+    print(target_count);
+    print("\nMessages processed: ");
+    print(final_count);
+
+    // Check completion by comparing counts manually
+    int complete = 1;
+    if (final_count < target_count) {
+        complete = 0;
+    }
+
+    if (complete == 0) {
+        print("\nERROR: Not all messages processed! Missing ");
+        int missing = target_count - final_count;
+        print(missing);
+        print(" messages");
+    } else if (error_count > 0) {
+        print("\nVALIDATION FAILED: ");
+        print(error_count);
+        print(" errors detected");
+    } else {
+        print("\nVALIDATION PASSED: All messages verified");
+    }
+
+    print("\n=========================\nBenchmark complete");
 }
