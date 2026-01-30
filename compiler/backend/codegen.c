@@ -1136,6 +1136,7 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
                         print_line(gen, "handle_%s:", pattern->value);
                         indent(gen);
                         print_line(gen, "%s_handle_%s(self, _msg_data);", actor->value, pattern->value);
+                        print_line(gen, "free(_msg_data);  // Free message payload after processing");
                         print_line(gen, "return;");
                         unindent(gen);
                         print_line(gen, "");
