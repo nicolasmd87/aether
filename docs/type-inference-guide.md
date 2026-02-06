@@ -284,9 +284,9 @@ x = unknown_value()   // Type cannot be inferred
 
 ## Summary
 
-- **Inference is powerful** - Handles 90% of cases automatically
-- **Explicit types are documentation** - Use strategically
-- **No performance cost** - Compile-time only
+- **Inference is powerful** - Handles most common cases automatically
+- **Explicit types are documentation** - Use strategically for public APIs
+- **No runtime cost** - Type inference is compile-time only
 - **Fully type-safe** - Same guarantees as explicit types
 
 Type inference gives Aether the expressiveness of ML/Haskell while maintaining C-level type safety and performance.

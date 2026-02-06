@@ -26,8 +26,6 @@ Reuses actor instances instead of repeated allocation/deallocation.
 
 **Use Case:** High actor churn workloads where actors are frequently created and destroyed.
 
-**Expected Improvement:** 30-50% reduction in allocation overhead for typical workloads.
-
 #### 2. Direct Actor Bypass (aether_direct_send.h)
 Skips mailbox for same-core actors by directly invoking message handlers.
 

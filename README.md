@@ -252,10 +252,10 @@ Available flags:
 The runtime employs a tiered optimization strategy:
 
 **TIER 1 - Always Enabled:**
-- Actor pooling (1.81x speedup)
-- Direct send for same-core actors
-- Adaptive batching (4-64 messages)
-- Message coalescing (15x throughput)
+- Actor pooling (reduces allocation overhead)
+- Direct send for same-core actors (bypasses queues)
+- Adaptive batching (adjusts batch size dynamically)
+- Message coalescing (combines small messages)
 - Thread-local message pools
 
 **TIER 2 - Auto-Detected:**
@@ -264,8 +264,8 @@ The runtime employs a tiered optimization strategy:
 - CPU core pinning (OS-dependent)
 
 **TIER 3 - Opt-In:**
-- Lock-free mailbox (trade-off: faster under contention, slower single-threaded)
-- Message deduplication (semantic change, adds overhead)
+- Lock-free mailbox (better under contention)
+- Message deduplication (prevents duplicate processing)
 
 ## Documentation
 
