@@ -9,22 +9,22 @@ Aether implements a type inference system that automatically deduces types from 
 ### From Literals
 
 ```aether
-let x = 42;           // inferred: int
-let pi = 3.14;        // inferred: float
-let name = "Alice";   // inferred: string
-let flag = true;      // inferred: bool
+x = 42              // inferred: int
+pi = 3.14           // inferred: float
+name = "Alice"      // inferred: string
+flag = true         // inferred: bool
 ```
 
 ### From Expressions
 
 ```aether
-let a = 10;
-let b = 20;
-let sum = a + b;      // inferred: int (both operands are int)
+a = 10
+b = 20
+sum = a + b           // inferred: int (both operands are int)
 
-let x = 3.14;
-let y = 2.0;
-let result = x * y;   // inferred: float
+x = 3.14
+y = 2.0
+result = x * y        // inferred: float
 ```
 
 ### From Functions
@@ -32,17 +32,17 @@ let result = x * y;   // inferred: float
 ```aether
 // Return type inferred from return statement
 add(a, b) {
-    return a + b;     // If used with ints → int, if with floats → float
+    return a + b      // If used with ints -> int, if with floats -> float
 }
 
 // Parameters inferred from usage
 multiply(x, y) {
-    return x * y;
+    return x * y
 }
 
 main() {
-    let n = add(10, 20);        // add inferred as: int -> int -> int
-    let f = multiply(3.14, 2.0); // multiply inferred as: float -> float -> float
+    n = add(10, 20)             // add inferred as: int -> int -> int
+    f = multiply(3.14, 2.0)     // multiply inferred as: float -> float -> float
 }
 ```
 
@@ -63,30 +63,30 @@ struct Player {
 }
 
 main() {
-    let p = Point{ x: 10, y: 20 };  // x, y inferred as int
-    
-    let player = Player{
-        name: "Alice",    // string
-        health: 100,      // int
-        score: 0          // int
-    };
+    p = Point{ x: 10, y: 20 }   // x, y inferred as int
+
+    player = Player{
+        name: "Alice",          // string
+        health: 100,            // int
+        score: 0                // int
+    }
 }
 ```
 
 ### Array Elements
 
 ```aether
-let nums = [1, 2, 3, 4, 5];        // inferred: int[]
-let names = ["Alice", "Bob"];       // inferred: string[]
-let mixed_ok = [1.0, 2.0, 3.0];    // inferred: float[]
+nums = [1, 2, 3, 4, 5]             // inferred: int[]
+names = ["Alice", "Bob"]           // inferred: string[]
+mixed_ok = [1.0, 2.0, 3.0]         // inferred: float[]
 ```
 
 ### Through Assignments
 
 ```aether
-let x = 42;       // x: int
-let y = x;        // y: int (inferred from x)
-let z = y + 10;   // z: int (inferred from y + int)
+x = 42            // x: int
+y = x             // y: int (inferred from x)
+z = y + 10        // z: int (inferred from y + int)
 ```
 
 ## When to Use Explicit Types
@@ -98,12 +98,12 @@ While inference handles most cases, explicit types are useful for:
 ```aether
 // Explicit types make intent clear
 calculate_damage(base: int, defense: int): int {
-    return base - defense;
+    return base - defense
 }
 
 // vs inferred (less clear to reader)
 calculate_damage(base, defense) {
-    return base - defense;
+    return base - defense
 }
 ```
 
@@ -121,7 +121,7 @@ process_data(input: float[]) {
 ```aether
 // Export with explicit types for clarity
 export calculate_score(kills: int, deaths: int, assists: int): float {
-    return (kills + assists / 2.0) / (deaths + 1);
+    return (kills + assists / 2.0) / (deaths + 1)
 }
 ```
 
@@ -132,12 +132,12 @@ You can mix explicit and inferred types:
 ```aether
 // Some parameters explicit, some inferred
 process(data, threshold: int) {
-    return data > threshold;  // data type inferred from usage
+    return data > threshold   // data type inferred from usage
 }
 
 // Explicit return, inferred parameters
 format_message(user, message): string {
-    return user + ": " + message;  // parameters inferred as string
+    return user + ": " + message  // parameters inferred as string
 }
 ```
 
@@ -148,10 +148,10 @@ format_message(user, message): string {
 The compiler walks the AST and collects type constraints:
 
 ```aether
-let x = 42;
+x = 42
 // Constraint: x must be int (from literal 42)
 
-let y = x + 10;
+y = x + 10
 // Constraint: y must be int (from x:int + 10:int)
 ```
 
@@ -170,8 +170,8 @@ Done: All types resolved
 Once inferred, types are validated for consistency:
 
 ```aether
-let x = 42;
-x = "hello";  // ERROR: Can't assign string to int
+x = 42
+x = "hello"   // ERROR: Can't assign string to int
 ```
 
 ## Edge Cases
@@ -180,12 +180,8 @@ x = "hello";  // ERROR: Can't assign string to int
 
 ```aether
 // This FAILS - can't infer type without usage
-let x;
-x = get_value();  // ERROR: Type of x unknown
-
-// Solution: Provide explicit type
-let x: int;
-x = get_value();  // OK
+x: int              // Declare with explicit type
+x = get_value()     // OK - type is known
 ```
 
 ### Generic Functions
@@ -193,12 +189,12 @@ x = get_value();  // OK
 ```aether
 // Currently not supported - specify explicit types
 identity(x: int): int {
-    return x;
+    return x
 }
 
 // Future: Generic type parameters
 // identity<T>(x: T): T {
-//     return x;
+//     return x
 // }
 ```
 
@@ -245,12 +241,12 @@ struct Player {
 }
 
 calculate_total(base, bonus) {  // Inferred from usage
-    return base + bonus;
+    return base + bonus
 }
 
 main() {
-    let p = Player{ name: "Alice", health: 100, score: 0 };
-    let total = calculate_total(p.score, 10);
+    p = Player{ name: "Alice", health: 100, score: 0 }
+    total = calculate_total(p.score, 10)
 }
 ```
 
@@ -265,12 +261,12 @@ struct Player {
 
 // Explicit return: public function
 calculate_total(base, bonus): int {
-    return base + bonus;
+    return base + bonus
 }
 
 main() {
-    let p = Player{ name: "Alice", health: 100, score: 0 };
-    let total = calculate_total(p.score, 10);
+    p = Player{ name: "Alice", health: 100, score: 0 }
+    total = calculate_total(p.score, 10)
 }
 ```
 
@@ -279,11 +275,11 @@ main() {
 When inference fails, Aether provides helpful errors:
 
 ```aether
-let x;  // Type cannot be inferred
+x = unknown_value()   // Type cannot be inferred
 
 // Error: Type inference failed
 //   Line 1: Variable 'x' has ambiguous type
-//   help: Add type annotation: let x: int;
+//   help: Add type annotation: x: int = unknown_value()
 ```
 
 ## Summary

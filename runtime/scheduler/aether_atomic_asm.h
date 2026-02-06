@@ -139,7 +139,16 @@ static inline int atomic_fetch_add_asm(atomic_int* ptr, int value) {
 }
 
 static inline void spin_pause() {
-    // Generic pause - compiler will optimize
+#if defined(__aarch64__) || defined(__arm64__)
+    // ARM64: yield gives up CPU time slice to other threads
+    __asm__ volatile("yield" ::: "memory");
+#elif defined(__arm__)
+    // ARM32: yield instruction
+    __asm__ volatile("yield" ::: "memory");
+#else
+    // Generic: use compiler barrier
+    __asm__ volatile("" ::: "memory");
+#endif
 }
 
 typedef struct {

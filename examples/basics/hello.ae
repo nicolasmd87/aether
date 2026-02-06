@@ -1,14 +1,22 @@
-main() {
-    print("Hello, Aether World!\n");
-    print("This is a clean, professional compiler.\n");
-    
-    int x = 42;
-    int y = 8;
-    
-    if (x > y) {
-        print("x (%d) is greater than y (%d)\n", x, y);
-    }
-    
-    print("Aether compilation successful!\n");
-}
+// Hello World - Your first Aether program
+// Run with: ae run examples/basics/hello.ae
 
+main() {
+    print("Hello, Aether!\n");
+
+    // Variables with type inference
+    x = 42;
+    y = 8;
+
+    if (x > y) {
+        print("x is greater than y\n");
+    }
+
+    // Simple arithmetic
+    sum = x + y;
+    print("Sum: ");
+    print(sum);
+    print("\n");
+
+    print("Welcome to Aether!\n");
+}

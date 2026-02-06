@@ -230,14 +230,12 @@ See:
 4. **Disable in production** - Zero overhead by default
 5. **Focus on hot paths** - Profile what matters
 
-## Performance Wins Validated
+## Optimization Validation
 
-Measured on test hardware; results vary by platform.
+Using this profiling system, you can measure:
+- Atomic operation overhead in hot paths
+- Mailbox operation cycles
+- Message copy overhead
+- Queue operation latency
 
-Using this profiling system, we've measured:
-- Atomic overhead: **5.74x slower** in tight loops
-- Mailbox operations: **19-20 cycles** each (optimal)
-- Message copy: **22 cycles** (40 bytes, negligible)
-- SPSC queue: **12 cycles** (lock-free wins)
-
-**Result:** Removed unnecessary atomics → **5.74x speedup** in benchmarks
+Profile your code to identify bottlenecks and validate optimizations on your target hardware. Results vary by platform and workload.

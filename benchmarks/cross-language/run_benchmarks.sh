@@ -9,8 +9,61 @@ cd "$(dirname "$0")"
 # Source cargo environment if it exists
 [ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"
 
-# Add common tool paths
+# Source GVM (Go Version Manager) if it exists
+[ -s "$HOME/.gvm/scripts/gvm" ] && source "$HOME/.gvm/scripts/gvm"
+
+# Add common tool paths for macOS (Homebrew) and Linux
 export PATH="$HOME/.cargo/bin:$PATH"
+export PATH="/opt/homebrew/bin:$PATH"
+export PATH="/usr/local/bin:$PATH"
+export PATH="/usr/local/go/bin:$PATH"
+export PATH="$HOME/go/bin:$PATH"
+export PATH="$HOME/.local/bin:$PATH"
+
+# GVM Go paths (if gvm is installed but not sourced)
+if [ -d "$HOME/.gvm/gos" ]; then
+    for go_ver in "$HOME/.gvm/gos"/*/bin; do
+        [ -d "$go_ver" ] && export PATH="$go_ver:$PATH"
+    done
+fi
+
+# Erlang/Elixir paths (macOS Homebrew)
+if [ -d "/opt/homebrew/opt/erlang/bin" ]; then
+    export PATH="/opt/homebrew/opt/erlang/bin:$PATH"
+fi
+if [ -d "/opt/homebrew/opt/elixir/bin" ]; then
+    export PATH="/opt/homebrew/opt/elixir/bin:$PATH"
+fi
+
+# Erlang/Elixir paths (Linux - apt/dnf/asdf)
+if [ -d "/usr/lib/erlang/bin" ]; then
+    export PATH="/usr/lib/erlang/bin:$PATH"
+fi
+if [ -d "/usr/local/lib/erlang/bin" ]; then
+    export PATH="/usr/local/lib/erlang/bin:$PATH"
+fi
+# asdf version manager (common on Linux)
+if [ -d "$HOME/.asdf/shims" ]; then
+    export PATH="$HOME/.asdf/shims:$PATH"
+fi
+
+# Zig paths (macOS Homebrew)
+if [ -d "/opt/homebrew/opt/zig" ]; then
+    export PATH="/opt/homebrew/opt/zig:$PATH"
+fi
+# Zig paths (Linux - snap/manual install)
+if [ -d "/snap/bin" ]; then
+    export PATH="/snap/bin:$PATH"
+fi
+
+# Pony paths (macOS Homebrew)
+if [ -d "/opt/homebrew/opt/ponyc/bin" ]; then
+    export PATH="/opt/homebrew/opt/ponyc/bin:$PATH"
+fi
+# Pony paths (Linux - apt/manual install)
+if [ -d "/usr/local/lib/ponyc/bin" ]; then
+    export PATH="/usr/local/lib/ponyc/bin:$PATH"
+fi
 
 # Auto-detect Java 17+ for Scala (portable across macOS/Linux)
 detect_java() {

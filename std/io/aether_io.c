@@ -111,3 +111,31 @@ void aether_file_info_free(AetherFileInfo* info) {
     if (info) free(info);
 }
 
+// Environment variables
+AetherString* aether_getenv(const char* name) {
+    if (!name) return NULL;
+    const char* value = getenv(name);
+    if (!value) return NULL;
+    return aether_string_new(value);
+}
+
+int aether_setenv(const char* name, const char* value) {
+    if (!name || !value) return 0;
+#ifdef _WIN32
+    // Windows uses _putenv_s
+    return _putenv_s(name, value) == 0 ? 1 : 0;
+#else
+    // POSIX setenv (1 = overwrite existing)
+    return setenv(name, value, 1) == 0 ? 1 : 0;
+#endif
+}
+
+int aether_unsetenv(const char* name) {
+    if (!name) return 0;
+#ifdef _WIN32
+    return _putenv_s(name, "") == 0 ? 1 : 0;
+#else
+    return unsetenv(name) == 0 ? 1 : 0;
+#endif
+}
+

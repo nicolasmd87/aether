@@ -139,14 +139,12 @@ void aether_free_message(void* msg_data) {
 void aether_send_message(void* actor_ptr, void* message_data, size_t message_size) {
     ActorBase* actor = (ActorBase*)actor_ptr;
 
-    // TRY POOL FIRST (lock-free for TLS pools)
-    void* msg_copy = payload_pool_acquire(message_size);
-
-    if (!msg_copy) {
-        // Fallback: malloc for large messages or pool exhausted
-        msg_copy = malloc(message_size);
-        if (!msg_copy) return;
-    }
+    // Always use heap allocation for type-safe messages.
+    // TLS pools have thread affinity issues when sender/receiver are on different threads.
+    // The inline message path (Message._imsg with payload_int) is still optimized for
+    // single-int payloads and avoids allocation entirely.
+    void* msg_copy = malloc(message_size);
+    if (!msg_copy) return;
 
     memcpy(msg_copy, message_data, message_size);
 
@@ -163,12 +161,11 @@ void aether_send_message(void* actor_ptr, void* message_data, size_t message_siz
     // Use optimized scheduler send paths:
     // - Same-core: direct mailbox send (no queue overhead)
     // - Cross-core: lock-free queue with batching
-    // - Automatic SPSC queue usage where beneficial
     if (current_core_id >= 0 && current_core_id == actor->assigned_core) {
-        // TIER 1 OPTIMIZATION: Same-core direct send
+        // Same-core: direct mailbox send
         scheduler_send_local(actor, msg);
     } else {
-        // Cross-core send with lock-free queue
+        // Cross-core or from main thread: use queue
         scheduler_send_remote(actor, msg, current_core_id);
     }
 }

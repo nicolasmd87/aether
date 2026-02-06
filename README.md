@@ -55,44 +55,59 @@ See [benchmarks/cross-language/](benchmarks/cross-language/) for methodology and
 
 ## Quick Start
 
-### Prerequisites
-
-**Required:**
-- GCC 11+ or Clang 14+
-- Make (or mingw32-make on Windows)
-- Git
-
-**Optional:**
-- Docker Desktop (recommended for consistent environment)
-
-### Installation
+### Install
 
 ```bash
 git clone https://github.com/nicolasmd87/aether.git
 cd aether
-make ae
+./install.sh
 ```
 
-This builds both the compiler and the `ae` CLI tool. Verify it works:
+This builds Aether and installs it to `~/.aether`. After restarting your terminal (or running `source ~/.zshrc`), the `ae` command is available system-wide.
 
-```bash
-./build/ae version
-```
+To install to a custom location: `./install.sh /usr/local` (requires sudo).
 
-**Windows:** Use `mingw32-make` instead of `make`.
+**Prerequisites:** GCC or Clang, Make, Git. The installer checks for these and tells you what's missing.
+
+**Windows:** Use `mingw32-make ae` instead (see [Getting Started](docs/getting-started.md) for Windows setup).
 
 ### Your First Program
 
 ```bash
 # Create a new project
-./build/ae init hello
+ae init hello
 cd hello
-../build/ae run
+ae run
 ```
 
 Or run a single file directly:
 
 ```bash
+ae run examples/basics/hello.ae
+```
+
+### Editor Setup (Optional)
+
+Install syntax highlighting for a better coding experience:
+
+**VS Code / Cursor:**
+```bash
+cd editor/vscode
+./install.sh
+```
+
+This provides:
+- Syntax highlighting with TextMate grammar
+- Custom "Aether Erlang" dark theme
+- `.ae` file icons
+
+### Development Build (without installing)
+
+If you prefer to build without installing:
+
+```bash
+make ae
+./build/ae version
 ./build/ae run examples/basics/hello.ae
 ```
 
@@ -259,6 +274,7 @@ The runtime employs a tiered optimization strategy:
 - [Getting Started Guide](docs/getting-started.md) - Installation and first steps
 - [Language Tutorial](docs/tutorial.md) - Learn Aether syntax and concepts
 - [Language Reference](docs/language-reference.md) - Complete language specification
+- [C Interoperability](docs/c-interop.md) - Using C libraries and the `extern` keyword
 - [Architecture Overview](docs/architecture.md) - Runtime and compiler design
 - [Memory Management](docs/memory-management.md) - Arena GC and pooling strategies
 - [Runtime Optimizations](docs/runtime-optimizations.md) - Performance techniques

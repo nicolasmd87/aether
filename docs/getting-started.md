@@ -4,52 +4,76 @@ This guide covers installation and basic usage of the Aether programming languag
 
 ## Installation
 
-### Prerequisites
-
-**All Platforms:**
-- Git
-- GCC 9.0+ or Clang 10.0+
-- Make
-- pthread support (usually built-in)
-
-**Windows:**
-- MinGW-w64 GCC 11.0+ (MSVC is not supported)
-- PowerShell 5.1+
-
-**macOS:**
-- Xcode command line tools: `xcode-select --install`
-- Homebrew GCC recommended: `brew install gcc`
-
-**Linux:**
-- `sudo apt-get install build-essential` (Debian/Ubuntu)
-
-### Building from Source
+### Quick Install (recommended)
 
 ```bash
 git clone https://github.com/nicolasmd87/aether.git
 cd aether
-make ae
+./install.sh
 ```
 
-This builds the compiler and the `ae` CLI tool. Verify:
+This builds the compiler, CLI tool, and standard library, then installs everything to `~/.aether`. After restarting your terminal (or running `source ~/.zshrc`), the `ae` command is available globally.
+
+To install to a custom location:
 
 ```bash
+./install.sh /usr/local    # System-wide install (needs sudo)
+```
+
+### Prerequisites
+
+The installer checks for these automatically, but here's what you need:
+
+**macOS:**
+- Xcode command line tools: `xcode-select --install`
+
+**Linux (Debian/Ubuntu):**
+- `sudo apt-get install build-essential`
+
+**Linux (Fedora/RHEL):**
+- `sudo dnf install gcc make`
+
+**Windows:**
+- MinGW-w64 GCC 11.0+ (MSVC is not supported)
+- Use `mingw32-make ae` instead of the install script
+
+### Development Build (without installing)
+
+If you prefer to build without installing to your system:
+
+```bash
+make ae
 ./build/ae version
 ```
 
-**Windows (MinGW):**
+This builds the `ae` CLI tool in the `build/` directory. You'll need to use `./build/ae` instead of just `ae`.
+
+### Editor Setup
+
+For syntax highlighting and a better development experience:
+
+**VS Code / Cursor:**
 ```bash
-mingw32-make ae
+cd editor/vscode
+./install.sh
 ```
+
+Features included:
+- Syntax highlighting with TextMate grammar
+- Custom "Aether Erlang" dark theme optimized for Aether code
+- `.ae` file icons
+- Basic language configuration (comments, brackets, etc.)
+
+After installation, open any `.ae` file and VS Code will automatically apply syntax highlighting. Select the "Aether Erlang" theme via `Preferences > Color Theme` for the best experience.
 
 ## Your First Aether Program
 
 **Option A: Create a project (recommended)**
 
 ```bash
-./build/ae init myproject
+ae init myproject
 cd myproject
-../build/ae run
+ae run
 ```
 
 This creates a project with `aether.toml`, `src/main.ae`, and `tests/`.
@@ -65,13 +89,13 @@ main() {
 ```
 
 ```bash
-./build/ae run hello.ae
+ae run hello.ae
 ```
 
 **Build an executable:**
 
 ```bash
-./build/ae build hello.ae -o hello
+ae build hello.ae -o hello
 ./hello
 ```
 
@@ -165,9 +189,73 @@ match (nums) {
 }
 ```
 
+## Project Configuration
+
+Projects use `aether.toml` for configuration. Created automatically by `ae init`:
+
+```toml
+[package]
+name = "myproject"
+version = "0.1.0"
+
+[[bin]]
+name = "myproject"
+path = "src/main.ae"
+
+[dependencies]
+
+[build]
+target = "native"
+# link_flags = "-lsqlite3 -lcurl"  # Link external C libraries
+```
+
+### Linking C Libraries
+
+To link external C libraries, add `link_flags` to the `[build]` section:
+
+```toml
+[build]
+link_flags = "-lsqlite3 -lcurl -lssl"
+```
+
+This allows Aether programs to use libraries like SQLite, libcurl, OpenSSL, etc.
+
+### Command-Line Arguments
+
+Access command-line arguments in your program:
+
+```aether
+main() {
+    count = args_count()
+    for (i = 0; i < count; i = i + 1) {
+        print(args_get(i))
+        print("\n")
+    }
+}
+```
+
+Run with arguments: `ae run myprogram.ae -- arg1 arg2`
+
+### Environment Variables
+
+Read configuration from environment variables:
+
+```aether
+main() {
+    home = getenv("HOME")
+    if (home) {
+        print("Home directory: ")
+        print(home)
+        print("\n")
+    }
+}
+```
+
 ## Next Steps
 
 - Read the [Tutorial](tutorial.md) for a guided introduction
+- Learn about [C Interoperability](c-interop.md) to use C libraries
+- See [C Embedding Guide](c-embedding.md) to embed Aether actors in C applications
 - Explore [Standard Library Documentation](stdlib-reference.md)
 - See [Architecture](architecture.md) for compiler and runtime internals
 - See [Runtime Optimizations](runtime-optimizations.md) for performance details
@@ -200,11 +288,15 @@ match (nums) {
 **macOS:**
 - May need `xcode-select --install` for command line tools
 - Homebrew GCC recommended: `brew install gcc`
+- Apple Silicon (M1/M2/M3): Runtime auto-detects P-cores for consistent performance
+- Thread affinity is advisory on macOS; occasional benchmark variance is normal
 
 **Linux:**
 - Kernel 4.14+ recommended for full NUMA support
 - AddressSanitizer may require `gcc-multilib` on some distributions
+- Full thread affinity support for deterministic performance
 
 **Windows:**
 - Use PowerShell, not CMD
 - Forward slashes in paths work: `./build/ae`
+- Full thread affinity support via SetThreadAffinityMask

@@ -55,7 +55,8 @@ void aether_detect_hardware(void) {
     g_hw_caps.mwait_available = cpu->mwait_supported;
     
     // CPU pinning detection (OS-dependent)
-#if defined(__linux__) || defined(_WIN32)
+    // Linux: pthread_setaffinity_np, macOS: thread_policy_set, Windows: SetThreadAffinityMask
+#if defined(__linux__) || defined(__APPLE__) || defined(_WIN32)
     g_hw_caps.cpu_pinning_available = true;
 #else
     g_hw_caps.cpu_pinning_available = false;

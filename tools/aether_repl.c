@@ -149,6 +149,7 @@ void print_help() {
     printf("  :multi, :m       - Enter multiline mode (end with empty line)\n");
     printf("  :reset, :r       - Reset the session (clear all definitions)\n");
     printf("  :show, :s        - Show current session code\n");
+    printf("  :version, :v     - Show version information\n");
     printf("\nUsage:\n");
     printf("  - Enter expressions to evaluate them immediately\n");
     printf("  - Define functions, actors, and structs\n");
@@ -156,7 +157,7 @@ void print_help() {
     printf("\nExamples:\n");
     printf("  >>> 2 + 3\n");
     printf("  5\n");
-    printf("  >>> int x = 42\n");
+    printf("  >>> x = 42\n");
     printf("  >>> x * 2\n");
     printf("  84\n");
     printf("%s\n", COLOR_RESET);
@@ -281,9 +282,22 @@ bool compile_and_run(REPLState* state, const char* code, bool is_expression, Inp
     char c_file[256];
     snprintf(c_file, sizeof(c_file), "%s.c", state->output_file);
 
+    // Find compiler: $AETHERC env var > $AETHER_HOME/bin/aetherc > aetherc in PATH > ./build/aetherc
+    const char* compiler = getenv("AETHERC");
+    if (!compiler || strlen(compiler) == 0) {
+        const char* home = getenv("AETHER_HOME");
+        static char compiler_buf[512];
+        if (home && strlen(home) > 0) {
+            snprintf(compiler_buf, sizeof(compiler_buf), "%s/bin/aetherc", home);
+            compiler = compiler_buf;
+        } else {
+            compiler = "aetherc";  // rely on PATH
+        }
+    }
+
     char compile_cmd[512];
     snprintf(compile_cmd, sizeof(compile_cmd),
-             "./build/aetherc %s %s 2>&1", state->temp_file, c_file);
+             "%s %s %s 2>&1", compiler, state->temp_file, c_file);
 
     FILE* compile_proc = popen(compile_cmd, "r");
     if (!compile_proc) {
@@ -301,10 +315,20 @@ bool compile_and_run(REPLState* state, const char* code, bool is_expression, Inp
         return false;
     }
 
-    // Compile C to executable
-    char gcc_cmd[512];
-    snprintf(gcc_cmd, sizeof(gcc_cmd),
-             "gcc %s runtime/aether_runtime.c runtime/utils/aether_cpu_detect.c -o %s 2>&1", c_file, state->output_file);
+    // Compile C to executable — use $AETHER_CFLAGS/$AETHER_LDFLAGS if set by ae
+    const char* cflags = getenv("AETHER_CFLAGS");
+    const char* ldflags = getenv("AETHER_LDFLAGS");
+    char gcc_cmd[2048];
+    if (cflags && ldflags) {
+        snprintf(gcc_cmd, sizeof(gcc_cmd),
+                 "gcc %s %s %s -o %s -pthread -lm 2>&1",
+                 cflags, c_file, ldflags, state->output_file);
+    } else {
+        // Fallback: try using runtime source files from CWD (dev mode)
+        snprintf(gcc_cmd, sizeof(gcc_cmd),
+                 "gcc %s runtime/aether_runtime.c runtime/utils/aether_cpu_detect.c -o %s 2>&1",
+                 c_file, state->output_file);
+    }
 
     FILE* gcc_proc = popen(gcc_cmd, "r");
     if (!gcc_proc) {
@@ -389,7 +413,14 @@ bool handle_command(const char* input, REPLState* state, InputBuffer* session_bu
         }
         return true;
     }
-    
+
+    if (strcmp(input, ":version") == 0 || strcmp(input, ":v") == 0) {
+        printf("%sAether REPL v0.4.0%s\n", COLOR_CYAN, COLOR_RESET);
+        printf("Aether Language - Actor-based concurrent programming\n");
+        printf("https://github.com/nicolasmd87/aether\n");
+        return true;
+    }
+
     printf("%sUnknown command: %s%s\n", COLOR_RED, input, COLOR_RESET);
     printf("Type :help for available commands\n");
     return true;
@@ -576,6 +607,12 @@ int main(int argc, char** argv) {
     // Remove temp files
     remove(state.temp_file);
     remove(state.output_file);
+
+    // Remove generated .c file
+    char c_file[256];
+    snprintf(c_file, sizeof(c_file), "%s.c", state.output_file);
+    remove(c_file);
+
 #ifdef _WIN32
     char temp_exe[256];
     snprintf(temp_exe, sizeof(temp_exe), "%s.exe", state.output_file);

@@ -21,6 +21,7 @@ ASTNode* parse_import_statement(Parser* parser);
 ASTNode* parse_export_statement(Parser* parser);
 ASTNode* parse_actor_definition(Parser* parser);
 ASTNode* parse_function_definition(Parser* parser);
+ASTNode* parse_extern_declaration(Parser* parser);
 ASTNode* parse_pattern(Parser* parser);
 ASTNode* parse_struct_pattern(Parser* parser);
 ASTNode* parse_list_pattern(Parser* parser);

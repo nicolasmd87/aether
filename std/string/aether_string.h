@@ -54,5 +54,15 @@ const char* aether_string_to_cstr(AetherString* str);
 AetherString* aether_string_from_int(int value);
 AetherString* aether_string_from_float(float value);
 
+// Parsing (string -> number)
+// Returns 1 on success, 0 on failure. Result stored in out_value.
+int aether_string_to_int(AetherString* str, int* out_value);
+int aether_string_to_long(AetherString* str, long* out_value);
+int aether_string_to_float(AetherString* str, float* out_value);
+int aether_string_to_double(AetherString* str, double* out_value);
+
+// Formatting (printf-style)
+AetherString* aether_string_format(const char* fmt, ...);
+
 #endif // AETHER_STRING_H
 

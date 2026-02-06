@@ -201,26 +201,6 @@ points = Vector.new()
 counter = spawn(Counter())
 ```
 
-## Deprecated: The `let` Keyword
-
-**Don't use `let`** - it's redundant in Aether:
-
-```aether
-// Deprecated - avoid
-let x = 42
-let name = "Alice"
-
-// Use type inference instead
-x = 42
-name = "Alice"
-
-// Or explicit types
-int x = 42
-string name = "Alice"
-```
-
-The `let` keyword adds no value since Aether has native type inference.
-
 ## Examples
 
 ### Example 1: Script-Style (Inference-Heavy)
@@ -334,27 +314,6 @@ func fibonacci(int n): int {
 | Scripts/prototypes | Inference | Minimal annotations |
 
 **Golden Rule**: Use explicit types when they add **clarity** or are **required**. Use inference when types are **obvious** from context.
-
-## Migration Guide
-
-If you have code using `let`:
-
-```aether
-// Old (with let)
-let x = 42
-let name = "Alice"
-let map = HashMap.new()
-
-// New (inference)
-x = 42
-name = "Alice"
-map = HashMap.new()
-
-// New (explicit types)
-int x = 42
-string name = "Alice"
-HashMap map = HashMap.new()
-```
 
 ## Tooling Support
 

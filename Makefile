@@ -316,13 +316,13 @@ install: release ae stdlib
 	@install -m 755 build/aetherc-release$(EXE_EXT) $(PREFIX)/bin/aetherc
 	@install -d $(PREFIX)/lib/aether
 	@install -m 644 build/libaether.a $(PREFIX)/lib/aether/
-	@install -d $(PREFIX)/include/aether
 	@for dir in runtime runtime/actors runtime/scheduler runtime/utils \
 	            runtime/memory runtime/config std/string std/math std/net \
 	            std/collections std/json std/fs std/log std/io; do \
 		if [ -d $$dir ]; then \
+			install -d $(PREFIX)/include/aether/$$dir; \
 			for h in $$dir/*.h; do \
-				[ -f "$$h" ] && install -m 644 "$$h" $(PREFIX)/include/aether/ 2>/dev/null || true; \
+				[ -f "$$h" ] && install -m 644 "$$h" $(PREFIX)/include/aether/$$dir/ 2>/dev/null || true; \
 			done; \
 		fi; \
 	done
@@ -422,71 +422,20 @@ repl: compiler
 	@echo "Starting Aether REPL..."
 	@echo "Checking dependencies..."
 ifeq ($(DETECTED_OS),Darwin)
-	@if [ ! -d /opt/homebrew/include/readline ] && [ ! -d /usr/local/include/readline ]; then \
-		echo ""; \
-		echo "readline library not found"; \
-		echo ""; \
-		if command -v brew >/dev/null 2>&1; then \
-			read -p "Install readline via Homebrew? [y/N] " answer; \
-			if [ "$$answer" = "y" ] || [ "$$answer" = "Y" ]; then \
-				echo "Installing readline..."; \
-				brew install readline; \
-			else \
-				echo "Installation cancelled. Please install manually: brew install readline"; \
-				exit 1; \
-			fi; \
-		else \
-			echo "Homebrew not found. Install Homebrew first: https://brew.sh"; \
-			echo "Then run: brew install readline"; \
-			exit 1; \
-		fi; \
-	fi
 	@$(CC) $(CFLAGS) -I/opt/homebrew/include tools/aether_repl.c -o build/aether_repl$(EXE_EXT) -L/opt/homebrew/lib -lreadline 2>/dev/null || \
-	$(CC) $(CFLAGS) -I/usr/local/include tools/aether_repl.c -o build/aether_repl$(EXE_EXT) -L/usr/local/lib -lreadline
+	$(CC) $(CFLAGS) -I/usr/local/include tools/aether_repl.c -o build/aether_repl$(EXE_EXT) -L/usr/local/lib -lreadline 2>/dev/null || \
+	$(CC) $(CFLAGS) tools/aether_repl.c -o build/aether_repl$(EXE_EXT) -ledit 2>/dev/null || \
+	$(CC) $(CFLAGS) tools/aether_repl.c -o build/aether_repl$(EXE_EXT) -lreadline 2>/dev/null || \
+	(echo "readline not found. Install with: brew install readline" && exit 1)
 else ifeq ($(DETECTED_OS),Linux)
-	@if ! ldconfig -p | grep -q libreadline 2>/dev/null; then \
-		echo ""; \
-		echo "readline library not found"; \
-		echo ""; \
-		if command -v apt-get >/dev/null 2>&1; then \
-			read -p "Install readline via apt-get? [y/N] " answer; \
-			if [ "$$answer" = "y" ] || [ "$$answer" = "Y" ]; then \
-				echo "Installing readline..."; \
-				sudo apt-get update && sudo apt-get install -y libreadline-dev; \
-			else \
-				echo "Installation cancelled. Please install manually: sudo apt-get install libreadline-dev"; \
-				exit 1; \
-			fi; \
-		elif command -v yum >/dev/null 2>&1; then \
-			read -p "Install readline via yum? [y/N] " answer; \
-			if [ "$$answer" = "y" ] || [ "$$answer" = "Y" ]; then \
-				echo "Installing readline..."; \
-				sudo yum install -y readline-devel; \
-			else \
-				echo "Installation cancelled. Please install manually: sudo yum install readline-devel"; \
-				exit 1; \
-			fi; \
-		elif command -v pacman >/dev/null 2>&1; then \
-			read -p "Install readline via pacman? [y/N] " answer; \
-			if [ "$$answer" = "y" ] || [ "$$answer" = "Y" ]; then \
-				echo "Installing readline..."; \
-				sudo pacman -S --noconfirm readline; \
-			else \
-				echo "Installation cancelled. Please install manually: sudo pacman -S readline"; \
-				exit 1; \
-			fi; \
-		else \
-			echo "Could not detect package manager. Please install readline development library manually."; \
-			exit 1; \
-		fi; \
-	fi
-	@$(CC) $(CFLAGS) tools/aether_repl.c -o build/aether_repl$(EXE_EXT) -lreadline
+	@$(CC) $(CFLAGS) tools/aether_repl.c -o build/aether_repl$(EXE_EXT) -lreadline 2>/dev/null || \
+	(echo "readline not found. Install with: sudo apt-get install libreadline-dev" && exit 1)
 else
 	@echo "Error: REPL not supported on $(DETECTED_OS)"
 	@exit 1
 endif
-	@echo "✓ Dependencies OK"
-	@./build/aether_repl$(EXE_EXT)
+	@echo "✓ REPL built: build/aether_repl$(EXE_EXT)"
+	@echo "Run with: ./build/ae repl"
 
 # Build statistics
 stats:

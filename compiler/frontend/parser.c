@@ -116,6 +116,10 @@ Type* parse_type(Parser* parser) {
             advance_token(parser);
             type = create_type(TYPE_MESSAGE);
             break;
+        case TOKEN_PTR:
+            advance_token(parser);
+            type = create_type(TYPE_PTR);
+            break;
         case TOKEN_IDENTIFIER: {
             // Could be a struct type
             advance_token(parser);
@@ -1524,6 +1528,67 @@ ASTNode* parse_receive_statement(Parser* parser) {
     return receive_stmt;
 }
 
+// Parse extern C function declaration
+// Syntax: extern name(param: type, ...) -> return_type
+//         extern name(param: type, ...)   (void return)
+ASTNode* parse_extern_declaration(Parser* parser) {
+    Token* extern_token = expect_token(parser, TOKEN_EXTERN);
+    if (!extern_token) return NULL;
+
+    Token* name = expect_token(parser, TOKEN_IDENTIFIER);
+    if (!name) return NULL;
+
+    expect_token(parser, TOKEN_LEFT_PAREN);
+
+    ASTNode* extern_func = create_ast_node(AST_EXTERN_FUNCTION, name->value,
+                                           extern_token->line, extern_token->column);
+
+    // Parse parameters with types: param: type, param2: type
+    if (!match_token(parser, TOKEN_RIGHT_PAREN)) {
+        do {
+            Token* param_name = expect_token(parser, TOKEN_IDENTIFIER);
+            if (!param_name) break;
+
+            ASTNode* param = create_ast_node(AST_IDENTIFIER, param_name->value,
+                                            param_name->line, param_name->column);
+
+            // Require type annotation for extern: param: type
+            if (match_token(parser, TOKEN_COLON)) {
+                Type* param_type = parse_type(parser);
+                if (param_type) {
+                    param->node_type = param_type;
+                } else {
+                    parser_error(parser, "Expected type after ':' in extern parameter");
+                    param->node_type = create_type(TYPE_INT);  // Fallback for error recovery
+                }
+            } else {
+                // Type annotation required for extern functions
+                parser_error(parser, "Type annotation required for extern parameter (use param: type)");
+                param->node_type = create_type(TYPE_INT);  // Fallback for error recovery
+            }
+
+            add_child(extern_func, param);
+        } while (match_token(parser, TOKEN_COMMA));
+
+        expect_token(parser, TOKEN_RIGHT_PAREN);
+    }
+
+    // Parse optional return type: -> type
+    if (match_token(parser, TOKEN_ARROW)) {
+        Type* return_type = parse_type(parser);
+        if (return_type) {
+            extern_func->node_type = return_type;
+        } else {
+            extern_func->node_type = create_type(TYPE_INT);
+        }
+    } else {
+        // No return type = void
+        extern_func->node_type = create_type(TYPE_VOID);
+    }
+
+    return extern_func;
+}
+
 ASTNode* parse_function_definition(Parser* parser) {
     // Erlang-style pattern matching functions!
     // Syntax: 
@@ -1861,6 +1926,9 @@ ASTNode* parse_program(Parser* parser) {
                 break;
             case TOKEN_STRUCT:
                 node = parse_struct_definition(parser);
+                break;
+            case TOKEN_EXTERN:
+                node = parse_extern_declaration(parser);
                 break;
             case TOKEN_MAIN:
                 node = parse_main_function(parser);

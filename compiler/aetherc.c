@@ -28,6 +28,7 @@
 
 // Global flags
 static bool verbose_mode = false;
+static const char* emit_header_path = NULL;
 
 #ifdef _WIN32
     #include <windows.h>
@@ -43,6 +44,22 @@ static bool verbose_mode = false;
 // Helper to check file existence
 int file_exists(const char* path) {
     return access(path, F_OK) == 0;
+}
+
+// Derive header filename from output path (output.c -> output.h)
+static char* derive_header_path(const char* output_path) {
+    size_t len = strlen(output_path);
+    char* header_path = malloc(len + 1);
+    strcpy(header_path, output_path);
+
+    // Replace .c with .h, or append .h if no .c extension
+    if (len > 2 && header_path[len-2] == '.' && header_path[len-1] == 'c') {
+        header_path[len-1] = 'h';
+    } else {
+        header_path = realloc(header_path, len + 3);
+        strcat(header_path, ".h");
+    }
+    return header_path;
 }
 
 // Compile aether source to C
@@ -167,10 +184,37 @@ int compile_source(const char* input_path, const char* output_path) {
         return 0;
     }
     
-    CodeGenerator* codegen = create_code_generator(output);
+    // Open header file if --emit-header was specified
+    FILE* header_output = NULL;
+    char* header_path = NULL;
+    if (emit_header_path) {
+        if (strcmp(emit_header_path, "auto") == 0) {
+            header_path = derive_header_path(output_path);
+        } else {
+            header_path = strdup(emit_header_path);
+        }
+        header_output = fopen(header_path, "w");
+        if (!header_output) {
+            fprintf(stderr, "Warning: Could not open header file %s\n", header_path);
+        }
+    }
+
+    CodeGenerator* codegen;
+    if (header_output) {
+        codegen = create_code_generator_with_header(output, header_output, header_path);
+        printf("Also generating header: %s\n", header_path);
+    } else {
+        codegen = create_code_generator(output);
+    }
     generate_program(codegen, program);
     fclose(output);
-    
+    if (header_output) {
+        fclose(header_output);
+    }
+    if (header_path) {
+        free(header_path);
+    }
+
     printf("Code generation successful\n");
     
     // Cleanup
@@ -225,12 +269,14 @@ void print_help(const char* program_name) {
     printf("Options:\n");
     printf("  --version, -v                    Show version information\n");
     printf("  --verbose                        Show detailed compilation phases and timing\n");
+    printf("  --emit-header [path]             Generate C header for embedding (default: auto)\n");
     printf("  --help, -h                       Show this help message\n");
     printf("\n");
     printf("Examples:\n");
     printf("  %s hello.ae hello.c              Compile to C\n", program_name);
     printf("  %s run hello.ae                  Quick run\n", program_name);
     printf("  %s --verbose hello.ae hello.c    Compile with timing info\n", program_name);
+    printf("  %s --emit-header hello.ae hello.c  Generate hello.h for C embedding\n", program_name);
 }
 
 int main(int argc, char *argv[]) {
@@ -246,6 +292,24 @@ int main(int argc, char *argv[]) {
         } else if (strcmp(argv[arg_offset], "--verbose") == 0) {
             verbose_mode = true;
             arg_offset++;
+        } else if (strcmp(argv[arg_offset], "--emit-header") == 0) {
+            // Check for optional explicit path argument (must end in .h)
+            if (arg_offset + 1 < argc && argv[arg_offset + 1][0] != '-') {
+                const char* next_arg = argv[arg_offset + 1];
+                size_t len = strlen(next_arg);
+                if (len > 2 && next_arg[len-2] == '.' && next_arg[len-1] == 'h') {
+                    // Explicit .h path provided
+                    emit_header_path = next_arg;
+                    arg_offset += 2;
+                } else {
+                    // Next arg is probably the input file, not a header path
+                    emit_header_path = "auto";
+                    arg_offset++;
+                }
+            } else {
+                emit_header_path = "auto";  // Auto-derive from output filename
+                arg_offset++;
+            }
         } else {
             fprintf(stderr, "Unknown option: %s\n", argv[arg_offset]);
             fprintf(stderr, "Use --help for usage information\n");

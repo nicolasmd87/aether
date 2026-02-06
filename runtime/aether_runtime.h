@@ -32,6 +32,13 @@ typedef struct {
 void aether_runtime_init(int num_cores, int flags);
 void aether_runtime_shutdown();
 
+// Command-line arguments (set by main, accessible from anywhere)
+extern int aether_argc;
+extern char** aether_argv;
+void aether_args_init(int argc, char** argv);
+int aether_args_count(void);
+const char* aether_args_get(int index);
+
 // Configuration queries
 const AetherRuntimeConfig* aether_runtime_get_config();
 int aether_runtime_has_feature(int feature_flag);

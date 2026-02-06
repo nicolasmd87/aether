@@ -15,7 +15,8 @@ typedef enum {
     AST_MAIN_FUNCTION,
     AST_STRUCT_DEFINITION,
     AST_STRUCT_FIELD,
-    
+    AST_EXTERN_FUNCTION,      // External C function declaration
+
     // Statements
     AST_BLOCK,
     AST_VARIABLE_DECLARATION,
@@ -89,6 +90,7 @@ typedef enum {
     TYPE_ARRAY,
     TYPE_STRUCT,
     TYPE_VOID,
+    TYPE_PTR,           // void* for C interop
     TYPE_WILDCARD,
     TYPE_UNKNOWN
 } TypeKind;

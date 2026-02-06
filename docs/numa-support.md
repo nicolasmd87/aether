@@ -70,9 +70,9 @@ Modified `runtime/scheduler/multicore_scheduler.c`:
 
 ### Expected Benefits on NUMA Systems
 
-- **Reduced latency**: Local memory access is 2-3x faster
+- **Reduced latency**: Local memory access typically has lower latency than remote access
 - **Higher bandwidth**: Avoids contention on remote memory controllers
-- **Better scaling**: Removes NUMA as bottleneck
+- **Better scaling**: NUMA-aware allocation improves scaling on multi-socket systems
 
 ### UMA Systems
 
@@ -183,7 +183,6 @@ All 148 tests pass with NUMA support:
 Multicore benchmark works with NUMA allocation:
 ```bash
 ./build/mc_bench.exe
-# 98M msg/sec on 4 cores
 ```
 
 ## Future Enhancements

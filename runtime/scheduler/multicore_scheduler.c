@@ -19,6 +19,11 @@
 #include "../aether_numa.h"
 #include "../actors/aether_send_buffer.h"
 
+#ifdef __APPLE__
+#include <mach/mach.h>
+#include <mach/thread_policy.h>
+#endif
+
 // Branch prediction hints
 #ifndef likely
 #define likely(x)   __builtin_expect(!!(x), 1)
@@ -44,18 +49,29 @@ atomic_int next_actor_id = 1;
 __thread int current_core_id = -1;
 
 // Pin thread to specific CPU core (NUMA awareness)
-// Silently degrades if platform doesn't support affinity
+// Full support on Linux, macOS, and Windows
 static void pin_to_core(int core_id) {
 #ifdef __linux__
     cpu_set_t cpuset;
     CPU_ZERO(&cpuset);
     CPU_SET(core_id, &cpuset);
     pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+#elif defined(__APPLE__)
+    // macOS uses thread affinity tags - threads with same tag tend to run on same core
+    // This is a hint to the scheduler, not a hard binding (macOS design philosophy)
+    thread_affinity_policy_data_t policy = { core_id + 1 };  // Tag must be > 0
+    thread_policy_set(pthread_mach_thread_np(pthread_self()),
+                      THREAD_AFFINITY_POLICY,
+                      (thread_policy_t)&policy,
+                      THREAD_AFFINITY_POLICY_COUNT);
+
+    // Set high QoS to encourage P-core usage on Apple Silicon
+    // QOS_CLASS_USER_INTERACTIVE has highest priority and prefers performance cores
+    pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
 #elif defined(_WIN32)
     DWORD_PTR mask = (DWORD_PTR)1 << core_id;
     SetThreadAffinityMask(GetCurrentThread(), mask);
 #endif
-    // Other platforms: no affinity support, but scheduler still works
 }
 
 // Partitioned scheduler thread - NO work stealing
@@ -276,9 +292,11 @@ void* __attribute__((hot)) scheduler_thread(void* arg) {
             
             // Keep spinning aggressively for high-throughput workloads
             if (idle_count < 10000) {
-                // Tight spin with pause
-                #if defined(__x86_64__) || defined(_M_X64)
+                // Tight spin with architecture-specific pause
+                #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
                 __asm__ __volatile__("pause" ::: "memory");
+                #elif defined(__aarch64__) || defined(__arm64__) || defined(__arm__)
+                __asm__ __volatile__("yield" ::: "memory");
                 #endif
             } else {
                 // Brief yield only after extended idle
@@ -535,8 +553,10 @@ void scheduler_send_remote(ActorBase* actor, Message msg, int from_core) {
         if (++retries % 1000 == 0) {
             sched_yield();
         }
-        #if defined(__x86_64__) || defined(_M_X64)
+        #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
         __asm__ __volatile__("pause" ::: "memory");
+        #elif defined(__aarch64__) || defined(__arm64__) || defined(__arm__)
+        __asm__ __volatile__("yield" ::: "memory");
         #endif
     }
 

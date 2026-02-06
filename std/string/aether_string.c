@@ -2,7 +2,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <ctype.h>
+#include <errno.h>
+#include <limits.h>
 
 // Alias for string literal creation
 AetherString* aether_string_from_literal(const char* cstr) {
@@ -247,5 +250,107 @@ AetherString* aether_string_from_float(float value) {
     char buffer[64];
     snprintf(buffer, sizeof(buffer), "%g", value);
     return aether_string_new(buffer);
+}
+
+// Parsing functions - convert string to numbers
+int aether_string_to_int(AetherString* str, int* out_value) {
+    if (!str || !str->data || !out_value) return 0;
+
+    char* endptr;
+    errno = 0;
+    long val = strtol(str->data, &endptr, 10);
+
+    // Check for errors: no conversion, overflow, or trailing garbage
+    if (endptr == str->data || errno == ERANGE || val > INT_MAX || val < INT_MIN) {
+        return 0;
+    }
+
+    // Skip trailing whitespace
+    while (*endptr && isspace((unsigned char)*endptr)) endptr++;
+    if (*endptr != '\0') return 0;  // Trailing non-whitespace
+
+    *out_value = (int)val;
+    return 1;
+}
+
+int aether_string_to_long(AetherString* str, long* out_value) {
+    if (!str || !str->data || !out_value) return 0;
+
+    char* endptr;
+    errno = 0;
+    long val = strtol(str->data, &endptr, 10);
+
+    if (endptr == str->data || errno == ERANGE) {
+        return 0;
+    }
+
+    while (*endptr && isspace((unsigned char)*endptr)) endptr++;
+    if (*endptr != '\0') return 0;
+
+    *out_value = val;
+    return 1;
+}
+
+int aether_string_to_float(AetherString* str, float* out_value) {
+    if (!str || !str->data || !out_value) return 0;
+
+    char* endptr;
+    errno = 0;
+    float val = strtof(str->data, &endptr);
+
+    if (endptr == str->data || errno == ERANGE) {
+        return 0;
+    }
+
+    while (*endptr && isspace((unsigned char)*endptr)) endptr++;
+    if (*endptr != '\0') return 0;
+
+    *out_value = val;
+    return 1;
+}
+
+int aether_string_to_double(AetherString* str, double* out_value) {
+    if (!str || !str->data || !out_value) return 0;
+
+    char* endptr;
+    errno = 0;
+    double val = strtod(str->data, &endptr);
+
+    if (endptr == str->data || errno == ERANGE) {
+        return 0;
+    }
+
+    while (*endptr && isspace((unsigned char)*endptr)) endptr++;
+    if (*endptr != '\0') return 0;
+
+    *out_value = val;
+    return 1;
+}
+
+// Printf-style string formatting
+AetherString* aether_string_format(const char* fmt, ...) {
+    if (!fmt) return aether_string_empty();
+
+    va_list args;
+
+    // First pass: calculate required size
+    va_start(args, fmt);
+    int size = vsnprintf(NULL, 0, fmt, args);
+    va_end(args);
+
+    if (size < 0) return aether_string_empty();
+
+    // Allocate buffer
+    char* buffer = (char*)malloc(size + 1);
+    if (!buffer) return aether_string_empty();
+
+    // Second pass: format string
+    va_start(args, fmt);
+    vsnprintf(buffer, size + 1, fmt, args);
+    va_end(args);
+
+    AetherString* result = aether_string_new_with_length(buffer, size);
+    free(buffer);
+    return result;
 }
 

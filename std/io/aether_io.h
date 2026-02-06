@@ -26,5 +26,10 @@ typedef struct {
 AetherFileInfo* aether_file_info(AetherString* path);
 void aether_file_info_free(AetherFileInfo* info);
 
+// Environment variables
+AetherString* aether_getenv(const char* name);
+int aether_setenv(const char* name, const char* value);
+int aether_unsetenv(const char* name);
+
 #endif // AETHER_IO_H
 

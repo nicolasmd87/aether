@@ -1,0 +1,128 @@
+// Functional Programming Style in Aether
+//
+// Aether supports both imperative (loops) and functional (recursion)
+// programming styles. This example demonstrates the functional approach
+// inspired by Erlang.
+
+// Factorial - classic recursive example
+factorial(n) {
+    if (n <= 1) { return 1 }
+    return n * factorial(n - 1)
+}
+
+// Fibonacci using recursion
+fibonacci(n) {
+    if (n <= 1) { return n }
+    return fibonacci(n - 1) + fibonacci(n - 2)
+}
+
+// Power function using recursion
+power(base, exp) {
+    if (exp == 0) { return 1 }
+    return base * power(base, exp - 1)
+}
+
+// Sum from 1 to n using recursion
+sum_to_n(n) {
+    if (n <= 0) { return 0 }
+    return n + sum_to_n(n - 1)
+}
+
+// Greatest Common Divisor (Euclidean algorithm)
+gcd(a, b) {
+    if (b == 0) { return a }
+    return gcd(b, a - (a / b) * b)  // a % b using integer arithmetic
+}
+
+// Count digits recursively
+count_digits(n) {
+    if (n < 10) { return 1 }
+    return 1 + count_digits(n / 10)
+}
+
+// Sum of digits
+sum_digits(n) {
+    if (n < 10) { return n }
+    return (n - (n / 10) * 10) + sum_digits(n / 10)  // n % 10 + recursive
+}
+
+// Is palindrome (number)
+reverse_num(n, acc) {
+    if (n == 0) { return acc }
+    return reverse_num(n / 10, acc * 10 + (n - (n / 10) * 10))
+}
+
+is_palindrome(n) {
+    return n == reverse_num(n, 0)
+}
+
+main() {
+    print("=== Functional Style Examples ===\n\n")
+
+    // Factorial
+    print("Factorial:\n")
+    print("  5! = ")
+    print(factorial(5))
+    print("\n")
+    print("  10! = ")
+    print(factorial(10))
+    print("\n\n")
+
+    // Fibonacci
+    print("Fibonacci sequence (first 10):\n  ")
+    for (i = 0; i < 10; i = i + 1) {
+        print(fibonacci(i))
+        print(" ")
+    }
+    print("\n\n")
+
+    // Power
+    print("Power:\n")
+    print("  2^10 = ")
+    print(power(2, 10))
+    print("\n")
+    print("  3^4 = ")
+    print(power(3, 4))
+    print("\n\n")
+
+    // Sum to n
+    print("Sum 1 to n:\n")
+    print("  sum(10) = ")
+    print(sum_to_n(10))
+    print("\n")
+    print("  sum(100) = ")
+    print(sum_to_n(100))
+    print("\n\n")
+
+    // GCD
+    print("GCD (Euclidean algorithm):\n")
+    print("  gcd(48, 18) = ")
+    print(gcd(48, 18))
+    print("\n")
+    print("  gcd(100, 35) = ")
+    print(gcd(100, 35))
+    print("\n\n")
+
+    // Digit operations
+    print("Digit operations:\n")
+    print("  Digits in 12345: ")
+    print(count_digits(12345))
+    print("\n")
+    print("  Sum of digits in 12345: ")
+    print(sum_digits(12345))
+    print("\n\n")
+
+    // Palindrome check
+    print("Palindrome check:\n")
+    print("  121 is palindrome: ")
+    print(is_palindrome(121))
+    print("\n")
+    print("  123 is palindrome: ")
+    print(is_palindrome(123))
+    print("\n\n")
+
+    print("Functional programming emphasizes:\n")
+    print("  - Recursion instead of loops\n")
+    print("  - Pure functions (no side effects)\n")
+    print("  - Composing small functions\n")
+}

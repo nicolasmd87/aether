@@ -2,6 +2,8 @@
 
 Complete reference for Aether's standard library modules.
 
+> **Note:** The standard library is under active development. Some APIs documented here may be partially implemented or planned for future releases. The runtime provides C implementations in `std/` that can be linked via the `ae` tool.
+
 ## Collections (`std.collections`)
 
 ### HashMap
@@ -139,6 +141,81 @@ Log.error("Error message")
 - `WARN`: Warning messages
 - `ERROR`: Error messages
 
+## Strings (`std.string`)
+
+Immutable, reference-counted strings with comprehensive operations.
+
+### String Creation and Operations
+
+```aether
+import std.string
+
+// Create strings
+s = string.new("Hello")
+s2 = string.concat(s, " World")
+
+// String operations
+len = string.length(s)
+upper = string.to_upper(s)
+lower = string.to_lower(s)
+trimmed = string.trim(s)
+
+// Searching
+contains = string.contains(s, "ell")
+index = string.index_of(s, "l")
+starts = string.starts_with(s, "He")
+ends = string.ends_with(s, "lo")
+
+// Substrings and splitting
+sub = string.substring(s, 0, 3)  // "Hel"
+parts = string.split(s, ",")
+```
+
+### String Parsing
+
+Convert strings to numbers with error handling.
+
+```aether
+// Parse integers
+input = "42"
+value = 0
+if (string.to_int(input, value)) {
+    print("Parsed: ")
+    print(value)
+}
+
+// Parse floats
+pi_str = "3.14159"
+pi = 0.0
+if (string.to_float(pi_str, pi)) {
+    print("Pi: ")
+    print(pi)
+}
+```
+
+**Parsing Functions:**
+- `to_int(str, out)`: Parse integer, returns 1 on success, 0 on failure
+- `to_long(str, out)`: Parse long integer
+- `to_float(str, out)`: Parse float
+- `to_double(str, out)`: Parse double
+
+### String Formatting
+
+Printf-style string formatting.
+
+```aether
+// Format strings (C API - available from runtime)
+formatted = string.format("User %s has %d points", name, score)
+message = string.format("Value: %.2f", 3.14159)
+```
+
+**Format Specifiers:**
+- `%s`: String
+- `%d`: Integer
+- `%f`: Float/double
+- `%x`: Hexadecimal
+- `%%`: Literal percent sign
+
 ## File System (`std.fs`)
 
 Cross-platform file system operations.
@@ -166,6 +243,64 @@ FS.delete_dir("folder")
 - `create_dir(path)`: Create directory
 - `list_dir(path)`: List directory contents
 - `delete_dir(path)`: Delete directory
+
+## Environment (`std.io`)
+
+Access environment variables and command-line arguments.
+
+### Environment Variables
+
+```aether
+import std.io as IO
+
+// Read environment variable
+home = IO.getenv("HOME")
+if (home) {
+    print("Home: ")
+    print(home)
+}
+
+// Set environment variable
+IO.setenv("MY_VAR", "my_value")
+
+// Unset environment variable
+IO.unsetenv("MY_VAR")
+```
+
+**Functions:**
+- `getenv(name)`: Get environment variable value (returns null if not set)
+- `setenv(name, value)`: Set environment variable
+- `unsetenv(name)`: Remove environment variable
+
+### Command-Line Arguments
+
+Access program arguments passed at runtime.
+
+```aether
+// Available as globals in main()
+// aether_argc: Number of arguments
+// aether_argv: Array of argument strings
+
+main() {
+    count = args_count()
+    print("Argument count: ")
+    print(count)
+    print("\n")
+
+    for (i = 0; i < count; i = i + 1) {
+        arg = args_get(i)
+        print("Arg ")
+        print(i)
+        print(": ")
+        print(arg)
+        print("\n")
+    }
+}
+```
+
+**Functions:**
+- `args_count()`: Get number of command-line arguments
+- `args_get(index)`: Get argument at index (0 is program name)
 
 ## Networking (`std.net`)
 

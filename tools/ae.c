@@ -18,6 +18,7 @@
 #include <stdbool.h>
 #include <sys/stat.h>
 
+
 #ifdef _WIN32
 #include <windows.h>
 #include <direct.h>
@@ -145,9 +146,20 @@ static void discover_toolchain(void) {
 
     // Strategy 1: $AETHER_HOME
     const char* home = getenv("AETHER_HOME");
+    // Strip trailing \r or whitespace (shell config with CRLF line endings)
+    static char home_clean[1024];
+    if (home) {
+        strncpy(home_clean, home, sizeof(home_clean) - 1);
+        home_clean[sizeof(home_clean) - 1] = '\0';
+        size_t len = strlen(home_clean);
+        while (len > 0 && (home_clean[len-1] == '\r' || home_clean[len-1] == '\n' || home_clean[len-1] == ' '))
+            home_clean[--len] = '\0';
+        home = home_clean;
+    }
     if (home && dir_exists(home)) {
         strncpy(tc.root, home, sizeof(tc.root) - 1);
         snprintf(tc.compiler, sizeof(tc.compiler), "%s/bin/aetherc" EXE_EXT, tc.root);
+        if (tc.verbose) fprintf(stderr, "[toolchain] compiler=%s exists=%d\n", tc.compiler, path_exists(tc.compiler));
         if (path_exists(tc.compiler)) goto found_root;
     }
 
@@ -218,7 +230,7 @@ found_root:
     if (tc.dev_mode) {
         snprintf(tc.lib, sizeof(tc.lib), "%s/build/libaether.a", tc.root);
     } else {
-        snprintf(tc.lib, sizeof(tc.lib), "%s/lib/aether/libaether.a", tc.root);
+        snprintf(tc.lib, sizeof(tc.lib), "%s/lib/libaether.a", tc.root);
     }
     tc.has_lib = path_exists(tc.lib);
 
@@ -282,8 +294,40 @@ found_root:
         }
     } else {
         snprintf(tc.include_flags, sizeof(tc.include_flags),
-            "-I%s/include/aether", tc.root);
+            "-I%s/include/aether/runtime -I%s/include/aether/runtime/actors "
+            "-I%s/include/aether/runtime/scheduler -I%s/include/aether/runtime/utils "
+            "-I%s/include/aether/runtime/memory -I%s/include/aether/runtime/config "
+            "-I%s/include/aether/std -I%s/include/aether/std/string "
+            "-I%s/include/aether/std/io -I%s/include/aether/std/math "
+            "-I%s/include/aether/std/net -I%s/include/aether/std/collections "
+            "-I%s/include/aether/std/json",
+            tc.root, tc.root, tc.root, tc.root, tc.root, tc.root,
+            tc.root, tc.root, tc.root, tc.root, tc.root, tc.root, tc.root);
     }
+}
+
+// Get link_flags from aether.toml [build] section
+// Returns empty string if not found or no aether.toml
+static const char* get_link_flags(void) {
+    static char flags[1024] = "";
+    static bool checked = false;
+
+    if (checked) return flags;
+    checked = true;
+
+    if (!path_exists("aether.toml")) return flags;
+
+    TomlDocument* doc = toml_parse_file("aether.toml");
+    if (!doc) return flags;
+
+    const char* val = toml_get_value(doc, "build", "link_flags");
+    if (val) {
+        strncpy(flags, val, sizeof(flags) - 1);
+        flags[sizeof(flags) - 1] = '\0';
+    }
+
+    toml_free_document(doc);
+    return flags;
 }
 
 // Build GCC command for linking an Aether-compiled C file
@@ -291,6 +335,7 @@ static void build_gcc_cmd(char* cmd, size_t size,
                           const char* c_file, const char* out_file,
                           bool optimize) {
     const char* opt = optimize ? "-O2" : "-O0 -g";
+    const char* link_flags = get_link_flags();
 
     if (tc.has_lib) {
         char lib_dir[1024];
@@ -300,12 +345,12 @@ static void build_gcc_cmd(char* cmd, size_t size,
         if (slash) *slash = '\0';
 
         snprintf(cmd, size,
-            "gcc %s %s %s -L%s -laether -o %s -pthread -lm",
-            opt, tc.include_flags, c_file, lib_dir, out_file);
+            "gcc %s %s %s -L%s -laether -o %s -pthread -lm %s",
+            opt, tc.include_flags, c_file, lib_dir, out_file, link_flags);
     } else {
         snprintf(cmd, size,
-            "gcc %s %s %s %s -o %s -pthread -lm",
-            opt, tc.include_flags, c_file, tc.runtime_srcs, out_file);
+            "gcc %s %s %s %s -o %s -pthread -lm %s",
+            opt, tc.include_flags, c_file, tc.runtime_srcs, out_file, link_flags);
     }
 }
 
@@ -412,11 +457,15 @@ static int cmd_build(int argc, char** argv) {
         return 1;
     }
 
-    const char* base = output_name ? output_name : get_basename(file);
+    const char* base = get_basename(file);
     char c_file[1024], exe_file[1024], cmd[8192];
 
-    // Project mode: output to target/
-    if (path_exists("aether.toml") && !output_name) {
+    if (output_name) {
+        // Explicit -o: use the path as-is
+        snprintf(c_file, sizeof(c_file), "%s.c", output_name);
+        snprintf(exe_file, sizeof(exe_file), "%s" EXE_EXT, output_name);
+    } else if (path_exists("aether.toml")) {
+        // Project mode: output to target/
         mkdirs("target");
         snprintf(c_file, sizeof(c_file), "target/%s.c", base);
         snprintf(exe_file, sizeof(exe_file), "target/%s" EXE_EXT, base);
@@ -491,6 +540,7 @@ static int cmd_init(int argc, char** argv) {
     fprintf(f, "[dependencies]\n\n");
     fprintf(f, "[build]\n");
     fprintf(f, "target = \"native\"\n");
+    fprintf(f, "# link_flags = \"-lsqlite3 -lcurl\"  # Add extra linker flags\n");
     fclose(f);
 
     // src/main.ae
@@ -744,13 +794,31 @@ static int cmd_repl(void) {
         snprintf(repl_path, sizeof(repl_path), "%s/bin/aether_repl" EXE_EXT, tc.root);
     }
 
+    // Set env vars so the REPL can find compiler and link flags
+    setenv("AETHERC", tc.compiler, 1);
+    setenv("AETHER_CFLAGS", tc.include_flags, 1);
+
+    char ldflags[2048];
+    if (tc.has_lib) {
+        char lib_dir[1024];
+        strncpy(lib_dir, tc.lib, sizeof(lib_dir) - 1);
+        lib_dir[sizeof(lib_dir) - 1] = '\0';
+        char* slash = strrchr(lib_dir, '/');
+        if (slash) *slash = '\0';
+        snprintf(ldflags, sizeof(ldflags), "-L%s -laether", lib_dir);
+    } else {
+        strncpy(ldflags, tc.runtime_srcs, sizeof(ldflags) - 1);
+        ldflags[sizeof(ldflags) - 1] = '\0';
+    }
+    setenv("AETHER_LDFLAGS", ldflags, 1);
+
     if (path_exists(repl_path)) {
         return run_cmd(repl_path);
     }
 
     // Try building it in dev mode
     if (tc.dev_mode) {
-        printf("REPL not built yet. Building...\n");
+        printf("Building REPL...\n");
         char cmd[2048];
         snprintf(cmd, sizeof(cmd), "make -C %s repl 2>&1", tc.root);
         if (run_cmd(cmd) == 0 && path_exists(repl_path)) {
@@ -758,7 +826,8 @@ static int cmd_repl(void) {
         }
     }
 
-    fprintf(stderr, "Error: REPL not available. Run 'make repl' to build it.\n");
+    fprintf(stderr, "Error: REPL binary not found at %s\n", repl_path);
+    fprintf(stderr, "Build it with: make repl\n");
     return 1;
 }
 

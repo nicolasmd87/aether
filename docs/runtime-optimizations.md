@@ -237,6 +237,24 @@ The benchmark build uses `-flto` for both compilation and linking, enabling cros
 
 The `cpu_recommend_cores` function uses CPUID on x86 and falls back to OS-level APIs (`sysctl` on macOS, `sysconf` on Linux, `GetNativeSystemInfo` on Windows) when CPUID returns zero (ARM, virtualized environments).
 
+### Apple Silicon P-Core Detection
+
+**Implementation:** `runtime/utils/aether_cpu_detect.c`, `runtime/scheduler/multicore_scheduler.c`
+
+On Apple Silicon (M1/M2/M3), the runtime detects and uses only Performance cores (P-cores) to ensure consistent throughput. Efficiency cores (E-cores) are excluded because they run at lower clock speeds and can cause variance in benchmarks.
+
+Detection uses `sysctlbyname("hw.perflevel0.physicalcpu")` to query the P-core count. Combined with `QOS_CLASS_USER_INTERACTIVE` thread priority, this encourages macOS to schedule actor threads on P-cores.
+
+**Platform-specific thread affinity:**
+
+| Platform | Mechanism | Binding |
+|----------|-----------|---------|
+| Linux | `pthread_setaffinity_np` | Hard binding |
+| macOS | `thread_policy_set` + QoS | Hint only |
+| Windows | `SetThreadAffinityMask` | Hard binding |
+
+Note: macOS does not support hard core pinning by design. Thread placement is advisory, which may cause occasional variance in microbenchmarks.
+
 ## Rejected Optimizations
 
 ### Manual Prefetching

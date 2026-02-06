@@ -1,0 +1,35 @@
+// Demonstration of calling custom C functions with extern
+//
+// The extern keyword declares C functions you want to call from Aether.
+// Standard C library functions (printf, strlen, malloc, etc.) are
+// already available through the included headers.
+//
+// Use extern for:
+// - Your own C functions defined in separate .c files
+// - Third-party C libraries (sqlite3, curl, etc.)
+
+// Declare custom C functions (these would be defined in a .c file)
+extern my_add(a: int, b: int) -> int
+extern my_multiply(x: float, y: float) -> float
+extern my_greet(name: string)
+extern get_magic_number() -> int
+
+main() {
+    // Call our custom C functions
+    result = my_add(10, 20)
+    print("my_add(10, 20) = ")
+    print(result)
+    print("\n")
+
+    product = my_multiply(3.5, 2.0)
+    print("my_multiply(3.5, 2.0) = ")
+    print(product)
+    print("\n")
+
+    my_greet("Aether")
+
+    magic = get_magic_number()
+    print("Magic number: ")
+    print(magic)
+    print("\n")
+}

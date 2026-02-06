@@ -20,7 +20,7 @@ Multiple threads work simultaneously.
 
 **Benefits:**
 - **No waiting** - threads never block each other
-- **Faster** - 1.5-2x speedup from eliminating mutex locks
+- **Lower overhead** - eliminates mutex lock/unlock operations
 - **Scalable** - performance improves with more cores
 
 ---
@@ -258,15 +258,22 @@ if (pool->is_thread_local) {
 
 ## Cross-Platform Support
 
-| Platform | Lock-Free | MWAIT | SIMD | Status |
-|----------|-----------|-------|------|--------|
-| **Intel x86** (2013+) | Yes | Yes | AVX2 | Full support |
-| **AMD Ryzen** | Yes | Yes | AVX2 | Full support |
-| **Old x86** (pre-2013) | Yes | No | SSE4.2 | Partial |
-| **ARM** | Yes | No (uses WFE) | NEON | Fallbacks active |
-| **Other** | Yes | No | No | Baseline |
+| Platform | Lock-Free | MWAIT | SIMD | Thread Affinity | Status |
+|----------|-----------|-------|------|-----------------|--------|
+| **Intel x86** (2013+) | Yes | Yes | AVX2 | Hard | Full support |
+| **AMD Ryzen** | Yes | Yes | AVX2 | Hard | Full support |
+| **Apple Silicon** (M1/M2/M3) | Yes | No (WFE) | NEON | Advisory | P-cores only |
+| **Old x86** (pre-2013) | Yes | No | SSE4.2 | Hard | Partial |
+| **ARM Linux** | Yes | No (WFE) | NEON | Hard | Full support |
+| **Windows** | Yes | Yes | AVX2 | Hard | Full support |
 
 Runtime automatically uses best available optimizations for each platform.
+
+**Apple Silicon Notes:**
+- P-cores (Performance) detected via `hw.perflevel0.physicalcpu`
+- E-cores (Efficiency) excluded for consistent throughput
+- QoS hints encourage P-core scheduling
+- Thread affinity is advisory; macOS may migrate threads
 
 ---
 

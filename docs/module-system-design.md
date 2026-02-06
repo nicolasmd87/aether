@@ -1,5 +1,7 @@
 # Aether Module System
 
+> **Design Document:** This describes the planned module system architecture. Basic `import` statements work for including files, but `module`, `export`, and qualified imports are not yet implemented. See current import support in the [language reference](language-reference.md).
+
 This document describes Aether's module system for code organization and namespace management.
 
 ## Overview

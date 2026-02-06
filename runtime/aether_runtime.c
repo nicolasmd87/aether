@@ -131,3 +131,23 @@ void aether_runtime_print_config() {
 void aether_runtime_shutdown() {
     g_runtime_initialized = 0;
 }
+
+// Command-line arguments
+int aether_argc = 0;
+char** aether_argv = NULL;
+
+void aether_args_init(int argc, char** argv) {
+    aether_argc = argc;
+    aether_argv = argv;
+}
+
+int aether_args_count(void) {
+    return aether_argc;
+}
+
+const char* aether_args_get(int index) {
+    if (index < 0 || index >= aether_argc || !aether_argv) {
+        return NULL;
+    }
+    return aether_argv[index];
+}

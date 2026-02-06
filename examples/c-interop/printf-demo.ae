@@ -1,0 +1,22 @@
+// Demonstration of C interoperability
+// Standard C library functions are already available - no extern needed
+
+main() {
+    // printf, strlen, abs, sqrt are already available from C headers
+    print("Hello from Aether!\n")
+
+    // Using basic math (already available)
+    x = 42
+    y = x * 2
+    print("x * 2 = ")
+    print(y)
+    print("\n")
+
+    // String handling
+    msg = "Aether + C interop"
+    print("Message: ")
+    print(msg)
+    print("\n")
+
+    print("Standard C functions work out of the box!\n")
+}

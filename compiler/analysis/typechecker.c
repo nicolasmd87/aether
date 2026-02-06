@@ -170,6 +170,7 @@ int is_callable(Type* type) {
         case TYPE_VOID:
         case TYPE_ARRAY:
         case TYPE_WILDCARD:
+        case TYPE_PTR:
             return 0;
         default:
             return 1;
@@ -400,6 +401,11 @@ int typecheck_program(ASTNode* program) {
                 add_symbol(global_table, child->value, clone_type(child->node_type), 0, 1, 0);
                 break;
             }
+            case AST_EXTERN_FUNCTION: {
+                // Register extern C function in symbol table
+                add_symbol(global_table, child->value, clone_type(child->node_type), 0, 1, 0);
+                break;
+            }
             case AST_STRUCT_DEFINITION: {
                 Type* struct_type = create_type(TYPE_STRUCT);
                 struct_type->struct_name = strdup(child->value);
@@ -492,6 +498,9 @@ int typecheck_node(ASTNode* node, SymbolTable* table) {
             return typecheck_actor_definition(node, table);
         case AST_FUNCTION_DEFINITION:
             return typecheck_function_definition(node, table);
+        case AST_EXTERN_FUNCTION:
+            // Extern functions have no body to check - just a declaration
+            return 1;
         case AST_STRUCT_DEFINITION:
             return typecheck_struct_definition(node, table);
         case AST_MAIN_FUNCTION:
@@ -811,8 +820,19 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
         
         case AST_MATCH_STATEMENT: {
             // Type check the match expression
+            Type* match_expr_type = NULL;
+            Type* element_type = NULL;
             if (stmt->child_count > 0) {
                 typecheck_expression(stmt->children[0], table);
+                match_expr_type = stmt->children[0]->node_type;
+                // Extract element type if matching on an array
+                if (match_expr_type && match_expr_type->kind == TYPE_ARRAY && match_expr_type->element_type) {
+                    element_type = match_expr_type->element_type;
+                }
+            }
+            // Default to int if we couldn't determine the element type
+            if (!element_type) {
+                element_type = create_type(TYPE_INT);
             }
 
             // Type check each match arm
@@ -826,27 +846,27 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                 // Create a new scope for pattern variables
                 SymbolTable* arm_table = create_symbol_table(table);
 
-                // Register pattern variables from list patterns
+                // Register pattern variables from list patterns using the actual element type
                 if (pattern->type == AST_PATTERN_LIST) {
                     for (int j = 0; j < pattern->child_count; j++) {
                         ASTNode* elem = pattern->children[j];
                         if (elem && elem->type == AST_PATTERN_VARIABLE && elem->value) {
-                            add_symbol(arm_table, elem->value, create_type(TYPE_INT), 0, 0, 0);
+                            add_symbol(arm_table, elem->value, clone_type(element_type), 0, 0, 0);
                         }
                     }
                 } else if (pattern->type == AST_PATTERN_CONS) {
-                    // [h|t] - register head and tail
+                    // [h|t] - register head and tail with proper types
                     if (pattern->child_count >= 1) {
                         ASTNode* head = pattern->children[0];
                         if (head && head->type == AST_PATTERN_VARIABLE && head->value) {
-                            add_symbol(arm_table, head->value, create_type(TYPE_INT), 0, 0, 0);
+                            add_symbol(arm_table, head->value, clone_type(element_type), 0, 0, 0);
                         }
                     }
                     if (pattern->child_count >= 2) {
                         ASTNode* tail = pattern->children[1];
                         if (tail && tail->type == AST_PATTERN_VARIABLE && tail->value) {
                             Type* tail_type = create_type(TYPE_ARRAY);
-                            tail_type->element_type = create_type(TYPE_INT);
+                            tail_type->element_type = clone_type(element_type);
                             add_symbol(arm_table, tail->value, tail_type, 0, 0, 0);
                         }
                     }

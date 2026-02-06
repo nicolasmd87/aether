@@ -58,12 +58,80 @@ static void cpuid(uint32_t leaf, uint32_t subleaf, uint32_t* eax, uint32_t* ebx,
 
 // Detect CPU features
 void cpu_detect_features(CPUInfo* info) {
+#if defined(__aarch64__) || defined(__arm64__) || defined(__arm__)
+    // ARM architecture - use OS APIs for detection
+    strcpy(info->cpu_brand, "ARM Processor");
+
+    // Get core count via OS
+#if defined(__APPLE__)
+    int mib[2] = {CTL_HW, HW_NCPU};
+    unsigned int ncpu = 0;
+    size_t len = sizeof(ncpu);
+    if (sysctl(mib, 2, &ncpu, &len, NULL, 0) == 0 && ncpu > 0) {
+        info->num_cores = ncpu;
+    } else {
+        info->num_cores = 1;
+    }
+    // Apple Silicon has 128-byte cache lines (performance cores)
+    info->cache_line_size = 128;
+#elif defined(__linux__)
+    long nprocs = sysconf(_SC_NPROCESSORS_ONLN);
+    info->num_cores = (nprocs > 0) ? (int)nprocs : 1;
+    info->cache_line_size = 64;  // Most ARM Linux uses 64-byte cache lines
+#else
+    info->num_cores = 1;
+    info->cache_line_size = 64;
+#endif
+
+    // ARM SIMD (NEON) detection
+#if defined(__aarch64__) || defined(__arm64__)
+    // ARMv8/AArch64 always has NEON (Advanced SIMD)
+    info->sse42_supported = 1;  // NEON is comparable to SSE4.2
+    info->avx_supported = 0;    // No AVX on ARM
+    info->avx2_supported = 0;   // No AVX2 on ARM
+    info->avx512f_supported = 0;
+    info->fma_supported = 1;    // ARMv8 has FMA
+#elif defined(__ARM_NEON) || defined(__ARM_NEON__)
+    // ARM32 with NEON (compile-time detection)
+    info->sse42_supported = 1;  // NEON provides SIMD
+    info->avx_supported = 0;
+    info->avx2_supported = 0;
+    info->avx512f_supported = 0;
+    info->fma_supported = 0;    // VFPv4 has FMA but not all ARMv7
+#else
+    // ARM32 without NEON compile flag - try runtime detection on Linux
+    info->sse42_supported = 0;
+    info->avx_supported = 0;
+    info->avx2_supported = 0;
+    info->avx512f_supported = 0;
+    info->fma_supported = 0;
+#if defined(__linux__)
+    // Check /proc/cpuinfo for NEON support
+    FILE* cpuinfo = fopen("/proc/cpuinfo", "r");
+    if (cpuinfo) {
+        char line[256];
+        while (fgets(line, sizeof(line), cpuinfo)) {
+            if (strncmp(line, "Features", 8) == 0 && strstr(line, "neon")) {
+                info->sse42_supported = 1;  // NEON available
+                break;
+            }
+        }
+        fclose(cpuinfo);
+    }
+#endif
+#endif
+
+    info->mwait_supported = 0;  // No MWAIT on ARM, use WFE instead
+    info->monitor_supported = 0;
+
+#else
+    // x86 architecture - use CPUID
     uint32_t eax, ebx, ecx, edx;
-    
+
     // Get CPU vendor and max CPUID level
     cpuid(0, 0, &eax, &ebx, &ecx, &edx);
     uint32_t max_level = eax;
-    
+
     // Get CPU brand string
     cpuid(0x80000000, 0, &eax, &ebx, &ecx, &edx);
     if (eax >= 0x80000004) {
@@ -75,36 +143,37 @@ void cpu_detect_features(CPUInfo* info) {
     } else {
         strcpy(info->cpu_brand, "Unknown CPU");
     }
-    
+
     // Check CPUID feature flags
     if (max_level >= 1) {
         cpuid(1, 0, &eax, &ebx, &ecx, &edx);
-        
+
         // ECX flags
         info->avx_supported = (ecx & (1 << 28)) != 0;  // AVX
         info->fma_supported = (ecx & (1 << 12)) != 0;  // FMA3
         info->sse42_supported = (ecx & (1 << 20)) != 0;  // SSE4.2
         info->monitor_supported = (ecx & (1 << 3)) != 0;  // MONITOR/MWAIT
         info->mwait_supported = info->monitor_supported;  // Same flag
-        
+
         // Logical processor count
         info->num_cores = (ebx >> 16) & 0xFF;
-        
+
         // Cache line size (bits 8-15 of EBX, in 8-byte units)
         info->cache_line_size = ((ebx >> 8) & 0xFF) * 8;
         if (info->cache_line_size == 0) {
             info->cache_line_size = 64;  // Default to 64 bytes
         }
     }
-    
+
     // Extended features (leaf 7)
     if (max_level >= 7) {
         cpuid(7, 0, &eax, &ebx, &ecx, &edx);
-        
+
         // EBX flags
         info->avx2_supported = (ebx & (1 << 5)) != 0;      // AVX2
         info->avx512f_supported = (ebx & (1 << 16)) != 0;  // AVX-512 Foundation
     }
+#endif
 }
 
 // Initialize and cache CPU info
@@ -194,13 +263,23 @@ int cpu_recommend_cores() {
         long sc = sysconf(_SC_NPROCESSORS_ONLN);
         cores = (sc > 0) ? (int)sc : 1;
 #elif defined(__APPLE__) || defined(__MACOS__)
-        int mib[2] = {CTL_HW, HW_NCPU};
-        unsigned int val = 0;
-        size_t len = sizeof(val);
-        if (sysctl(mib, 2, &val, &len, NULL, 0) == 0 && val > 0)
-            cores = (int)val;
-        else
-            cores = 1;
+        // On Apple Silicon, prefer P-cores only for consistent performance
+        // Query hw.perflevel0.physicalcpu (Performance cores)
+        int pcore_count = 0;
+        size_t len = sizeof(pcore_count);
+        if (sysctlbyname("hw.perflevel0.physicalcpu", &pcore_count, &len, NULL, 0) == 0 && pcore_count > 0) {
+            // Apple Silicon - use P-cores only to avoid E-core slowdowns
+            cores = pcore_count;
+        } else {
+            // Not Apple Silicon or query failed - use total cores
+            int mib[2] = {CTL_HW, HW_NCPU};
+            unsigned int val = 0;
+            len = sizeof(val);
+            if (sysctl(mib, 2, &val, &len, NULL, 0) == 0 && val > 0)
+                cores = (int)val;
+            else
+                cores = 1;
+        }
 #elif defined(_WIN32)
         SYSTEM_INFO si;
         GetNativeSystemInfo(&si);
