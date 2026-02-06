@@ -39,9 +39,19 @@ jobs:
 
     - name: Check for leaks
       run: |
-        # Extract definitely lost bytes
-        definitely_lost=$(grep "definitely lost:" valgrind-output.txt | grep -oP '\d+(?= bytes)' | head -1 || echo "0")
-        indirectly_lost=$(grep "indirectly lost:" valgrind-output.txt | grep -oP '\d+(?= bytes)' | head -1 || echo "0")
+        # Check if valgrind reported no leaks at all
+        if grep -q "All heap blocks were freed -- no leaks are possible" valgrind-output.txt; then
+          echo "SUCCESS: All heap blocks were freed - no leaks possible"
+          exit 0
+        fi
+
+        # Extract definitely lost bytes (portable grep without -P)
+        definitely_lost=$(grep "definitely lost:" valgrind-output.txt | sed 's/.*definitely lost: \([0-9,]*\) bytes.*/\1/' | tr -d ',' | head -1)
+        indirectly_lost=$(grep "indirectly lost:" valgrind-output.txt | sed 's/.*indirectly lost: \([0-9,]*\) bytes.*/\1/' | tr -d ',' | head -1)
+
+        # Default to 0 if empty
+        definitely_lost=${definitely_lost:-0}
+        indirectly_lost=${indirectly_lost:-0}
 
         echo "Definitely lost: $definitely_lost bytes"
         echo "Indirectly lost: $indirectly_lost bytes"
