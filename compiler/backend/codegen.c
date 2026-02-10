@@ -1396,7 +1396,12 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
                                         fdef = fdef->next;
                                     }
                                 }
-                                print_line(gen, "%s %s = _pattern->%s;", c_type, field->value, field->value);
+                                const char* var_name = field->value;
+                                if (field->child_count > 0 && field->children[0] &&
+                                    field->children[0]->type == AST_PATTERN_VARIABLE && field->children[0]->value) {
+                                    var_name = field->children[0]->value;
+                                }
+                                print_line(gen, "%s %s = _pattern->%s;", c_type, var_name, field->value);
                             }
                         }
 

@@ -568,7 +568,13 @@ int typecheck_actor_definition(ASTNode* actor, SymbolTable* table) {
                                 if (!field_type) {
                                     field_type = create_type(TYPE_UNKNOWN);
                                 }
-                                add_symbol(receive_table, field->value, field_type, 0, 0, 0);
+                                // Use pattern variable name if present (field: var), else field name
+                                const char* var_name = field->value;
+                                if (field->child_count > 0 && field->children[0] &&
+                                    field->children[0]->type == AST_PATTERN_VARIABLE && field->children[0]->value) {
+                                    var_name = field->children[0]->value;
+                                }
+                                add_symbol(receive_table, var_name, field_type, 0, 0, 0);
                             }
                         }
                     }
