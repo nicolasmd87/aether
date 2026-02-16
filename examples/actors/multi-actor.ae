@@ -42,5 +42,13 @@ main() {
     counter ! Tick { value: 3 };
     logger ! Log { code: 300 };
 
-    print("Multi-actor done\n");
+    // Wait for all messages to be processed
+    wait_for_idle();
+
+    print("Counter total: ");
+    print(counter.count);
+    print("\n");
+    print("Logger entries: ");
+    print(logger.entries);
+    print("\n");
 }

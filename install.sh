@@ -279,7 +279,8 @@ install_editor_extension() {
     local editor_cmd="$1"
     local editor_name="$2"
     local ext_dir="$3"
-    local ext_name="aether-language-0.4.1"
+    local version=$(cat "$(dirname "$0")/VERSION" 2>/dev/null | tr -d '[:space:]' || echo "0.5.0")
+    local ext_name="aether-language-$version"
     local ext_path="$ext_dir/$ext_name"
     local src_dir="$(dirname "$0")/editor/vscode"
 

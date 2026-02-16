@@ -50,5 +50,10 @@ main() {
     calc ! Add { value: 100 };
     calc ! PrintResult {};
 
-    print("Calculator done\n");
+    // Wait for all operations to complete
+    wait_for_idle();
+
+    print("Final result: ");
+    print(calc.result);
+    print("\n");
 }

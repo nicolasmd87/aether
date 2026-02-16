@@ -11,38 +11,64 @@ on:
         required: true
 
 jobs:
+  validate-version:
+    name: Validate Version
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Check version matches tag
+      run: |
+        TAG_VERSION=${GITHUB_REF#refs/tags/v}
+        FILE_VERSION=$(cat VERSION | tr -d '[:space:]')
+        echo "Tag version: $TAG_VERSION"
+        echo "File version: $FILE_VERSION"
+        if [ "$TAG_VERSION" != "$FILE_VERSION" ]; then
+          echo "::error::Tag v$TAG_VERSION doesn't match VERSION file ($FILE_VERSION)"
+          exit 1
+        fi
+        echo "✓ Version validated: $FILE_VERSION"
+
   build-release:
     name: Build Release Binaries
+    needs: validate-version
+    if: always() && (needs.validate-version.result == 'success' || needs.validate-version.result == 'skipped')
     runs-on: ${{ matrix.os }}
-    
+
     strategy:
       matrix:
         include:
           - os: ubuntu-latest
-            artifact_name: aetherc
-            asset_name: aetherc-linux-x86_64
+            target: linux-x86_64
+            exe_ext: ""
           - os: macos-latest
-            artifact_name: aetherc
-            asset_name: aetherc-macos-x86_64
+            target: macos-x86_64
+            exe_ext: ""
+          - os: macos-14
+            target: macos-arm64
+            exe_ext: ""
           - os: windows-latest
-            artifact_name: aetherc.exe
-            asset_name: aetherc-windows-x86_64.exe
-            
+            target: windows-x86_64
+            exe_ext: ".exe"
+
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
-      
+      uses: actions/checkout@v4
+
     - name: Setup GCC (Ubuntu)
       if: matrix.os == 'ubuntu-latest'
       run: |
         sudo apt-get update
         sudo apt-get install -y gcc make
-        
+
     - name: Setup GCC (macOS)
-      if: matrix.os == 'macos-latest'
+      if: startsWith(matrix.os, 'macos')
       run: |
-        brew install gcc make
-        
+        # Use system clang on macOS, which is always available
+        echo "Using system compiler"
+
     - name: Setup GCC (Windows)
       if: matrix.os == 'windows-latest'
       uses: msys2/setup-msys2@v2
@@ -51,71 +77,95 @@ jobs:
         install: >-
           mingw-w64-x86_64-gcc
           make
-          
+
     - name: Build Release (Unix)
       if: matrix.os != 'windows-latest'
       run: |
-        make
-        strip build/${{ matrix.artifact_name }} || true
-        
+        make release
+        make ae
+        strip build/aetherc${{ matrix.exe_ext }} build/ae${{ matrix.exe_ext }} || true
+
     - name: Build Release (Windows)
       if: matrix.os == 'windows-latest'
       shell: msys2 {0}
       run: |
-        make
-        strip build/${{ matrix.artifact_name }} || true
-        
-    - name: Package Runtime
+        make release
+        make ae
+        strip build/aetherc${{ matrix.exe_ext }} build/ae${{ matrix.exe_ext }} || true
+
+    - name: Package Release
       run: |
-        mkdir -p release/runtime
-        cp -r runtime/*.c runtime/*.h release/runtime/
-        cp build/${{ matrix.artifact_name }} release/
+        VERSION=$(cat VERSION | tr -d '[:space:]')
+        mkdir -p release/bin
+        mkdir -p release/lib
+        mkdir -p release/include/aether
+        mkdir -p release/share/aether
+
+        # Binaries
+        cp build/aetherc${{ matrix.exe_ext }} release/bin/
+        cp build/ae${{ matrix.exe_ext }} release/bin/
+
+        # Runtime sources (for linking)
+        cp -r runtime release/share/aether/
+        cp -r std release/share/aether/
+
+        # Headers
+        cp -r runtime/*.h release/include/aether/ 2>/dev/null || true
+        cp -r runtime/actors release/include/aether/ 2>/dev/null || true
+        cp -r runtime/scheduler release/include/aether/ 2>/dev/null || true
+
+        # Docs
         cp LICENSE release/
         cp README.md release/
-        
+        cp VERSION release/
+
     - name: Create Archive (Unix)
       if: matrix.os != 'windows-latest'
       run: |
+        VERSION=$(cat VERSION | tr -d '[:space:]')
         cd release
-        tar -czf ../${{ matrix.asset_name }}.tar.gz *
-        
+        tar -czf ../aether-$VERSION-${{ matrix.target }}.tar.gz *
+
     - name: Create Archive (Windows)
       if: matrix.os == 'windows-latest'
       shell: msys2 {0}
       run: |
+        VERSION=$(cat VERSION | tr -d '[:space:]')
         cd release
-        zip -r ../${{ matrix.asset_name }}.zip *
-        
+        zip -r ../aether-$VERSION-${{ matrix.target }}.zip *
+
     - name: Upload Release Asset
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
-        name: ${{ matrix.asset_name }}
+        name: aether-${{ matrix.target }}
         path: |
-          ${{ matrix.asset_name }}.tar.gz
-          ${{ matrix.asset_name }}.zip
-          
+          aether-*-${{ matrix.target }}.tar.gz
+          aether-*-${{ matrix.target }}.zip
+
   create-release:
     name: Create GitHub Release
     needs: build-release
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/')
-    
+
     steps:
     - name: Checkout code
-      uses: actions/checkout@v3
-      
+      uses: actions/checkout@v4
+
     - name: Download all artifacts
-      uses: actions/download-artifact@v3
-      
+      uses: actions/download-artifact@v4
+
+    - name: List artifacts
+      run: find . -name "aether-*" -type f
+
     - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
         files: |
-          */*.tar.gz
-          */*.zip
+          **/aether-*.tar.gz
+          **/aether-*.zip
         draft: false
         prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
         generate_release_notes: true
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-

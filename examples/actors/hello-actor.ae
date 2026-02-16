@@ -27,5 +27,11 @@ main() {
     greeter ! Greet { name: 1 };
     greeter ! Greet { name: 2 };
     greeter ! Farewell {};
-    print("Hello actor done\n");
+
+    // Wait for all messages to be processed
+    wait_for_idle();
+
+    print("Total greetings: ");
+    print(greeter.count);
+    print("\n");
 }

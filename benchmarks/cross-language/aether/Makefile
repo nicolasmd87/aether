@@ -11,14 +11,33 @@ RUNTIME_SRCS = ../../../runtime/scheduler/multicore_scheduler.c \
                ../../../runtime/actors/aether_send_message.c \
                ../../../runtime/actors/aether_actor_thread.c
 
+.PHONY: all clean ping_pong counting thread_ring fork_join
+
+all: ping_pong counting thread_ring fork_join
+
 ping_pong: ping_pong.ae
-	@echo "Compiling Aether source..."
+	@echo "Compiling Aether ping_pong..."
 	@$(AETHER_COMPILER) ping_pong.ae /tmp/ping_pong_aether.c
-	@echo "Compiling to native binary..."
 	@$(CC) $(CFLAGS) /tmp/ping_pong_aether.c $(RUNTIME_SRCS) -o ping_pong $(LDFLAGS)
 	@echo "Done: ./ping_pong"
 
-clean:
-	rm -f ping_pong /tmp/ping_pong_aether.c*
+counting: counting.ae
+	@echo "Compiling Aether counting..."
+	@$(AETHER_COMPILER) counting.ae /tmp/counting_aether.c
+	@$(CC) $(CFLAGS) /tmp/counting_aether.c $(RUNTIME_SRCS) -o counting $(LDFLAGS)
+	@echo "Done: ./counting"
 
-.PHONY: clean
+thread_ring: thread_ring.ae
+	@echo "Compiling Aether thread_ring..."
+	@$(AETHER_COMPILER) thread_ring.ae /tmp/thread_ring_aether.c
+	@$(CC) $(CFLAGS) /tmp/thread_ring_aether.c $(RUNTIME_SRCS) -o thread_ring $(LDFLAGS)
+	@echo "Done: ./thread_ring"
+
+fork_join: fork_join.ae
+	@echo "Compiling Aether fork_join..."
+	@$(AETHER_COMPILER) fork_join.ae /tmp/fork_join_aether.c
+	@$(CC) $(CFLAGS) /tmp/fork_join_aether.c $(RUNTIME_SRCS) -o fork_join $(LDFLAGS)
+	@echo "Done: ./fork_join"
+
+clean:
+	rm -f ping_pong counting thread_ring fork_join /tmp/*_aether.c*

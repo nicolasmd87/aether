@@ -3,8 +3,16 @@ const std = @import("std");
 const Thread = std.Thread;
 const Mutex = std.Thread.Mutex;
 const Condition = std.Thread.Condition;
+const print = std.debug.print;
 
-const MESSAGES = 10_000_000;
+fn getMessages() usize {
+    if (std.posix.getenv("BENCHMARK_MESSAGES")) |val| {
+        return std.fmt.parseInt(usize, val, 10) catch 100_000;
+    }
+    return 100_000;
+}
+
+var MESSAGES: usize = 0;
 
 const Channel = struct {
     mutex: Mutex = .{},
@@ -16,7 +24,7 @@ const Channel = struct {
 var chan_a: Channel = .{};
 var chan_b: Channel = .{};
 
-fn pingThread(_: *anyopaque) u8 {
+fn pingThread(_: *anyopaque) void {
     var i: i32 = 0;
     while (i < MESSAGES) : (i += 1) {
         // Send to A
@@ -37,13 +45,12 @@ fn pingThread(_: *anyopaque) u8 {
 
         // Validate received value matches what was sent
         if (received != i) {
-            std.debug.print("Ping validation error: expected {}, got {}\n", .{i, received});
+            print("Ping validation error: expected {}, got {}\n", .{ i, received });
         }
     }
-    return 0;
 }
 
-fn pongThread(_: *anyopaque) u8 {
+fn pongThread(_: *anyopaque) void {
     var expected: i32 = 0;
     while (expected < MESSAGES) : (expected += 1) {
         // Wait for A
@@ -57,7 +64,7 @@ fn pongThread(_: *anyopaque) u8 {
 
         // Validate received value matches expected sequence
         if (received != expected) {
-            std.debug.print("Pong validation error: expected {}, got {}\n", .{expected, received});
+            print("Pong validation error: expected {}, got {}\n", .{ expected, received });
         }
 
         // Send back the EXACT value received to B
@@ -67,59 +74,34 @@ fn pongThread(_: *anyopaque) u8 {
         chan_b.cond.signal();
         chan_b.mutex.unlock();
     }
-    return 0;
 }
 
-fn rdtsc() u64 {
-    // For ARM (Apple Silicon), we'll use timer
-    if (@import("builtin").cpu.arch == .aarch64) {
-        const ts = std.posix.clock_gettime(std.posix.CLOCK.MONOTONIC) catch return 0;
-        return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
-    }
-    // For x86_64, use RDTSC
-    return asm volatile ("rdtsc"
-        : [ret] "={eax},{edx}" (-> u64),
-    );
+fn getTimeNs() u64 {
+    const ts = std.posix.clock_gettime(std.posix.CLOCK.MONOTONIC) catch return 0;
+    return @as(u64, @intCast(ts.sec)) * 1_000_000_000 + @as(u64, @intCast(ts.nsec));
 }
 
 pub fn main() !void {
-    var stdout_buffer: [4096]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
-    const stdout = &stdout_writer.interface;
+    MESSAGES = getMessages();
 
-    try stdout.print("=== Zig Ping-Pong Benchmark ===\n", .{});
-    try stdout.print("Messages: {}\n", .{MESSAGES});
-    try stdout.print("Using std.Thread with Mutex and Condition\n\n", .{});
-    try stdout.flush();
+    print("=== Zig Ping-Pong Benchmark ===\n", .{});
+    print("Messages: {}\n", .{MESSAGES});
+    print("Using std.Thread with Mutex and Condition\n\n", .{});
 
-    const start = rdtsc();
+    const start = getTimeNs();
 
-    var thread1 = try Thread.spawn(.{}, pingThread, .{@as(*anyopaque, undefined)});
-    var thread2 = try Thread.spawn(.{}, pongThread, .{@as(*anyopaque, undefined)});
+    const thread1 = try Thread.spawn(.{}, pingThread, .{@as(*anyopaque, undefined)});
+    const thread2 = try Thread.spawn(.{}, pongThread, .{@as(*anyopaque, undefined)});
 
     thread1.join();
     thread2.join();
 
-    const end = rdtsc();
-    const total_cycles = end - start;
+    const end = getTimeNs();
+    const elapsed_ns = end - start;
+    const elapsed_sec = @as(f64, @floatFromInt(elapsed_ns)) / 1e9;
+    const cycles_per_msg = elapsed_sec * 3e9 / @as(f64, @floatFromInt(MESSAGES));
+    const throughput = @as(f64, @floatFromInt(MESSAGES)) / elapsed_sec / 1e6;
 
-    if (@import("builtin").cpu.arch == .aarch64) {
-        // ARM: nanoseconds
-        const ns_per_msg = @as(f64, @floatFromInt(total_cycles)) / @as(f64, MESSAGES);
-        const throughput = 1e9 / ns_per_msg;
-        const cycles_per_msg = ns_per_msg * 3.0; // Approximate at 3GHz
-
-        try stdout.print("Cycles/msg:     {d:.2}\n", .{cycles_per_msg});
-        try stdout.print("Throughput:     {d:.2} M msg/sec\n", .{throughput / 1e6});
-        try stdout.flush();
-    } else {
-        // x86_64: actual cycles
-        const cycles_per_msg = @as(f64, @floatFromInt(total_cycles)) / @as(f64, MESSAGES);
-        const freq = 3.0e9; // Approximate
-        const throughput = freq / cycles_per_msg;
-
-        try stdout.print("Cycles/msg:     {d:.2}\n", .{cycles_per_msg});
-        try stdout.print("Throughput:     {d:.2} M msg/sec\n", .{throughput / 1e6});
-        try stdout.flush();
-    }
+    print("Cycles/msg:     {d:.2}\n", .{cycles_per_msg});
+    print("Throughput:     {d:.2} M msg/sec\n", .{throughput});
 }

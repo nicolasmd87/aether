@@ -101,6 +101,50 @@ See [std/fs/README.md](../std/fs/README.md) for complete documentation.
 
 ---
 
+## Concurrency Functions
+
+### Actor Management
+
+- `spawn(ActorName())` - Create a new actor instance and return a reference to it
+
+### Synchronization
+
+- `wait_for_idle()` - Block until all actors have finished processing messages. Use this to synchronize the main thread with actor completion.
+
+- `sleep(milliseconds)` - Pause execution for the specified number of milliseconds.
+
+### Example
+
+```aether
+message Task { id: int }
+
+actor Worker {
+    state completed = 0
+
+    receive {
+        Task(id) -> {
+            completed = completed + 1
+        }
+    }
+}
+
+main() {
+    w = spawn(Worker())
+
+    w ! Task { id: 1 }
+    w ! Task { id: 2 }
+
+    // Wait for all tasks to complete
+    wait_for_idle()
+
+    print("Completed: ")
+    print(w.completed)
+    print("\n")
+}
+```
+
+---
+
 ## Math Library (`aether_math.h`)
 
 ### Basic Operations
@@ -234,7 +278,13 @@ main() {
     counter = spawn(Counter())
     counter ! Increment { amount: 1 }
     counter ! Increment { amount: 1 }
-    print("Counter processing messages\n")
+
+    // Wait for all messages to be processed
+    wait_for_idle()
+
+    print("Final count: ")
+    print(counter.count)
+    print("\n")
 }
 ```
 

@@ -1,0 +1,80 @@
+// Aether Counting Actor Benchmark (Savina-style)
+// Based on the Savina benchmark suite micro-benchmark
+// Measures message passing overhead with a single counting actor
+
+message Increment {}
+
+actor Counter {
+    state count = 0;
+
+    receive {
+        Increment() -> {
+            count = count + 1;
+        }
+    }
+}
+
+main() {
+    // Read from BENCHMARK_MESSAGES env var, default 100K
+    total_messages = 100000;
+    env_val = getenv("BENCHMARK_MESSAGES");
+    if (env_val != 0) {
+        total_messages = atoi(env_val);
+    }
+
+    counter = spawn(Counter());
+
+    // Get start time
+    start_time = clock_ns();
+
+    // Send all messages
+    i = 0;
+    while (i < total_messages) {
+        counter ! Increment {};
+        i = i + 1;
+    }
+
+    // Wait for completion
+    wait_for_idle();
+
+    // Get end time
+    end_time = clock_ns();
+
+    // Verify
+    actual = counter.count;
+    if (actual != total_messages) {
+        print("VALIDATION FAILED: expected ");
+        print(total_messages);
+        print(" got ");
+        print(actual);
+        print("\n");
+    }
+
+    // Calculate metrics
+    elapsed_ns = end_time - start_time;
+    elapsed_ms = elapsed_ns / 1000000;
+
+    // Cycles/msg (assuming 3GHz clock)
+    if (actual > 0) {
+        total_cycles = elapsed_ns * 3;
+        cycles_per_msg = total_cycles / actual;
+        print("Cycles/msg:     ");
+        print(cycles_per_msg);
+        print("\n");
+    }
+
+    // Throughput: messages / seconds = messages * 1000 / elapsed_ms
+    if (elapsed_ms > 0) {
+        msg_per_sec = (actual * 1000) / elapsed_ms;
+        throughput_m = msg_per_sec / 1000000;
+        throughput_frac = (msg_per_sec / 10000) - (throughput_m * 100);
+        print("Throughput:     ");
+        print(throughput_m);
+        print(".");
+        if (throughput_frac < 10) {
+            print("0");
+        }
+        print(throughput_frac);
+        print(" M msg/sec\n");
+    }
+}

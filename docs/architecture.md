@@ -175,6 +175,7 @@ IDENTIFIER("x") EQUALS NUMBER(42) PLUS IDENTIFIER("y")
        int auto_process;
        int assigned_core;
        int migrate_to;        // Affinity hint: core to migrate to (-1 = none)
+       int main_thread_only;  // If set, scheduler threads skip this actor
        SPSCQueue spsc_queue;  // Lock-free same-core messaging
    } ActorBase;
    ```
@@ -268,16 +269,17 @@ IDENTIFIER("x") EQUALS NUMBER(42) PLUS IDENTIFIER("y")
 
 The runtime implements these optimization strategies in the active code paths:
 
-1. **Thread-Local Message Pools** - Eliminate malloc/free overhead
-2. **Batch Dequeue** - Reduce atomic operations from N to 1 per batch
-3. **Adaptive Batching** - Scale batch size with load (64 to 1024)
-4. **Direct Mailbox Delivery** - Same-core messages bypass the queue
-5. **Computed Goto Dispatch** - Direct label jumps for message handlers
-6. **Inline Single-Int Messages** - Bypass pool allocation for common messages
-7. **Message-Driven Migration** - Co-locate communicating actors
-8. **Optimized Spinlock** - PAUSE/YIELD hints during spin-wait
-9. **Cache Line Alignment** - Prevent false sharing on shared structures
-10. **Relaxed Atomic Ordering** - Avoid barriers on non-critical counters
+1. **Main Thread Actor Mode** - Single-actor programs bypass scheduler entirely
+2. **Thread-Local Message Pools** - Eliminate malloc/free overhead
+3. **Batch Dequeue** - Reduce atomic operations from N to 1 per batch
+4. **Adaptive Batching** - Scale batch size with load (64 to 1024)
+5. **Direct Mailbox Delivery** - Same-core messages bypass the queue
+6. **Computed Goto Dispatch** - Direct label jumps for message handlers
+7. **Inline Single-Int Messages** - Bypass pool allocation for common messages
+8. **Message-Driven Migration** - Co-locate communicating actors
+9. **Optimized Spinlock** - PAUSE/YIELD hints during spin-wait
+10. **Cache Line Alignment** - Prevent false sharing on shared structures
+11. **Relaxed Atomic Ordering** - Avoid barriers on non-critical counters
 
 See [runtime-optimizations.md](runtime-optimizations.md) for implementation details.
 
@@ -351,22 +353,6 @@ See [runtime-optimizations.md](runtime-optimizations.md) for implementation deta
 - **Choice:** Portable C11 code with platform-specific branches
 - **Implication:** Platform-specific intrinsics guarded by `#if` directives
 - **Mitigation:** Fallback paths for all platform-specific code
-
-## Future Directions
-
-### Planned
-
-1. Incremental type checking
-2. LLVM backend (direct IR generation)
-3. Generics (type-parametric polymorphism)
-4. Actor supervision trees
-
-### Under Consideration
-
-1. Hot code reloading
-2. Persistent actor state
-3. Distributed actor runtime
-4. Effect system for tracking side effects
 
 ## References
 

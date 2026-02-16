@@ -1,0 +1,104 @@
+// Aether Fork-Join Throughput Benchmark (Savina-style)
+// Based on the Savina benchmark suite micro-benchmark
+// Measures messaging throughput with parallel workers
+
+message Work { value: int }
+
+actor Worker {
+    state processed = 0;
+    state sum = 0;
+
+    receive {
+        Work(value) -> {
+            // Simulate minimal work
+            sum = sum + value;
+            processed = processed + 1;
+        }
+    }
+}
+
+main() {
+    // Read from BENCHMARK_MESSAGES env var, default 100K total
+    num_workers = 8;
+    messages_per_worker = 12500;
+    env_val = getenv("BENCHMARK_MESSAGES");
+    if (env_val != 0) {
+        messages_per_worker = atoi(env_val) / num_workers;
+    }
+
+    // Create workers
+    w0 = spawn(Worker());
+    w1 = spawn(Worker());
+    w2 = spawn(Worker());
+    w3 = spawn(Worker());
+    w4 = spawn(Worker());
+    w5 = spawn(Worker());
+    w6 = spawn(Worker());
+    w7 = spawn(Worker());
+
+    // Get start time
+    start_time = clock_ns();
+
+    // Send messages round-robin to workers
+    total = num_workers * messages_per_worker;
+    i = 0;
+    while (i < total) {
+        remainder = i - (i / num_workers) * num_workers;
+        if (remainder == 0) { w0 ! Work { value: i }; }
+        if (remainder == 1) { w1 ! Work { value: i }; }
+        if (remainder == 2) { w2 ! Work { value: i }; }
+        if (remainder == 3) { w3 ! Work { value: i }; }
+        if (remainder == 4) { w4 ! Work { value: i }; }
+        if (remainder == 5) { w5 ! Work { value: i }; }
+        if (remainder == 6) { w6 ! Work { value: i }; }
+        if (remainder == 7) { w7 ! Work { value: i }; }
+        i = i + 1;
+    }
+
+    // Wait for completion
+    wait_for_idle();
+
+    // Get end time
+    end_time = clock_ns();
+
+    // Verify
+    total_processed = w0.processed + w1.processed + w2.processed + w3.processed +
+                      w4.processed + w5.processed + w6.processed + w7.processed;
+
+    if (total_processed != total) {
+        print("VALIDATION FAILED: expected ");
+        print(total);
+        print(" got ");
+        print(total_processed);
+        print("\n");
+    }
+
+    // Calculate metrics
+    elapsed_ns = end_time - start_time;
+    elapsed_ms = elapsed_ns / 1000000;
+    actual_messages = total_processed;
+
+    // Cycles/msg (assuming 3GHz clock)
+    if (actual_messages > 0) {
+        total_cycles = elapsed_ns * 3;
+        cycles_per_msg = total_cycles / actual_messages;
+        print("Cycles/msg:     ");
+        print(cycles_per_msg);
+        print("\n");
+    }
+
+    // Throughput: messages / seconds = messages * 1000 / elapsed_ms
+    if (elapsed_ms > 0) {
+        msg_per_sec = (actual_messages * 1000) / elapsed_ms;
+        throughput_m = msg_per_sec / 1000000;
+        throughput_frac = (msg_per_sec / 10000) - (throughput_m * 100);
+        print("Throughput:     ");
+        print(throughput_m);
+        print(".");
+        if (throughput_frac < 10) {
+            print("0");
+        }
+        print(throughput_frac);
+        print(" M msg/sec\n");
+    }
+}

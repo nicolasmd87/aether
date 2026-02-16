@@ -49,8 +49,17 @@ main() {
     w1 ! DoWork { task_id: 3 };
     w2 ! DoWork { task_id: 4 };
 
+    // Wait for all work to complete
+    wait_for_idle();
+
     w1 ! GetStats {};
     w2 ! GetStats {};
 
-    print("Supervisor done\n");
+    wait_for_idle();
+    print("Worker 1 completed: ");
+    print(w1.completed);
+    print("\n");
+    print("Worker 2 completed: ");
+    print(w2.completed);
+    print("\n");
 }

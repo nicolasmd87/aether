@@ -15,6 +15,11 @@
 #include <readline/history.h>
 #endif
 
+// Version is set by Makefile from VERSION file
+#ifndef AETHER_VERSION
+#define AETHER_VERSION "0.0.0-dev"
+#endif
+
 // ANSI color codes
 #define COLOR_RESET   "\033[0m"
 #define COLOR_CYAN    "\033[36m"
@@ -133,7 +138,7 @@ void print_welcome() {
     printf("   / ___ \\ | |___  | | |  _  | |___|  _ <                 \n");
     printf("  /_/   \\_\\|_____| |_| |_| |_|_____|_| \\_\\               \n");
     printf("                                                            \n");
-    printf("%s       Interactive REPL  v0.4.0%s                        \n", COLOR_YELLOW, COLOR_CYAN);
+    printf("%s       Interactive REPL  v%s%s                        \n", COLOR_YELLOW, AETHER_VERSION, COLOR_CYAN);
     printf("       Type :help for commands                             \n");
     printf("                                                            \n");
     printf("============================================================\n");
@@ -415,7 +420,7 @@ bool handle_command(const char* input, REPLState* state, InputBuffer* session_bu
     }
 
     if (strcmp(input, ":version") == 0 || strcmp(input, ":v") == 0) {
-        printf("%sAether REPL v0.4.0%s\n", COLOR_CYAN, COLOR_RESET);
+        printf("%sAether REPL v%s%s\n", COLOR_CYAN, AETHER_VERSION, COLOR_RESET);
         printf("Aether Language - Actor-based concurrent programming\n");
         printf("https://github.com/nicolasmd87/aether\n");
         return true;

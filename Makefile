@@ -26,9 +26,12 @@ else
     RM_DIR := rm -rf
 endif
 
+# Version from VERSION file (single source of truth)
+VERSION := $(shell cat VERSION 2>/dev/null || echo "0.0.0")
+
 # Compiler configuration with ccache support
 CC := $(shell command -v ccache 2>/dev/null && echo "ccache gcc" || echo "gcc")
-CFLAGS = -O2 -Icompiler -Iruntime -Iruntime/actors -Iruntime/scheduler -Iruntime/utils -Iruntime/memory -Iruntime/config -Istd -Istd/string -Istd/io -Istd/math -Istd/net -Istd/collections -Istd/json -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -MMD -MP
+CFLAGS = -O2 -Icompiler -Iruntime -Iruntime/actors -Iruntime/scheduler -Iruntime/utils -Iruntime/memory -Iruntime/config -Istd -Istd/string -Istd/io -Istd/math -Istd/net -Istd/collections -Istd/json -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -MMD -MP -DAETHER_VERSION=\"$(VERSION)\"
 LDFLAGS = -pthread -lm
 
 # Zero warnings achieved - ready for -Werror
@@ -175,24 +178,33 @@ test-manual-runtime: compiler
 	@echo "Running manual runtime test..."
 	./build/test_runtime_manual$(EXE_EXT)
 
+# Benchmark presets: full (10M), medium (1M), low (100K), stress (100M)
+BENCHMARK_PRESET ?= low
+
 benchmark:
 	@echo "============================================"
 	@echo "  Running Cross-Language Benchmark Suite"
+	@echo "  Preset: $(BENCHMARK_PRESET)"
 	@echo "============================================"
 	@echo ""
-	@cd benchmarks/cross-language && $(MAKE) benchmark-ui
+	@cd benchmarks/cross-language && BENCHMARK_PRESET=$(BENCHMARK_PRESET) $(MAKE) benchmark-ui
 
 examples: compiler
 	@echo "==================================="
 	@echo "  Building Aether Examples"
 	@echo "==================================="
-	@$(MKDIR) $(BUILD_DIR)/examples $(BUILD_DIR)/examples/basics $(BUILD_DIR)/examples/actors $(BUILD_DIR)/examples/applications
+	@$(MKDIR) $(BUILD_DIR)/examples $(BUILD_DIR)/examples/basics $(BUILD_DIR)/examples/actors $(BUILD_DIR)/examples/applications $(BUILD_DIR)/examples/c-interop
 	@pass=0; fail=0; \
 	for src in $$(find examples -name '*.ae' | sort); do \
 		name=$$(echo $$src | sed 's|examples/||;s|\.ae$$||'); \
+		dir=$$(dirname $$src); \
+		extra_c=""; \
+		if [ -d "$$dir" ]; then \
+			extra_c=$$(find "$$dir" -maxdepth 1 -name '*.c' 2>/dev/null | tr '\n' ' '); \
+		fi; \
 		printf "  %-30s " "$$name"; \
 		if ./build/aetherc$(EXE_EXT) $$src $(BUILD_DIR)/examples/$$name.c 2>/dev/null && \
-		   $(CC) $(CFLAGS) $(BUILD_DIR)/examples/$$name.c $(RUNTIME_SRC) $(STD_SRC) $(COLLECTIONS_SRC) \
+		   $(CC) $(CFLAGS) $(BUILD_DIR)/examples/$$name.c $$extra_c $(RUNTIME_SRC) $(STD_SRC) $(COLLECTIONS_SRC) \
 		         -o $(BUILD_DIR)/examples/$$name$(EXE_EXT) $(LDFLAGS) 2>/dev/null; then \
 			echo "OK"; \
 			pass=$$((pass + 1)); \
@@ -232,9 +244,9 @@ apkg:
 
 ae: compiler
 	@echo "==================================="
-	@echo "Building ae command-line tool ($(DETECTED_OS))"
+	@echo "Building ae command-line tool ($(DETECTED_OS)) v$(VERSION)"
 	@echo "==================================="
-	$(CC) -O2 -Itools tools/ae.c tools/apkg/toml_parser.c -o build/ae$(EXE_EXT) -lm
+	$(CC) -O2 -DAETHER_VERSION=\"$(VERSION)\" -Itools tools/ae.c tools/apkg/toml_parser.c -o build/ae$(EXE_EXT) -lm
 	@echo "✓ Built successfully: build/ae$(EXE_EXT)"
 	@echo ""
 	@echo "Usage:"

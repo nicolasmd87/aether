@@ -27,5 +27,11 @@ main() {
     c ! Increment { amount: 3 };
     c ! Increment { amount: 10 };
     c ! GetValue {};
-    print("Counter done\n");
+
+    // Wait for all messages to be processed
+    wait_for_idle();
+
+    print("Final count: ");
+    print(c.count);
+    print("\n");
 }

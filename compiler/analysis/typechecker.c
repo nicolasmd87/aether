@@ -356,15 +356,34 @@ int typecheck_program(ASTNode* program) {
     SymbolTable* global_table = create_symbol_table(NULL);
     
     // Add builtin functions
+    // Signature: add_symbol(table, name, type, is_actor, is_function, is_state)
     Type* typeof_type = create_type(TYPE_STRING);
-    add_symbol(global_table, "typeof", typeof_type, 1, 0, 1);  // is_function=1
-    
+    add_symbol(global_table, "typeof", typeof_type, 0, 1, 0);
+
     Type* is_type_type = create_type(TYPE_BOOL);
-    add_symbol(global_table, "is_type", is_type_type, 1, 0, 1);
-    
+    add_symbol(global_table, "is_type", is_type_type, 0, 1, 0);
+
     Type* convert_type_type = create_type(TYPE_UNKNOWN);  // Returns any type
-    add_symbol(global_table, "convert_type", convert_type_type, 1, 0, 1);
-    
+    add_symbol(global_table, "convert_type", convert_type_type, 0, 1, 0);
+
+    // Scheduler/concurrency builtins
+    Type* wait_idle_type = create_type(TYPE_VOID);
+    add_symbol(global_table, "wait_for_idle", wait_idle_type, 0, 1, 0);
+
+    Type* sleep_type = create_type(TYPE_VOID);
+    add_symbol(global_table, "sleep", sleep_type, 0, 1, 0);
+
+    // Environment variable builtins
+    Type* getenv_type = create_type(TYPE_STRING);  // Returns string (or null)
+    add_symbol(global_table, "getenv", getenv_type, 0, 1, 0);
+
+    Type* atoi_type = create_type(TYPE_INT);  // Returns int
+    add_symbol(global_table, "atoi", atoi_type, 0, 1, 0);
+
+    // Timing builtin
+    Type* clock_ns_type = create_type(TYPE_INT);  // Returns nanoseconds as int
+    add_symbol(global_table, "clock_ns", clock_ns_type, 0, 1, 0);
+
     // First pass: collect all declarations
     for (int i = 0; i < program->child_count; i++) {
         ASTNode* child = program->children[i];
@@ -568,7 +587,13 @@ int typecheck_actor_definition(ASTNode* actor, SymbolTable* table) {
                                 if (!field_type) {
                                     field_type = create_type(TYPE_UNKNOWN);
                                 }
-                                add_symbol(receive_table, field->value, field_type, 0, 0, 0);
+                                // Use pattern variable name if present (field: var), else field name
+                                const char* var_name = field->value;
+                                if (field->child_count > 0 && field->children[0] &&
+                                    field->children[0]->type == AST_PATTERN_VARIABLE && field->children[0]->value) {
+                                    var_name = field->children[0]->value;
+                                }
+                                add_symbol(receive_table, var_name, field_type, 0, 0, 0);
                             }
                         }
                     }
@@ -1028,7 +1053,7 @@ int typecheck_binary_expression(ASTNode* expr, SymbolTable* table) {
 
 int typecheck_function_call(ASTNode* call, SymbolTable* table) {
     if (!call || call->type != AST_FUNCTION_CALL) return 0;
-    
+
     Symbol* symbol = lookup_symbol(table, call->value);
     if (!symbol || !symbol->is_function) {
         type_error("Undefined function", call->line, call->column);

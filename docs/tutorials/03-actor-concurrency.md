@@ -522,6 +522,59 @@ counter ! Increment {}
 counter ! Increment {}
 ```
 
+## Waiting for Completion
+
+When you need to wait for actors to finish processing before continuing, use `wait_for_idle()`:
+
+```aether
+message Compute { value: int }
+
+actor Worker {
+    state result = 0
+
+    receive {
+        Compute(value) -> {
+            result = value * 2
+        }
+    }
+}
+
+main() {
+    worker = spawn(Worker())
+
+    // Send work
+    worker ! Compute { value: 21 }
+
+    // Wait for all messages to be processed
+    wait_for_idle()
+
+    // Now safe to read state
+    print("Result: ")
+    print(worker.result)
+    print("\n")
+}
+```
+
+The `wait_for_idle()` function blocks until all actors have finished processing their queued messages. This is useful when you need to:
+
+- Read actor state after computation
+- Coordinate multiple actors before continuing
+- Ensure all work completes before program exit
+
+For timed delays, use `sleep(milliseconds)`:
+
+```aether
+main() {
+    worker = spawn(Worker())
+    worker ! Start {}
+
+    // Wait for 1 second
+    sleep(1000)
+
+    worker ! Stop {}
+}
+```
+
 ## Next Steps
 
 You've learned:

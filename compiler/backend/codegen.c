@@ -435,8 +435,20 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 int skip_parens = gen->in_condition;
                 gen->in_condition = 0;  // Only skip for top-level, not nested
 
+                // Check if this is an assignment expression (=)
+                int is_assignment = (expr->value && strcmp(expr->value, "=") == 0);
+
                 if (!skip_parens) fprintf(gen->output, "(");
+
+                // For assignments, left side is lvalue - no atomic operations
+                if (is_assignment) {
+                    gen->generating_lvalue = 1;
+                }
                 generate_expression(gen, expr->children[0]);
+                if (is_assignment) {
+                    gen->generating_lvalue = 0;
+                }
+
                 fprintf(gen->output, " %s ", get_c_operator(expr->value));
                 generate_expression(gen, expr->children[1]);
                 if (!skip_parens) fprintf(gen->output, ")");
@@ -546,6 +558,32 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         fprintf(gen->output, ")");
                     }
                 }
+                // Built-in: wait_for_idle() - waits until all actors are idle
+                else if (strcmp(func_name, "wait_for_idle") == 0) {
+                    fprintf(gen->output, "scheduler_wait()");
+                }
+                // Built-in: sleep(ms) - sleep for milliseconds
+                else if (strcmp(func_name, "sleep") == 0 && expr->child_count == 1) {
+                    fprintf(gen->output, "usleep(1000 * (");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, "))");
+                }
+                // Built-in: getenv(name) - get environment variable value
+                else if (strcmp(func_name, "getenv") == 0 && expr->child_count == 1) {
+                    fprintf(gen->output, "getenv(");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, ")");
+                }
+                // Built-in: atoi(str) - convert string to integer
+                else if (strcmp(func_name, "atoi") == 0 && expr->child_count == 1) {
+                    fprintf(gen->output, "atoi(");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, ")");
+                }
+                // Built-in: clock_ns() - get monotonic clock in nanoseconds
+                else if (strcmp(func_name, "clock_ns") == 0 && expr->child_count == 0) {
+                    fprintf(gen->output, "({ struct timespec _ts; clock_gettime(CLOCK_MONOTONIC, &_ts); (int64_t)_ts.tv_sec * 1000000000LL + _ts.tv_nsec; })");
+                }
                 else {
                     // Regular function call: func_name(arg1, arg2, ...)
                     fprintf(gen->output, "%s(", func_name);
@@ -557,7 +595,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 }
             }
             break;
-            
+
         case AST_ACTOR_REF:
             if (strcmp(expr->value, "self") == 0) {
                 fprintf(gen->output, "aether_self()");
@@ -1396,7 +1434,12 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
                                         fdef = fdef->next;
                                     }
                                 }
-                                print_line(gen, "%s %s = _pattern->%s;", c_type, field->value, field->value);
+                                const char* var_name = field->value;
+                                if (field->child_count > 0 && field->children[0] &&
+                                    field->children[0]->type == AST_PATTERN_VARIABLE && field->children[0]->value) {
+                                    var_name = field->children[0]->value;
+                                }
+                                print_line(gen, "%s %s = _pattern->%s;", c_type, var_name, field->value);
                             }
                         }
 
@@ -1592,7 +1635,8 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
     
     print_line(gen, "%s* spawn_%s() {", actor->value, actor->value);
     indent(gen);
-    print_line(gen, "int core = atomic_fetch_add(&next_actor_id, 1) %% num_cores;");
+    print_line(gen, "// AETHER_SINGLE_CORE=1 forces all actors to core 0 (eliminates cross-core overhead)");
+    print_line(gen, "int core = getenv(\"AETHER_SINGLE_CORE\") ? 0 : (atomic_fetch_add(&next_actor_id, 1) %% num_cores);");
     print_line(gen, "%s* actor = (%s*)scheduler_spawn_pooled(core, (void (*)(void*))%s_step, sizeof(%s));",
                actor->value, actor->value, actor->value, actor->value);
     print_line(gen, "if (!actor) {");
@@ -1947,12 +1991,6 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
     print_line(gen, "aether_args_init(argc, argv);");
     print_line(gen, "");
 
-    // Add timing if we have actors (for benchmarking)
-    if (gen->actor_count > 0) {
-        print_line(gen, "uint64_t _bench_start = rdtsc();");
-        print_line(gen, "");
-    }
-
     // Initialize scheduler with recommended core count if actors were defined
     if (gen->actor_count > 0) {
         print_line(gen, "// Initialize Aether runtime with auto-detected optimizations");
@@ -1966,7 +2004,7 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
         print_line(gen, "#endif");
         print_line(gen, "");
         print_line(gen, "scheduler_start();");
-        print_line(gen, "current_core_id = 0;");
+        print_line(gen, "current_core_id = -1;  // Main thread is not a scheduler thread");
         print_line(gen, "");
     }
     
@@ -1978,26 +2016,7 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
     if (gen->actor_count > 0) {
         print_line(gen, "");
         print_line(gen, "// Wait for actors to complete and clean up");
-        print_line(gen, "scheduler_stop();");
         print_line(gen, "scheduler_wait();");
-        print_line(gen, "");
-        print_line(gen, "// Output benchmark results");
-        print_line(gen, "uint64_t _bench_end = rdtsc();");
-        print_line(gen, "uint64_t _bench_cycles = _bench_end - _bench_start;");
-        print_line(gen, "#if defined(__x86_64__) || defined(__i386__)");
-        print_line(gen, "double cycles_per_msg = (double)_bench_cycles / (10000000 * 2);");
-        print_line(gen, "double cpu_freq_ghz = 3.0;  // Approximate CPU frequency");
-        print_line(gen, "double seconds = cycles_per_msg * (10000000 * 2) / (cpu_freq_ghz * 1e9);");
-        print_line(gen, "double throughput = (2.0 * 10000000) / seconds;");
-        print_line(gen, "printf(\"\\nCycles/msg:     %%.2f\\n\", cycles_per_msg);");
-        print_line(gen, "printf(\"Throughput:     %%.2f M msg/sec\\n\", throughput / 1e6);");
-        print_line(gen, "#elif defined(__aarch64__) || defined(__arm__)");
-        print_line(gen, "double seconds = _bench_cycles / 1e9;");
-        print_line(gen, "double throughput = (2.0 * 10000000) / seconds;");
-        print_line(gen, "double cycles_per_msg = _bench_cycles / (10000000 * 2.0);");
-        print_line(gen, "printf(\"\\nCycles/msg:     %%.2f\\n\", cycles_per_msg);");
-        print_line(gen, "printf(\"Throughput:     %%.2f M msg/sec\\n\", throughput / 1e6);");
-        print_line(gen, "#endif");
     }
 
     // Print message pool statistics (only for actor programs)
@@ -2044,6 +2063,7 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "#include <string.h>");
     print_line(gen, "#include <stdbool.h>");
     print_line(gen, "#include <stdatomic.h>");
+    print_line(gen, "#include <unistd.h>");
     print_line(gen, "");
     // Declare runtime args function (avoid full header to prevent conflicts with actor runtime)
     print_line(gen, "void aether_args_init(int argc, char** argv);");

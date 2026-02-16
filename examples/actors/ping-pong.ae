@@ -40,5 +40,13 @@ main() {
     pong ! Ping { seq: 3 };
     ping ! Pong { seq: 3 };
 
-    print("Ping-pong done\n");
+    // Wait for all messages to be processed
+    wait_for_idle();
+
+    print("Ping received: ");
+    print(ping.received);
+    print(" pongs\n");
+    print("Pong received: ");
+    print(pong.received);
+    print(" pings\n");
 }

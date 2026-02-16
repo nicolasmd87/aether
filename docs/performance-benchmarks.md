@@ -8,14 +8,51 @@ This document describes the benchmark methodology and available performance test
 
 ### Ping-Pong
 
-Two actors exchange messages in sequence. Tests basic message-passing latency and throughput.
+Two actors exchange messages in sequence. Tests cross-actor message-passing latency and throughput.
 
 **Workload:**
-- 2 actors
-- 10 million messages exchanged
-- Measures throughput and per-message latency
+- 2 actors exchanging messages
+- Configurable message count via `BENCHMARK_MESSAGES` environment variable
+- Measures round-trip throughput
 
 **Location:** `benchmarks/cross-language/aether/ping_pong.ae`
+
+### Counting
+
+Single actor receives increment messages from the main thread. Tests main thread to actor message throughput.
+
+**Workload:**
+- 1 actor
+- Main thread sends all messages
+- Measures unidirectional throughput
+
+**Notes:**
+- Activates Main Thread Actor Mode (synchronous processing, no scheduler overhead)
+- Represents best-case single-actor performance
+
+**Location:** `benchmarks/cross-language/aether/counting.ae`
+
+### Thread Ring
+
+N actors arranged in a ring, each forwarding messages to the next. Tests multi-actor coordination and scheduler efficiency.
+
+**Workload:**
+- N actors (configurable)
+- Token passed around the ring
+- Measures ring completion time
+
+**Location:** `benchmarks/cross-language/aether/thread_ring.ae`
+
+### Fork-Join
+
+Master spawns N workers, distributes work, collects results. Tests fan-out/fan-in patterns.
+
+**Workload:**
+- 1 master actor, N worker actors
+- Master sends tasks, workers reply with results
+- Measures parallel dispatch and aggregation
+
+**Location:** `benchmarks/cross-language/aether/fork_join.ae`
 
 ## Cross-Language Benchmarks
 

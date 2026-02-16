@@ -31,5 +31,11 @@ main() {
     greeter ! Greet { user_id: 1 };
     greeter ! Greet { user_id: 2 };
     greeter ! Farewell { user_id: 1 };
-    print("Multi-message done\n");
+
+    // Wait for all messages to be processed
+    wait_for_idle();
+
+    print("Total greetings: ");
+    print(greeter.greetings);
+    print("\n");
 }

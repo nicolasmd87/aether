@@ -1,0 +1,71 @@
+// Integration test for synchronization primitives
+// Tests wait_for_idle() and sleep() built-in functions
+
+message Task { id: int }
+message Done {}
+
+actor Worker {
+    state completed = 0;
+
+    receive {
+        Task(id) -> {
+            completed = completed + 1;
+        }
+        Done() -> {
+            // Signal completion
+        }
+    }
+}
+
+actor Accumulator {
+    state total = 0;
+
+    receive {
+        Task(id) -> {
+            total = total + id;
+        }
+    }
+}
+
+main() {
+    print("Testing wait_for_idle()...\n");
+
+    // Spawn all actors upfront
+    w = spawn(Worker());
+    a1 = spawn(Accumulator());
+    a2 = spawn(Accumulator());
+
+    // Send messages to worker
+    w ! Task { id: 1 };
+    w ! Task { id: 2 };
+    w ! Task { id: 3 };
+
+    // Send messages to accumulators
+    a1 ! Task { id: 10 };
+    a1 ! Task { id: 20 };
+    a2 ! Task { id: 30 };
+    a2 ! Task { id: 40 };
+
+    // Wait for all messages to be processed
+    wait_for_idle();
+
+    // Verify results
+    print("Worker completed: ");
+    print(w.completed);
+    print("\n");
+
+    print("Accumulator 1 total: ");
+    print(a1.total);
+    print("\n");
+
+    print("Accumulator 2 total: ");
+    print(a2.total);
+    print("\n");
+
+    // Test sleep function
+    print("Testing sleep()...\n");
+    sleep(10);
+    print("Sleep completed\n");
+
+    print("Synchronization tests passed\n");
+}

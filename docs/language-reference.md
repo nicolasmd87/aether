@@ -292,7 +292,15 @@ point.x = 10
 
 ## Built-in Functions
 
-- `print(format, ...)` - Print formatted string (similar to printf)
+### I/O
+
+- `print(value)` - Print a value to standard output
+
+### Concurrency
+
+- `spawn(ActorName())` - Create a new actor instance
+- `wait_for_idle()` - Block until all actors have finished processing messages
+- `sleep(ms)` - Pause execution for the specified number of milliseconds
 
 ## Modules and Imports
 

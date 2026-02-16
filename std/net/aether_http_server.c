@@ -632,3 +632,109 @@ void aether_http_server_free(HttpServer* server) {
     
     free(server);
 }
+
+// MIME type detection based on file extension
+const char* aether_http_mime_type(const char* path) {
+    if (!path) return "application/octet-stream";
+
+    const char* ext = strrchr(path, '.');
+    if (!ext) return "application/octet-stream";
+
+    ext++; // Skip the dot
+
+    // Common web MIME types
+    if (strcasecmp(ext, "html") == 0 || strcasecmp(ext, "htm") == 0) return "text/html; charset=utf-8";
+    if (strcasecmp(ext, "css") == 0) return "text/css; charset=utf-8";
+    if (strcasecmp(ext, "js") == 0) return "application/javascript; charset=utf-8";
+    if (strcasecmp(ext, "json") == 0) return "application/json; charset=utf-8";
+    if (strcasecmp(ext, "xml") == 0) return "application/xml; charset=utf-8";
+    if (strcasecmp(ext, "txt") == 0) return "text/plain; charset=utf-8";
+
+    // Images
+    if (strcasecmp(ext, "png") == 0) return "image/png";
+    if (strcasecmp(ext, "jpg") == 0 || strcasecmp(ext, "jpeg") == 0) return "image/jpeg";
+    if (strcasecmp(ext, "gif") == 0) return "image/gif";
+    if (strcasecmp(ext, "svg") == 0) return "image/svg+xml";
+    if (strcasecmp(ext, "ico") == 0) return "image/x-icon";
+    if (strcasecmp(ext, "webp") == 0) return "image/webp";
+
+    // Fonts
+    if (strcasecmp(ext, "woff") == 0) return "font/woff";
+    if (strcasecmp(ext, "woff2") == 0) return "font/woff2";
+    if (strcasecmp(ext, "ttf") == 0) return "font/ttf";
+    if (strcasecmp(ext, "otf") == 0) return "font/otf";
+
+    // Other
+    if (strcasecmp(ext, "pdf") == 0) return "application/pdf";
+    if (strcasecmp(ext, "zip") == 0) return "application/zip";
+    if (strcasecmp(ext, "wasm") == 0) return "application/wasm";
+
+    return "application/octet-stream";
+}
+
+// Serve a single file
+void aether_http_serve_file(HttpServerResponse* res, const char* filepath) {
+    FILE* f = fopen(filepath, "rb");
+    if (!f) {
+        aether_http_response_set_status(res, 404);
+        aether_http_response_set_body(res, "404 - File Not Found");
+        return;
+    }
+
+    // Get file size
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    // Read file content
+    char* content = (char*)malloc(size + 1);
+    if (!content) {
+        fclose(f);
+        aether_http_response_set_status(res, 500);
+        aether_http_response_set_body(res, "500 - Server Error");
+        return;
+    }
+
+    fread(content, 1, size, f);
+    content[size] = '\0';
+    fclose(f);
+
+    // Set response
+    aether_http_response_set_status(res, 200);
+    aether_http_response_set_header(res, "Content-Type", aether_http_mime_type(filepath));
+    aether_http_response_set_header(res, "Access-Control-Allow-Origin", "*");
+    aether_http_response_set_body(res, content);
+    free(content);
+}
+
+// Static file serving handler (for use with wildcard routes)
+void aether_http_serve_static(HttpRequest* req, HttpServerResponse* res, void* base_dir) {
+    const char* dir = (const char*)base_dir;
+    if (!dir) dir = ".";
+
+    // Build filepath from request path
+    const char* req_path = req->path;
+    if (!req_path || req_path[0] == '\0') req_path = "/";
+
+    // Handle root path
+    if (strcmp(req_path, "/") == 0) {
+        req_path = "/index.html";
+    }
+
+    // Skip leading slash
+    if (req_path[0] == '/') req_path++;
+
+    // Security: prevent directory traversal
+    if (strstr(req_path, "..") != NULL) {
+        aether_http_response_set_status(res, 403);
+        aether_http_response_set_body(res, "403 - Forbidden");
+        return;
+    }
+
+    // Build full path
+    char filepath[1024];
+    snprintf(filepath, sizeof(filepath), "%s/%s", dir, req_path);
+
+    // Serve the file
+    aether_http_serve_file(res, filepath);
+}

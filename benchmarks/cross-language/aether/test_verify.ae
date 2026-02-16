@@ -1,0 +1,50 @@
+message Ping { count: int }
+message Pong { count: int }
+
+actor PingActor {
+    state pong_ref = 0;
+    state received = 0;
+    state target = 0;
+
+    receive {
+        Pong(count) -> {
+            received = received + 1;
+            if (received < target) {
+                pong_ref ! Ping { count: received };
+            }
+        }
+    }
+}
+
+actor PongActor {
+    state ping_ref = 0;
+
+    receive {
+        Ping(count) -> {
+            ping_ref ! Pong { count: count };
+        }
+    }
+}
+
+main() {
+    total_messages = 100;
+    
+    ping = spawn(PingActor());
+    pong = spawn(PongActor());
+    
+    ping.pong_ref = pong;
+    ping.target = total_messages;
+    pong.ping_ref = ping;
+    
+    // Start
+    pong ! Ping { count: 0 };
+    
+    // Wait
+    wait_for_idle();
+    
+    print("Received: ");
+    print(ping.received);
+    print(" / ");
+    print(total_messages);
+    print("\n");
+}

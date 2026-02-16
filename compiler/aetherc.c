@@ -20,7 +20,11 @@
 
 // Compiler limits
 #define MAX_TOKENS 10000
-#define AETHER_VERSION "0.4.0"
+
+// Version is set by Makefile from VERSION file
+#ifndef AETHER_VERSION
+#define AETHER_VERSION "0.0.0-dev"
+#endif
 
 // Constants for better maintainability
 #define DEFAULT_MAX_ACTORS 1000

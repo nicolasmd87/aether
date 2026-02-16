@@ -9,7 +9,11 @@
 #include <unistd.h>
 #endif
 
-#define APKG_VERSION "0.1.0"
+// Version is set by Makefile from VERSION file
+#ifndef AETHER_VERSION
+#define AETHER_VERSION "0.0.0-dev"
+#endif
+#define APKG_VERSION AETHER_VERSION
 
 int apkg_init(const char* name) {
     printf("Initializing new Aether package '%s'...\n", name);

@@ -3,7 +3,11 @@ import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class PingPong {
-    private static final int MESSAGES = 10_000_000;
+    private static int getMessages() {
+        String env = System.getenv("BENCHMARK_MESSAGES");
+        return env != null ? Integer.parseInt(env) : 100000;
+    }
+    private static final int MESSAGES = getMessages();
 
     static class PingThread extends Thread {
         private final BlockingQueue<Integer> sendQueue;

@@ -1,0 +1,125 @@
+// Aether Benchmark Visualization Server
+// Demonstrates Aether's HTTP handling capabilities
+//
+// Build: ae build server.ae -o server --extra server_ffi.c
+// Run: ./server
+// Open: http://localhost:8080
+
+// FFI declarations
+extern socket_create(port: int) -> int
+extern socket_accept(fd: int) -> int
+extern socket_read(fd: int, buf: string, size: int) -> int
+extern socket_write(fd: int, data: string, len: int) -> int
+extern socket_close(fd: int)
+extern file_read(path: string) -> string
+extern getcwd_str() -> string
+extern allocate_string(size: int) -> string
+extern string_length(s: string) -> int
+extern starts_with(s: string, prefix: string) -> int
+extern ends_with(s: string, suffix: string) -> int
+extern substring(s: string, start: int, len: int) -> string
+extern int_to_string(n: int) -> string
+extern parse_http_path(request: string) -> string
+extern str_concat(a: string, b: string) -> string
+extern strcmp(a: string, b: string) -> int
+
+// Message for actor-based handling
+message HandleRequest { client_fd: int }
+
+main() {
+    port = 8080;
+
+    print("=======================================================\n");
+    print("  Aether Benchmark Visualization Server\n");
+    print("  Written in Aether - Compiled to native code\n");
+    print("=======================================================\n\n");
+
+    server_fd = socket_create(port);
+    if (server_fd < 0) {
+        print("Failed to create server socket\n");
+    }
+
+    if (server_fd >= 0) {
+        print("Server listening on http://localhost:");
+        print(port);
+        print("\n");
+        print("Press Ctrl+C to stop\n\n");
+
+        base_dir = getcwd_str();
+
+        // Main accept loop
+        while (1 == 1) {
+            client_fd = socket_accept(server_fd);
+            if (client_fd >= 0) {
+                buf = allocate_string(4096);
+                n = socket_read(client_fd, buf, 4096);
+
+                if (n > 0) {
+                    path = parse_http_path(buf);
+
+                    // Variables for response - declared at top of scope
+                    status = 404;
+                    content_type = "text/plain";
+                    body = "Not Found";
+                    filepath = "";
+                    content = "";
+                    filename = "";
+
+                    // Route: / or /index.html
+                    if (strcmp(path, "/") == 0 || strcmp(path, "/index.html") == 0) {
+                        filepath = str_concat(base_dir, "/index.html");
+                        content = file_read(filepath);
+                        if (string_length(content) > 0) {
+                            status = 200;
+                            content_type = "text/html; charset=utf-8";
+                            body = content;
+                        }
+                    }
+
+                    // Route: /results_*.json
+                    if (starts_with(path, "/results_") == 1 && ends_with(path, ".json") == 1) {
+                        filename = substring(path, 1, string_length(path) - 1);
+                        filepath = str_concat(base_dir, "/");
+                        filepath = str_concat(filepath, filename);
+                        content = file_read(filepath);
+                        status = 200;
+                        content_type = "application/json";
+                        if (string_length(content) > 0) {
+                            body = content;
+                        } else {
+                            body = "{\"benchmarks\":{},\"message\":\"No results yet\"}";
+                        }
+                    }
+
+                    // Route: /api/sysinfo
+                    if (strcmp(path, "/api/sysinfo") == 0) {
+                        status = 200;
+                        content_type = "application/json";
+                        body = "{\"server\":\"Aether HTTP Server\",\"version\":\"0.5.0\",\"language\":\"Aether\",\"runtime\":\"Native\"}";
+                    }
+
+                    // Build HTTP response
+                    status_text = "OK";
+                    if (status == 404) {
+                        status_text = "Not Found";
+                    }
+
+                    header = str_concat("HTTP/1.1 ", int_to_string(status));
+                    header = str_concat(header, " ");
+                    header = str_concat(header, status_text);
+                    header = str_concat(header, "\r\nContent-Type: ");
+                    header = str_concat(header, content_type);
+                    header = str_concat(header, "\r\nContent-Length: ");
+                    header = str_concat(header, int_to_string(string_length(body)));
+                    header = str_concat(header, "\r\nConnection: close\r\n");
+                    header = str_concat(header, "Access-Control-Allow-Origin: *\r\n\r\n");
+                    response = str_concat(header, body);
+
+                    socket_write(client_fd, response, string_length(response));
+                }
+
+                socket_close(client_fd);
+            }
+        }
+    }
+}

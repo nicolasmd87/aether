@@ -17,6 +17,7 @@
 #include <condition_variable>
 #include <chrono>
 #include <atomic>
+#include <cstdlib>
 
 #ifdef _WIN32
 #include <intrin.h>
@@ -32,7 +33,7 @@ static inline uint64_t rdtsc() {
 }
 #endif
 
-#define MESSAGES 10000000
+static int MESSAGES = 100000;  // Default for "low" preset
 #define USE_MUTEX 1  // Set to 0 for atomic busy-wait (unfair), 1 for mutex (fair)
 
 #if USE_MUTEX
@@ -132,6 +133,9 @@ void pong_thread() {
 #endif
 
 int main() {
+    const char* env = getenv("BENCHMARK_MESSAGES");
+    if (env) MESSAGES = atoi(env);
+
     std::cout << "=== C++ Ping-Pong Benchmark ===" << std::endl;
     std::cout << "Messages: " << MESSAGES << std::endl;
 #if USE_MUTEX

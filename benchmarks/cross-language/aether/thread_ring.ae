@@ -1,0 +1,132 @@
+// Aether Thread Ring Benchmark (Savina-style)
+// Based on the Savina benchmark suite micro-benchmark
+// Measures message sending and context switching between N actors in a ring
+
+message Token { hops: int }
+
+actor RingNode {
+    state next_ref = 0;
+    state received = 0;
+
+    receive {
+        Token(hops) -> {
+            received = received + 1;
+            if (hops > 0) {
+                next_ref ! Token { hops: hops - 1 };
+            }
+        }
+    }
+}
+
+main() {
+    // Read from BENCHMARK_MESSAGES env var, default 100K
+    num_hops = 100000;
+    env_val = getenv("BENCHMARK_MESSAGES");
+    if (env_val != 0) {
+        num_hops = atoi(env_val);
+    }
+    ring_size = 20;
+
+    // Create ring of actors (20 nodes)
+    nodes_0 = spawn(RingNode());
+    nodes_1 = spawn(RingNode());
+    nodes_2 = spawn(RingNode());
+    nodes_3 = spawn(RingNode());
+    nodes_4 = spawn(RingNode());
+    nodes_5 = spawn(RingNode());
+    nodes_6 = spawn(RingNode());
+    nodes_7 = spawn(RingNode());
+    nodes_8 = spawn(RingNode());
+    nodes_9 = spawn(RingNode());
+    nodes_10 = spawn(RingNode());
+    nodes_11 = spawn(RingNode());
+    nodes_12 = spawn(RingNode());
+    nodes_13 = spawn(RingNode());
+    nodes_14 = spawn(RingNode());
+    nodes_15 = spawn(RingNode());
+    nodes_16 = spawn(RingNode());
+    nodes_17 = spawn(RingNode());
+    nodes_18 = spawn(RingNode());
+    nodes_19 = spawn(RingNode());
+
+    // Wire up the ring
+    nodes_0.next_ref = nodes_1;
+    nodes_1.next_ref = nodes_2;
+    nodes_2.next_ref = nodes_3;
+    nodes_3.next_ref = nodes_4;
+    nodes_4.next_ref = nodes_5;
+    nodes_5.next_ref = nodes_6;
+    nodes_6.next_ref = nodes_7;
+    nodes_7.next_ref = nodes_8;
+    nodes_8.next_ref = nodes_9;
+    nodes_9.next_ref = nodes_10;
+    nodes_10.next_ref = nodes_11;
+    nodes_11.next_ref = nodes_12;
+    nodes_12.next_ref = nodes_13;
+    nodes_13.next_ref = nodes_14;
+    nodes_14.next_ref = nodes_15;
+    nodes_15.next_ref = nodes_16;
+    nodes_16.next_ref = nodes_17;
+    nodes_17.next_ref = nodes_18;
+    nodes_18.next_ref = nodes_19;
+    nodes_19.next_ref = nodes_0;
+
+    // Get start time
+    start_time = clock_ns();
+
+    // Start the token
+    nodes_0 ! Token { hops: num_hops };
+
+    // Wait for completion
+    wait_for_idle();
+
+    // Get end time
+    end_time = clock_ns();
+
+    // Verify
+    total_received = nodes_0.received + nodes_1.received + nodes_2.received +
+                     nodes_3.received + nodes_4.received + nodes_5.received +
+                     nodes_6.received + nodes_7.received + nodes_8.received +
+                     nodes_9.received + nodes_10.received + nodes_11.received +
+                     nodes_12.received + nodes_13.received + nodes_14.received +
+                     nodes_15.received + nodes_16.received + nodes_17.received +
+                     nodes_18.received + nodes_19.received;
+
+    expected = num_hops + 1;
+    if (total_received != expected) {
+        print("VALIDATION FAILED: expected ");
+        print(expected);
+        print(" got ");
+        print(total_received);
+        print("\n");
+    }
+
+    // Calculate metrics
+    elapsed_ns = end_time - start_time;
+    elapsed_ms = elapsed_ns / 1000000;
+    actual_messages = total_received;
+
+    // Cycles/msg (assuming 3GHz clock)
+    if (actual_messages > 0) {
+        total_cycles = elapsed_ns * 3;
+        cycles_per_msg = total_cycles / actual_messages;
+        print("Cycles/msg:     ");
+        print(cycles_per_msg);
+        print("\n");
+    }
+
+    // Throughput: messages / seconds = messages * 1000 / elapsed_ms
+    if (elapsed_ms > 0) {
+        msg_per_sec = (actual_messages * 1000) / elapsed_ms;
+        throughput_m = msg_per_sec / 1000000;
+        throughput_frac = (msg_per_sec / 10000) - (throughput_m * 100);
+        print("Throughput:     ");
+        print(throughput_m);
+        print(".");
+        if (throughput_frac < 10) {
+            print("0");
+        }
+        print(throughput_frac);
+        print(" M msg/sec\n");
+    }
+}

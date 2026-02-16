@@ -66,16 +66,23 @@ main() {
     w3 ! Process { task_id: 6 };
     coord ! Dispatch { task_id: 6 };
 
+    // Wait for all tasks to complete
+    wait_for_idle();
+
     // Check status
     w1 ! Status {};
     w2 ! Status {};
     w3 ! Status {};
     coord ! Report {};
 
+    // Wait for status reports
+    wait_for_idle();
+
     // Shutdown
     w1 ! Shutdown {};
     w2 ! Shutdown {};
     w3 ! Shutdown {};
 
-    print("Worker pool done\n");
+    wait_for_idle();
+    print("Worker pool completed\n");
 }

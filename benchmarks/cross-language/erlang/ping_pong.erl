@@ -1,7 +1,11 @@
 -module(ping_pong).
--export([start/0, ping/3, pong/1]).
+-export([start/0, ping/3, pong/2]).
 
--define(MESSAGES, 10000000).
+get_messages() ->
+    case os:getenv("BENCHMARK_MESSAGES") of
+        false -> 100000;
+        Val -> list_to_integer(Val)
+    end.
 
 ping(Pong, N, _I) when N =< 0 ->
     Pong ! done,
@@ -19,11 +23,11 @@ ping(Pong, N, I) ->
             ping(Pong, N - 1, I + 1)
     end.
 
-pong(Expected) when Expected >= ?MESSAGES ->
+pong(Expected, Messages) when Expected >= Messages ->
     receive
         done -> done
     end;
-pong(Expected) ->
+pong(Expected, Messages) ->
     receive
         {ping, Ping, Value} ->
             % Validate received value matches expected sequence
@@ -34,23 +38,24 @@ pong(Expected) ->
             end,
             % Echo back the EXACT value received
             Ping ! {pong, Value},
-            pong(Expected + 1)
+            pong(Expected + 1, Messages)
     end.
 
 start() ->
+    Messages = get_messages(),
     io:format("=== Erlang Ping-Pong Benchmark ===~n"),
-    io:format("Messages: ~p~n~n", [?MESSAGES]),
+    io:format("Messages: ~p~n~n", [Messages]),
 
     % Spawn processes
     Parent = self(),
-    Pong = spawn(?MODULE, pong, [0]),
+    Pong = spawn(fun() -> pong(0, Messages) end),
 
-    % Start timer
-    Start = erlang:system_time(nanosecond),
+    % Start timer (monotonic_time is correct for benchmarks per Erlang docs)
+    Start = erlang:monotonic_time(nanosecond),
 
     % Run ping-pong - spawn returns the PID, we need to link it to receive done
     spawn_link(fun() ->
-        ping(Pong, ?MESSAGES, 0),
+        ping(Pong, Messages, 0),
         Parent ! done
     end),
 
@@ -63,14 +68,14 @@ start() ->
     end,
 
     % Calculate metrics
-    End = erlang:system_time(nanosecond),
+    End = erlang:monotonic_time(nanosecond),
     ElapsedNs = End - Start,
     ElapsedSec = ElapsedNs / 1000000000.0,
 
     % Estimate cycles (assuming 3GHz)
     TotalCycles = ElapsedNs * 3.0,
-    CyclesPerMsg = TotalCycles / ?MESSAGES,
-    MsgPerSec = ?MESSAGES / ElapsedSec,
+    CyclesPerMsg = TotalCycles / Messages,
+    MsgPerSec = Messages / ElapsedSec,
 
     io:format("Cycles/msg:     ~.2f~n", [CyclesPerMsg]),
     io:format("Throughput:     ~.2f M msg/sec~n", [MsgPerSec / 1000000]),

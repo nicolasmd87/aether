@@ -1,6 +1,22 @@
 [package]
-name = "ping_pong"
+name = "aether_benchmarks"
 version = "0.1.0"
 edition = "2021"
+
+[[bin]]
+name = "ping_pong"
+path = "src/ping_pong.rs"
+
+[[bin]]
+name = "counting"
+path = "src/counting.rs"
+
+[[bin]]
+name = "thread_ring"
+path = "src/thread_ring.rs"
+
+[[bin]]
+name = "fork_join"
+path = "src/fork_join.rs"
 
 [dependencies]

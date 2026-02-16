@@ -29,6 +29,13 @@ The actor runtime includes several performance optimizations applied automatical
 
 ### Active Optimizations
 
+**Main Thread Actor Mode:**
+- Single-actor programs bypass the scheduler entirely
+- Messages processed synchronously in the sender's context
+- Zero-copy: caller's stack pointer passed directly
+- Activated automatically when only one actor exists
+- Disabled by `AETHER_NO_INLINE=1` environment variable
+
 **Message Coalescing:**
 - Batch dequeue drains multiple messages in a single atomic operation
 - Configurable threshold (COALESCE_THRESHOLD = 512)
@@ -76,6 +83,7 @@ typedef struct {
     int auto_process;
     int assigned_core;
     int migrate_to;
+    int main_thread_only;  // If set, scheduler threads skip this actor
     SPSCQueue spsc_queue;
     // User state fields follow
 } ActorBase;
@@ -176,6 +184,28 @@ The multi-core scheduler uses fixed core partitioning:
 - Each scheduler runs in a pthread pinned to a core
 - Actors assigned to cores via round-robin (`actor_id % num_cores`)
 - Cross-core messages use lock-free queues with batch dequeue/enqueue
+
+### Synchronization
+
+The `wait_for_idle()` function blocks until all actors have finished processing their messages. This is the recommended way to synchronize the main thread with actor completion:
+
+```aether
+main() {
+    ping = spawn(PingActor())
+    pong = spawn(PongActor())
+
+    // Send initial message
+    ping ! Start {}
+
+    // Wait for all messages to be processed
+    wait_for_idle()
+
+    // Actors are now idle, safe to read state
+    print(ping.result)
+}
+```
+
+The implementation uses per-core message counters to detect idle state with minimal overhead on the message-passing hot path. Each scheduler core tracks messages sent and processed locally, and `wait_for_idle()` sums across cores to determine when all in-flight messages have been handled.
 
 ### Initialization
 

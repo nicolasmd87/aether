@@ -248,6 +248,21 @@ if (pool->is_thread_local) {
 
 ---
 
+## Environment Variables
+
+| Variable | Effect |
+|----------|--------|
+| `AETHER_NO_INLINE` | Disables Main Thread Actor Mode (forces scheduler-based processing) |
+| `AETHER_INLINE` | Forces Main Thread Actor Mode even with multiple actors |
+| `AETHER_SINGLE_CORE` | Pins all actors to core 0 (eliminates cross-core overhead) |
+| `AETHER_PROFILE` | Memory profile: `micro`, `small`, `medium` (default), `large` |
+| `AETHER_MSG_POOL_SIZE` | Override message pool size (default from profile) |
+| `AETHER_ACTOR_POOL_SIZE` | Override actor pool size (default from profile) |
+| `AETHER_VERBOSE` | Print optimization configuration at startup |
+| `BENCHMARK_MESSAGES` | Sets message count for benchmark programs |
+
+---
+
 ## Best Practices
 
 1. **Always use `AETHER_FLAG_AUTO_DETECT`** unless you have a specific reason not to

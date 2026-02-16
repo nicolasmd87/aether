@@ -141,7 +141,6 @@ actor Counter {
     receive {
         Ping() -> {
             count = count + 1
-            print(count)
         }
     }
 }
@@ -149,10 +148,21 @@ actor Counter {
 main() {
     c = spawn(Counter())
     c ! Ping {}
+    c ! Ping {}
+    c ! Ping {}
+
+    // Wait for all messages to be processed
+    wait_for_idle()
+
+    print("Count: ")
+    print(c.count)
+    print("\n")
 }
 ```
 
 Actors are lightweight concurrent entities that communicate through asynchronous messages. Each actor has private state and a mailbox for incoming messages. Messages are defined with the `message` keyword and sent with the `!` operator. The runtime distributes actors across available CPU cores automatically.
+
+Use `wait_for_idle()` to block until all actors have finished processing their messages. This is essential when you need to read actor state or coordinate completion.
 
 ## Module System
 

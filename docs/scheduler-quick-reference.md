@@ -1,5 +1,24 @@
 # Aether Scheduler - Quick Reference
 
+## Main Thread Mode
+
+Single-actor programs bypass the scheduler entirely. When only one actor exists and all messages originate from the main thread, the runtime processes messages synchronously without spawning scheduler threads.
+
+**Activation:**
+- Automatic: Enabled when the first actor spawns, disabled when a second actor spawns
+- Manual disable: Set `AETHER_NO_INLINE=1` environment variable
+
+**Mechanism:**
+- `scheduler_start()` returns immediately
+- `scheduler_wait()` returns immediately
+- `aether_send_message` processes synchronously via `aether_send_message_sync`
+- Zero-copy: message data passed directly from caller's stack
+
+**Per-actor flag:**
+The `main_thread_only` field on `ActorBase` signals scheduler threads to skip processing this actor. When a second actor spawns, the flag is cleared on the first actor.
+
+---
+
 ## Scheduler Usage
 
 ```c
@@ -18,9 +37,8 @@ for (int i = 0; i < 10000; i++) {
     scheduler_send_remote(actor, msg, current_core_id);
 }
 
-// Stop gracefully
-scheduler_stop();
-scheduler_wait();
+// Wait for all messages to be processed, then stop
+scheduler_wait();  // Blocks until idle, then stops and joins threads
 ```
 
 ## Actor Allocation
@@ -77,6 +95,23 @@ sender -> scheduler_send_local -> mailbox (direct) -> actor step
 ```c
 #define QUEUE_SIZE 16384  // In lockfree_queue.h
 ```
+
+## Idle Detection
+
+`scheduler_wait()` blocks until all messages have been processed. It uses per-core counters to detect idle state without atomic contention on the message-passing hot path:
+
+```c
+// Per-core counters in Scheduler struct
+uint64_t messages_sent;      // Incremented on send (no atomic)
+uint64_t messages_processed; // Incremented on process (no atomic)
+
+// scheduler_wait() sums across cores
+while (total_sent != total_processed) {
+    // spin-wait
+}
+```
+
+Messages sent from the main thread (before scheduler threads start) use a separate atomic counter. This path is infrequent.
 
 ## Core Assignment and Migration
 

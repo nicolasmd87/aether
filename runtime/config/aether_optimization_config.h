@@ -24,6 +24,76 @@
 
 #include <stdatomic.h>
 #include <stdbool.h>
+#include <stdlib.h>
+
+// ============================================================================
+// MEMORY PROFILES (auto-detected or user-specified via AETHER_PROFILE)
+// Controls pool sizes for different workload characteristics
+// ============================================================================
+
+typedef enum {
+    AETHER_PROFILE_MICRO,    // <10 actors, <1M messages: pools=256
+    AETHER_PROFILE_SMALL,    // <100 actors: pools=1024
+    AETHER_PROFILE_MEDIUM,   // <1000 actors: pools=4096 (default)
+    AETHER_PROFILE_LARGE     // 1000+ actors: pools=16384
+} AetherProfile;
+
+// Profile pool sizes
+#define AETHER_PROFILE_MICRO_MSG_POOL   256
+#define AETHER_PROFILE_SMALL_MSG_POOL   1024
+#define AETHER_PROFILE_MEDIUM_MSG_POOL  4096
+#define AETHER_PROFILE_LARGE_MSG_POOL   16384
+
+#define AETHER_PROFILE_MICRO_ACTOR_POOL  16
+#define AETHER_PROFILE_SMALL_ACTOR_POOL  64
+#define AETHER_PROFILE_MEDIUM_ACTOR_POOL 256
+#define AETHER_PROFILE_LARGE_ACTOR_POOL  1024
+
+// Get pool sizes for a profile
+static inline int aether_profile_msg_pool_size(AetherProfile p) {
+    switch (p) {
+        case AETHER_PROFILE_MICRO:  return AETHER_PROFILE_MICRO_MSG_POOL;
+        case AETHER_PROFILE_SMALL:  return AETHER_PROFILE_SMALL_MSG_POOL;
+        case AETHER_PROFILE_LARGE:  return AETHER_PROFILE_LARGE_MSG_POOL;
+        default:                    return AETHER_PROFILE_MEDIUM_MSG_POOL;
+    }
+}
+
+static inline int aether_profile_actor_pool_size(AetherProfile p) {
+    switch (p) {
+        case AETHER_PROFILE_MICRO:  return AETHER_PROFILE_MICRO_ACTOR_POOL;
+        case AETHER_PROFILE_SMALL:  return AETHER_PROFILE_SMALL_ACTOR_POOL;
+        case AETHER_PROFILE_LARGE:  return AETHER_PROFILE_LARGE_ACTOR_POOL;
+        default:                    return AETHER_PROFILE_MEDIUM_ACTOR_POOL;
+    }
+}
+
+// ============================================================================
+// ENVIRONMENT VARIABLE HELPERS
+// ============================================================================
+
+// Parse AETHER_PROFILE env var
+static inline AetherProfile aether_profile_from_env(void) {
+    const char* env = getenv("AETHER_PROFILE");
+    if (!env) return AETHER_PROFILE_MEDIUM;
+
+    if (env[0] == 'm' && env[1] == 'i') return AETHER_PROFILE_MICRO;  // "micro"
+    if (env[0] == 's') return AETHER_PROFILE_SMALL;                   // "small"
+    if (env[0] == 'l') return AETHER_PROFILE_LARGE;                   // "large"
+    return AETHER_PROFILE_MEDIUM;                                      // "medium" or unknown
+}
+
+// Read integer from env var with default
+static inline int aether_env_int(const char* name, int default_val) {
+    const char* env = getenv(name);
+    if (!env) return default_val;
+    return atoi(env);
+}
+
+// Check if env var is set (any value = true, absent = false)
+static inline bool aether_env_bool(const char* name) {
+    return getenv(name) != NULL;
+}
 
 // ============================================================================
 // TIER 1: ALWAYS-ON OPTIMIZATIONS (no user control needed)
@@ -86,12 +156,32 @@ typedef struct {
     atomic_bool use_lockfree_mailbox;
     atomic_bool use_message_dedup;
     atomic_bool verbose;
-    
+
+    // Inline mode (auto-detected or env override)
+    // When active, single-actor programs bypass queues entirely
+    atomic_bool inline_mode_active;
+    atomic_bool inline_mode_forced;   // Set by AETHER_INLINE=1 env var
+    atomic_bool inline_mode_disabled; // Set by AETHER_NO_INLINE=1 env var
+
+    // Main thread actor mode: single actor, all sends from main(), no scheduler needed
+    // When active: messages processed synchronously in sender's context
+    atomic_bool main_thread_mode;
+    void* main_actor;  // Pointer to the single actor (ActorBase*)
+
+    // Actor tracking for auto-detection
+    atomic_int actor_count;
+
+    // Memory profile (auto-detected or env override)
+    AetherProfile profile;
+    int msg_pool_size;    // Actual pool size (env override or from profile)
+    int actor_pool_size;  // Actual pool size (env override or from profile)
+
     // Statistics
     atomic_uint_fast64_t actors_pooled;
     atomic_uint_fast64_t actors_malloced;
     atomic_uint_fast64_t direct_sends;
     atomic_uint_fast64_t queue_sends;
+    atomic_uint_fast64_t inline_sends;     // Messages sent via inline mode
     atomic_uint_fast64_t batches_adjusted;
     atomic_uint_fast64_t simd_batches;
     atomic_uint_fast64_t messages_deduped;
@@ -133,5 +223,61 @@ static inline bool aether_has_opt(AetherOptFlags flag) {
 #else
 #define AETHER_STAT_INC(field) ((void)0)
 #endif
+
+// ============================================================================
+// INLINE MODE DETECTION (for single-actor sequential optimization)
+// ============================================================================
+
+// Check if inline mode is currently active (single branch, predicted false)
+static inline bool aether_inline_mode_active(void) {
+    return __builtin_expect(atomic_load_explicit(&g_aether_config.inline_mode_active, memory_order_relaxed), 0);
+}
+
+// Check if main thread actor mode is active (synchronous processing)
+// This is the fastest path: no scheduler, no queues, direct function calls
+static inline bool aether_main_thread_mode_active(void) {
+    return __builtin_expect(atomic_load_explicit(&g_aether_config.main_thread_mode, memory_order_relaxed), 0);
+}
+
+// Enable main thread mode for an actor (call after spawn, before any sends)
+static inline void aether_enable_main_thread_mode(void* actor) {
+    atomic_store_explicit(&g_aether_config.main_thread_mode, true, memory_order_relaxed);
+    g_aether_config.main_actor = actor;
+}
+
+// Called at spawn time to update actor count and inline mode state
+static inline void aether_on_actor_spawn(void) {
+    int count = atomic_fetch_add_explicit(&g_aether_config.actor_count, 1, memory_order_relaxed);
+
+    // Check env overrides
+    if (atomic_load_explicit(&g_aether_config.inline_mode_disabled, memory_order_relaxed)) {
+        return; // User forced inline off
+    }
+
+    if (atomic_load_explicit(&g_aether_config.inline_mode_forced, memory_order_relaxed)) {
+        atomic_store_explicit(&g_aether_config.inline_mode_active, true, memory_order_relaxed);
+        return; // User forced inline on regardless of actor count
+    }
+
+    // Auto-detect: inline mode only for single actor (count was 0 before increment)
+    bool single_actor = (count == 0);
+    atomic_store_explicit(&g_aether_config.inline_mode_active, single_actor, memory_order_relaxed);
+
+    // MAIN THREAD MODE: Disable when second actor is spawned
+    // This ensures multi-actor programs use scheduler threads (not synchronous processing)
+    if (!single_actor) {
+        atomic_store_explicit(&g_aether_config.main_thread_mode, false, memory_order_relaxed);
+        g_aether_config.main_actor = NULL;
+    }
+}
+
+// Called when an actor terminates
+static inline void aether_on_actor_terminate(void) {
+    atomic_fetch_sub_explicit(&g_aether_config.actor_count, 1, memory_order_relaxed);
+}
+
+// Initialize profile and inline mode from env vars
+// Called once at runtime init
+void aether_init_from_env(void);
 
 #endif // AETHER_OPTIMIZATION_CONFIG_H

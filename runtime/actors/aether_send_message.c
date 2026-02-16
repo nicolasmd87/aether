@@ -1,5 +1,6 @@
 #include "actor_state_machine.h"
 #include "../scheduler/multicore_scheduler.h"
+#include "../config/aether_optimization_config.h"
 #include <string.h>
 #include <stdlib.h>
 #include <pthread.h>
@@ -117,9 +118,17 @@ static inline int payload_pool_release(void* ptr) {
     return 1;  // Successfully returned to pool
 }
 
+// TLS flag: when set, skip freeing (used for sync mode zero-copy)
+extern __thread int g_skip_free;
+
 // Free message payload - try pool first, then fall back to free()
 void aether_free_message(void* msg_data) {
     if (!msg_data) return;
+
+    // SYNC MODE: Skip free when processing messages with zero-copy stack pointers
+    if (__builtin_expect(g_skip_free, 0)) {
+        return;  // Caller's stack memory - don't free!
+    }
 
     // Try to return to pool
     if (payload_pool_release(msg_data)) {
@@ -134,11 +143,65 @@ void aether_free_message(void* msg_data) {
 // Message Sending with Pool Optimization
 // ==============================================================================
 
+// ==============================================================================
+// MAIN THREAD MODE: Synchronous Message Processing
+// ==============================================================================
+// When main thread mode is active:
+// - Single actor, all sends from main(), no scheduler threads
+// - Messages processed synchronously in sender's context
+// - Zero queue overhead: 50M+ msg/sec possible
+//
+// This is the fastest path for single-actor programs like the counting benchmark.
+
+// TLS flag: when set, aether_free_message skips freeing (used for sync mode)
+// Declared here, accessed by aether_free_message below
+__thread int g_skip_free = 0;
+
+static inline void __attribute__((hot)) aether_send_message_sync(ActorBase* actor, void* message_data, size_t message_size) {
+    // ULTRA-FAST PATH: Pass original message directly without copying
+    // Since processing is synchronous, caller's stack memory is still valid
+    // We mark g_skip_free so step() doesn't try to free the caller's stack
+
+    // Create mailbox message pointing to original data
+    Message msg;
+    msg.type = *(int*)message_data;  // First field is _message_id
+    msg.sender_id = 0;
+    msg.payload_int = 0;
+    msg.payload_ptr = message_data;  // Direct pointer - no copy!
+    msg.zerocopy.data = NULL;
+    msg.zerocopy.size = 0;
+    msg.zerocopy.owned = 0;
+
+    // Direct mailbox insert + synchronous step (no scheduler involvement)
+    mailbox_send(&actor->mailbox, msg);
+
+    // Tell aether_free_message to skip freeing during this step()
+    g_skip_free = 1;
+    actor->step(actor);
+    g_skip_free = 0;
+
+    // Track stats
+    AETHER_STAT_INC(inline_sends);
+}
+
 // Send a typed message to an actor using optimized scheduler paths
 // Uses SPSC queues, direct sends, and other optimizations automatically
 void aether_send_message(void* actor_ptr, void* message_data, size_t message_size) {
     ActorBase* actor = (ActorBase*)actor_ptr;
 
+    // ==============================================================================
+    // FAST PATH: Main thread mode (single actor, synchronous processing)
+    // ==============================================================================
+    // For single-actor programs (like counting benchmark), process immediately.
+    // No scheduler threads, no queues, no atomics - pure function call.
+    if (aether_main_thread_mode_active()) {
+        aether_send_message_sync(actor, message_data, message_size);
+        return;
+    }
+
+    // ==============================================================================
+    // STANDARD PATH: Multi-actor scheduler-based processing
+    // ==============================================================================
     // Always use heap allocation for type-safe messages.
     // TLS pools have thread affinity issues when sender/receiver are on different threads.
     // The inline message path (Message._imsg with payload_int) is still optimized for
@@ -161,11 +224,12 @@ void aether_send_message(void* actor_ptr, void* message_data, size_t message_siz
     // Use optimized scheduler send paths:
     // - Same-core: direct mailbox send (no queue overhead)
     // - Cross-core: lock-free queue with batching
+    // NOTE: Inline mode disabled for debugging
     if (current_core_id >= 0 && current_core_id == actor->assigned_core) {
         // Same-core: direct mailbox send
         scheduler_send_local(actor, msg);
     } else {
-        // Cross-core or from main thread: use queue
+        // Cross-core or main thread: use queue
         scheduler_send_remote(actor, msg, current_core_id);
     }
 }

@@ -15,7 +15,7 @@ typedef struct {
     int header_count;
     char* body;
     size_t body_length;
-    
+
     // Parsed data
     char** param_keys;      // From /users/:id
     char** param_values;
@@ -61,16 +61,16 @@ typedef struct {
     int port;
     char* host;
     int is_running;
-    
+
     // Routing
     HttpRoute* routes;
-    
+
     // Middleware
     HttpMiddlewareNode* middleware_chain;
-    
+
     // Actor system
     Scheduler* scheduler;
-    
+
     // Configuration
     int max_connections;
     int keep_alive_timeout;
@@ -109,11 +109,15 @@ void aether_http_response_json(HttpServerResponse* res, const char* json);
 const char* aether_http_response_serialize(HttpServerResponse* res);
 void aether_http_server_response_free(HttpServerResponse* res);
 
-// Server control
-void aether_http_server_stop(HttpServer* server);
-
 // Helpers
 int aether_http_route_matches(const char* pattern, const char* path, HttpRequest* req);
 const char* aether_http_status_text(int code);
+
+// MIME type detection
+const char* aether_http_mime_type(const char* path);
+
+// Static file serving
+void aether_http_serve_file(HttpServerResponse* res, const char* filepath);
+void aether_http_serve_static(HttpRequest* req, HttpServerResponse* res, void* base_dir);
 
 #endif

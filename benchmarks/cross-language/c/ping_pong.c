@@ -7,7 +7,8 @@
 #include <unistd.h>
 #include <time.h>
 
-#define MESSAGES 10000000
+// Configurable via BENCHMARK_MESSAGES env var, default 100K for "low" preset
+static int MESSAGES = 100000;
 
 typedef struct {
     pthread_mutex_t mutex;
@@ -70,22 +71,17 @@ void* pong_thread(void* arg) {
     return NULL;
 }
 
-static inline uint64_t rdtsc() {
-#if defined(__x86_64__) || defined(__i386__)
-    unsigned int lo, hi;
-    __asm__ __volatile__ ("rdtsc" : "=a" (lo), "=d" (hi));
-    return ((uint64_t)hi << 32) | lo;
-#elif defined(__aarch64__) || defined(__arm__)
-    // ARM doesn't have RDTSC, use clock_gettime
+static inline uint64_t get_time_ns(void) {
     struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ULL + ts.tv_nsec;
-#else
-    return 0;
-#endif
 }
 
 int main() {
+    // Read message count from environment
+    const char* env = getenv("BENCHMARK_MESSAGES");
+    if (env) MESSAGES = atoi(env);
+
     chan_a = calloc(1, sizeof(Channel));
     chan_b = calloc(1, sizeof(Channel));
 
@@ -98,7 +94,7 @@ int main() {
     printf("Messages: %d\n", MESSAGES);
     printf("Using pthread mutexes and condition variables\n\n");
 
-    uint64_t start = rdtsc();
+    uint64_t start = get_time_ns();
 
     pthread_t t1, t2;
     pthread_create(&t1, NULL, ping_thread, NULL);
@@ -107,25 +103,13 @@ int main() {
     pthread_join(t1, NULL);
     pthread_join(t2, NULL);
 
-    uint64_t end = rdtsc();
-    uint64_t total_cycles = end - start;
-
-#if defined(__x86_64__) || defined(__i386__)
-    double cycles_per_msg = (double)total_cycles / MESSAGES;
-    double freq = 3.0e9; // Approximate CPU frequency
-    double throughput = freq / cycles_per_msg;
+    uint64_t end = get_time_ns();
+    double elapsed_sec = (double)(end - start) / 1e9;
+    double throughput = MESSAGES / elapsed_sec;
+    double cycles_per_msg = elapsed_sec * 3e9 / MESSAGES;
 
     printf("Cycles/msg:     %.2f\n", cycles_per_msg);
     printf("Throughput:     %.2f M msg/sec\n", throughput / 1e6);
-#elif defined(__aarch64__) || defined(__arm__)
-    // ARM: convert nanoseconds to throughput
-    double ns_per_msg = (double)total_cycles / MESSAGES;
-    double throughput = 1e9 / ns_per_msg;
-    double cycles_per_msg = ns_per_msg * 3.0; // Approximate conversion at 3GHz
-
-    printf("Cycles/msg:     %.2f\n", cycles_per_msg);
-    printf("Throughput:     %.2f M msg/sec\n", throughput / 1e6);
-#endif
 
     pthread_mutex_destroy(&chan_a->mutex);
     pthread_cond_destroy(&chan_a->cond);

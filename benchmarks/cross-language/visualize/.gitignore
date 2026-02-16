@@ -1,0 +1,3 @@
+# Build artifacts
+server
+server_generated.c

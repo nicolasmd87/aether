@@ -23,4 +23,11 @@ main() {
     counter ! Increment { amount: 5 };
     counter ! Increment { amount: 3 };
     counter ! GetValue {};
+
+    // Wait for all messages to be processed
+    wait_for_idle();
+
+    print("\nFinal count: ");
+    print(counter.count);
+    print("\n");
 }

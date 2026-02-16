@@ -74,5 +74,13 @@ main() {
     adder ! Doubled { value: 6 };
     collector ! Result { value: 16 };
 
-    print("Pipeline done\n");
+    // Wait for all messages to be processed
+    wait_for_idle();
+
+    print("Collector total: ");
+    print(collector.total);
+    print("\n");
+    print("Items processed: ");
+    print(collector.count);
+    print("\n");
 }

@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Aether Language Benchmarks - Ping-Pong Actor Performance</title>
+<title>Aether Cross-Language Actor Benchmarks</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -49,6 +49,49 @@ body {
   padding: 40px 32px;
 }
 
+/* Pattern Tabs */
+.pattern-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 32px;
+  flex-wrap: wrap;
+}
+
+.pattern-tab {
+  padding: 12px 24px;
+  background: #1a1a1a;
+  border: 1px solid #2a2a2a;
+  border-radius: 8px;
+  color: #888;
+  font-size: 0.95rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.pattern-tab:hover {
+  border-color: #3a3a3a;
+  color: #ccc;
+}
+
+.pattern-tab.active {
+  background: linear-gradient(135deg, #1a2f4a 0%, #162538 100%);
+  border-color: #4a9eff;
+  color: #4a9eff;
+}
+
+.pattern-tab .status {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-left: 8px;
+}
+
+.pattern-tab .status.loaded { background: #4caf50; }
+.pattern-tab .status.error { background: #f44336; }
+.pattern-tab .status.pending { background: #666; }
+
 .system-info {
   background: linear-gradient(135deg, #1a1f2e 0%, #161b26 100%);
   border: 1px solid #2a3f5f;
@@ -83,15 +126,15 @@ body {
 
 .metrics-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
-  gap: 20px;
-  margin-bottom: 40px;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-bottom: 32px;
 }
 
 .metric-card {
   background: linear-gradient(135deg, #1a1a1a 0%, #151515 100%);
   border: 1px solid #2a2a2a;
-  padding: 24px;
+  padding: 20px;
   border-radius: 10px;
   transition: all 0.3s ease;
 }
@@ -99,42 +142,48 @@ body {
 .metric-card:hover {
   border-color: #3a3a3a;
   transform: translateY(-2px);
-  box-shadow: 0 8px 16px rgba(0,0,0,0.4);
 }
 
 .metric-label {
-  font-size: 0.85rem;
+  font-size: 0.8rem;
   color: #888;
-  margin-bottom: 8px;
+  margin-bottom: 6px;
   text-transform: uppercase;
   letter-spacing: 0.05em;
 }
 
 .metric-value {
-  font-size: 2.5rem;
+  font-size: 2rem;
   font-weight: 700;
   color: #fff;
   margin-bottom: 4px;
 }
 
 .metric-detail {
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   color: #666;
+}
+
+.charts-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-bottom: 32px;
 }
 
 .section {
   background: #1a1a1a;
   border: 1px solid #2a2a2a;
   border-radius: 12px;
-  padding: 32px;
-  margin-bottom: 32px;
+  padding: 24px;
+  margin-bottom: 24px;
 }
 
 .section-title {
-  font-size: 1.4rem;
+  font-size: 1.2rem;
   font-weight: 600;
   color: #fff;
-  margin-bottom: 24px;
+  margin-bottom: 20px;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -143,22 +192,20 @@ body {
 .section-title::before {
   content: '';
   width: 4px;
-  height: 24px;
+  height: 20px;
   background: linear-gradient(180deg, #4a9eff 0%, #2d7acc 100%);
   border-radius: 2px;
 }
 
 .chart-container {
   position: relative;
-  height: 400px;
-  margin: 24px 0;
+  height: 300px;
 }
 
 .comparison-table {
   width: 100%;
   border-collapse: separate;
   border-spacing: 0;
-  margin-top: 24px;
   font-size: 0.9rem;
 }
 
@@ -167,25 +214,18 @@ body {
 }
 
 .comparison-table th {
-  padding: 16px;
+  padding: 14px 12px;
   text-align: left;
   color: #fff;
   font-weight: 600;
   border-bottom: 2px solid #4a9eff;
-  position: sticky;
-  top: 80px;
-  background: #252525;
-  z-index: 10;
+  white-space: nowrap;
 }
 
 .comparison-table td {
-  padding: 14px 16px;
+  padding: 12px;
   border-bottom: 1px solid #2a2a2a;
   color: #ccc;
-}
-
-.comparison-table tbody tr {
-  transition: background 0.2s ease;
 }
 
 .comparison-table tbody tr:hover {
@@ -196,11 +236,11 @@ body {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 28px;
+  height: 28px;
   border-radius: 6px;
   font-weight: 700;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
 }
 
 .rank-1 { background: linear-gradient(135deg, #ffd700 0%, #ffed4e 100%); color: #000; }
@@ -211,74 +251,55 @@ body {
 .lang-name {
   font-weight: 600;
   color: #fff;
-  font-size: 1rem;
 }
 
 .runtime-tag {
   display: inline-block;
-  padding: 4px 10px;
+  padding: 3px 8px;
   background: #2a2a2a;
   border-radius: 4px;
-  font-size: 0.8rem;
+  font-size: 0.75rem;
   color: #999;
 }
 
 .perf-value {
   font-weight: 600;
   font-family: 'Monaco', 'Menlo', monospace;
-  font-size: 0.95rem;
-}
-
-.notes-text {
-  font-size: 0.85rem;
-  color: #888;
-  line-height: 1.4;
+  font-size: 0.9rem;
 }
 
 .winner-highlight {
   color: #4a9eff !important;
-  font-weight: 700;
 }
 
 .methodology {
   background: linear-gradient(135deg, #1a2a1a 0%, #151e15 100%);
   border: 1px solid #2a3a2a;
   border-left: 4px solid #4caf50;
-  padding: 24px;
+  padding: 20px;
   border-radius: 8px;
   margin-bottom: 32px;
 }
 
 .methodology h3 {
   color: #4caf50;
-  font-size: 1.1rem;
-  margin-bottom: 12px;
+  font-size: 1rem;
+  margin-bottom: 10px;
 }
 
 .methodology p {
   color: #aaa;
-  font-size: 0.9rem;
+  font-size: 0.85rem;
   line-height: 1.6;
-}
-
-.methodology ul {
-  margin: 12px 0;
-  padding-left: 20px;
-}
-
-.methodology li {
-  color: #999;
-  font-size: 0.9rem;
-  margin: 6px 0;
 }
 
 .footer {
   text-align: center;
-  padding: 32px;
+  padding: 24px;
   color: #666;
   font-size: 0.85rem;
   border-top: 1px solid #2a2a2a;
-  margin-top: 40px;
+  margin-top: 32px;
 }
 
 .loading {
@@ -290,18 +311,24 @@ body {
   color: #888;
 }
 
-@media (max-width: 768px) {
-  .metrics-grid {
+.no-data {
+  text-align: center;
+  padding: 40px;
+  color: #666;
+}
+
+@media (max-width: 900px) {
+  .charts-row {
     grid-template-columns: 1fr;
   }
+}
 
-  .chart-container {
-    height: 300px;
+@media (max-width: 768px) {
+  .metrics-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
-
-  .system-info {
-    flex-direction: column;
-    gap: 16px;
+  .chart-container {
+    height: 250px;
   }
 }
 </style>
@@ -311,38 +338,56 @@ body {
 <div class="header">
   <div class="header-content">
     <h1>Aether Cross-Language Benchmarks</h1>
-    <div class="header-subtitle">Ping-Pong Actor Performance Comparison</div>
+    <div class="header-subtitle">Savina Actor Benchmark Suite - Performance Comparison</div>
   </div>
 </div>
 
 <div class="container">
-  <div id="loading" class="loading">Loading benchmark data...</div>
-  <div id="content" style="display: none;">
+  <div class="pattern-tabs" id="pattern-tabs">
+    <div class="pattern-tab active" data-pattern="ping_pong">
+      Ping-Pong <span class="status pending"></span>
+    </div>
+    <div class="pattern-tab" data-pattern="counting">
+      Counting <span class="status pending"></span>
+    </div>
+    <div class="pattern-tab" data-pattern="thread_ring">
+      Thread Ring <span class="status pending"></span>
+    </div>
+    <div class="pattern-tab" data-pattern="fork_join">
+      Fork-Join <span class="status pending"></span>
+    </div>
+  </div>
 
+  <div id="loading" class="loading">Loading benchmark data...</div>
+
+  <div id="content" style="display: none;">
     <div class="system-info" id="system-info"></div>
 
-    <div class="methodology">
+    <div class="methodology" id="methodology">
       <h3>Methodology</h3>
-      <p>All languages implement the same ping-pong benchmark: two actors exchange 10 million messages (20M total round-trips). Each language uses its native, idiomatic concurrency primitives with no artificial handicaps.</p>
-      <ul>
-        <li><strong>Throughput:</strong> Messages processed per second (higher is better)</li>
-        <li><strong>Latency:</strong> CPU cycles per message at ~3GHz (lower is better)</li>
-        <li><strong>Memory:</strong> Resident Set Size during execution (lower is better)</li>
-      </ul>
+      <p id="methodology-text"></p>
     </div>
 
     <div class="metrics-grid" id="metrics"></div>
 
-    <div class="section">
-      <div class="section-title">Performance Comparison</div>
-      <div class="chart-container">
-        <canvas id="throughputChart"></canvas>
+    <div class="charts-row">
+      <div class="section">
+        <div class="section-title">Throughput Comparison</div>
+        <div class="chart-container">
+          <canvas id="throughputChart"></canvas>
+        </div>
+      </div>
+      <div class="section">
+        <div class="section-title">Memory Usage</div>
+        <div class="chart-container">
+          <canvas id="memoryChart"></canvas>
+        </div>
       </div>
     </div>
 
     <div class="section">
       <div class="section-title">Detailed Results</div>
-      <table class="comparison-table" id="resultsTable">
+      <table class="comparison-table">
         <thead>
           <tr>
             <th>Rank</th>
@@ -351,140 +396,222 @@ body {
             <th>Throughput</th>
             <th>Latency (cyc/msg)</th>
             <th>Memory</th>
-            <th>Implementation Notes</th>
+            <th>Notes</th>
           </tr>
         </thead>
         <tbody id="tableBody"></tbody>
       </table>
     </div>
-
   </div>
 </div>
 
 <div class="footer">
-  Aether Programming Language | Fair, reproducible benchmarks | Data auto-refreshes every 60s
+  Aether Programming Language | Fair, reproducible Savina benchmarks | Data auto-refreshes every 60s
 </div>
 
 <script>
-let refreshInterval;
+const PATTERNS = ['ping_pong', 'counting', 'thread_ring', 'fork_join'];
+const PATTERN_DESCRIPTIONS = {
+  ping_pong: 'Two actors exchange 10 million messages back and forth. Measures pure message passing overhead with minimal computation.',
+  counting: 'A single counter actor receives and counts messages sequentially. Tests single-actor throughput without contention.',
+  thread_ring: 'A token is passed through a ring of 100 actors. Measures scheduling overhead with many actors and sequential dependencies.',
+  fork_join: 'Messages are distributed round-robin to 8 worker actors. Tests parallel processing with work distribution.'
+};
 
-async function loadBenchmarks() {
+let allResults = {};
+let currentPattern = 'ping_pong';
+let throughputChart = null;
+let memoryChart = null;
+
+async function loadPattern(pattern) {
+  const tab = document.querySelector(`[data-pattern="${pattern}"]`);
+  const status = tab.querySelector('.status');
+
   try {
-    console.log('Fetching benchmark data...');
-    const response = await fetch('/results_ping_pong.json');
-    console.log('Response status:', response.status);
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}`);
+    // Check if running from file:// protocol
+    if (window.location.protocol === 'file:') {
+      throw new Error('Cannot load JSON via file:// protocol. Please run a local server.');
     }
+
+    const response = await fetch(`results_${pattern}.json`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
     const data = await response.json();
-    console.log('Data loaded:', data);
-
     if (!data.benchmarks || Object.keys(data.benchmarks).length === 0) {
-      document.getElementById('loading').innerHTML = 'No results available. Run: <code>make benchmark-ui</code>';
-      return;
+      throw new Error('No results');
     }
 
-    document.getElementById('loading').style.display = 'none';
-    document.getElementById('content').style.display = 'block';
-
-    renderDashboard(data);
+    allResults[pattern] = data;
+    status.className = 'status loaded';
+    return true;
   } catch (error) {
-    console.error('Load error:', error);
-    document.getElementById('loading').innerHTML = `Error loading benchmarks: ${error.message}<br><br>Check browser console for details.`;
+    console.warn(`Failed to load ${pattern}:`, error);
+    status.className = 'status error';
+    return false;
   }
 }
 
-function renderDashboard(data) {
+async function loadAllPatterns() {
+  const promises = PATTERNS.map(p => loadPattern(p));
+  await Promise.all(promises);
+
+  // Find first pattern with data
+  for (const pattern of PATTERNS) {
+    if (allResults[pattern]) {
+      currentPattern = pattern;
+      break;
+    }
+  }
+
+  if (Object.keys(allResults).length === 0) {
+    if (window.location.protocol === 'file:') {
+      document.getElementById('loading').innerHTML =
+        '<strong>Cannot load data from file:// URL</strong><br><br>' +
+        'Please run a local server:<br><br>' +
+        '<code style="background:#222;padding:8px 12px;border-radius:4px;display:inline-block;">' +
+        'cd benchmarks/cross-language/visualize && python3 -m http.server 8080' +
+        '</code><br><br>' +
+        'Then open: <a href="http://localhost:8080" style="color:#4a9eff;">http://localhost:8080</a>';
+    } else {
+      document.getElementById('loading').innerHTML =
+        'No benchmark results found.<br><br>Run: <code>make benchmark</code>';
+    }
+    return;
+  }
+
+  document.getElementById('loading').style.display = 'none';
+  document.getElementById('content').style.display = 'block';
+
+  renderDashboard();
+}
+
+function selectPattern(pattern) {
+  if (!allResults[pattern]) return;
+
+  currentPattern = pattern;
+
+  // Update tab states
+  document.querySelectorAll('.pattern-tab').forEach(tab => {
+    tab.classList.toggle('active', tab.dataset.pattern === pattern);
+  });
+
+  renderDashboard();
+}
+
+function renderDashboard() {
+  const data = allResults[currentPattern];
+  if (!data) return;
+
   // Sort languages by throughput
   const languages = Object.keys(data.benchmarks).sort((a, b) =>
     (data.benchmarks[b].msg_per_sec || 0) - (data.benchmarks[a].msg_per_sec || 0)
   );
-
   const benchmarks = languages.map(lang => data.benchmarks[lang]);
 
   // System info
-  const systemInfoHTML = `
+  document.getElementById('system-info').innerHTML = `
     <div class="system-info-item">
       <div class="system-info-label">CPU</div>
-      <div class="system-info-value">${data.hardware.cpu || 'Unknown'}</div>
+      <div class="system-info-value">${data.hardware?.cpu || 'Unknown'}</div>
     </div>
     <div class="system-info-item">
       <div class="system-info-label">Cores</div>
-      <div class="system-info-value">${data.hardware.cores || 'N/A'}</div>
+      <div class="system-info-value">${data.hardware?.cores || 'N/A'}</div>
     </div>
     <div class="system-info-item">
       <div class="system-info-label">OS</div>
-      <div class="system-info-value">${data.hardware.os || 'Unknown'}</div>
+      <div class="system-info-value">${data.hardware?.os || 'Unknown'}</div>
     </div>
     <div class="system-info-item">
-      <div class="system-info-label">Timestamp</div>
-      <div class="system-info-value">${new Date(data.timestamp).toLocaleString()}</div>
+      <div class="system-info-label">Pattern</div>
+      <div class="system-info-value">${currentPattern.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())}</div>
     </div>
     <div class="system-info-item">
-      <div class="system-info-label">Languages Tested</div>
+      <div class="system-info-label">Languages</div>
       <div class="system-info-value">${languages.length}</div>
     </div>
   `;
-  document.getElementById('system-info').innerHTML = systemInfoHTML;
 
-  // Top metrics cards
+  // Methodology
+  document.getElementById('methodology-text').textContent =
+    PATTERN_DESCRIPTIONS[currentPattern] || 'No description available.';
+
+  // Metrics
   const topLang = benchmarks[0];
   const aetherData = data.benchmarks['Aether'] || topLang;
-  const throughputMsgs = (aetherData.msg_per_sec || 0) / 1e6;
+  const throughputM = (aetherData?.msg_per_sec || 0) / 1e6;
+  const lowestMemory = Math.min(...benchmarks.map(b => b.memory_mb || 999).filter(m => m > 0));
+  const highestThroughput = (topLang?.msg_per_sec || 0) / 1e6;
+  const lowestThroughput = (benchmarks[benchmarks.length - 1]?.msg_per_sec || 1) / 1e6;
 
-  const metricsHTML = `
+  document.getElementById('metrics').innerHTML = `
     <div class="metric-card">
-      <div class="metric-label">Peak Throughput</div>
-      <div class="metric-value">${throughputMsgs.toFixed(1)}M</div>
-      <div class="metric-detail">messages/second (Aether)</div>
+      <div class="metric-label">Aether Throughput</div>
+      <div class="metric-value">${throughputM.toFixed(1)}M</div>
+      <div class="metric-detail">messages/second</div>
     </div>
     <div class="metric-card">
-      <div class="metric-label">Best Latency</div>
-      <div class="metric-value">${(aetherData.cycles_per_msg || 0).toFixed(1)}</div>
-      <div class="metric-detail">CPU cycles/message (Aether)</div>
+      <div class="metric-label">Aether Latency</div>
+      <div class="metric-value">${(aetherData?.cycles_per_msg || 0).toFixed(0)}</div>
+      <div class="metric-detail">cycles/message</div>
     </div>
     <div class="metric-card">
       <div class="metric-label">Lowest Memory</div>
-      <div class="metric-value">${Math.min(...benchmarks.map(b => b.memory_mb || 999)).toFixed(1)}MB</div>
-      <div class="metric-detail">Resident set size</div>
+      <div class="metric-value">${lowestMemory < 999 ? lowestMemory.toFixed(1) : 'N/A'}MB</div>
+      <div class="metric-detail">resident set size</div>
     </div>
     <div class="metric-card">
       <div class="metric-label">Performance Range</div>
-      <div class="metric-value">${(throughputMsgs / ((benchmarks[benchmarks.length-1].msg_per_sec || 1) / 1e6)).toFixed(0)}x</div>
-      <div class="metric-detail">Fastest vs. slowest</div>
+      <div class="metric-value">${lowestThroughput > 0 ? (highestThroughput / lowestThroughput).toFixed(0) : 'N/A'}x</div>
+      <div class="metric-detail">fastest vs slowest</div>
     </div>
   `;
-  document.getElementById('metrics').innerHTML = metricsHTML;
 
-  // Chart
-  renderChart(languages, benchmarks);
-
-  // Table
+  renderCharts(languages, benchmarks);
   renderTable(languages, benchmarks);
 }
 
-function renderChart(languages, benchmarks) {
-  console.log('Rendering chart with', languages.length, 'languages');
-
-  if (typeof Chart === 'undefined') {
-    console.error('Chart.js not loaded!');
-    document.getElementById('throughputChart').parentElement.innerHTML =
-      '<p style="color: red;">Chart.js library failed to load. Check your internet connection.</p>';
-    return;
-  }
-
-  const ctx = document.getElementById('throughputChart').getContext('2d');
+function renderCharts(languages, benchmarks) {
+  const ctx1 = document.getElementById('throughputChart').getContext('2d');
+  const ctx2 = document.getElementById('memoryChart').getContext('2d');
 
   const throughputData = benchmarks.map(b => (b.msg_per_sec || 0) / 1e6);
+  const memoryData = benchmarks.map(b => b.memory_mb || 0);
   const colors = languages.map(lang => lang === 'Aether' ? '#4a9eff' : '#666');
 
-  if (window.performanceChart) {
-    window.performanceChart.destroy();
-  }
+  // Destroy existing charts
+  if (throughputChart) throughputChart.destroy();
+  if (memoryChart) memoryChart.destroy();
 
-  window.performanceChart = new Chart(ctx, {
+  const chartOptions = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { display: false },
+      tooltip: {
+        backgroundColor: '#1a1a1a',
+        titleColor: '#fff',
+        bodyColor: '#ccc',
+        borderColor: '#4a9eff',
+        borderWidth: 1,
+        padding: 10,
+        displayColors: false
+      }
+    },
+    scales: {
+      y: {
+        beginAtZero: true,
+        grid: { color: '#2a2a2a' },
+        ticks: { color: '#888' }
+      },
+      x: {
+        grid: { display: false },
+        ticks: { color: '#888', maxRotation: 45 }
+      }
+    }
+  };
+
+  throughputChart = new Chart(ctx1, {
     type: 'bar',
     data: {
       labels: languages,
@@ -492,49 +619,57 @@ function renderChart(languages, benchmarks) {
         label: 'Throughput (M msg/sec)',
         data: throughputData,
         backgroundColor: colors,
-        borderColor: colors,
-        borderWidth: 1
+        borderWidth: 0
       }]
     },
     options: {
-      responsive: true,
-      maintainAspectRatio: false,
+      ...chartOptions,
       plugins: {
-        legend: { display: false },
+        ...chartOptions.plugins,
         tooltip: {
-          backgroundColor: '#1a1a1a',
-          titleColor: '#fff',
-          bodyColor: '#ccc',
-          borderColor: '#4a9eff',
-          borderWidth: 1,
-          padding: 12,
-          displayColors: false,
+          ...chartOptions.plugins.tooltip,
           callbacks: {
-            label: function(context) {
-              return `${context.parsed.y.toFixed(2)} M msg/sec`;
-            }
+            label: ctx => `${ctx.parsed.y.toFixed(2)} M msg/sec`
           }
         }
       },
       scales: {
+        ...chartOptions.scales,
         y: {
-          beginAtZero: true,
-          grid: { color: '#2a2a2a' },
-          ticks: {
-            color: '#888',
-            callback: function(value) {
-              return value.toFixed(1) + 'M';
-            }
-          },
-          title: {
-            display: true,
-            text: 'Throughput (Million messages/second)',
-            color: '#ccc'
+          ...chartOptions.scales.y,
+          title: { display: true, text: 'M msg/sec', color: '#888' }
+        }
+      }
+    }
+  });
+
+  memoryChart = new Chart(ctx2, {
+    type: 'bar',
+    data: {
+      labels: languages,
+      datasets: [{
+        label: 'Memory (MB)',
+        data: memoryData,
+        backgroundColor: colors.map(c => c === '#4a9eff' ? '#4caf50' : '#555'),
+        borderWidth: 0
+      }]
+    },
+    options: {
+      ...chartOptions,
+      plugins: {
+        ...chartOptions.plugins,
+        tooltip: {
+          ...chartOptions.plugins.tooltip,
+          callbacks: {
+            label: ctx => `${ctx.parsed.y.toFixed(2)} MB`
           }
-        },
-        x: {
-          grid: { display: false },
-          ticks: { color: '#888' }
+        }
+      },
+      scales: {
+        ...chartOptions.scales,
+        y: {
+          ...chartOptions.scales.y,
+          title: { display: true, text: 'Memory (MB)', color: '#888' }
         }
       }
     }
@@ -542,7 +677,7 @@ function renderChart(languages, benchmarks) {
 }
 
 function renderTable(languages, benchmarks) {
-  const tableBody = document.getElementById('tableBody');
+  const tbody = document.getElementById('tableBody');
   let html = '';
 
   languages.forEach((lang, index) => {
@@ -551,7 +686,7 @@ function renderTable(languages, benchmarks) {
     const rankClass = rank === 1 ? 'rank-1' : rank === 2 ? 'rank-2' : rank === 3 ? 'rank-3' : 'rank-other';
     const throughput = ((bench.msg_per_sec || 0) / 1e6).toFixed(2);
     const latency = (bench.cycles_per_msg || 0).toFixed(1);
-    const memory = (bench.memory_mb || 0).toFixed(2);
+    const memory = bench.memory_mb > 0 ? `${bench.memory_mb.toFixed(2)} MB` : 'N/A';
     const isWinner = rank === 1;
 
     html += `
@@ -561,30 +696,32 @@ function renderTable(languages, benchmarks) {
         <td><span class="runtime-tag">${bench.runtime || 'N/A'}</span></td>
         <td class="perf-value ${isWinner ? 'winner-highlight' : ''}">${throughput} M/s</td>
         <td class="perf-value">${latency}</td>
-        <td class="perf-value">${memory} MB</td>
-        <td class="notes-text">${bench.notes || ''}</td>
+        <td class="perf-value">${memory}</td>
+        <td style="color: #888; font-size: 0.85rem;">${bench.notes || ''}</td>
       </tr>
     `;
   });
 
-  tableBody.innerHTML = html;
+  tbody.innerHTML = html;
 }
 
-// Wait for Chart.js to load before starting
+// Tab click handlers
+document.querySelectorAll('.pattern-tab').forEach(tab => {
+  tab.addEventListener('click', () => selectPattern(tab.dataset.pattern));
+});
+
+// Initial load
 if (typeof Chart !== 'undefined') {
-  console.log('Chart.js loaded, starting benchmark load');
-  loadBenchmarks();
-  refreshInterval = setInterval(loadBenchmarks, 60000);
+  loadAllPatterns();
+  setInterval(() => loadAllPatterns(), 60000);
 } else {
-  console.log('Waiting for Chart.js...');
-  window.addEventListener('load', function() {
+  window.addEventListener('load', () => {
     if (typeof Chart !== 'undefined') {
-      console.log('Chart.js loaded after window load');
-      loadBenchmarks();
-      refreshInterval = setInterval(loadBenchmarks, 60000);
+      loadAllPatterns();
+      setInterval(() => loadAllPatterns(), 60000);
     } else {
       document.getElementById('loading').innerHTML =
-        'Error: Chart.js failed to load from CDN.<br>Check your internet connection or try refreshing.';
+        'Error: Chart.js failed to load. Check your internet connection.';
     }
   });
 }

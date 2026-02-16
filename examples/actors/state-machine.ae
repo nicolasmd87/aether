@@ -81,5 +81,13 @@ main() {
     door ! DoorLock {};
     door ! DoorOpen {};
 
-    print("State machine done\n");
+    // Wait for all state transitions to complete
+    wait_for_idle();
+
+    print("Traffic light phase: ");
+    print(light.phase);
+    print("\n");
+    print("Door locked: ");
+    print(door.locked);
+    print("\n");
 }

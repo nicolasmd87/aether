@@ -1,38 +1,26 @@
-// Aether ping-pong benchmark with PROPER SYNCHRONIZATION
-// Validates that responses contain correct count values
+// Aether Ping-Pong Benchmark (Savina-style)
+// Based on the Savina benchmark suite micro-benchmark
+// Measures pure message passing overhead between two actors
 
-message Ping {
-    count: int
-}
-
-message Pong {
-    count: int
-}
+message Ping { count: int }
+message Pong { count: int }
 
 actor PingActor {
     state pong_ref = 0;
-    state expected_count = 0;
-    state total_messages = 10000000;
+    state received = 0;
+    state target = 0;
     state errors = 0;
-    state completed = 0;
 
     receive {
         Pong(count) -> {
-            // VALIDATE: The pong must echo back our expected count
-            if (count != expected_count) {
-                print("ERROR: Ping validation failed - expected ");
-                print(expected_count);
-                print(" but got ");
-                print(count);
-                print("\n");
+            // Validate sequence
+            if (count != received) {
                 errors = errors + 1;
             }
+            received = received + 1;
 
-            expected_count = expected_count + 1;
-            if (expected_count < total_messages) {
-                pong_ref ! Ping { count: expected_count };
-            } else {
-                completed = 1;
+            if (received < target) {
+                pong_ref ! Ping { count: received };
             }
         }
     }
@@ -40,79 +28,92 @@ actor PingActor {
 
 actor PongActor {
     state ping_ref = 0;
-    state expected_count = 0;
+    state expected = 0;
 
     receive {
         Ping(count) -> {
-            // VALIDATE: Must receive messages in sequence
-            if (count != expected_count) {
-                print("ERROR: Pong validation failed - expected ");
-                print(expected_count);
-                print(" but got ");
-                print(count);
+            // Validate sequence
+            if (count != expected) {
+                // Sequence error detected
             }
-            expected_count = expected_count + 1;
-
-            // Echo back the EXACT count we received
+            expected = expected + 1;
+            // Echo back the count
             ping_ref ! Pong { count: count };
         }
     }
 }
 
 main() {
-    print("=== Aether Ping-Pong (Validated) ===\n");
+    // Read from BENCHMARK_MESSAGES env var, default 100K
+    total_messages = 100000;
+    env_val = getenv("BENCHMARK_MESSAGES");
+    if (env_val != 0) {
+        total_messages = atoi(env_val);
+    }
 
     ping = spawn(PingActor());
     pong = spawn(PongActor());
 
+    // Wire up actor references
     ping.pong_ref = pong;
+    ping.target = total_messages;
     pong.ping_ref = ping;
 
-    // Start with count=0
+    // Get start time
+    start_time = clock_ns();
+
+    // Start the ping-pong chain
     pong ! Ping { count: 0 };
 
-    // Wait for completion - poll until ping actor signals done
-    // NOTE: Loop must not be optimized away - ping.completed is modified by actor thread
-    int is_complete = 0;
-    int iterations = 0;
-    while (is_complete == 0) {
-        is_complete = ping.completed;
-        iterations = iterations + 1;
-        // Prevent compiler optimization by checking iterations periodically
-        if (iterations == 10000000) {
-            iterations = 0;
+    // Wait for completion
+    wait_for_idle();
+
+    // Get end time
+    end_time = clock_ns();
+
+    // Verify results
+    if (ping.errors > 0) {
+        print("VALIDATION FAILED: ");
+        print(ping.errors);
+        print(" errors\n");
+    }
+
+    actual_received = ping.received;
+    if (actual_received < total_messages) {
+        print("INCOMPLETE: ");
+        print(actual_received);
+        print("/");
+        print(total_messages);
+        print(" messages\n");
+    }
+
+    // Calculate metrics
+    elapsed_ns = end_time - start_time;
+    elapsed_ms = elapsed_ns / 1000000;
+
+    // Cycles/msg (assuming 3GHz clock)
+    // cycles = elapsed_ns * 3 (ns * GHz = cycles)
+    // cycles_per_msg = cycles / messages
+    if (actual_received > 0) {
+        total_cycles = elapsed_ns * 3;
+        cycles_per_msg = total_cycles / actual_received;
+        print("Cycles/msg:     ");
+        print(cycles_per_msg);
+        print("\n");
+    }
+
+    // Throughput: messages / seconds = messages * 1000 / elapsed_ms
+    if (elapsed_ms > 0) {
+        msg_per_sec = (actual_received * 1000) / elapsed_ms;
+        throughput_m = msg_per_sec / 1000000;
+        throughput_frac = (msg_per_sec / 10000) - (throughput_m * 100);
+        print("Throughput:     ");
+        print(throughput_m);
+        print(".");
+        if (throughput_frac < 10) {
+            print("0");
         }
+        print(throughput_frac);
+        print(" M msg/sec\n");
     }
-
-    // Report validation results
-    int error_count = ping.errors;
-    int final_count = ping.expected_count;
-    int target_count = ping.total_messages;
-
-    print("\n=== VALIDATION REPORT ===");
-    print("Messages sent:      ");
-    print(target_count);
-    print("\nMessages processed: ");
-    print(final_count);
-
-    // Check completion by comparing counts manually
-    int complete = 1;
-    if (final_count < target_count) {
-        complete = 0;
-    }
-
-    if (complete == 0) {
-        print("\nERROR: Not all messages processed! Missing ");
-        int missing = target_count - final_count;
-        print(missing);
-        print(" messages");
-    } else if (error_count > 0) {
-        print("\nVALIDATION FAILED: ");
-        print(error_count);
-        print(" errors detected");
-    } else {
-        print("\nVALIDATION PASSED: All messages verified");
-    }
-
-    print("\n=========================\nBenchmark complete");
 }

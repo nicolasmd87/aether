@@ -41,7 +41,11 @@
 
 #include "apkg/toml_parser.h"
 
-#define AE_VERSION "1.0.0"
+// Version is set by Makefile from VERSION file
+#ifndef AETHER_VERSION
+#define AETHER_VERSION "0.0.0-dev"
+#endif
+#define AE_VERSION AETHER_VERSION
 
 // --------------------------------------------------------------------------
 // Toolchain state
@@ -333,9 +337,10 @@ static const char* get_link_flags(void) {
 // Build GCC command for linking an Aether-compiled C file
 static void build_gcc_cmd(char* cmd, size_t size,
                           const char* c_file, const char* out_file,
-                          bool optimize) {
+                          bool optimize, const char* extra_files) {
     const char* opt = optimize ? "-O2" : "-O0 -g";
     const char* link_flags = get_link_flags();
+    const char* extra = extra_files ? extra_files : "";
 
     if (tc.has_lib) {
         char lib_dir[1024];
@@ -345,12 +350,12 @@ static void build_gcc_cmd(char* cmd, size_t size,
         if (slash) *slash = '\0';
 
         snprintf(cmd, size,
-            "gcc %s %s %s -L%s -laether -o %s -pthread -lm %s",
-            opt, tc.include_flags, c_file, lib_dir, out_file, link_flags);
+            "gcc %s %s %s %s -L%s -laether -o %s -pthread -lm %s",
+            opt, tc.include_flags, c_file, extra, lib_dir, out_file, link_flags);
     } else {
         snprintf(cmd, size,
-            "gcc %s %s %s %s -o %s -pthread -lm %s",
-            opt, tc.include_flags, c_file, tc.runtime_srcs, out_file, link_flags);
+            "gcc %s %s %s %s %s -o %s -pthread -lm %s",
+            opt, tc.include_flags, c_file, extra, tc.runtime_srcs, out_file, link_flags);
     }
 }
 
@@ -406,13 +411,13 @@ static int cmd_run(int argc, char** argv) {
     }
 
     // Step 2: Compile .c to executable with runtime
-    build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, true);
+    build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, true, NULL);
     if (!tc.verbose) {
         strncat(cmd, " >/dev/null 2>&1", sizeof(cmd) - strlen(cmd) - 1);
     }
     if (run_cmd(cmd) != 0) {
         // Re-run with output for error diagnosis
-        build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, true);
+        build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, true, NULL);
         run_cmd(cmd);
         fprintf(stderr, "Build failed.\n");
         return 1;
@@ -432,10 +437,15 @@ static int cmd_run(int argc, char** argv) {
 static int cmd_build(int argc, char** argv) {
     const char* file = NULL;
     const char* output_name = NULL;
+    char extra_files[2048] = "";
 
     for (int i = 0; i < argc; i++) {
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             output_name = argv[++i];
+        } else if (strcmp(argv[i], "--extra") == 0 && i + 1 < argc) {
+            // Append extra C files (space-separated)
+            if (extra_files[0]) strncat(extra_files, " ", sizeof(extra_files) - strlen(extra_files) - 1);
+            strncat(extra_files, argv[++i], sizeof(extra_files) - strlen(extra_files) - 1);
         } else if (argv[i][0] != '-') {
             file = argv[i];
         }
@@ -448,7 +458,7 @@ static int cmd_build(int argc, char** argv) {
 
     if (!file) {
         fprintf(stderr, "Error: No input file specified.\n");
-        fprintf(stderr, "Usage: ae build <file.ae> [-o output]\n");
+        fprintf(stderr, "Usage: ae build <file.ae> [-o output] [--extra file.c]\n");
         return 1;
     }
 
@@ -491,12 +501,13 @@ static int cmd_build(int argc, char** argv) {
     }
 
     // Step 2: .c to executable with runtime
-    build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, true);
+    const char* extra = extra_files[0] ? extra_files : NULL;
+    build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, true, extra);
     if (!tc.verbose) {
         strncat(cmd, " >/dev/null 2>&1", sizeof(cmd) - strlen(cmd) - 1);
     }
     if (run_cmd(cmd) != 0) {
-        build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, true);
+        build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, true, extra);
         run_cmd(cmd);
         fprintf(stderr, "Build failed.\n");
         return 1;
@@ -668,7 +679,7 @@ static int cmd_test(int argc, char** argv) {
         }
 
         // Compile .c to executable
-        build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, false);
+        build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, false, NULL);
         char full_cmd[8192];
         snprintf(full_cmd, sizeof(full_cmd), "%s >/dev/null 2>&1", cmd);
         if (run_cmd(full_cmd) != 0) {
@@ -832,6 +843,142 @@ static int cmd_repl(void) {
 }
 
 // --------------------------------------------------------------------------
+// Release management
+// --------------------------------------------------------------------------
+
+static int parse_version(const char* version, int* major, int* minor, int* patch) {
+    return sscanf(version, "%d.%d.%d", major, minor, patch) == 3;
+}
+
+static int cmd_release(int argc, char** argv) {
+    if (argc < 1) {
+        printf("Usage: ae release <major|minor|patch> [--dry-run]\n");
+        printf("\nBumps the version number and creates a release.\n");
+        printf("\nExamples:\n");
+        printf("  ae release patch      # 0.5.0 -> 0.5.1\n");
+        printf("  ae release minor      # 0.5.0 -> 0.6.0\n");
+        printf("  ae release major      # 0.5.0 -> 1.0.0\n");
+        printf("  ae release patch --dry-run  # Show what would happen\n");
+        return 1;
+    }
+
+    const char* bump_type = argv[0];
+    bool dry_run = false;
+
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--dry-run") == 0 || strcmp(argv[i], "-n") == 0) {
+            dry_run = true;
+        }
+    }
+
+    // Validate bump type
+    if (strcmp(bump_type, "major") != 0 &&
+        strcmp(bump_type, "minor") != 0 &&
+        strcmp(bump_type, "patch") != 0) {
+        fprintf(stderr, "Error: Invalid bump type '%s'. Use major, minor, or patch.\n", bump_type);
+        return 1;
+    }
+
+    // Find VERSION file - prefer current dir (dev mode), then tc.root
+    char version_path[1024];
+    if (path_exists("VERSION")) {
+        strcpy(version_path, "VERSION");
+    } else if (tc.root[0]) {
+        snprintf(version_path, sizeof(version_path), "%s/VERSION", tc.root);
+    } else {
+        strcpy(version_path, "VERSION");
+    }
+
+    // Read current version
+    FILE* f = fopen(version_path, "r");
+    if (!f) {
+        fprintf(stderr, "Error: VERSION file not found at %s\n", version_path);
+        return 1;
+    }
+
+    char current_version[64];
+    if (!fgets(current_version, sizeof(current_version), f)) {
+        fclose(f);
+        fprintf(stderr, "Error: Could not read VERSION file\n");
+        return 1;
+    }
+    fclose(f);
+
+    // Remove trailing newline
+    current_version[strcspn(current_version, "\n")] = '\0';
+
+    // Parse version
+    int major, minor, patch;
+    if (!parse_version(current_version, &major, &minor, &patch)) {
+        fprintf(stderr, "Error: Invalid version format '%s'. Expected X.Y.Z\n", current_version);
+        return 1;
+    }
+
+    // Bump version
+    if (strcmp(bump_type, "major") == 0) {
+        major++;
+        minor = 0;
+        patch = 0;
+    } else if (strcmp(bump_type, "minor") == 0) {
+        minor++;
+        patch = 0;
+    } else {
+        patch++;
+    }
+
+    char new_version[64];
+    snprintf(new_version, sizeof(new_version), "%d.%d.%d", major, minor, patch);
+
+    printf("Version: %s -> %s\n", current_version, new_version);
+
+    if (dry_run) {
+        printf("\n[Dry run] Would:\n");
+        printf("  1. Update VERSION to %s\n", new_version);
+        printf("  2. Commit: 'Release v%s'\n", new_version);
+        printf("  3. Tag: v%s\n", new_version);
+        printf("  4. Push to origin\n");
+        return 0;
+    }
+
+    // Write new version
+    f = fopen(version_path, "w");
+    if (!f) {
+        fprintf(stderr, "Error: Could not write VERSION file\n");
+        return 1;
+    }
+    fprintf(f, "%s\n", new_version);
+    fclose(f);
+    printf("✓ Updated VERSION file\n");
+
+    // Git operations
+    char cmd[512];
+
+    snprintf(cmd, sizeof(cmd), "git add VERSION");
+    if (system(cmd) != 0) {
+        fprintf(stderr, "Warning: git add failed\n");
+    }
+
+    snprintf(cmd, sizeof(cmd), "git commit -m 'Release v%s'", new_version);
+    if (system(cmd) != 0) {
+        fprintf(stderr, "Warning: git commit failed\n");
+    } else {
+        printf("✓ Created commit\n");
+    }
+
+    snprintf(cmd, sizeof(cmd), "git tag v%s", new_version);
+    if (system(cmd) != 0) {
+        fprintf(stderr, "Warning: git tag failed\n");
+    } else {
+        printf("✓ Created tag v%s\n", new_version);
+    }
+
+    printf("\nRelease v%s prepared. To publish:\n", new_version);
+    printf("  git push origin main --tags\n");
+
+    return 0;
+}
+
+// --------------------------------------------------------------------------
 // Help and main
 // --------------------------------------------------------------------------
 
@@ -847,6 +994,7 @@ static void print_usage(void) {
     printf("  add <package>        Add a dependency\n");
     printf("  repl                 Start interactive REPL\n");
     printf("  fmt [file]           Format source code\n");
+    printf("  release <type>       Bump version (major|minor|patch)\n");
     printf("  version              Show version\n");
     printf("  help                 Show this help\n");
     printf("\nExamples:\n");
@@ -905,6 +1053,10 @@ int main(int argc, char** argv) {
     if (strcmp(cmd, "fmt") == 0) {
         printf("Formatter not yet implemented.\n");
         return 0;
+    }
+    if (strcmp(cmd, "release") == 0) {
+        discover_toolchain();  // Need tc.root for VERSION file path
+        return cmd_release(sub_argc, sub_argv);
     }
 
     // All other commands need the toolchain

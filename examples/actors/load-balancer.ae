@@ -82,6 +82,9 @@ main() {
     w4 ! Task { id: 12 };
     balancer ! Assign { id: 12 };
 
+    // Wait for all tasks to complete
+    wait_for_idle();
+
     // Check stats
     w1 ! Stats {};
     w2 ! Stats {};
@@ -89,5 +92,6 @@ main() {
     w4 ! Stats {};
     balancer ! Balance {};
 
-    print("Load balancer done\n");
+    wait_for_idle();
+    print("Load balancer completed\n");
 }

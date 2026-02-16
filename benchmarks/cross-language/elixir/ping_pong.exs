@@ -2,7 +2,10 @@
 
 # Elixir ping-pong benchmark using processes
 defmodule PingPong do
-  @messages 10_000_000
+  @messages (System.get_env("BENCHMARK_MESSAGES") |> case do
+    nil -> 100_000
+    val -> String.to_integer(val)
+  end)
 
   def ping(pong_pid, 0, _) do
     send(pong_pid, :done)
