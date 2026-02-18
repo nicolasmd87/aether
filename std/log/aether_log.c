@@ -5,9 +5,9 @@
 
 // Global logging state
 static struct {
-    AetherLogConfig config;
+    LogConfig config;
     int initialized;
-    AetherLogStats stats;
+    LogStats stats;
 } g_log = {
     .config = {
         .min_level = LOG_LEVEL_INFO,
@@ -39,9 +39,9 @@ static struct {
 #endif
 
 // Get color for log level
-static const char* get_level_color(AetherLogLevel level) {
+static const char* get_level_color(LogLevel level) {
     if (!g_log.config.use_colors) return "";
-    
+
     switch (level) {
         case LOG_LEVEL_DEBUG: return LOG_COLOR_DEBUG;
         case LOG_LEVEL_INFO:  return LOG_COLOR_INFO;
@@ -53,7 +53,7 @@ static const char* get_level_color(AetherLogLevel level) {
 }
 
 // Get string name for log level
-static const char* get_level_name(AetherLogLevel level) {
+static const char* get_level_name(LogLevel level) {
     switch (level) {
         case LOG_LEVEL_DEBUG: return "DEBUG";
         case LOG_LEVEL_INFO:  return "INFO ";
@@ -72,11 +72,11 @@ static void get_timestamp(char* buffer, size_t size) {
 }
 
 // Initialize logging
-void aether_log_init(const char* filename, AetherLogLevel min_level) {
+void log_init(const char* filename, LogLevel min_level) {
     if (g_log.initialized && g_log.config.output_file) {
         fclose(g_log.config.output_file);
     }
-    
+
     if (filename) {
         g_log.config.output_file = fopen(filename, "a");
         if (!g_log.config.output_file) {
@@ -86,27 +86,27 @@ void aether_log_init(const char* filename, AetherLogLevel min_level) {
     } else {
         g_log.config.output_file = stderr;
     }
-    
+
     g_log.config.min_level = min_level;
     g_log.initialized = 1;
 }
 
-void aether_log_init_with_config(AetherLogConfig* config) {
+void log_init_with_config(LogConfig* config) {
     if (g_log.initialized && g_log.config.output_file) {
         fclose(g_log.config.output_file);
     }
-    
-    memcpy(&g_log.config, config, sizeof(AetherLogConfig));
-    
+
+    memcpy(&g_log.config, config, sizeof(LogConfig));
+
     if (!g_log.config.output_file) {
         g_log.config.output_file = stderr;
     }
-    
+
     g_log.initialized = 1;
 }
 
-void aether_log_shutdown() {
-    if (g_log.initialized && g_log.config.output_file && 
+void log_shutdown() {
+    if (g_log.initialized && g_log.config.output_file &&
         g_log.config.output_file != stderr && g_log.config.output_file != stdout) {
         fclose(g_log.config.output_file);
     }
@@ -114,15 +114,15 @@ void aether_log_shutdown() {
 }
 
 // Core logging function
-void aether_log(AetherLogLevel level, const char* fmt, ...) {
+void log_write(LogLevel level, const char* fmt, ...) {
     if (!g_log.initialized) {
-        aether_log_init(NULL, LOG_LEVEL_INFO);
+        log_init(NULL, LOG_LEVEL_INFO);
     }
-    
+
     if (level < g_log.config.min_level) {
         return;
     }
-    
+
     // Update statistics
     switch (level) {
         case LOG_LEVEL_DEBUG: g_log.stats.debug_count++; break;
@@ -131,30 +131,30 @@ void aether_log(AetherLogLevel level, const char* fmt, ...) {
         case LOG_LEVEL_ERROR: g_log.stats.error_count++; break;
         case LOG_LEVEL_FATAL: g_log.stats.fatal_count++; break;
     }
-    
+
     FILE* out = g_log.config.output_file;
     const char* color = get_level_color(level);
     const char* reset = g_log.config.use_colors ? LOG_COLOR_RESET : "";
-    
+
     // Print timestamp if enabled
     if (g_log.config.show_timestamps) {
         char timestamp[64];
         get_timestamp(timestamp, sizeof(timestamp));
         fprintf(out, "[%s] ", timestamp);
     }
-    
+
     // Print log level
     fprintf(out, "%s%s%s: ", color, get_level_name(level), reset);
-    
+
     // Print message
     va_list args;
     va_start(args, fmt);
     vfprintf(out, fmt, args);
     va_end(args);
-    
+
     fprintf(out, "\n");
     fflush(out);
-    
+
     // If fatal, abort
     if (level == LOG_LEVEL_FATAL) {
         abort();
@@ -162,16 +162,16 @@ void aether_log(AetherLogLevel level, const char* fmt, ...) {
 }
 
 // Logging with source location
-void aether_log_with_location(AetherLogLevel level, const char* file, int line, 
-                              const char* func, const char* fmt, ...) {
+void log_with_location(LogLevel level, const char* file, int line,
+                       const char* func, const char* fmt, ...) {
     if (!g_log.initialized) {
-        aether_log_init(NULL, LOG_LEVEL_INFO);
+        log_init(NULL, LOG_LEVEL_INFO);
     }
-    
+
     if (level < g_log.config.min_level) {
         return;
     }
-    
+
     // Update statistics
     switch (level) {
         case LOG_LEVEL_DEBUG: g_log.stats.debug_count++; break;
@@ -180,33 +180,33 @@ void aether_log_with_location(AetherLogLevel level, const char* file, int line,
         case LOG_LEVEL_ERROR: g_log.stats.error_count++; break;
         case LOG_LEVEL_FATAL: g_log.stats.fatal_count++; break;
     }
-    
+
     FILE* out = g_log.config.output_file;
     const char* color = get_level_color(level);
     const char* reset = g_log.config.use_colors ? LOG_COLOR_RESET : "";
-    
+
     // Print timestamp if enabled
     if (g_log.config.show_timestamps) {
         char timestamp[64];
         get_timestamp(timestamp, sizeof(timestamp));
         fprintf(out, "[%s] ", timestamp);
     }
-    
+
     // Print log level
     fprintf(out, "%s%s%s: ", color, get_level_name(level), reset);
-    
+
     // Print source location
     fprintf(out, "[%s:%d in %s] ", file, line, func);
-    
+
     // Print message
     va_list args;
     va_start(args, fmt);
     vfprintf(out, fmt, args);
     va_end(args);
-    
+
     fprintf(out, "\n");
     fflush(out);
-    
+
     // If fatal, abort
     if (level == LOG_LEVEL_FATAL) {
         abort();
@@ -214,28 +214,28 @@ void aether_log_with_location(AetherLogLevel level, const char* file, int line,
 }
 
 // Configuration functions
-void aether_log_set_level(AetherLogLevel level) {
+void log_set_level(LogLevel level) {
     g_log.config.min_level = level;
 }
 
-void aether_log_set_colors(int enabled) {
+void log_set_colors(int enabled) {
     g_log.config.use_colors = enabled;
 }
 
-void aether_log_set_timestamps(int enabled) {
+void log_set_timestamps(int enabled) {
     g_log.config.show_timestamps = enabled;
 }
 
-void aether_log_set_format(const char* format) {
+void log_set_format(const char* format) {
     g_log.config.format_string = format;
 }
 
 // Statistics
-AetherLogStats aether_log_get_stats() {
+LogStats log_get_stats() {
     return g_log.stats;
 }
 
-void aether_log_print_stats() {
+void log_print_stats() {
     fprintf(stderr, "\n========== Logging Statistics ==========\n");
     fprintf(stderr, "DEBUG: %zu\n", g_log.stats.debug_count);
     fprintf(stderr, "INFO:  %zu\n", g_log.stats.info_count);

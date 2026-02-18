@@ -1,0 +1,105 @@
+// Switch Statement - C-style switch with case labels
+// Alternative to match for simple value dispatch
+//
+// Features:
+//   - case labels with values
+//   - default fallback
+//   - break to exit
+
+get_month_name(month) {
+    name = "Unknown";
+
+    switch (month) {
+        case 1: name = "January";
+        case 2: name = "February";
+        case 3: name = "March";
+        case 4: name = "April";
+        case 5: name = "May";
+        case 6: name = "June";
+        case 7: name = "July";
+        case 8: name = "August";
+        case 9: name = "September";
+        case 10: name = "October";
+        case 11: name = "November";
+        case 12: name = "December";
+        default: name = "Invalid";
+    }
+
+    return name;
+}
+
+get_days_in_month(month) {
+    days = 0;
+
+    switch (month) {
+        case 1: days = 31;
+        case 2: days = 28;  // Non-leap year
+        case 3: days = 31;
+        case 4: days = 30;
+        case 5: days = 31;
+        case 6: days = 30;
+        case 7: days = 31;
+        case 8: days = 31;
+        case 9: days = 30;
+        case 10: days = 31;
+        case 11: days = 30;
+        case 12: days = 31;
+        default: days = 0;
+    }
+
+    return days;
+}
+
+describe_digit(digit) {
+    switch (digit) {
+        case 0: print("zero");
+        case 1: print("one");
+        case 2: print("two");
+        case 3: print("three");
+        case 4: print("four");
+        case 5: print("five");
+        case 6: print("six");
+        case 7: print("seven");
+        case 8: print("eight");
+        case 9: print("nine");
+        default: print("not a digit");
+    }
+    print("\n");
+}
+
+main() {
+    print("=== Switch Statement Examples ===\n\n");
+
+    // Month names
+    print("Month names:\n");
+    for (m = 1; m <= 12; m = m + 1) {
+        print("  ");
+        print(m);
+        print(": ");
+        print(get_month_name(m));
+        print("\n");
+    }
+    print("\n");
+
+    // Days in month
+    print("Days in each month:\n");
+    for (m = 1; m <= 12; m = m + 1) {
+        print("  ");
+        print(get_month_name(m));
+        print(": ");
+        print(get_days_in_month(m));
+        print(" days\n");
+    }
+    print("\n");
+
+    // Digit descriptions
+    print("Digit descriptions:\n");
+    for (d = 0; d <= 10; d = d + 1) {
+        print("  ");
+        print(d);
+        print(" = ");
+        describe_digit(d);
+    }
+
+    print("\n=== Switch Examples Complete ===\n");
+}

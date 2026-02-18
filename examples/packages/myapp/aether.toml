@@ -1,0 +1,8 @@
+[package]
+name = "myapp"
+version = "0.1.0"
+description = "Example demonstrating local nested packages"
+
+[[bin]]
+name = "myapp"
+path = "src/main.ae"

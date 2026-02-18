@@ -1,0 +1,25 @@
+// std.fs - File System Module
+// Import with: import std.fs
+
+// File operations
+extern file_open(path: string, mode: string) -> ptr
+extern file_close(file: ptr) -> int
+extern file_read_all(file: ptr) -> ptr
+extern file_write(file: ptr, data: string, length: int) -> int
+extern file_exists(path: string) -> int
+extern file_delete(path: string) -> int
+extern file_size(path: string) -> int
+
+// Directory operations
+extern dir_exists(path: string) -> int
+extern dir_create(path: string) -> int
+extern dir_delete(path: string) -> int
+extern dir_list(path: string) -> ptr
+extern dir_list_free(list: ptr)
+
+// Path utilities
+extern path_join(path1: string, path2: string) -> ptr
+extern path_dirname(path: string) -> ptr
+extern path_basename(path: string) -> ptr
+extern path_extension(path: string) -> ptr
+extern path_is_absolute(path: string) -> int

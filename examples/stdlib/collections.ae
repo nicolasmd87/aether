@@ -1,0 +1,113 @@
+// Collections - Demonstrates ArrayList and HashMap using namespace calls
+// Run with: ae run examples/stdlib/collections.ae
+//
+// Uses namespace-style calls: list.new(), map.put(), string.new(), etc.
+
+import std.list
+import std.map
+import std.string
+
+main() {
+    print("=== Aether Collections Demo ===\n\n")
+
+    // ArrayList example - storing strings
+    print("ArrayList (storing strings):\n")
+    mylist = list.new()
+    print("  Created new ArrayList\n")
+
+    // Create some strings to store
+    str1 = string.new("hello")
+    str2 = string.new("world")
+    str3 = string.new("aether")
+
+    // Add strings to list
+    list.add(mylist, str1)
+    list.add(mylist, str2)
+    list.add(mylist, str3)
+    print("  Added 3 strings: hello, world, aether\n")
+
+    print("  Size: ")
+    print(list.size(mylist))
+    print("\n")
+
+    // Get items back and print their lengths
+    item0 = list.get(mylist, 0)
+    print("  Item[0] length: ")
+    print(string.length(item0))
+    print(" (hello)\n")
+
+    item1 = list.get(mylist, 1)
+    print("  Item[1] length: ")
+    print(string.length(item1))
+    print(" (world)\n")
+
+    item2 = list.get(mylist, 2)
+    print("  Item[2] length: ")
+    print(string.length(item2))
+    print(" (aether)\n")
+
+    // Remove middle item
+    list.remove(mylist, 1)
+    print("  Removed item at index 1\n")
+    print("  New size: ")
+    print(list.size(mylist))
+    print("\n")
+
+    // Clear and free
+    list.clear(mylist)
+    print("  Cleared list\n")
+    list.free(mylist)
+    print("  ArrayList freed\n\n")
+
+    // HashMap example
+    print("HashMap (string keys and values):\n")
+    mymap = map.new()
+    print("  Created new HashMap\n")
+
+    // Create string keys
+    key_name = string.new("name")
+    key_lang = string.new("language")
+    key_ver = string.new("version")
+
+    // Create string values
+    val_aether = string.new("Aether")
+    val_lang = string.new("Compiled Actor Language")
+    val_ver = string.new("0.5.0")
+
+    // Add entries
+    map.put(mymap, key_name, val_aether)
+    map.put(mymap, key_lang, val_lang)
+    map.put(mymap, key_ver, val_ver)
+    print("  Added 3 entries\n")
+
+    print("  Size: ")
+    print(map.size(mymap))
+    print("\n")
+
+    // Check if key exists
+    print("  Has 'name': ")
+    print(map.has(mymap, key_name))
+    print("\n")
+
+    // Get value and print its length
+    val = map.get(mymap, key_lang)
+    print("  Value for 'language' length: ")
+    print(string.length(val))
+    print("\n")
+
+    // Cleanup strings
+    string.release(str1)
+    string.release(str2)
+    string.release(str3)
+    string.release(key_name)
+    string.release(key_lang)
+    string.release(key_ver)
+    string.release(val_aether)
+    string.release(val_lang)
+    string.release(val_ver)
+
+    map.free(mymap)
+    print("  HashMap freed\n")
+
+    print("\nCollections demo complete!\n")
+}

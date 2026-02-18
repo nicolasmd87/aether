@@ -14,32 +14,31 @@ typedef enum {
 
 typedef struct JsonValue JsonValue;
 
-JsonValue* aether_json_parse(AetherString* json_str);
-AetherString* aether_json_stringify(JsonValue* value);
-void aether_json_free(JsonValue* value);
+JsonValue* json_parse(AetherString* json_str);
+AetherString* json_stringify(JsonValue* value);
+void json_free(JsonValue* value);
 
-JsonType aether_json_type(JsonValue* value);
-int aether_json_is_null(JsonValue* value);
+JsonType json_type(JsonValue* value);
+int json_is_null(JsonValue* value);
 
-int aether_json_get_bool(JsonValue* value);
-double aether_json_get_number(JsonValue* value);
-int aether_json_get_int(JsonValue* value);
-AetherString* aether_json_get_string(JsonValue* value);
+int json_get_bool(JsonValue* value);
+double json_get_number(JsonValue* value);
+int json_get_int(JsonValue* value);
+AetherString* json_get_string(JsonValue* value);
 
-JsonValue* aether_json_object_get(JsonValue* obj, AetherString* key);
-void aether_json_object_set(JsonValue* obj, AetherString* key, JsonValue* value);
-int aether_json_object_has(JsonValue* obj, AetherString* key);
+JsonValue* json_object_get(JsonValue* obj, AetherString* key);
+void json_object_set(JsonValue* obj, AetherString* key, JsonValue* value);
+int json_object_has(JsonValue* obj, AetherString* key);
 
-JsonValue* aether_json_array_get(JsonValue* arr, int index);
-void aether_json_array_add(JsonValue* arr, JsonValue* value);
-int aether_json_array_size(JsonValue* arr);
+JsonValue* json_array_get(JsonValue* arr, int index);
+void json_array_add(JsonValue* arr, JsonValue* value);
+int json_array_size(JsonValue* arr);
 
-JsonValue* aether_json_create_null();
-JsonValue* aether_json_create_bool(int value);
-JsonValue* aether_json_create_number(double value);
-JsonValue* aether_json_create_string(AetherString* value);
-JsonValue* aether_json_create_array();
-JsonValue* aether_json_create_object();
+JsonValue* json_create_null();
+JsonValue* json_create_bool(int value);
+JsonValue* json_create_number(double value);
+JsonValue* json_create_string(AetherString* value);
+JsonValue* json_create_array();
+JsonValue* json_create_object();
 
 #endif
-

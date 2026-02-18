@@ -3,17 +3,18 @@
 
 #include "../string/aether_string.h"
 
-typedef struct Socket Socket;
-typedef struct ServerSocket ServerSocket;
+typedef struct TcpSocket TcpSocket;
+typedef struct TcpServer TcpServer;
 
-Socket* aether_socket_connect(AetherString* host, int port);
-int aether_socket_send(Socket* sock, AetherString* data);
-AetherString* aether_socket_receive(Socket* sock, int max_bytes);
-int aether_socket_close(Socket* sock);
+// TCP Client
+TcpSocket* tcp_connect(AetherString* host, int port);
+int tcp_send(TcpSocket* sock, AetherString* data);
+AetherString* tcp_receive(TcpSocket* sock, int max_bytes);
+int tcp_close(TcpSocket* sock);
 
-ServerSocket* aether_server_create(int port);
-Socket* aether_server_accept(ServerSocket* server);
-int aether_server_close(ServerSocket* server);
+// TCP Server
+TcpServer* tcp_listen(int port);
+TcpSocket* tcp_accept(TcpServer* server);
+int tcp_server_close(TcpServer* server);
 
 #endif
-

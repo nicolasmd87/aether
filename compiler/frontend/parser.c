@@ -168,6 +168,21 @@ ASTNode* parse_primary_expression(Parser* parser) {
         case TOKEN_FALSE:
             return create_literal_node(advance_token(parser));
             
+        // Type keywords used as namespace names: string.new(), int.parse(), etc.
+        case TOKEN_STRING:
+        case TOKEN_INT:
+        case TOKEN_FLOAT:
+        case TOKEN_BOOL: {
+            // Check if followed by dot - treat as namespace identifier
+            Token* next = peek_ahead(parser, 1);
+            if (next && next->type == TOKEN_DOT) {
+                // Treat type keyword as identifier for namespace access
+                return create_identifier_node(advance_token(parser));
+            }
+            // Otherwise return NULL - type keyword alone in expression is invalid
+            return NULL;
+        }
+
         case TOKEN_IDENTIFIER: {
             // Could be identifier or struct literal
             Token* next = parser->tokens[parser->current_token + 1];
@@ -178,9 +193,9 @@ ASTNode* parse_primary_expression(Parser* parser) {
                 int column = token->column;
                 advance_token(parser); // consume identifier
                 advance_token(parser); // consume '{'
-                
+
                 ASTNode* struct_lit = create_ast_node(AST_STRUCT_LITERAL, struct_name, line, column);
-                
+
                 // Parse field initializers
                 if (!match_token(parser, TOKEN_RIGHT_BRACE)) {
                     do {
@@ -190,34 +205,34 @@ ASTNode* parse_primary_expression(Parser* parser) {
                             free_ast_node(struct_lit);
                             return NULL;
                         }
-                        
+
                         // Expect colon
                         if (!expect_token(parser, TOKEN_COLON)) {
                             free_ast_node(struct_lit);
                             return NULL;
                         }
-                        
+
                         // Parse field value
                         ASTNode* value_expr = parse_expression(parser);
                         if (!value_expr) {
                             free_ast_node(struct_lit);
                             return NULL;
                         }
-                        
+
                         // Create field init node
                         ASTNode* field_init = create_ast_node(AST_ASSIGNMENT, field_name->value,
                                                               field_name->line, field_name->column);
                         add_child(field_init, value_expr);
                         add_child(struct_lit, field_init);
-                        
+
                     } while (match_token(parser, TOKEN_COMMA));
-                    
+
                     if (!expect_token(parser, TOKEN_RIGHT_BRACE)) {
                         free_ast_node(struct_lit);
                         return NULL;
                     }
                 }
-                
+
                 return struct_lit;
             } else {
                 // Regular identifier
@@ -335,6 +350,39 @@ ASTNode* parse_primary_expression(Parser* parser) {
             return spawn_call;
         }
 
+        case TOKEN_PRINT: {
+            // Allow print() as an expression (e.g., in pattern matching bodies)
+            int line = token->line;
+            int column = token->column;
+            advance_token(parser); // consume 'print'
+
+            if (!expect_token(parser, TOKEN_LEFT_PAREN)) {
+                parser_error(parser, "Expected '(' after 'print'");
+                return NULL;
+            }
+
+            ASTNode* print_call = create_ast_node(AST_PRINT_STATEMENT, NULL, line, column);
+
+            // Parse arguments
+            if (!match_token(parser, TOKEN_RIGHT_PAREN)) {
+                do {
+                    ASTNode* arg = parse_expression(parser);
+                    if (!arg) {
+                        free_ast_node(print_call);
+                        return NULL;
+                    }
+                    add_child(print_call, arg);
+                } while (match_token(parser, TOKEN_COMMA));
+
+                if (!expect_token(parser, TOKEN_RIGHT_PAREN)) {
+                    free_ast_node(print_call);
+                    return NULL;
+                }
+            }
+
+            return print_call;
+        }
+
         default:
             return NULL;
     }
@@ -425,14 +473,23 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
         
         if (op->type == TOKEN_LEFT_PAREN) {
             // Function call: expr(arg1, arg2, ...)
-            // Extract function name if expr is an identifier
+            // Extract function name - handle both simple and namespaced calls
             const char* func_name = NULL;
             if (expr && expr->type == AST_IDENTIFIER && expr->value) {
+                // Simple call: foo()
                 func_name = strdup(expr->value);
+            } else if (expr && expr->type == AST_MEMBER_ACCESS && expr->value &&
+                       expr->child_count > 0 && expr->children[0] &&
+                       expr->children[0]->type == AST_IDENTIFIER) {
+                // Namespaced call: namespace.func() -> store as "namespace.func"
+                char qualified_name[256];
+                snprintf(qualified_name, sizeof(qualified_name), "%s.%s",
+                         expr->children[0]->value, expr->value);
+                func_name = strdup(qualified_name);
             }
-            
+
             advance_token(parser); // consume '('
-            
+
             ASTNode* func_call = create_ast_node(AST_FUNCTION_CALL, func_name, op->line, op->column);
             
             // Parse arguments
@@ -544,9 +601,23 @@ ASTNode* parse_statement(Parser* parser) {
         case TOKEN_INT:
         case TOKEN_STRING:
         case TOKEN_FLOAT:
-        case TOKEN_BOOL:
-            // Explicit type: int x = 42;
+        case TOKEN_BOOL: {
+            // Check if this is a namespace call: string.func() vs type declaration: string x = ...
+            Token* next = peek_ahead(parser, 1);
+            if (next && next->type == TOKEN_DOT) {
+                // Namespace call like string.release(s) - parse as expression statement
+                ASTNode* expr = parse_expression(parser);
+                if (expr) {
+                    expect_token(parser, TOKEN_SEMICOLON);
+                    ASTNode* stmt = create_ast_node(AST_EXPRESSION_STATEMENT, NULL, token->line, token->column);
+                    add_child(stmt, expr);
+                    return stmt;
+                }
+                return NULL;
+            }
+            // Explicit type declaration: int x = 42;
             return parse_variable_declaration(parser);
+        }
             
         case TOKEN_IF:
             return parse_if_statement(parser);
@@ -987,22 +1058,43 @@ ASTNode* parse_module_declaration(Parser* parser) {
 }
 
 // Parse import statement
+// Helper: Check if token can be used as a module name part
+// Allows identifiers and type keywords (string, int, float, etc.)
+static int is_module_name_token(Token* token) {
+    if (!token) return 0;
+    switch (token->type) {
+        case TOKEN_IDENTIFIER:
+        case TOKEN_STRING:  // 'string' keyword
+        case TOKEN_INT:     // 'int' keyword
+        case TOKEN_FLOAT:   // 'float' keyword
+        case TOKEN_BOOL:    // 'bool' keyword
+            return 1;
+        default:
+            return 0;
+    }
+}
+
 // Syntax: import module.name
 // Syntax: import module.name (symbol1, symbol2)
 // Syntax: import module.name as alias
 ASTNode* parse_import_statement(Parser* parser) {
     Token* import_token = advance_token(parser);  // consume 'import'
-    
-    Token* name_token = expect_token(parser, TOKEN_IDENTIFIER);
-    if (!name_token) return NULL;
-    
+
+    Token* name_token = peek_token(parser);
+    if (!is_module_name_token(name_token)) {
+        parser_error(parser, "Expected module name after 'import'");
+        return NULL;
+    }
+    advance_token(parser);  // consume name
+
     // Build module name (handle dotted notation)
     char module_name[256] = {0};
     strncpy(module_name, name_token->value, sizeof(module_name) - 1);
-    
+
     while (match_token(parser, TOKEN_DOT)) {
-        Token* part = expect_token(parser, TOKEN_IDENTIFIER);
-        if (!part) break;
+        Token* part = peek_token(parser);
+        if (!is_module_name_token(part)) break;
+        advance_token(parser);  // consume the part
         strncat(module_name, ".", sizeof(module_name) - strlen(module_name) - 1);
         strncat(module_name, part->value, sizeof(module_name) - strlen(module_name) - 1);
     }

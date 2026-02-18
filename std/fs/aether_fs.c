@@ -17,111 +17,111 @@
 #endif
 
 // File operations
-AetherFile* aether_file_open(const char* path, const char* mode) {
+File* file_open(const char* path, const char* mode) {
     if (!path || !mode) return NULL;
-    
+
     FILE* fp = fopen(path, mode);
     if (!fp) return NULL;
-    
-    AetherFile* file = (AetherFile*)malloc(sizeof(AetherFile));
+
+    File* file = (File*)malloc(sizeof(File));
     file->handle = fp;
     file->is_open = 1;
     file->path = strdup(path);
     return file;
 }
 
-AetherString* aether_file_read_all(AetherFile* file) {
+AetherString* file_read_all(File* file) {
     if (!file || !file->is_open) return NULL;
-    
+
     FILE* fp = (FILE*)file->handle;
     fseek(fp, 0, SEEK_END);
     long size = ftell(fp);
     fseek(fp, 0, SEEK_SET);
-    
+
     char* buffer = (char*)malloc(size + 1);
     size_t read = fread(buffer, 1, size, fp);
     buffer[read] = '\0';
-    
-    AetherString* result = aether_string_new_with_length(buffer, read);
+
+    AetherString* result = string_new_with_length(buffer, read);
     free(buffer);
     return result;
 }
 
-int aether_file_write(AetherFile* file, const char* data, size_t length) {
+int file_write(File* file, const char* data, size_t length) {
     if (!file || !file->is_open || !data) return -1;
-    
+
     FILE* fp = (FILE*)file->handle;
     size_t written = fwrite(data, 1, length, fp);
     return (written == length) ? 0 : -1;
 }
 
-int aether_file_close(AetherFile* file) {
+int file_close(File* file) {
     if (!file) return -1;
-    
+
     if (file->is_open) {
         fclose((FILE*)file->handle);
         file->is_open = 0;
     }
-    
+
     free((void*)file->path);
     free(file);
     return 0;
 }
 
-int aether_file_exists(const char* path) {
+int file_exists(const char* path) {
     if (!path) return 0;
-    
+
     struct stat st;
     return (stat(path, &st) == 0 && !S_ISDIR(st.st_mode));
 }
 
-int aether_file_delete(const char* path) {
+int file_delete(const char* path) {
     if (!path) return -1;
     return remove(path);
 }
 
-size_t aether_file_size(const char* path) {
+size_t file_size(const char* path) {
     if (!path) return 0;
-    
+
     struct stat st;
     if (stat(path, &st) != 0) return 0;
     return st.st_size;
 }
 
 // Directory operations
-int aether_dir_exists(const char* path) {
+int dir_exists(const char* path) {
     if (!path) return 0;
-    
+
     struct stat st;
     return (stat(path, &st) == 0 && S_ISDIR(st.st_mode));
 }
 
-int aether_dir_create(const char* path) {
+int dir_create(const char* path) {
     if (!path) return -1;
     return mkdir(path, 0755);
 }
 
-int aether_dir_delete(const char* path) {
+int dir_delete(const char* path) {
     if (!path) return -1;
     return rmdir(path);
 }
 
 // Path operations
-AetherString* aether_path_join(const char* path1, const char* path2) {
+AetherString* path_join(const char* path1, const char* path2) {
     if (!path1 || !path2) return NULL;
-    
+
     size_t len1 = strlen(path1);
     size_t len2 = strlen(path2);
-    
+
     #ifdef _WIN32
     char sep = '\\';
     #else
     char sep = '/';
     #endif
-    
+
     int needs_sep = (len1 > 0 && path1[len1-1] != sep && path1[len1-1] != '/');
     size_t total = len1 + len2 + (needs_sep ? 1 : 0);
-    
+
     char* result = (char*)malloc(total + 1);
     strcpy(result, path1);
     if (needs_sep) {
@@ -130,71 +130,71 @@ AetherString* aether_path_join(const char* path1, const char* path2) {
     } else {
         strcpy(result + len1, path2);
     }
-    
-    AetherString* str = aether_string_new(result);
+
+    AetherString* str = string_new(result);
     free(result);
     return str;
 }
 
-AetherString* aether_path_dirname(const char* path) {
+AetherString* path_dirname(const char* path) {
     if (!path) return NULL;
-    
+
     const char* last_sep = strrchr(path, '/');
     const char* last_sep_win = strrchr(path, '\\');
-    
+
     if (last_sep_win && (!last_sep || last_sep_win > last_sep)) {
         last_sep = last_sep_win;
     }
-    
+
     if (!last_sep) {
-        return aether_string_new(".");
+        return string_new(".");
     }
-    
+
     size_t len = last_sep - path;
     if (len == 0) len = 1;  // Root directory
-    
+
     char* result = (char*)malloc(len + 1);
     strncpy(result, path, len);
     result[len] = '\0';
-    
-    AetherString* str = aether_string_new(result);
+
+    AetherString* str = string_new(result);
     free(result);
     return str;
 }
 
-AetherString* aether_path_basename(const char* path) {
+AetherString* path_basename(const char* path) {
     if (!path) return NULL;
-    
+
     const char* last_sep = strrchr(path, '/');
     const char* last_sep_win = strrchr(path, '\\');
-    
+
     if (last_sep_win && (!last_sep || last_sep_win > last_sep)) {
         last_sep = last_sep_win;
     }
-    
+
     const char* basename = last_sep ? last_sep + 1 : path;
-    return aether_string_new(basename);
+    return string_new(basename);
 }
 
-AetherString* aether_path_extension(const char* path) {
+AetherString* path_extension(const char* path) {
     if (!path) return NULL;
-    
+
     const char* last_dot = strrchr(path, '.');
     const char* last_sep = strrchr(path, '/');
     const char* last_sep_win = strrchr(path, '\\');
-    
+
     if (last_sep_win && (!last_sep || last_sep_win > last_sep)) {
         last_sep = last_sep_win;
     }
-    
+
     if (!last_dot || (last_sep && last_dot < last_sep)) {
-        return aether_string_new("");
+        return string_new("");
     }
-    
-    return aether_string_new(last_dot);
+
+    return string_new(last_dot);
 }
 
-int aether_path_is_absolute(const char* path) {
+int path_is_absolute(const char* path) {
     if (!path || path[0] == '\0') return 0;
     
     #ifdef _WIN32
@@ -214,37 +214,37 @@ int aether_path_is_absolute(const char* path) {
 }
 
 // Directory listing
-AetherDirList* aether_dir_list(const char* path) {
+DirList* dir_list(const char* path) {
     if (!path) return NULL;
-    
-    AetherDirList* list = (AetherDirList*)malloc(sizeof(AetherDirList));
+
+    DirList* list = (DirList*)malloc(sizeof(DirList));
     list->entries = NULL;
     list->count = 0;
-    
+
     #ifdef _WIN32
     WIN32_FIND_DATAA find_data;
     char search_path[MAX_PATH];
     snprintf(search_path, sizeof(search_path), "%s\\*", path);
-    
+
     HANDLE hFind = FindFirstFileA(search_path, &find_data);
     if (hFind == INVALID_HANDLE_VALUE) {
         return list;
     }
-    
+
     do {
-        if (strcmp(find_data.cFileName, ".") != 0 && 
+        if (strcmp(find_data.cFileName, ".") != 0 &&
             strcmp(find_data.cFileName, "..") != 0) {
             list->entries = (char**)realloc(list->entries, (list->count + 1) * sizeof(char*));
             list->entries[list->count] = strdup(find_data.cFileName);
             list->count++;
         }
     } while (FindNextFileA(hFind, &find_data));
-    
+
     FindClose(hFind);
     #else
     DIR* dir = opendir(path);
     if (!dir) return list;
-    
+
     struct dirent* entry;
     while ((entry = readdir(dir)) != NULL) {
         if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
@@ -253,16 +253,16 @@ AetherDirList* aether_dir_list(const char* path) {
             list->count++;
         }
     }
-    
+
     closedir(dir);
     #endif
-    
+
     return list;
 }
 
-void aether_dir_list_free(AetherDirList* list) {
+void dir_list_free(DirList* list) {
     if (!list) return;
-    
+
     for (int i = 0; i < list->count; i++) {
         free(list->entries[i]);
     }

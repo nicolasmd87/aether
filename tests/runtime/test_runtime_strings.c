@@ -3,89 +3,89 @@
 #include <string.h>
 
 TEST_CATEGORY(string_concat_basic, TEST_CATEGORY_STDLIB) {
-    AetherString* s1 = aether_string_from_cstr("Hello");
-    AetherString* s2 = aether_string_from_cstr(" World");
-    AetherString* result = aether_string_concat(s1, s2);
-    
+    AetherString* s1 = string_from_cstr("Hello");
+    AetherString* s2 = string_from_cstr(" World");
+    AetherString* result = string_concat(s1, s2);
+
     ASSERT_NOT_NULL(result);
     ASSERT_STREQ("Hello World", result->data);
-    
-    aether_string_free(s1);
-    aether_string_free(s2);
-    aether_string_free(result);
+
+    string_free(s1);
+    string_free(s2);
+    string_free(result);
 }
 
 TEST_CATEGORY(string_length, TEST_CATEGORY_STDLIB) {
-    AetherString* s = aether_string_from_cstr("Hello");
-    ASSERT_EQ(5, aether_string_length(s));
-    aether_string_free(s);
+    AetherString* s = string_from_cstr("Hello");
+    ASSERT_EQ(5, string_length(s));
+    string_free(s);
 }
 
 TEST_CATEGORY(string_char_at, TEST_CATEGORY_STDLIB) {
-    AetherString* s = aether_string_from_cstr("Hello");
-    ASSERT_EQ('H', aether_string_char_at(s, 0));
-    ASSERT_EQ('e', aether_string_char_at(s, 1));
-    ASSERT_EQ('o', aether_string_char_at(s, 4));
-    aether_string_free(s);
+    AetherString* s = string_from_cstr("Hello");
+    ASSERT_EQ('H', string_char_at(s, 0));
+    ASSERT_EQ('e', string_char_at(s, 1));
+    ASSERT_EQ('o', string_char_at(s, 4));
+    string_free(s);
 }
 
 TEST_CATEGORY(string_index_of, TEST_CATEGORY_STDLIB) {
-    AetherString* s = aether_string_from_cstr("Hello World");
-    AetherString* world = aether_string_from_cstr("World");
-    AetherString* xyz = aether_string_from_cstr("xyz");
-    ASSERT_EQ(6, aether_string_index_of(s, world));
-    ASSERT_EQ(-1, aether_string_index_of(s, xyz));
-    aether_string_free(s);
-    aether_string_free(world);
-    aether_string_free(xyz);
+    AetherString* s = string_from_cstr("Hello World");
+    AetherString* world = string_from_cstr("World");
+    AetherString* xyz = string_from_cstr("xyz");
+    ASSERT_EQ(6, string_index_of(s, world));
+    ASSERT_EQ(-1, string_index_of(s, xyz));
+    string_free(s);
+    string_free(world);
+    string_free(xyz);
 }
 
 TEST_CATEGORY(string_empty, TEST_CATEGORY_STDLIB) {
-    AetherString* s = aether_string_from_cstr("");
-    ASSERT_EQ(0, aether_string_length(s));
-    aether_string_free(s);
+    AetherString* s = string_from_cstr("");
+    ASSERT_EQ(0, string_length(s));
+    string_free(s);
 }
 
 TEST_CATEGORY(string_reference_counting, TEST_CATEGORY_STDLIB) {
-    AetherString* s1 = aether_string_from_cstr("Test");
+    AetherString* s1 = string_from_cstr("Test");
     ASSERT_EQ(1, s1->ref_count);
-    
+
     // Simulate reference increment
     s1->ref_count++;
     ASSERT_EQ(2, s1->ref_count);
-    
+
     // Free once (should decrement)
     s1->ref_count--;
     ASSERT_EQ(1, s1->ref_count);
-    
-    aether_string_free(s1);
+
+    string_free(s1);
 }
 
 TEST_CATEGORY(string_concat_empty, TEST_CATEGORY_STDLIB) {
-    AetherString* s1 = aether_string_from_cstr("");
-    AetherString* s2 = aether_string_from_cstr("Hello");
-    AetherString* result = aether_string_concat(s1, s2);
-    
+    AetherString* s1 = string_from_cstr("");
+    AetherString* s2 = string_from_cstr("Hello");
+    AetherString* result = string_concat(s1, s2);
+
     ASSERT_STREQ("Hello", result->data);
-    
-    aether_string_free(s1);
-    aether_string_free(s2);
-    aether_string_free(result);
+
+    string_free(s1);
+    string_free(s2);
+    string_free(result);
 }
 
 TEST_CATEGORY(string_special_chars, TEST_CATEGORY_STDLIB) {
-    AetherString* s = aether_string_from_cstr("Hello\nWorld\t!");
-    ASSERT_EQ(13, aether_string_length(s));
-    ASSERT_EQ('\n', aether_string_char_at(s, 5));
-    ASSERT_EQ('\t', aether_string_char_at(s, 11));
-    aether_string_free(s);
+    AetherString* s = string_from_cstr("Hello\nWorld\t!");
+    ASSERT_EQ(13, string_length(s));
+    ASSERT_EQ('\n', string_char_at(s, 5));
+    ASSERT_EQ('\t', string_char_at(s, 11));
+    string_free(s);
 }
 
 TEST_CATEGORY(string_unicode_basic, TEST_CATEGORY_STDLIB) {
     // Basic unicode test (if supported)
-    AetherString* s = aether_string_from_cstr("Hello 世界");
+    AetherString* s = string_from_cstr("Hello 世界");
     ASSERT_NOT_NULL(s);
-    aether_string_free(s);
+    string_free(s);
 }
 
 TEST_CATEGORY(string_large, TEST_CATEGORY_STDLIB) {
@@ -93,9 +93,8 @@ TEST_CATEGORY(string_large, TEST_CATEGORY_STDLIB) {
     char large[1000];
     memset(large, 'A', 999);
     large[999] = '\0';
-    
-    AetherString* s = aether_string_from_cstr(large);
-    ASSERT_EQ(999, aether_string_length(s));
-    aether_string_free(s);
-}
 
+    AetherString* s = string_from_cstr(large);
+    ASSERT_EQ(999, string_length(s));
+    string_free(s);
+}

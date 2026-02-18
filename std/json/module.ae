@@ -1,0 +1,39 @@
+// std.json - JSON Module
+// Import with: import std.json
+
+// JSON type constants
+// JSON_NULL = 0, JSON_BOOL = 1, JSON_NUMBER = 2
+// JSON_STRING = 3, JSON_ARRAY = 4, JSON_OBJECT = 5
+
+// Parsing and serialization
+extern json_parse(json_str: ptr) -> ptr
+extern json_stringify(value: ptr) -> ptr
+extern json_free(value: ptr)
+
+// Type checking
+extern json_type(value: ptr) -> int
+extern json_is_null(value: ptr) -> int
+
+// Value getters
+extern json_get_bool(value: ptr) -> int
+extern json_get_number(value: ptr) -> float
+extern json_get_int(value: ptr) -> int
+extern json_get_string(value: ptr) -> ptr
+
+// Object operations
+extern json_object_get(obj: ptr, key: ptr) -> ptr
+extern json_object_set(obj: ptr, key: ptr, value: ptr)
+extern json_object_has(obj: ptr, key: ptr) -> int
+
+// Array operations
+extern json_array_get(arr: ptr, index: int) -> ptr
+extern json_array_add(arr: ptr, value: ptr)
+extern json_array_size(arr: ptr) -> int
+
+// Value creation
+extern json_create_null() -> ptr
+extern json_create_bool(value: int) -> ptr
+extern json_create_number(value: float) -> ptr
+extern json_create_string(value: ptr) -> ptr
+extern json_create_array() -> ptr
+extern json_create_object() -> ptr

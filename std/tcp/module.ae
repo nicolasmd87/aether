@@ -1,0 +1,11 @@
+// std.tcp - TCP Socket Operations
+// Import with: import std.tcp
+// Usage: tcp.connect(host, port), tcp.send(sock, data), etc.
+
+extern tcp_connect(host: ptr, port: int) -> ptr
+extern tcp_send(sock: ptr, data: ptr) -> int
+extern tcp_receive(sock: ptr, max_bytes: int) -> ptr
+extern tcp_close(sock: ptr) -> int
+extern tcp_listen(port: int) -> ptr
+extern tcp_accept(server: ptr) -> ptr
+extern tcp_server_close(server: ptr) -> int

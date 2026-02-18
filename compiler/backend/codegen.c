@@ -5,9 +5,142 @@
 #include <stdbool.h>
 #include <pthread.h>
 #include "codegen.h"
+#include "../frontend/lexer.h"
+#include "../frontend/parser.h"
+
+#ifdef _WIN32
+    #include <io.h>
+    #define access _access
+    #define F_OK 0
+#else
+    #include <unistd.h>
+#endif
+
+// Maximum tokens for parsing module files
+#define MAX_MODULE_TOKENS 2000
 
 // Forward declarations
 static int has_return_value(ASTNode* node);
+
+// Helper to load and parse a module.ae file (same as typechecker)
+static ASTNode* codegen_load_module_file(const char* module_path) {
+    FILE* f = fopen(module_path, "r");
+    if (!f) return NULL;
+
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    char* source = malloc(size + 1);
+    if (!source) {
+        fclose(f);
+        return NULL;
+    }
+
+    size_t bytes_read = fread(source, 1, size, f);
+    fclose(f);
+    source[bytes_read] = '\0';
+
+    // Tokenize
+    lexer_init(source);
+    Token* tokens[MAX_MODULE_TOKENS];
+    int token_count = 0;
+
+    while (token_count < MAX_MODULE_TOKENS - 1) {
+        Token* token = next_token();
+        tokens[token_count++] = token;
+        if (token->type == TOKEN_EOF || token->type == TOKEN_ERROR) break;
+    }
+
+    // Parse
+    Parser* parser = create_parser(tokens, token_count);
+    ASTNode* ast = parse_program(parser);
+
+    // Cleanup
+    for (int i = 0; i < token_count; i++) {
+        free_token(tokens[i]);
+    }
+    free_parser(parser);
+    free(source);
+
+    return ast;
+}
+
+// Try multiple paths to find a module file
+static ASTNode* codegen_resolve_and_load_module(const char* module_name) {
+    char path[512];
+
+    // Try 1: Local development path
+    snprintf(path, sizeof(path), "std/%s/module.ae", module_name);
+    ASTNode* ast = codegen_load_module_file(path);
+    if (ast) return ast;
+
+    // Try 2: Installed path via AETHER_HOME
+    const char* aether_home = getenv("AETHER_HOME");
+    if (aether_home) {
+        snprintf(path, sizeof(path), "%s/share/aether/std/%s/module.ae", aether_home, module_name);
+        ast = codegen_load_module_file(path);
+        if (ast) return ast;
+    }
+
+    // Try 3: Common install locations
+    snprintf(path, sizeof(path), "/usr/local/share/aether/std/%s/module.ae", module_name);
+    ast = codegen_load_module_file(path);
+    if (ast) return ast;
+
+    snprintf(path, sizeof(path), "%s/.aether/share/aether/std/%s/module.ae",
+             getenv("HOME") ? getenv("HOME") : "", module_name);
+    ast = codegen_load_module_file(path);
+    if (ast) return ast;
+
+    return NULL;
+}
+
+// Resolve local package modules (non-std imports)
+// Converts dots to slashes: "mypackage.utils" -> "mypackage/utils/module.ae"
+static ASTNode* codegen_resolve_local_module(const char* module_path) {
+    char path[512];
+    char converted[512];
+
+    // Convert dots to slashes
+    strncpy(converted, module_path, sizeof(converted) - 1);
+    converted[sizeof(converted) - 1] = '\0';
+    for (char* p = converted; *p; p++) {
+        if (*p == '.') *p = '/';
+    }
+
+    // Try 1: lib/module_path/module.ae (library directory)
+    snprintf(path, sizeof(path), "lib/%s/module.ae", converted);
+    ASTNode* ast = codegen_load_module_file(path);
+    if (ast) return ast;
+
+    // Try 2: lib/module_path.ae (single file module)
+    snprintf(path, sizeof(path), "lib/%s.ae", converted);
+    ast = codegen_load_module_file(path);
+    if (ast) return ast;
+
+    // Try 3: src/module_path/module.ae
+    snprintf(path, sizeof(path), "src/%s/module.ae", converted);
+    ast = codegen_load_module_file(path);
+    if (ast) return ast;
+
+    // Try 4: src/module_path.ae
+    snprintf(path, sizeof(path), "src/%s.ae", converted);
+    ast = codegen_load_module_file(path);
+    if (ast) return ast;
+
+    // Try 5: module_path/module.ae (project root)
+    snprintf(path, sizeof(path), "%s/module.ae", converted);
+    ast = codegen_load_module_file(path);
+    if (ast) return ast;
+
+    // Try 6: module_path.ae (single file in root)
+    snprintf(path, sizeof(path), "%s.ae", converted);
+    ast = codegen_load_module_file(path);
+    if (ast) return ast;
+
+    return NULL;
+}
 
 // Returns the field name if msg has exactly one int field (eligible for inline encoding),
 // or NULL otherwise. Inline messages skip pool allocation entirely — the single int field
@@ -37,6 +170,8 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->emit_header = 0;
     gen->header_file = NULL;
     gen->header_path = NULL;
+    gen->generated_functions = NULL;
+    gen->generated_function_count = 0;
     return gen;
 }
 
@@ -65,6 +200,12 @@ void free_code_generator(CodeGenerator* gen) {
         }
         if (gen->message_registry) {
             free_message_registry(gen->message_registry);
+        }
+        if (gen->generated_functions) {
+            for (int i = 0; i < gen->generated_function_count; i++) {
+                free(gen->generated_functions[i]);
+            }
+            free(gen->generated_functions);
         }
         free(gen);
     }
@@ -97,6 +238,58 @@ void clear_declared_vars(CodeGenerator* gen) {
     }
     gen->declared_vars = NULL;
     gen->declared_var_count = 0;
+}
+
+// Helper: check if a function was already generated
+static int is_function_generated(CodeGenerator* gen, const char* func_name) {
+    for (int i = 0; i < gen->generated_function_count; i++) {
+        if (strcmp(gen->generated_functions[i], func_name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Helper: mark a function as generated
+static void mark_function_generated(CodeGenerator* gen, const char* func_name) {
+    gen->generated_functions = realloc(gen->generated_functions,
+                                       sizeof(char*) * (gen->generated_function_count + 1));
+    gen->generated_functions[gen->generated_function_count] = strdup(func_name);
+    gen->generated_function_count++;
+}
+
+// Helper: count how many function clauses exist with the same name
+static int count_function_clauses(ASTNode* program, const char* func_name) {
+    int count = 0;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* child = program->children[i];
+        if (child->type == AST_FUNCTION_DEFINITION &&
+            child->value && strcmp(child->value, func_name) == 0) {
+            count++;
+        }
+    }
+    return count;
+}
+
+// Helper: collect all function clauses with the same name
+static ASTNode** collect_function_clauses(ASTNode* program, const char* func_name, int* out_count) {
+    int count = count_function_clauses(program, func_name);
+    if (count == 0) {
+        *out_count = 0;
+        return NULL;
+    }
+
+    ASTNode** clauses = malloc(sizeof(ASTNode*) * count);
+    int idx = 0;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* child = program->children[i];
+        if (child->type == AST_FUNCTION_DEFINITION &&
+            child->value && strcmp(child->value, func_name) == 0) {
+            clauses[idx++] = child;
+        }
+    }
+    *out_count = count;
+    return clauses;
 }
 
 void indent(CodeGenerator* gen) {
@@ -309,7 +502,7 @@ const char* get_c_type(Type* type) {
             return buffer;
         }
         case TYPE_UNKNOWN:
-            fprintf(stderr, "Warning: Unresolved type (TYPE_UNKNOWN) in codegen, defaulting to int\n");
+            // TYPE_UNKNOWN is common for pattern variables - silently default to int
             return "int";
         default:
             fprintf(stderr, "Warning: Unknown type kind %d in codegen, defaulting to void\n", type->kind);
@@ -343,6 +536,39 @@ const char* get_c_operator(const char* aether_op) {
 
 void generate_type(CodeGenerator* gen, Type* type) {
     fprintf(gen->output, "%s", get_c_type(type));
+}
+
+// Generate a default return value for pattern match failures
+// This outputs a sentinel value that indicates "no match" for this clause
+static void generate_default_return_value(CodeGenerator* gen, Type* type) {
+    if (!type) {
+        fprintf(gen->output, "0");
+        return;
+    }
+    switch (type->kind) {
+        case TYPE_INT:
+            fprintf(gen->output, "0");
+            break;
+        case TYPE_FLOAT:
+            fprintf(gen->output, "0.0");
+            break;
+        case TYPE_STRING:
+            fprintf(gen->output, "\"\"");
+            break;
+        case TYPE_BOOL:
+            fprintf(gen->output, "0");
+            break;
+        case TYPE_VOID:
+            // For void functions, just return without value
+            // The caller should handle this - output nothing
+            break;
+        case TYPE_PTR:
+            fprintf(gen->output, "NULL");
+            break;
+        default:
+            fprintf(gen->output, "0");
+            break;
+    }
 }
 
 void generate_expression(CodeGenerator* gen, ASTNode* expr) {
@@ -586,7 +812,14 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 }
                 else {
                     // Regular function call: func_name(arg1, arg2, ...)
-                    fprintf(gen->output, "%s(", func_name);
+                    // Convert qualified names: string.new -> string_new
+                    char c_func_name[256];
+                    strncpy(c_func_name, func_name, sizeof(c_func_name) - 1);
+                    c_func_name[sizeof(c_func_name) - 1] = '\0';
+                    for (char* p = c_func_name; *p; p++) {
+                        if (*p == '.') *p = '_';
+                    }
+                    fprintf(gen->output, "%s(", c_func_name);
                     for (int i = 0; i < expr->child_count; i++) {
                         if (i > 0) fprintf(gen->output, ", ");
                         generate_expression(gen, expr->children[i]);
@@ -1162,12 +1395,20 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             break;
             
         case AST_RETURN_STATEMENT:
-            fprintf(gen->output, "return");
-            if (stmt->child_count > 0) {
-                fprintf(gen->output, " ");
-                generate_expression(gen, stmt->children[0]);
+            // Special case: if returning a print statement, just execute the print
+            // This handles pattern matching functions like: classify(x) when x < 0 -> print("negative\n")
+            if (stmt->child_count > 0 && stmt->children[0] &&
+                stmt->children[0]->type == AST_PRINT_STATEMENT) {
+                generate_statement(gen, stmt->children[0]);
+                fprintf(gen->output, "return;\n");
+            } else {
+                fprintf(gen->output, "return");
+                if (stmt->child_count > 0) {
+                    fprintf(gen->output, " ");
+                    generate_expression(gen, stmt->children[0]);
+                }
+                fprintf(gen->output, ";\n");
             }
-            fprintf(gen->output, ";\n");
             break;
             
         case AST_BREAK_STATEMENT:
@@ -1714,6 +1955,10 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
 static int has_return_value(ASTNode* node) {
     if (!node) return 0;
     if (node->type == AST_RETURN_STATEMENT && node->child_count > 0 && node->children[0]) {
+        // Print statements don't count as "return values" - they're void
+        if (node->children[0]->type == AST_PRINT_STATEMENT) {
+            return 0;
+        }
         return 1;
     }
     for (int i = 0; i < node->child_count; i++) {
@@ -1856,13 +2101,13 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
     for (int i = 0; i < func->child_count; i++) {
         ASTNode* child = func->children[i];
         
-        if (child->type == AST_PATTERN_LITERAL && 
+        if (child->type == AST_PATTERN_LITERAL &&
             strcmp(child->value, "_") != 0) {
             // Generate pattern match check
             print_indent(gen);
-            fprintf(gen->output, "if (_pattern_%d != %s) return ", 
+            fprintf(gen->output, "if (_pattern_%d != %s) return ",
                     pattern_idx, child->value);
-            generate_type(gen, func->node_type);
+            generate_default_return_value(gen, func->node_type);
             fprintf(gen->output, ";\n");
         }
         
@@ -1872,14 +2117,14 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
                 // Empty list check
                 print_indent(gen);
                 fprintf(gen->output, "if (_len_%d != 0) return ", list_idx);
-                generate_type(gen, func->node_type);
+                generate_default_return_value(gen, func->node_type);
                 fprintf(gen->output, ";\n");
             } else {
                 // Fixed-size list check
                 print_indent(gen);
-                fprintf(gen->output, "if (_len_%d != %d) return ", 
+                fprintf(gen->output, "if (_len_%d != %d) return ",
                         list_idx, child->child_count);
-                generate_type(gen, func->node_type);
+                generate_default_return_value(gen, func->node_type);
                 fprintf(gen->output, ";\n");
                 
                 // Bind pattern variables to list elements
@@ -1897,7 +2142,7 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
             // [H|T] pattern - check non-empty
             print_indent(gen);
             fprintf(gen->output, "if (_len_%d < 1) return ", list_idx);
-            generate_type(gen, func->node_type);
+            generate_default_return_value(gen, func->node_type);
             fprintf(gen->output, ";\n");
             
             // Bind head and tail
@@ -1930,7 +2175,7 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
             fprintf(gen->output, "if (!(");
             generate_expression(gen, child->children[0]);
             fprintf(gen->output, ")) return ");
-            generate_type(gen, func->node_type);
+            generate_default_return_value(gen, func->node_type);
             fprintf(gen->output, ";\n");
         }
     }
@@ -1945,9 +2190,356 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
     print_line(gen, "");
 }
 
+// Structure to hold pattern variable to parameter mapping
+typedef struct {
+    const char* var_name;
+    int arg_index;
+} PatternVarMapping;
+
+// Forward declaration for expression generation with substitution
+static void generate_expression_with_subst(CodeGenerator* gen, ASTNode* expr,
+                                           PatternVarMapping* mappings, int mapping_count);
+
+// Helper for expression substitution with optional parentheses
+static void generate_expression_with_subst_inner(CodeGenerator* gen, ASTNode* expr,
+                                                  PatternVarMapping* mappings, int mapping_count,
+                                                  int add_parens);
+
+// Generate an expression, substituting pattern variables with _argN
+static void generate_expression_with_subst(CodeGenerator* gen, ASTNode* expr,
+                                           PatternVarMapping* mappings, int mapping_count) {
+    // Top-level: no extra parentheses needed (if statement provides them)
+    generate_expression_with_subst_inner(gen, expr, mappings, mapping_count, 0);
+}
+
+static void generate_expression_with_subst_inner(CodeGenerator* gen, ASTNode* expr,
+                                                  PatternVarMapping* mappings, int mapping_count,
+                                                  int add_parens) {
+    if (!expr) return;
+
+    // Check if this is an identifier that should be substituted
+    if (expr->type == AST_IDENTIFIER && expr->value) {
+        for (int i = 0; i < mapping_count; i++) {
+            if (strcmp(mappings[i].var_name, expr->value) == 0) {
+                fprintf(gen->output, "_arg%d", mappings[i].arg_index);
+                return;
+            }
+        }
+        // Not in mapping, output as-is
+        fprintf(gen->output, "%s", expr->value);
+        return;
+    }
+
+    // For binary operations
+    if (expr->type == AST_BINARY_EXPRESSION) {
+        if (add_parens) fprintf(gen->output, "(");
+        generate_expression_with_subst_inner(gen, expr->children[0], mappings, mapping_count, 1);
+        fprintf(gen->output, " %s ", get_c_operator(expr->value));
+        generate_expression_with_subst_inner(gen, expr->children[1], mappings, mapping_count, 1);
+        if (add_parens) fprintf(gen->output, ")");
+        return;
+    }
+
+    // For unary operations
+    if (expr->type == AST_UNARY_EXPRESSION) {
+        if (add_parens) fprintf(gen->output, "(");
+        fprintf(gen->output, "%s", get_c_operator(expr->value));
+        if (expr->child_count > 0) {
+            generate_expression_with_subst_inner(gen, expr->children[0], mappings, mapping_count, 1);
+        }
+        if (add_parens) fprintf(gen->output, ")");
+        return;
+    }
+
+    // For literals, just output value
+    if (expr->type == AST_LITERAL) {
+        if (expr->node_type && expr->node_type->kind == TYPE_STRING) {
+            fprintf(gen->output, "\"%s\"", expr->value);
+        } else {
+            fprintf(gen->output, "%s", expr->value);
+        }
+        return;
+    }
+
+    // Fallback: use normal expression generation
+    generate_expression(gen, expr);
+}
+
+// Generate a single clause's pattern match condition and body
+// Returns 1 if this clause has a pattern/guard that needs checking, 0 if it's a catch-all
+static int generate_clause_condition(CodeGenerator* gen, ASTNode* func, int is_first) {
+    int has_condition = 0;
+    int param_idx = 0;
+
+    // First pass: check if this clause has any conditions (literals or guards)
+    for (int i = 0; i < func->child_count; i++) {
+        ASTNode* child = func->children[i];
+        if (child->type == AST_PATTERN_LITERAL && strcmp(child->value, "_") != 0) {
+            has_condition = 1;
+            break;
+        }
+        if (child->type == AST_GUARD_CLAUSE) {
+            has_condition = 1;
+            break;
+        }
+        if (child->type == AST_PATTERN_LIST || child->type == AST_PATTERN_CONS) {
+            has_condition = 1;
+            break;
+        }
+    }
+
+    if (!has_condition) {
+        // This is a catch-all clause (e.g., factorial(n) with no guard)
+        // Generate body directly
+        for (int i = 0; i < func->child_count; i++) {
+            ASTNode* child = func->children[i];
+            if (child->type == AST_BLOCK) {
+                generate_statement(gen, child);
+                break;
+            }
+        }
+        return 0;
+    }
+
+    // Build pattern variable to _argN mapping first
+    PatternVarMapping mappings[32];  // Max 32 parameters
+    int mapping_count = 0;
+    param_idx = 0;
+
+    for (int i = 0; i < func->child_count; i++) {
+        ASTNode* child = func->children[i];
+        if (child->type == AST_GUARD_CLAUSE || child->type == AST_BLOCK) continue;
+
+        if (child->type == AST_PATTERN_VARIABLE && child->value) {
+            mappings[mapping_count].var_name = child->value;
+            mappings[mapping_count].arg_index = param_idx;
+            mapping_count++;
+        }
+
+        if (child->type == AST_PATTERN_LITERAL ||
+            child->type == AST_PATTERN_VARIABLE ||
+            child->type == AST_PATTERN_STRUCT ||
+            child->type == AST_VARIABLE_DECLARATION) {
+            param_idx++;
+        }
+    }
+
+    // Generate condition
+    print_indent(gen);
+    if (is_first) {
+        fprintf(gen->output, "if (");
+    } else {
+        fprintf(gen->output, "} else if (");
+    }
+
+    int first_cond = 1;
+    param_idx = 0;
+    int list_idx = 0;
+    ASTNode* guard = NULL;
+
+    for (int i = 0; i < func->child_count; i++) {
+        ASTNode* child = func->children[i];
+
+        if (child->type == AST_GUARD_CLAUSE) {
+            guard = child;
+            continue;
+        }
+
+        if (child->type == AST_BLOCK) continue;
+
+        if (child->type == AST_PATTERN_LITERAL && strcmp(child->value, "_") != 0) {
+            if (!first_cond) fprintf(gen->output, " && ");
+            fprintf(gen->output, "_arg%d == %s", param_idx, child->value);
+            first_cond = 0;
+        }
+
+        if (child->type == AST_PATTERN_LIST) {
+            if (strcmp(child->value, "[]") == 0 && child->child_count == 0) {
+                if (!first_cond) fprintf(gen->output, " && ");
+                fprintf(gen->output, "_len%d == 0", list_idx);
+                first_cond = 0;
+            } else {
+                if (!first_cond) fprintf(gen->output, " && ");
+                fprintf(gen->output, "_len%d == %d", list_idx, child->child_count);
+                first_cond = 0;
+            }
+            list_idx++;
+        } else if (child->type == AST_PATTERN_CONS) {
+            if (!first_cond) fprintf(gen->output, " && ");
+            fprintf(gen->output, "_len%d >= 1", list_idx);
+            first_cond = 0;
+            list_idx++;
+        }
+
+        if (child->type == AST_PATTERN_LITERAL ||
+            child->type == AST_PATTERN_VARIABLE ||
+            child->type == AST_PATTERN_STRUCT ||
+            child->type == AST_VARIABLE_DECLARATION) {
+            param_idx++;
+        }
+    }
+
+    // Add guard condition with variable substitution
+    if (guard && guard->child_count > 0) {
+        if (!first_cond) fprintf(gen->output, " && ");
+        generate_expression_with_subst(gen, guard->children[0], mappings, mapping_count);
+    }
+
+    fprintf(gen->output, ") {\n");
+    indent(gen);
+
+    // Bind pattern variables
+    param_idx = 0;
+    list_idx = 0;
+    for (int i = 0; i < func->child_count; i++) {
+        ASTNode* child = func->children[i];
+
+        if (child->type == AST_PATTERN_VARIABLE) {
+            print_indent(gen);
+            generate_type(gen, child->node_type);
+            fprintf(gen->output, " %s = _arg%d;\n", child->value, param_idx);
+        }
+
+        if (child->type == AST_PATTERN_LIST && child->child_count > 0) {
+            for (int j = 0; j < child->child_count; j++) {
+                ASTNode* elem = child->children[j];
+                if (elem->type == AST_PATTERN_VARIABLE) {
+                    print_indent(gen);
+                    fprintf(gen->output, "int %s = _list%d[%d];\n",
+                            elem->value, list_idx, j);
+                }
+            }
+            list_idx++;
+        } else if (child->type == AST_PATTERN_CONS) {
+            if (child->child_count >= 1 && child->children[0]->type == AST_PATTERN_VARIABLE) {
+                print_indent(gen);
+                fprintf(gen->output, "int %s = _list%d[0];\n",
+                        child->children[0]->value, list_idx);
+            }
+            if (child->child_count >= 2 && child->children[1]->type == AST_PATTERN_VARIABLE) {
+                print_indent(gen);
+                fprintf(gen->output, "int* %s = &_list%d[1];\n",
+                        child->children[1]->value, list_idx);
+                print_indent(gen);
+                fprintf(gen->output, "int %s_len = _len%d - 1;\n",
+                        child->children[1]->value, list_idx);
+            }
+            list_idx++;
+        }
+
+        if (child->type == AST_PATTERN_LITERAL ||
+            child->type == AST_PATTERN_VARIABLE ||
+            child->type == AST_PATTERN_STRUCT ||
+            child->type == AST_VARIABLE_DECLARATION) {
+            param_idx++;
+        }
+    }
+
+    // Generate body
+    for (int i = 0; i < func->child_count; i++) {
+        ASTNode* child = func->children[i];
+        if (child->type == AST_BLOCK) {
+            generate_statement(gen, child);
+            break;
+        }
+    }
+
+    unindent(gen);
+    return 1;
+}
+
+// Generate a combined function from multiple pattern-matching clauses
+static void generate_combined_function(CodeGenerator* gen, ASTNode** clauses, int clause_count) {
+    if (clause_count == 0) return;
+
+    ASTNode* first = clauses[0];
+
+    // Determine return type from first clause
+    Type* ret_type = first->node_type;
+    int has_return = has_return_value(first);
+
+    // Check all clauses for return value
+    for (int i = 1; i < clause_count && !has_return; i++) {
+        if (has_return_value(clauses[i])) {
+            has_return = 1;
+        }
+    }
+
+    if ((!ret_type || ret_type->kind == TYPE_VOID || ret_type->kind == TYPE_UNKNOWN) && has_return) {
+        fprintf(gen->output, "int");
+    } else {
+        generate_type(gen, ret_type);
+    }
+    fprintf(gen->output, " %s(", first->value);
+
+    // Generate unified parameter list using _argN naming
+    // Count parameters from first clause
+    int param_count = 0;
+    int list_count = 0;
+
+    for (int i = 0; i < first->child_count; i++) {
+        ASTNode* child = first->children[i];
+        if (child->type == AST_GUARD_CLAUSE || child->type == AST_BLOCK) continue;
+
+        if (child->type == AST_PATTERN_LIST || child->type == AST_PATTERN_CONS) {
+            if (param_count > 0 || list_count > 0) fprintf(gen->output, ", ");
+            fprintf(gen->output, "int* _list%d, int _len%d", list_count, list_count);
+            list_count++;
+        } else if (child->type == AST_PATTERN_LITERAL ||
+                   child->type == AST_PATTERN_VARIABLE ||
+                   child->type == AST_PATTERN_STRUCT ||
+                   child->type == AST_VARIABLE_DECLARATION) {
+            if (param_count > 0 || list_count > 0) fprintf(gen->output, ", ");
+            generate_type(gen, child->node_type);
+            fprintf(gen->output, " _arg%d", param_count);
+            param_count++;
+        }
+    }
+
+    fprintf(gen->output, ") {\n");
+    indent(gen);
+    clear_declared_vars(gen);
+
+    // Generate each clause as an if/else-if branch
+    int is_first = 1;
+    int had_catchall = 0;
+
+    for (int i = 0; i < clause_count; i++) {
+        int had_condition = generate_clause_condition(gen, clauses[i], is_first);
+        if (had_condition) {
+            is_first = 0;
+        } else {
+            had_catchall = 1;
+        }
+    }
+
+    // Close last if block if we had conditions
+    if (!is_first) {
+        print_indent(gen);
+        fprintf(gen->output, "}\n");
+    }
+
+    // Add fallback return if no catch-all and function returns value
+    if (!had_catchall && has_return) {
+        print_indent(gen);
+        fprintf(gen->output, "return ");
+        // If ret_type was void/unknown but we're returning int, use 0
+        if (!ret_type || ret_type->kind == TYPE_VOID || ret_type->kind == TYPE_UNKNOWN) {
+            fprintf(gen->output, "0");
+        } else {
+            generate_default_return_value(gen, ret_type);
+        }
+        fprintf(gen->output, ";\n");
+    }
+
+    unindent(gen);
+    print_line(gen, "}");
+    print_line(gen, "");
+}
+
 void generate_struct_definition(CodeGenerator* gen, ASTNode* struct_def) {
     if (!struct_def || struct_def->type != AST_STRUCT_DEFINITION) return;
-    
+
     // Generate C struct
     print_line(gen, "typedef struct %s {", struct_def->value);
     indent(gen);
@@ -2111,11 +2703,63 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         print_line(gen, "}");
     }
     print_line(gen, "");
-    
+
+    // Generate forward declarations for all functions (handles mutual recursion)
+    print_line(gen, "// Forward declarations");
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* child = program->children[i];
+        if (!child || child->type != AST_FUNCTION_DEFINITION) continue;
+        if (!child->value) continue;
+
+        // Skip if already forward-declared (pattern matching generates combined functions)
+        int already_declared = 0;
+        for (int j = 0; j < i; j++) {
+            ASTNode* prev = program->children[j];
+            if (prev && prev->type == AST_FUNCTION_DEFINITION &&
+                prev->value && strcmp(prev->value, child->value) == 0) {
+                already_declared = 1;
+                break;
+            }
+        }
+        if (already_declared) continue;
+
+        // Determine return type
+        Type* ret_type = child->node_type;
+        int func_has_return = has_return_value(child);
+        if ((!ret_type || ret_type->kind == TYPE_VOID || ret_type->kind == TYPE_UNKNOWN) && func_has_return) {
+            fprintf(gen->output, "int");
+        } else {
+            generate_type(gen, ret_type);
+        }
+        fprintf(gen->output, " %s(", child->value);
+
+        // Generate parameter types
+        int param_count = 0;
+        for (int j = 0; j < child->child_count; j++) {
+            ASTNode* param = child->children[j];
+            if (param->type == AST_GUARD_CLAUSE || param->type == AST_BLOCK) continue;
+
+            if (param->type == AST_PATTERN_LIST || param->type == AST_PATTERN_CONS) {
+                if (param_count > 0) fprintf(gen->output, ", ");
+                fprintf(gen->output, "int*, int");
+                param_count++;
+            } else if (param->type == AST_PATTERN_LITERAL ||
+                       param->type == AST_PATTERN_VARIABLE ||
+                       param->type == AST_PATTERN_STRUCT ||
+                       param->type == AST_VARIABLE_DECLARATION) {
+                if (param_count > 0) fprintf(gen->output, ", ");
+                generate_type(gen, param->node_type);
+                param_count++;
+            }
+        }
+        fprintf(gen->output, ");\n");
+    }
+    print_line(gen, "");
+
     for (int i = 0; i < program->child_count; i++) {
         ASTNode* child = program->children[i];
         if (!child) continue;
-        
+
         switch (child->type) {
             case AST_MODULE_DECLARATION:
                 // Module declaration: just a comment in generated C
@@ -2123,8 +2767,11 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                 print_line(gen, "");
                 break;
             case AST_IMPORT_STATEMENT:
-                // Import statement: comment only (module system pending)
+                // Import statement: generate extern declarations for stdlib imports
                 if (child->value) {
+                    const char* module_path = child->value;
+
+                    // Check for alias
                     const char* alias = NULL;
                     if (child->child_count > 0) {
                         ASTNode* last = child->children[child->child_count - 1];
@@ -2134,9 +2781,62 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                     }
 
                     if (alias) {
-                        print_line(gen, "// Import: %s as %s", child->value, alias);
+                        print_line(gen, "// Import: %s as %s", module_path, alias);
                     } else {
-                        print_line(gen, "// Import: %s", child->value);
+                        print_line(gen, "// Import: %s", module_path);
+                    }
+
+                    // Handle stdlib imports: import std.X
+                    if (strncmp(module_path, "std.", 4) == 0) {
+                        const char* module_name = module_path + 4;
+
+                        // Load the module definition file
+                        ASTNode* mod_ast = codegen_resolve_and_load_module(module_name);
+                        if (mod_ast) {
+                            // Generate extern declarations for imported functions
+                            for (int j = 0; j < mod_ast->child_count; j++) {
+                                ASTNode* decl = mod_ast->children[j];
+                                if (decl->type == AST_EXTERN_FUNCTION && decl->value) {
+                                    // Check if selective import
+                                    int should_import = 1;
+                                    if (child->child_count > 0) {
+                                        ASTNode* first = child->children[0];
+                                        if (first && first->type == AST_IDENTIFIER) {
+                                            should_import = 0;
+                                            for (int k = 0; k < child->child_count; k++) {
+                                                ASTNode* sel = child->children[k];
+                                                if (sel && sel->type == AST_IDENTIFIER &&
+                                                    strcmp(sel->value, decl->value) == 0) {
+                                                    should_import = 1;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+
+                                    if (should_import) {
+                                        generate_extern_declaration(gen, decl);
+                                    }
+                                }
+                            }
+                            free_ast_node(mod_ast);
+                        }
+                    } else {
+                        // Handle local package imports: import mypackage.utils
+                        ASTNode* mod_ast = codegen_resolve_local_module(module_path);
+                        if (mod_ast) {
+                            // Generate extern declarations for imported functions
+                            for (int j = 0; j < mod_ast->child_count; j++) {
+                                ASTNode* decl = mod_ast->children[j];
+                                if (decl->type == AST_EXTERN_FUNCTION && decl->value) {
+                                    generate_extern_declaration(gen, decl);
+                                } else if (decl->type == AST_FUNCTION_DEFINITION && decl->value) {
+                                    // For user-defined functions, generate a forward declaration
+                                    generate_extern_declaration(gen, decl);
+                                }
+                            }
+                            free_ast_node(mod_ast);
+                        }
                     }
                 }
                 print_line(gen, "");
@@ -2148,7 +2848,18 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                     print_line(gen, "// Exported:");
                     switch (exported->type) {
                         case AST_FUNCTION_DEFINITION:
-                            generate_function_definition(gen, exported);
+                            // Handle exports like regular functions (pattern matching aware)
+                            if (exported->value && !is_function_generated(gen, exported->value)) {
+                                int clause_count = 0;
+                                ASTNode** clauses = collect_function_clauses(program, exported->value, &clause_count);
+                                if (clause_count > 1) {
+                                    generate_combined_function(gen, clauses, clause_count);
+                                } else {
+                                    generate_function_definition(gen, exported);
+                                }
+                                mark_function_generated(gen, exported->value);
+                                free(clauses);
+                            }
                             break;
                         case AST_STRUCT_DEFINITION:
                             generate_struct_definition(gen, exported);
@@ -2266,7 +2977,22 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                 }
                 break;
             case AST_FUNCTION_DEFINITION:
-                generate_function_definition(gen, child);
+                // Check if this function was already generated (handles pattern matching clauses)
+                if (child->value && !is_function_generated(gen, child->value)) {
+                    int clause_count = 0;
+                    ASTNode** clauses = collect_function_clauses(program, child->value, &clause_count);
+
+                    if (clause_count > 1) {
+                        // Multiple clauses - generate combined function
+                        generate_combined_function(gen, clauses, clause_count);
+                    } else {
+                        // Single clause - use standard generation
+                        generate_function_definition(gen, child);
+                    }
+
+                    mark_function_generated(gen, child->value);
+                    free(clauses);
+                }
                 break;
             case AST_STRUCT_DEFINITION:
                 generate_struct_definition(gen, child);

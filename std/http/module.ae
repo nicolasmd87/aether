@@ -1,0 +1,40 @@
+// std.http - HTTP Client & Server
+// Import with: import std.http
+// Usage: http.get(url), http.server_create(port), etc.
+
+// HTTP Client
+extern http_get(url: ptr) -> ptr
+extern http_post(url: ptr, body: ptr, content_type: ptr) -> ptr
+extern http_put(url: ptr, body: ptr, content_type: ptr) -> ptr
+extern http_delete(url: ptr) -> ptr
+extern http_response_free(response: ptr)
+
+// HTTP Server - lifecycle
+extern http_server_create(port: int) -> ptr
+extern http_server_bind(server: ptr, host: string, port: int) -> int
+extern http_server_start(server: ptr) -> int
+extern http_server_stop(server: ptr)
+extern http_server_free(server: ptr)
+
+// HTTP Server - routing
+extern http_server_get(server: ptr, path: string, handler: ptr, user_data: ptr)
+extern http_server_post(server: ptr, path: string, handler: ptr, user_data: ptr)
+extern http_server_put(server: ptr, path: string, handler: ptr, user_data: ptr)
+extern http_server_delete(server: ptr, path: string, handler: ptr, user_data: ptr)
+
+// HTTP Server - middleware
+extern http_server_use_middleware(server: ptr, middleware: ptr, user_data: ptr)
+
+// HTTP Request - accessors
+extern http_get_header(req: ptr, name: string) -> string
+extern http_get_query_param(req: ptr, name: string) -> string
+extern http_get_path_param(req: ptr, name: string) -> string
+extern http_request_free(req: ptr)
+
+// HTTP Response - building
+extern http_response_create() -> ptr
+extern http_response_set_status(res: ptr, code: int)
+extern http_response_set_header(res: ptr, name: string, value: string)
+extern http_response_set_body(res: ptr, body: string)
+extern http_response_json(res: ptr, json: string)
+extern http_server_response_free(res: ptr)

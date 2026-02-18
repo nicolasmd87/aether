@@ -90,7 +90,7 @@ int main(int argc, char** argv) {
     // Initialize profiler
     ProfilerConfig config = {
         .enabled = 1,
-        .port = 8080,
+        .port = 8081,
         .bind_address = "0.0.0.0",
         .max_events = 10000,
         .collection_interval_ms = 100

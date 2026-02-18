@@ -1,0 +1,9 @@
+// std.path - Path Utilities
+// Import with: import std.path
+// Usage: path.join("a", "b"), path.dirname("/a/b"), etc.
+
+extern path_join(path1: string, path2: string) -> ptr
+extern path_dirname(path: string) -> ptr
+extern path_basename(path: string) -> ptr
+extern path_extension(path: string) -> ptr
+extern path_is_absolute(path: string) -> int

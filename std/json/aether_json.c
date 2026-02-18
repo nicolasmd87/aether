@@ -25,7 +25,7 @@ static JsonValue* parse_value(const char** json);
 static JsonValue* parse_null(const char** json) {
     if (strncmp(*json, "null", 4) == 0) {
         *json += 4;
-        return aether_json_create_null();
+        return json_create_null();
     }
     return NULL;
 }
@@ -33,11 +33,11 @@ static JsonValue* parse_null(const char** json) {
 static JsonValue* parse_bool(const char** json) {
     if (strncmp(*json, "true", 4) == 0) {
         *json += 4;
-        return aether_json_create_bool(1);
+        return json_create_bool(1);
     }
     if (strncmp(*json, "false", 5) == 0) {
         *json += 5;
-        return aether_json_create_bool(0);
+        return json_create_bool(0);
     }
     return NULL;
 }
@@ -47,7 +47,7 @@ static JsonValue* parse_number(const char** json) {
     double value = strtod(*json, &end);
     if (end == *json) return NULL;
     *json = end;
-    return aether_json_create_number(value);
+    return json_create_number(value);
 }
 
 static JsonValue* parse_string(const char** json) {
@@ -81,7 +81,7 @@ static JsonValue* parse_string(const char** json) {
     // Create JsonValue directly without extra retain
     JsonValue* value = (JsonValue*)malloc(sizeof(JsonValue));
     value->type = JSON_STRING;
-    value->data.string_value = aether_string_new(buffer);
+    value->data.string_value = string_new(buffer);
     // String starts with refcount=1, JsonValue owns it
     return value;
 }
@@ -89,22 +89,22 @@ static JsonValue* parse_string(const char** json) {
 static JsonValue* parse_array(const char** json) {
     if (**json != '[') return NULL;
     (*json)++;
-    
-    JsonValue* arr = aether_json_create_array();
+
+    JsonValue* arr = json_create_array();
     skip_whitespace(json);
-    
+
     if (**json == ']') {
         (*json)++;
         return arr;
     }
-    
+
     while (1) {
         skip_whitespace(json);
         JsonValue* value = parse_value(json);
         if (value) {
-            aether_json_array_add(arr, value);
+            json_array_add(arr, value);
         }
-        
+
         skip_whitespace(json);
         if (**json == ',') {
             (*json)++;
@@ -112,28 +112,28 @@ static JsonValue* parse_array(const char** json) {
             break;
         }
     }
-    
+
     skip_whitespace(json);
     if (**json == ']') (*json)++;
-    
+
     return arr;
 }
 
 static JsonValue* parse_object(const char** json) {
     if (**json != '{') return NULL;
     (*json)++;
-    
-    JsonValue* obj = aether_json_create_object();
+
+    JsonValue* obj = json_create_object();
     skip_whitespace(json);
-    
+
     if (**json == '}') {
         (*json)++;
         return obj;
     }
-    
+
     while (1) {
         skip_whitespace(json);
-        
+
         if (**json != '"') break;
         JsonValue* key_val = parse_string(json);
         if (!key_val) break;
@@ -147,11 +147,11 @@ static JsonValue* parse_object(const char** json) {
         skip_whitespace(json);
         JsonValue* value = parse_value(json);
         if (value) {
-            aether_json_object_set(obj, key, value);
+            json_object_set(obj, key, value);
         }
         // Map retains the key, so release our reference
-        aether_string_release(key);
-        
+        string_release(key);
+
         skip_whitespace(json);
         if (**json == ',') {
             (*json)++;
@@ -159,10 +159,10 @@ static JsonValue* parse_object(const char** json) {
             break;
         }
     }
-    
+
     skip_whitespace(json);
     if (**json == '}') (*json)++;
-    
+
     return obj;
 }
 
@@ -179,7 +179,7 @@ static JsonValue* parse_value(const char** json) {
     return NULL;
 }
 
-JsonValue* aether_json_parse(AetherString* json_str) {
+JsonValue* json_parse(AetherString* json_str) {
     if (!json_str) return NULL;
     const char* json = json_str->data;
     return parse_value(&json);
@@ -188,15 +188,15 @@ JsonValue* aether_json_parse(AetherString* json_str) {
 static void stringify_value(JsonValue* value, AetherString** result);
 
 static void append_string(AetherString** result, const char* str) {
-    AetherString* temp = aether_string_new(str);
-    AetherString* new_result = aether_string_concat(*result, temp);
-    aether_string_release(*result);
-    aether_string_release(temp);
+    AetherString* temp = string_new(str);
+    AetherString* new_result = string_concat(*result, temp);
+    string_release(*result);
+    string_release(temp);
     *result = new_result;
 }
 
-AetherString* aether_json_stringify(JsonValue* value) {
-    AetherString* result = aether_string_empty();
+AetherString* json_stringify(JsonValue* value) {
+    AetherString* result = string_empty();
     stringify_value(value, &result);
     return result;
 }
@@ -231,158 +231,158 @@ static void stringify_value(JsonValue* value, AetherString** result) {
             
         case JSON_ARRAY: {
             append_string(result, "[");
-            int size = aether_list_size(value->data.array_value);
+            int size = list_size(value->data.array_value);
             for (int i = 0; i < size; i++) {
                 if (i > 0) append_string(result, ",");
-                JsonValue* item = (JsonValue*)aether_list_get(value->data.array_value, i);
+                JsonValue* item = (JsonValue*)list_get(value->data.array_value, i);
                 stringify_value(item, result);
             }
             append_string(result, "]");
             break;
         }
-            
+
         case JSON_OBJECT: {
             append_string(result, "{");
-            MapKeys* keys = aether_map_keys(value->data.object_value);
+            MapKeys* keys = map_keys(value->data.object_value);
             for (int i = 0; i < keys->count; i++) {
                 if (i > 0) append_string(result, ",");
                 append_string(result, "\"");
                 append_string(result, keys->keys[i]->data);
                 append_string(result, "\":");
-                JsonValue* val = (JsonValue*)aether_map_get(value->data.object_value, keys->keys[i]);
+                JsonValue* val = (JsonValue*)map_get(value->data.object_value, keys->keys[i]);
                 stringify_value(val, result);
             }
-            aether_map_keys_free(keys);
+            map_keys_free(keys);
             append_string(result, "}");
             break;
         }
     }
 }
 
-void aether_json_free(JsonValue* value) {
+void json_free(JsonValue* value) {
     if (!value) return;
-    
+
     switch (value->type) {
         case JSON_STRING:
-            aether_string_release(value->data.string_value);
+            string_release(value->data.string_value);
             break;
         case JSON_ARRAY: {
-            int size = aether_list_size(value->data.array_value);
+            int size = list_size(value->data.array_value);
             for (int i = 0; i < size; i++) {
-                aether_json_free((JsonValue*)aether_list_get(value->data.array_value, i));
+                json_free((JsonValue*)list_get(value->data.array_value, i));
             }
-            aether_list_free(value->data.array_value);
+            list_free(value->data.array_value);
             break;
         }
         case JSON_OBJECT: {
-            MapKeys* keys = aether_map_keys(value->data.object_value);
+            MapKeys* keys = map_keys(value->data.object_value);
             for (int i = 0; i < keys->count; i++) {
-                aether_json_free((JsonValue*)aether_map_get(value->data.object_value, keys->keys[i]));
+                json_free((JsonValue*)map_get(value->data.object_value, keys->keys[i]));
             }
-            aether_map_keys_free(keys);
-            aether_map_free(value->data.object_value);
+            map_keys_free(keys);
+            map_free(value->data.object_value);
             break;
         }
         default:
             break;
     }
-    
+
     free(value);
 }
 
-JsonType aether_json_type(JsonValue* value) {
+JsonType json_type(JsonValue* value) {
     return value ? value->type : JSON_NULL;
 }
 
-int aether_json_is_null(JsonValue* value) {
+int json_is_null(JsonValue* value) {
     return !value || value->type == JSON_NULL;
 }
 
-int aether_json_get_bool(JsonValue* value) {
+int json_get_bool(JsonValue* value) {
     return (value && value->type == JSON_BOOL) ? value->data.bool_value : 0;
 }
 
-double aether_json_get_number(JsonValue* value) {
+double json_get_number(JsonValue* value) {
     return (value && value->type == JSON_NUMBER) ? value->data.number_value : 0.0;
 }
 
-int aether_json_get_int(JsonValue* value) {
-    return (int)aether_json_get_number(value);
+int json_get_int(JsonValue* value) {
+    return (int)json_get_number(value);
 }
 
-AetherString* aether_json_get_string(JsonValue* value) {
+AetherString* json_get_string(JsonValue* value) {
     return (value && value->type == JSON_STRING) ? value->data.string_value : NULL;
 }
 
-JsonValue* aether_json_object_get(JsonValue* obj, AetherString* key) {
+JsonValue* json_object_get(JsonValue* obj, AetherString* key) {
     if (!obj || obj->type != JSON_OBJECT || !key) return NULL;
-    return (JsonValue*)aether_map_get(obj->data.object_value, key);
+    return (JsonValue*)map_get(obj->data.object_value, key);
 }
 
-void aether_json_object_set(JsonValue* obj, AetherString* key, JsonValue* value) {
+void json_object_set(JsonValue* obj, AetherString* key, JsonValue* value) {
     if (!obj || obj->type != JSON_OBJECT || !key) return;
-    aether_map_put(obj->data.object_value, key, value);
+    map_put(obj->data.object_value, key, value);
 }
 
-int aether_json_object_has(JsonValue* obj, AetherString* key) {
+int json_object_has(JsonValue* obj, AetherString* key) {
     if (!obj || obj->type != JSON_OBJECT || !key) return 0;
-    return aether_map_has(obj->data.object_value, key);
+    return map_has(obj->data.object_value, key);
 }
 
-JsonValue* aether_json_array_get(JsonValue* arr, int index) {
+JsonValue* json_array_get(JsonValue* arr, int index) {
     if (!arr || arr->type != JSON_ARRAY) return NULL;
-    return (JsonValue*)aether_list_get(arr->data.array_value, index);
+    return (JsonValue*)list_get(arr->data.array_value, index);
 }
 
-void aether_json_array_add(JsonValue* arr, JsonValue* value) {
+void json_array_add(JsonValue* arr, JsonValue* value) {
     if (!arr || arr->type != JSON_ARRAY) return;
-    aether_list_add(arr->data.array_value, value);
+    list_add(arr->data.array_value, value);
 }
 
-int aether_json_array_size(JsonValue* arr) {
+int json_array_size(JsonValue* arr) {
     if (!arr || arr->type != JSON_ARRAY) return 0;
-    return aether_list_size(arr->data.array_value);
+    return list_size(arr->data.array_value);
 }
 
-JsonValue* aether_json_create_null() {
+JsonValue* json_create_null() {
     JsonValue* value = (JsonValue*)malloc(sizeof(JsonValue));
     value->type = JSON_NULL;
     return value;
 }
 
-JsonValue* aether_json_create_bool(int val) {
+JsonValue* json_create_bool(int val) {
     JsonValue* value = (JsonValue*)malloc(sizeof(JsonValue));
     value->type = JSON_BOOL;
     value->data.bool_value = val;
     return value;
 }
 
-JsonValue* aether_json_create_number(double val) {
+JsonValue* json_create_number(double val) {
     JsonValue* value = (JsonValue*)malloc(sizeof(JsonValue));
     value->type = JSON_NUMBER;
     value->data.number_value = val;
     return value;
 }
 
-JsonValue* aether_json_create_string(AetherString* val) {
+JsonValue* json_create_string(AetherString* val) {
     JsonValue* value = (JsonValue*)malloc(sizeof(JsonValue));
     value->type = JSON_STRING;
     value->data.string_value = val;
-    aether_string_retain(val);  // Retain for reference counting
+    string_retain(val);  // Retain for reference counting
     return value;
 }
 
-JsonValue* aether_json_create_array() {
+JsonValue* json_create_array() {
     JsonValue* value = (JsonValue*)malloc(sizeof(JsonValue));
     value->type = JSON_ARRAY;
-    value->data.array_value = aether_list_new();
+    value->data.array_value = list_new();
     return value;
 }
 
-JsonValue* aether_json_create_object() {
+JsonValue* json_create_object() {
     JsonValue* value = (JsonValue*)malloc(sizeof(JsonValue));
     value->type = JSON_OBJECT;
-    value->data.object_value = aether_map_new();
+    value->data.object_value = map_new();
     return value;
 }
 

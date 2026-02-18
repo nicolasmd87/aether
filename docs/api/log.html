@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>log - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search log..." onkeyup="searchModule()">
+  <h2>Functions</h2>
+  <ul class="function-nav">
+    <li><a href="#log_init">log_init</a></li>
+    <li><a href="#log_init_with_config">log_init_with_config</a></li>
+    <li><a href="#log_shutdown">log_shutdown</a></li>
+    <li><a href="#log_write">log_write</a></li>
+    <li><a href="#log_set_level">log_set_level</a></li>
+    <li><a href="#log_set_colors">log_set_colors</a></li>
+    <li><a href="#log_set_timestamps">log_set_timestamps</a></li>
+    <li><a href="#log_set_format">log_set_format</a></li>
+    <li><a href="#log_print_stats">log_print_stats</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="net.html">net</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="json.html">json</a></li>
+    <li class="active"><a href="log.html">log</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="fs.html">fs</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>log</h1>
+    <p class="module-desc">Logging and diagnostics</p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="log_init" data-name="log_init">
+      <h3 class="function-name">log_init</h3>
+      <pre class="usage"><code>log_init(filename, min_level)</code></pre>
+      <p class="doc">Initialize logging system</p>
+    </div>
+    <div class="function" id="log_init_with_config" data-name="log_init_with_config">
+      <h3 class="function-name">log_init_with_config</h3>
+      <pre class="usage"><code>log_init_with_config(config)</code></pre>
+    </div>
+    <div class="function" id="log_shutdown" data-name="log_shutdown">
+      <h3 class="function-name">log_shutdown</h3>
+      <pre class="usage"><code>log_shutdown()</code></pre>
+    </div>
+    <div class="function" id="log_write" data-name="log_write">
+      <h3 class="function-name">log_write</h3>
+      <pre class="usage"><code>log_write(level, fmt)</code></pre>
+      <p class="doc">Core logging functions</p>
+    </div>
+    <div class="function" id="log_set_level" data-name="log_set_level">
+      <h3 class="function-name">log_set_level</h3>
+      <pre class="usage"><code>log_set_level(level)</code></pre>
+      <p class="doc">Configuration</p>
+    </div>
+    <div class="function" id="log_set_colors" data-name="log_set_colors">
+      <h3 class="function-name">log_set_colors</h3>
+      <pre class="usage"><code>log_set_colors(enabled)</code></pre>
+    </div>
+    <div class="function" id="log_set_timestamps" data-name="log_set_timestamps">
+      <h3 class="function-name">log_set_timestamps</h3>
+      <pre class="usage"><code>log_set_timestamps(enabled)</code></pre>
+    </div>
+    <div class="function" id="log_set_format" data-name="log_set_format">
+      <h3 class="function-name">log_set_format</h3>
+      <pre class="usage"><code>log_set_format(format)</code></pre>
+    </div>
+    <div class="function" id="log_print_stats" data-name="log_print_stats">
+      <h3 class="function-name">log_print_stats</h3>
+      <pre class="usage"><code>log_print_stats()</code></pre>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

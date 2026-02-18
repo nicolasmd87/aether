@@ -1,0 +1,54 @@
+// File I/O - Demonstrates file operations using namespace calls
+// Run with: ae run examples/stdlib/file-io.ae
+//
+// Uses namespace-style calls: file.exists(), dir.exists(), etc.
+
+import std.file
+import std.dir
+
+main() {
+    print("=== Aether File I/O Demo ===\n\n");
+
+    // Check if a file exists
+    print("Checking if files exist:\n");
+
+    if (file.exists("Makefile") == 1) {
+        print("  Makefile exists\n");
+        size = file.size("Makefile");
+        print("  Size: ");
+        print(size);
+        print(" bytes\n");
+    }
+
+    if (file.exists("nonexistent.txt") == 0) {
+        print("  nonexistent.txt does not exist (as expected)\n");
+    }
+
+    print("\n");
+
+    // Check directories
+    print("Checking directories:\n");
+
+    if (dir.exists("src") == 1) {
+        print("  src/ directory exists\n");
+    }
+
+    if (dir.exists("build") == 1) {
+        print("  build/ directory exists\n");
+    }
+
+    if (dir.exists("examples") == 1) {
+        print("  examples/ directory exists\n");
+    }
+
+    print("\n");
+
+    // Try to create a test directory
+    print("Creating test directory:\n");
+    result = dir.create("test_output");
+    if (result == 0) {
+        print("  Created test_output/ directory\n");
+    }
+
+    print("\nFile I/O demo complete!\n");
+}

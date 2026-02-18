@@ -1,0 +1,12 @@
+// std.list - ArrayList Operations
+// Import with: import std.list
+// Usage: list.new(), list.add(list, item), etc.
+
+extern list_new() -> ptr
+extern list_add(list: ptr, item: ptr)
+extern list_get(list: ptr, index: int) -> ptr
+extern list_set(list: ptr, index: int, item: ptr)
+extern list_size(list: ptr) -> int
+extern list_remove(list: ptr, index: int)
+extern list_clear(list: ptr)
+extern list_free(list: ptr)

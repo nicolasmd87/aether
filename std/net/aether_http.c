@@ -82,31 +82,31 @@ static HttpResponse* http_request(const char* method, AetherString* url, AetherS
     int port;
     
     if (!parse_url(url->data, host, &port, path)) {
-        response->error = aether_string_new("HTTPS not supported in basic implementation");
+        response->error = string_new("HTTPS not supported in basic implementation");
         return response;
     }
-    
+
     struct hostent* server = gethostbyname(host);
     if (!server) {
-        response->error = aether_string_new("Could not resolve host");
+        response->error = string_new("Could not resolve host");
         return response;
     }
-    
+
     int sockfd = socket(AF_INET, SOCK_STREAM, 0);
     if (sockfd < 0) {
-        response->error = aether_string_new("Could not create socket");
+        response->error = string_new("Could not create socket");
         return response;
     }
-    
+
     struct sockaddr_in serv_addr;
     memset(&serv_addr, 0, sizeof(serv_addr));
     serv_addr.sin_family = AF_INET;
     memcpy(&serv_addr.sin_addr.s_addr, server->h_addr, server->h_length);
     serv_addr.sin_port = htons(port);
-    
+
     if (connect(sockfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
         close(sockfd);
-        response->error = aether_string_new("Connection failed");
+        response->error = string_new("Connection failed");
         return response;
     }
     
@@ -137,7 +137,7 @@ static HttpResponse* http_request(const char* method, AetherString* url, AetherS
     
     if (send(sockfd, request, request_len, 0) < 0) {
         close(sockfd);
-        response->error = aether_string_new("Send failed");
+        response->error = string_new("Send failed");
         return response;
     }
     
@@ -165,38 +165,38 @@ static HttpResponse* http_request(const char* method, AetherString* url, AetherS
         if (space1) {
             response->status_code = atoi(space1 + 1);
         }
-        
-        response->headers = aether_string_new(full_response);
-        response->body = aether_string_new(header_end + 4);
+
+        response->headers = string_new(full_response);
+        response->body = string_new(header_end + 4);
     } else {
-        response->body = aether_string_new(full_response);
+        response->body = string_new(full_response);
     }
-    
+
     free(full_response);
     return response;
 }
 
-HttpResponse* aether_http_get(AetherString* url) {
+HttpResponse* http_get(AetherString* url) {
     return http_request("GET", url, NULL, NULL);
 }
 
-HttpResponse* aether_http_post(AetherString* url, AetherString* body, AetherString* content_type) {
+HttpResponse* http_post(AetherString* url, AetherString* body, AetherString* content_type) {
     return http_request("POST", url, body, content_type);
 }
 
-HttpResponse* aether_http_put(AetherString* url, AetherString* body, AetherString* content_type) {
+HttpResponse* http_put(AetherString* url, AetherString* body, AetherString* content_type) {
     return http_request("PUT", url, body, content_type);
 }
 
-HttpResponse* aether_http_delete(AetherString* url) {
+HttpResponse* http_delete(AetherString* url) {
     return http_request("DELETE", url, NULL, NULL);
 }
 
-void aether_http_response_free(HttpResponse* response) {
+void http_response_free(HttpResponse* response) {
     if (!response) return;
-    if (response->body) aether_string_release(response->body);
-    if (response->headers) aether_string_release(response->headers);
-    if (response->error) aether_string_release(response->error);
+    if (response->body) string_release(response->body);
+    if (response->headers) string_release(response->headers);
+    if (response->error) string_release(response->error);
     free(response);
 }
 

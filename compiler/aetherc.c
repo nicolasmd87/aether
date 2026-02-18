@@ -46,7 +46,7 @@ static const char* emit_header_path = NULL;
 #endif
 
 // Helper to check file existence
-int file_exists(const char* path) {
+int compiler_file_exists(const char* path) {
     return access(path, F_OK) == 0;
 }
 
@@ -242,8 +242,8 @@ int compile_c_to_exe(const char* c_file, const char* exe_file) {
     // We try to locate the runtime folder.
     
     const char* runtime_path = "runtime";
-    if (!file_exists("runtime/actor.c")) {
-        if (file_exists("../runtime/actor.c")) {
+    if (!compiler_file_exists("runtime/actor.c")) {
+        if (compiler_file_exists("../runtime/actor.c")) {
             runtime_path = "../runtime";
         } else {
             fprintf(stderr, "Error: Could not locate Aether runtime files.\n");

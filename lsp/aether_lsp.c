@@ -79,10 +79,31 @@ void lsp_server_run(LSPServer* server) {
 
 // Document management
 void lsp_document_open(LSPServer* server, const char* uri, const char* text) {
-    server->open_documents = (char**)realloc(server->open_documents, (server->document_count + 1) * sizeof(char*));
-    server->document_contents = (char**)realloc(server->document_contents, (server->document_count + 1) * sizeof(char*));
-    server->open_documents[server->document_count] = strdup(uri);
-    server->document_contents[server->document_count] = strdup(text);
+    char** new_docs = (char**)realloc(server->open_documents, (server->document_count + 1) * sizeof(char*));
+    if (!new_docs) {
+        lsp_log(server, "Error: Failed to allocate document array");
+        return;
+    }
+    server->open_documents = new_docs;
+
+    char** new_contents = (char**)realloc(server->document_contents, (server->document_count + 1) * sizeof(char*));
+    if (!new_contents) {
+        lsp_log(server, "Error: Failed to allocate contents array");
+        return;
+    }
+    server->document_contents = new_contents;
+
+    char* uri_copy = strdup(uri);
+    char* text_copy = strdup(text);
+    if (!uri_copy || !text_copy) {
+        free(uri_copy);
+        free(text_copy);
+        lsp_log(server, "Error: Failed to duplicate document strings");
+        return;
+    }
+
+    server->open_documents[server->document_count] = uri_copy;
+    server->document_contents[server->document_count] = text_copy;
     server->document_count++;
 }
 
@@ -136,9 +157,11 @@ void lsp_handle_completion(LSPServer* server, const char* id, const char* uri, i
         "{\"label\":\"print\",\"kind\":3,\"detail\":\"print(value)\",\"documentation\":\"Print to stdout\"},"
         "{\"label\":\"println\",\"kind\":3,\"detail\":\"println(value)\",\"documentation\":\"Print with newline\"},"
         "{\"label\":\"len\",\"kind\":3,\"detail\":\"len(array)\",\"documentation\":\"Get array length\"},"
-        "{\"label\":\"aether_string_concat\",\"kind\":3,\"detail\":\"string concat\"},"
-        "{\"label\":\"aether_http_get\",\"kind\":3,\"detail\":\"HTTP GET request\"},"
-        "{\"label\":\"aether_socket_connect\",\"kind\":3,\"detail\":\"TCP socket connect\"}"
+        "{\"label\":\"string_concat\",\"kind\":3,\"detail\":\"string concat\"},"
+        "{\"label\":\"http_get\",\"kind\":3,\"detail\":\"HTTP GET request\"},"
+        "{\"label\":\"socket_connect\",\"kind\":3,\"detail\":\"TCP socket connect\"},"
+        "{\"label\":\"file_exists\",\"kind\":3,\"detail\":\"check file exists\"},"
+        "{\"label\":\"json_parse\",\"kind\":3,\"detail\":\"parse JSON string\"}"
         "]"
         "}";
     lsp_send_response(server, id, completions);
@@ -170,12 +193,15 @@ void lsp_publish_diagnostics(LSPServer* server, const char* uri) {
     const char* source = lsp_document_get(server, uri);
     if (!source) return;
 
-    // TODO: Implement proper lexing/parsing/type checking
-    // For now, just send empty diagnostics
-    char diagnostics[8192] = "{\"uri\":\"";
-    strcat(diagnostics, uri);
-    strcat(diagnostics, "\",\"diagnostics\":[");
-    strcat(diagnostics, "]}");
+    // Build diagnostics JSON safely with bounds checking
+    char diagnostics[8192];
+    int written = snprintf(diagnostics, sizeof(diagnostics),
+                          "{\"uri\":\"%s\",\"diagnostics\":[]}", uri);
+
+    if (written < 0 || (size_t)written >= sizeof(diagnostics)) {
+        lsp_log(server, "Warning: URI too long for diagnostics buffer");
+        return;
+    }
 
     lsp_send_notification(server, "textDocument/publishDiagnostics", diagnostics);
 }
@@ -196,14 +222,26 @@ JSONRPCMessage* lsp_read_message(LSPServer* server) {
     }
     
     if (content_length == 0) return NULL;
-    
+
     // Read content
     char* content = (char*)malloc(content_length + 1);
-    fread(content, 1, content_length, server->input);
-    content[content_length] = '\0';
-    
+    if (!content) {
+        lsp_log(server, "Error: Failed to allocate content buffer");
+        return NULL;
+    }
+    size_t bytes_read = fread(content, 1, content_length, server->input);
+    if (bytes_read != (size_t)content_length) {
+        lsp_log(server, "Warning: Read fewer bytes than expected");
+    }
+    content[bytes_read] = '\0';
+
     // Parse JSON (simplified - would use a proper JSON parser in production)
     JSONRPCMessage* msg = (JSONRPCMessage*)malloc(sizeof(JSONRPCMessage));
+    if (!msg) {
+        lsp_log(server, "Error: Failed to allocate message struct");
+        free(content);
+        return NULL;
+    }
     msg->method = NULL;
     msg->id = NULL;
     msg->params = NULL;

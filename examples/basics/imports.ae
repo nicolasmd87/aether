@@ -1,23 +1,17 @@
 // Import aliasing demonstration
 // Shows how to import modules with shorter aliases
 //
-// Syntax examples (commented out as modules may not exist):
-// import std.math as m          -- import std.math, refer to it as 'm'
-// import std.collections as col -- import std.collections, refer to it as 'col'
+// Syntax:
+//   import std.math           -- import std.math, use as 'math'
+//   import std.string as str  -- import std.string, refer to it as 'str'
 //
-// Then use: m.sqrt(16) instead of std.math.sqrt(16)
+// Then use: math.sqrt(16), str.new("hello")
+
+import std.string
 
 main() {
-    print("=== Import Aliasing Demo ===\n\n")
-
-    print("Import aliasing syntax:\n")
-    print("  import module.path as alias\n\n")
-
-    print("Examples:\n")
-    print("  import std.math as m\n")
-    print("  import std.collections as col\n\n")
-
-    print("Usage:\n")
-    print("  m.sqrt(16)  // calls std.math.sqrt\n")
-    print("  col.Vector  // refers to std.collections.Vector\n")
+    // Using imported string functions
+    print("=== Import Example ===\n");
+    print("Imported std.string module\n");
+    print("String functions are now available!\n");
 }

@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>fs - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search fs..." onkeyup="searchModule()">
+  <h2>Functions</h2>
+  <ul class="function-nav">
+    <li><a href="#file_read_all">file_read_all</a></li>
+    <li><a href="#file_write">file_write</a></li>
+    <li><a href="#file_close">file_close</a></li>
+    <li><a href="#file_exists">file_exists</a></li>
+    <li><a href="#file_delete">file_delete</a></li>
+    <li><a href="#file_size">file_size</a></li>
+    <li><a href="#dir_exists">dir_exists</a></li>
+    <li><a href="#dir_create">dir_create</a></li>
+    <li><a href="#dir_delete">dir_delete</a></li>
+    <li><a href="#path_join">path_join</a></li>
+    <li><a href="#path_dirname">path_dirname</a></li>
+    <li><a href="#path_basename">path_basename</a></li>
+    <li><a href="#path_extension">path_extension</a></li>
+    <li><a href="#path_is_absolute">path_is_absolute</a></li>
+    <li><a href="#dir_list_free">dir_list_free</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="net.html">net</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li class="active"><a href="fs.html">fs</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>fs</h1>
+    <p class="module-desc">File system operations</p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="file_read_all" data-name="file_read_all">
+      <h3 class="function-name">file_read_all</h3>
+      <pre class="usage"><code>file_read_all(file)</code></pre>
+    </div>
+    <div class="function" id="file_write" data-name="file_write">
+      <h3 class="function-name">file_write</h3>
+      <pre class="usage"><code>file_write(file, data, length)</code></pre>
+    </div>
+    <div class="function" id="file_close" data-name="file_close">
+      <h3 class="function-name">file_close</h3>
+      <pre class="usage"><code>file_close(file)</code></pre>
+    </div>
+    <div class="function" id="file_exists" data-name="file_exists">
+      <h3 class="function-name">file_exists</h3>
+      <pre class="usage"><code>file_exists(path)</code></pre>
+    </div>
+    <div class="function" id="file_delete" data-name="file_delete">
+      <h3 class="function-name">file_delete</h3>
+      <pre class="usage"><code>file_delete(path)</code></pre>
+    </div>
+    <div class="function" id="file_size" data-name="file_size">
+      <h3 class="function-name">file_size</h3>
+      <pre class="usage"><code>file_size(path)</code></pre>
+    </div>
+    <div class="function" id="dir_exists" data-name="dir_exists">
+      <h3 class="function-name">dir_exists</h3>
+      <pre class="usage"><code>dir_exists(path)</code></pre>
+      <p class="doc">Directory operations</p>
+    </div>
+    <div class="function" id="dir_create" data-name="dir_create">
+      <h3 class="function-name">dir_create</h3>
+      <pre class="usage"><code>dir_create(path)</code></pre>
+    </div>
+    <div class="function" id="dir_delete" data-name="dir_delete">
+      <h3 class="function-name">dir_delete</h3>
+      <pre class="usage"><code>dir_delete(path)</code></pre>
+    </div>
+    <div class="function" id="path_join" data-name="path_join">
+      <h3 class="function-name">path_join</h3>
+      <pre class="usage"><code>path_join(path1, path2)</code></pre>
+      <p class="doc">Path operations</p>
+    </div>
+    <div class="function" id="path_dirname" data-name="path_dirname">
+      <h3 class="function-name">path_dirname</h3>
+      <pre class="usage"><code>path_dirname(path)</code></pre>
+    </div>
+    <div class="function" id="path_basename" data-name="path_basename">
+      <h3 class="function-name">path_basename</h3>
+      <pre class="usage"><code>path_basename(path)</code></pre>
+    </div>
+    <div class="function" id="path_extension" data-name="path_extension">
+      <h3 class="function-name">path_extension</h3>
+      <pre class="usage"><code>path_extension(path)</code></pre>
+    </div>
+    <div class="function" id="path_is_absolute" data-name="path_is_absolute">
+      <h3 class="function-name">path_is_absolute</h3>
+      <pre class="usage"><code>path_is_absolute(path)</code></pre>
+    </div>
+    <div class="function" id="dir_list_free" data-name="dir_list_free">
+      <h3 class="function-name">dir_list_free</h3>
+      <pre class="usage"><code>dir_list_free(list)</code></pre>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

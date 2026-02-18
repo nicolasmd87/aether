@@ -95,7 +95,7 @@ TEST_SRC = tests/runtime/test_harness.c \
 STANDALONE_TESTS = tests/runtime/test_runtime_manual.c \
                    tests/compiler/test_arrays.c
 
-all: compiler
+all: compiler ae stdlib
 
 # Create object directories
 $(OBJ_DIR)/compiler $(OBJ_DIR)/compiler/frontend $(OBJ_DIR)/compiler/backend $(OBJ_DIR)/compiler/analysis $(OBJ_DIR)/runtime $(OBJ_DIR)/runtime/actors $(OBJ_DIR)/runtime/scheduler $(OBJ_DIR)/runtime/memory $(OBJ_DIR)/runtime/config $(OBJ_DIR)/runtime/simd $(OBJ_DIR)/runtime/utils $(OBJ_DIR)/std $(OBJ_DIR)/std/string $(OBJ_DIR)/std/io $(OBJ_DIR)/std/math $(OBJ_DIR)/std/net $(OBJ_DIR)/std/fs $(OBJ_DIR)/std/log $(OBJ_DIR)/std/collections $(OBJ_DIR)/std/json $(OBJ_DIR)/tests $(OBJ_DIR)/tests/compiler $(OBJ_DIR)/tests/memory $(OBJ_DIR)/tests/runtime:
@@ -193,7 +193,7 @@ examples: compiler
 	@echo "==================================="
 	@echo "  Building Aether Examples"
 	@echo "==================================="
-	@$(MKDIR) $(BUILD_DIR)/examples $(BUILD_DIR)/examples/basics $(BUILD_DIR)/examples/actors $(BUILD_DIR)/examples/applications $(BUILD_DIR)/examples/c-interop
+	@$(MKDIR) $(BUILD_DIR)/examples $(BUILD_DIR)/examples/basics $(BUILD_DIR)/examples/actors $(BUILD_DIR)/examples/applications $(BUILD_DIR)/examples/c-interop $(BUILD_DIR)/examples/stdlib $(BUILD_DIR)/examples/packages/myapp/lib/utils $(BUILD_DIR)/examples/packages/myapp/src
 	@pass=0; fail=0; \
 	for src in $$(find examples -name '*.ae' | sort); do \
 		name=$$(echo $$src | sed 's|examples/||;s|\.ae$$||'); \
@@ -263,7 +263,41 @@ profiler:
 	$(CC) $(CFLAGS) -DAETHER_PROFILING tools/profiler/profiler_server.c tools/profiler/profiler_demo.c $(RUNTIME_SRC) $(LDFLAGS) -o build/profiler_demo$(EXE_EXT)
 	@echo "✓ Profiler built successfully: build/profiler_demo$(EXE_EXT)"
 	@echo ""
-	@echo "Run the demo and open http://localhost:8080"
+	@echo "Run the demo and open http://localhost:8081"
+
+docgen:
+	@echo "==================================="
+	@echo "Building Documentation Generator ($(DETECTED_OS))"
+	@echo "==================================="
+	@$(MKDIR) build
+	$(CC) -O2 -Wall tools/docgen/docgen.c -o build/docgen$(EXE_EXT)
+	@echo "✓ Documentation generator built: build/docgen$(EXE_EXT)"
+	@echo ""
+	@echo "Usage: ./build/docgen std docs/api"
+
+docs-server: compiler
+	@echo "==================================="
+	@echo "Building Documentation Server ($(DETECTED_OS))"
+	@echo "==================================="
+	@./build/aetherc$(EXE_EXT) tools/docgen/server.ae build/docs_server_gen.c
+	@$(CC) -O2 -o build/docs-server$(EXE_EXT) build/docs_server_gen.c tools/docgen/server_ffi.c \
+		$(RUNTIME_SRC) $(STD_SRC) $(COLLECTIONS_SRC) $(LDFLAGS)
+	@rm -f build/docs_server_gen.c
+	@echo "✓ Documentation server built: build/docs-server$(EXE_EXT)"
+
+docs: docgen
+	@echo "==================================="
+	@echo "Generating API Documentation"
+	@echo "==================================="
+	@$(MKDIR) docs/api
+	./build/docgen$(EXE_EXT) std docs/api
+	@echo ""
+	@echo "✓ Documentation generated in docs/api/"
+	@echo "  Run 'make docs-serve' to view at http://localhost:3000"
+
+docs-serve: docs docs-server
+	@echo ""
+	./build/docs-server$(EXE_EXT)
 
 # Precompiled stdlib archive
 stdlib: $(STD_OBJS) $(COLLECTIONS_OBJS) $(RUNTIME_OBJS)
@@ -527,9 +561,16 @@ help:
 	@echo "  make lsp            - Build LSP server"
 	@echo "  make apkg           - Build package manager"
 	@echo "  make profiler       - Build profiler dashboard"
+	@echo "  make docgen         - Build documentation generator"
+	@echo "  make docs           - Generate API documentation (in docs/api/)"
+	@echo "  make docs-serve     - Serve docs at http://localhost:3000"
+	@echo ""
+	@echo "Web Servers (localhost):"
+	@echo "  make docs-serve     - API Documentation    :3000"
+	@echo "  make benchmark      - Benchmark Dashboard  :8080"
+	@echo "  make profiler       - Profiler Dashboard   :8081"
 	@echo ""
 	@echo "Other Targets:"
-	@echo "  make benchmark      - Run performance benchmarks"
 	@echo "  make examples       - Compile example programs"
 	@echo "  make install        - Install to $(PREFIX)"
 	@echo "  make stats          - Show build statistics"
@@ -601,7 +642,7 @@ valgrind-check: clean
 		./build/test_runner$(EXE_EXT) || (echo "Memory leaks detected!" && exit 1)
 	@echo "✓ No memory leaks detected"
 
-.PHONY: all compiler lsp apkg ae profiler test test-build test-valgrind test-asan test-memory test-manual-runtime benchmark benchmark-ui examples run compile repl clean help self-test release install stats stdlib ci docker-ci docker-build-ci valgrind-check
+.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime benchmark benchmark-ui examples run compile repl clean help self-test release install stats stdlib ci docker-ci docker-build-ci valgrind-check
 
 # Cross-language benchmark UI
 benchmark-ui:

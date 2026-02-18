@@ -30,9 +30,9 @@ static void http_server_init() {
     http_server_initialized = 1;
 }
 
-HttpServer* aether_http_server_create(int port) {
+HttpServer* http_server_create(int port) {
     http_server_init();
-    
+
     HttpServer* server = (HttpServer*)calloc(1, sizeof(HttpServer));
     server->port = port;
     server->host = strdup("0.0.0.0");
@@ -43,11 +43,11 @@ HttpServer* aether_http_server_create(int port) {
     server->max_connections = 1000;
     server->keep_alive_timeout = 30;
     server->scheduler = NULL;
-    
+
     return server;
 }
 
-int aether_http_server_bind(HttpServer* server, const char* host, int port) {
+int http_server_bind(HttpServer* server, const char* host, int port) {
     server->socket_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server->socket_fd < 0) {
         fprintf(stderr, "Failed to create socket\n");
@@ -95,7 +95,7 @@ int aether_http_server_bind(HttpServer* server, const char* host, int port) {
 }
 
 // Request parsing
-HttpRequest* aether_http_parse_request(const char* raw_request) {
+HttpRequest* http_parse_request(const char* raw_request) {
     HttpRequest* req = (HttpRequest*)calloc(1, sizeof(HttpRequest));
     
     // Parse request line: METHOD /path HTTP/1.1
@@ -210,7 +210,7 @@ HttpRequest* aether_http_parse_request(const char* raw_request) {
     return req;
 }
 
-const char* aether_http_get_header(HttpRequest* req, const char* key) {
+const char* http_get_header(HttpRequest* req, const char* key) {
     for (int i = 0; i < req->header_count; i++) {
         if (strcasecmp(req->header_keys[i], key) == 0) {
             return req->header_values[i];
@@ -219,7 +219,7 @@ const char* aether_http_get_header(HttpRequest* req, const char* key) {
     return NULL;
 }
 
-const char* aether_http_get_query_param(HttpRequest* req, const char* key) {
+const char* http_get_query_param(HttpRequest* req, const char* key) {
     if (!req->query_string) return NULL;
     
     // Parse query params on demand
@@ -245,7 +245,7 @@ const char* aether_http_get_query_param(HttpRequest* req, const char* key) {
     return value_buf;
 }
 
-const char* aether_http_get_path_param(HttpRequest* req, const char* key) {
+const char* http_get_path_param(HttpRequest* req, const char* key) {
     for (int i = 0; i < req->param_count; i++) {
         if (strcmp(req->param_keys[i], key) == 0) {
             return req->param_values[i];
@@ -254,7 +254,7 @@ const char* aether_http_get_path_param(HttpRequest* req, const char* key) {
     return NULL;
 }
 
-void aether_http_request_free(HttpRequest* req) {
+void http_request_free(HttpRequest* req) {
     if (!req) return;
     
     free(req->method);
@@ -281,7 +281,7 @@ void aether_http_request_free(HttpRequest* req) {
 }
 
 // Response building
-HttpServerResponse* aether_http_response_create() {
+HttpServerResponse* http_response_create() {
     HttpServerResponse* res = (HttpServerResponse*)calloc(1, sizeof(HttpServerResponse));
     res->status_code = 200;
     res->status_text = strdup("OK");
@@ -290,21 +290,21 @@ HttpServerResponse* aether_http_response_create() {
     res->header_count = 0;
     res->body = NULL;
     res->body_length = 0;
-    
+
     // Add default headers
-    aether_http_response_set_header(res, "Content-Type", "text/html; charset=utf-8");
-    aether_http_response_set_header(res, "Server", "Aether/1.0");
-    
+    http_response_set_header(res, "Content-Type", "text/html; charset=utf-8");
+    http_response_set_header(res, "Server", "Aether/1.0");
+
     return res;
 }
 
-void aether_http_response_set_status(HttpServerResponse* res, int code) {
+void http_response_set_status(HttpServerResponse* res, int code) {
     res->status_code = code;
     free(res->status_text);
-    res->status_text = strdup(aether_http_status_text(code));
+    res->status_text = strdup(http_status_text(code));
 }
 
-void aether_http_response_set_header(HttpServerResponse* res, const char* key, const char* value) {
+void http_response_set_header(HttpServerResponse* res, const char* key, const char* value) {
     // Check if header exists, update it
     for (int i = 0; i < res->header_count; i++) {
         if (strcasecmp(res->header_keys[i], key) == 0) {
@@ -320,23 +320,23 @@ void aether_http_response_set_header(HttpServerResponse* res, const char* key, c
     res->header_count++;
 }
 
-void aether_http_response_set_body(HttpServerResponse* res, const char* body) {
+void http_response_set_body(HttpServerResponse* res, const char* body) {
     free(res->body);
     res->body = strdup(body);
     res->body_length = strlen(body);
-    
+
     // Update Content-Length
     char len_str[32];
     snprintf(len_str, sizeof(len_str), "%zu", res->body_length);
-    aether_http_response_set_header(res, "Content-Length", len_str);
+    http_response_set_header(res, "Content-Length", len_str);
 }
 
-void aether_http_response_json(HttpServerResponse* res, const char* json) {
-    aether_http_response_set_header(res, "Content-Type", "application/json");
-    aether_http_response_set_body(res, json);
+void http_response_json(HttpServerResponse* res, const char* json) {
+    http_response_set_header(res, "Content-Type", "application/json");
+    http_response_set_body(res, json);
 }
 
-const char* aether_http_response_serialize(HttpServerResponse* res) {
+const char* http_response_serialize(HttpServerResponse* res) {
     static char buffer[65536];  // Increased from 8KB to 64KB for larger responses
     
     int offset = snprintf(buffer, sizeof(buffer), 
@@ -358,23 +358,23 @@ const char* aether_http_response_serialize(HttpServerResponse* res) {
     return buffer;
 }
 
-void aether_http_server_response_free(HttpServerResponse* res) {
+void http_server_response_free(HttpServerResponse* res) {
     if (!res) return;
-    
+
     free(res->status_text);
     free(res->body);
-    
+
     for (int i = 0; i < res->header_count; i++) {
         free(res->header_keys[i]);
         free(res->header_values[i]);
     }
     free(res->header_keys);
     free(res->header_values);
-    
+
     free(res);
 }
 
-const char* aether_http_status_text(int code) {
+const char* http_status_text(int code) {
     switch (code) {
         case 200: return "OK";
         case 201: return "Created";
@@ -391,7 +391,7 @@ const char* aether_http_status_text(int code) {
 }
 
 // Routing
-void aether_http_server_add_route(HttpServer* server, const char* method, const char* path, HttpHandler handler, void* user_data) {
+void http_server_add_route(HttpServer* server, const char* method, const char* path, HttpHandler handler, void* user_data) {
     HttpRoute* route = (HttpRoute*)malloc(sizeof(HttpRoute));
     route->method = strdup(method);
     route->path_pattern = strdup(path);
@@ -401,23 +401,23 @@ void aether_http_server_add_route(HttpServer* server, const char* method, const 
     server->routes = route;
 }
 
-void aether_http_server_get(HttpServer* server, const char* path, HttpHandler handler, void* user_data) {
-    aether_http_server_add_route(server, "GET", path, handler, user_data);
+void http_server_get(HttpServer* server, const char* path, HttpHandler handler, void* user_data) {
+    http_server_add_route(server, "GET", path, handler, user_data);
 }
 
-void aether_http_server_post(HttpServer* server, const char* path, HttpHandler handler, void* user_data) {
-    aether_http_server_add_route(server, "POST", path, handler, user_data);
+void http_server_post(HttpServer* server, const char* path, HttpHandler handler, void* user_data) {
+    http_server_add_route(server, "POST", path, handler, user_data);
 }
 
-void aether_http_server_put(HttpServer* server, const char* path, HttpHandler handler, void* user_data) {
-    aether_http_server_add_route(server, "PUT", path, handler, user_data);
+void http_server_put(HttpServer* server, const char* path, HttpHandler handler, void* user_data) {
+    http_server_add_route(server, "PUT", path, handler, user_data);
 }
 
-void aether_http_server_delete(HttpServer* server, const char* path, HttpHandler handler, void* user_data) {
-    aether_http_server_add_route(server, "DELETE", path, handler, user_data);
+void http_server_delete(HttpServer* server, const char* path, HttpHandler handler, void* user_data) {
+    http_server_add_route(server, "DELETE", path, handler, user_data);
 }
 
-void aether_http_server_use_middleware(HttpServer* server, HttpMiddleware middleware, void* user_data) {
+void http_server_use_middleware(HttpServer* server, HttpMiddleware middleware, void* user_data) {
     HttpMiddlewareNode* node = (HttpMiddlewareNode*)malloc(sizeof(HttpMiddlewareNode));
     node->middleware = middleware;
     node->user_data = user_data;
@@ -426,7 +426,7 @@ void aether_http_server_use_middleware(HttpServer* server, HttpMiddleware middle
 }
 
 // Route matching with parameter extraction
-int aether_http_route_matches(const char* pattern, const char* path, HttpRequest* req) {
+int http_route_matches(const char* pattern, const char* path, HttpRequest* req) {
     // Exact match
     if (strcmp(pattern, path) == 0) {
         return 1;
@@ -488,78 +488,78 @@ int aether_http_route_matches(const char* pattern, const char* path, HttpRequest
 static void handle_client_connection(HttpServer* server, int client_fd) {
     char buffer[8192];
     int bytes_read = recv(client_fd, buffer, sizeof(buffer) - 1, 0);
-    
+
     if (bytes_read <= 0) {
         close(client_fd);
         return;
     }
-    
+
     buffer[bytes_read] = '\0';
-    
+
     // Parse request
-    HttpRequest* req = aether_http_parse_request(buffer);
+    HttpRequest* req = http_parse_request(buffer);
     if (!req) {
         close(client_fd);
         return;
     }
-    
+
     // Create response
-    HttpServerResponse* res = aether_http_response_create();
-    
+    HttpServerResponse* res = http_response_create();
+
     // Execute middleware chain
     HttpMiddlewareNode* middleware = server->middleware_chain;
     int should_continue = 1;
-    
+
     while (middleware && should_continue) {
         should_continue = middleware->middleware(req, res, middleware->user_data);
         middleware = middleware->next;
     }
-    
+
     // If middleware blocked, send response and return
     if (!should_continue) {
-        const char* response_str = aether_http_response_serialize(res);
+        const char* response_str = http_response_serialize(res);
         send(client_fd, response_str, strlen(response_str), 0);
         close(client_fd);
-        aether_http_request_free(req);
-        aether_http_server_response_free(res);
+        http_request_free(req);
+        http_server_response_free(res);
         return;
     }
-    
+
     // Find matching route
     HttpRoute* route = server->routes;
     HttpRoute* matched_route = NULL;
-    
+
     while (route) {
         if (strcmp(route->method, req->method) == 0) {
-            if (aether_http_route_matches(route->path_pattern, req->path, req)) {
+            if (http_route_matches(route->path_pattern, req->path, req)) {
                 matched_route = route;
                 break;
             }
         }
         route = route->next;
     }
-    
+
     // Execute route handler or return 404
     if (matched_route) {
         matched_route->handler(req, res, matched_route->user_data);
     } else {
-        aether_http_response_set_status(res, 404);
-        aether_http_response_set_body(res, "404 Not Found");
+        http_response_set_status(res, 404);
+        http_response_set_body(res, "404 Not Found");
     }
-    
+
     // Send response
-    const char* response_str = aether_http_response_serialize(res);
+    const char* response_str = http_response_serialize(res);
     send(client_fd, response_str, strlen(response_str), 0);
-    
+
     // Cleanup
     close(client_fd);
-    aether_http_request_free(req);
-    aether_http_server_response_free(res);
+    http_request_free(req);
+    http_server_response_free(res);
 }
 
 // Server main loop with proper connection handling
-int aether_http_server_start(HttpServer* server) {
-    if (aether_http_server_bind(server, server->host, server->port) < 0) {
+int http_server_start(HttpServer* server) {
+    if (http_server_bind(server, server->host, server->port) < 0) {
         return -1;
     }
 
@@ -581,19 +581,19 @@ int aether_http_server_start(HttpServer* server) {
             if (!server->is_running) break;
             continue;
         }
-        
+
         // Handle connection
         handle_client_connection(server, client_fd);
     }
-    
+
     return 0;
 }
 
-void aether_http_server_stop(HttpServer* server) {
+void http_server_stop(HttpServer* server) {
     if (!server) return;
-    
+
     server->is_running = 0;
-    
+
     if (server->socket_fd >= 0) {
 #ifdef _WIN32
         closesocket(server->socket_fd);
@@ -605,10 +605,10 @@ void aether_http_server_stop(HttpServer* server) {
     }
 }
 
-void aether_http_server_free(HttpServer* server) {
+void http_server_free(HttpServer* server) {
     if (!server) return;
-    
-    aether_http_server_stop(server);
+
+    http_server_stop(server);
     
     free(server->host);
     
@@ -634,7 +634,7 @@ void aether_http_server_free(HttpServer* server) {
 }
 
 // MIME type detection based on file extension
-const char* aether_http_mime_type(const char* path) {
+const char* http_mime_type(const char* path) {
     if (!path) return "application/octet-stream";
 
     const char* ext = strrchr(path, '.');
@@ -673,11 +673,11 @@ const char* aether_http_mime_type(const char* path) {
 }
 
 // Serve a single file
-void aether_http_serve_file(HttpServerResponse* res, const char* filepath) {
+void http_serve_file(HttpServerResponse* res, const char* filepath) {
     FILE* f = fopen(filepath, "rb");
     if (!f) {
-        aether_http_response_set_status(res, 404);
-        aether_http_response_set_body(res, "404 - File Not Found");
+        http_response_set_status(res, 404);
+        http_response_set_body(res, "404 - File Not Found");
         return;
     }
 
@@ -690,8 +690,8 @@ void aether_http_serve_file(HttpServerResponse* res, const char* filepath) {
     char* content = (char*)malloc(size + 1);
     if (!content) {
         fclose(f);
-        aether_http_response_set_status(res, 500);
-        aether_http_response_set_body(res, "500 - Server Error");
+        http_response_set_status(res, 500);
+        http_response_set_body(res, "500 - Server Error");
         return;
     }
 
@@ -700,15 +700,15 @@ void aether_http_serve_file(HttpServerResponse* res, const char* filepath) {
     fclose(f);
 
     // Set response
-    aether_http_response_set_status(res, 200);
-    aether_http_response_set_header(res, "Content-Type", aether_http_mime_type(filepath));
-    aether_http_response_set_header(res, "Access-Control-Allow-Origin", "*");
-    aether_http_response_set_body(res, content);
+    http_response_set_status(res, 200);
+    http_response_set_header(res, "Content-Type", http_mime_type(filepath));
+    http_response_set_header(res, "Access-Control-Allow-Origin", "*");
+    http_response_set_body(res, content);
     free(content);
 }
 
 // Static file serving handler (for use with wildcard routes)
-void aether_http_serve_static(HttpRequest* req, HttpServerResponse* res, void* base_dir) {
+void http_serve_static(HttpRequest* req, HttpServerResponse* res, void* base_dir) {
     const char* dir = (const char*)base_dir;
     if (!dir) dir = ".";
 
@@ -726,8 +726,8 @@ void aether_http_serve_static(HttpRequest* req, HttpServerResponse* res, void* b
 
     // Security: prevent directory traversal
     if (strstr(req_path, "..") != NULL) {
-        aether_http_response_set_status(res, 403);
-        aether_http_response_set_body(res, "403 - Forbidden");
+        http_response_set_status(res, 403);
+        http_response_set_body(res, "403 - Forbidden");
         return;
     }
 
@@ -736,5 +736,5 @@ void aether_http_serve_static(HttpRequest* req, HttpServerResponse* res, void* b
     snprintf(filepath, sizeof(filepath), "%s/%s", dir, req_path);
 
     // Serve the file
-    aether_http_serve_file(res, filepath);
+    http_serve_file(res, filepath);
 }

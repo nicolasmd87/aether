@@ -1,0 +1,146 @@
+// Match Expressions - Pattern matching with match statement
+// Demonstrates all pattern types in match expressions
+//
+// Pattern types:
+//   - Literal patterns (integers, strings)
+//   - Wildcard pattern (_)
+//   - List patterns ([], [x], [h|t])
+//   - Variable capture
+
+// Day of week using match
+day_name(n) {
+    match (n) {
+        1 -> { return "Monday"; }
+        2 -> { return "Tuesday"; }
+        3 -> { return "Wednesday"; }
+        4 -> { return "Thursday"; }
+        5 -> { return "Friday"; }
+        6 -> { return "Saturday"; }
+        7 -> { return "Sunday"; }
+        _ -> { return "Invalid"; }
+    }
+    return "Unknown";
+}
+
+// Describe a number
+describe_number(n) {
+    match (n) {
+        0 -> { print("zero"); }
+        1 -> { print("one"); }
+        2 -> { print("two"); }
+        _ -> {
+            if (n < 0) {
+                print("negative");
+            } else {
+                print("many");
+            }
+        }
+    }
+    print("\n");
+}
+
+// Simple sum function (iterative)
+sum_array(n1, n2, n3, n4) {
+    return n1 + n2 + n3 + n4;
+}
+
+main() {
+    print("=== Match Expression Examples ===\n\n");
+
+    // Simple integer matching
+    print("Integer matching:\n");
+    for (i = 0; i <= 5; i = i + 1) {
+        print("  ");
+        print(i);
+        print(": ");
+        describe_number(i);
+    }
+    print("  -3: ");
+    describe_number(-3);
+    print("\n");
+
+    // Day name lookup
+    print("Day lookup:\n");
+    for (d = 1; d <= 7; d = d + 1) {
+        print("  ");
+        print(d);
+        print(" = ");
+        print(day_name(d));
+        print("\n");
+    }
+    print("  9 = ");
+    print(day_name(9));
+    print("\n\n");
+
+    // List pattern matching
+    print("List patterns:\n");
+
+    // Empty list
+    empty = [];
+    empty_len = 0;
+    match (empty) {
+        [] -> { print("  []: empty list\n"); }
+        _ -> { print("  []: not empty\n"); }
+    }
+
+    // Single element
+    single = [42];
+    single_len = 1;
+    match (single) {
+        [] -> { print("  [42]: empty\n"); }
+        [x] -> {
+            print("  [42]: single element = ");
+            print(x);
+            print("\n");
+        }
+        _ -> { print("  [42]: multiple elements\n"); }
+    }
+
+    // Head-tail pattern (cons)
+    nums = [1, 2, 3, 4, 5];
+    nums_len = 5;
+    match (nums) {
+        [] -> { print("  [1,2,3,4,5]: empty\n"); }
+        [h|t] -> {
+            print("  [1,2,3,4,5]: head = ");
+            print(h);
+            print(", tail has rest\n");
+        }
+    }
+
+    // Multi-element pattern
+    pair = [10, 20];
+    pair_len = 2;
+    match (pair) {
+        [] -> { print("  [10,20]: empty\n"); }
+        [x] -> { print("  [10,20]: single\n"); }
+        [a, b] -> {
+            print("  [10,20]: pair = (");
+            print(a);
+            print(", ");
+            print(b);
+            print(")\n");
+        }
+        _ -> { print("  [10,20]: more than 2\n"); }
+    }
+
+    print("\n");
+
+    // Practical example: process first element differently
+    print("Processing list:\n");
+    data = [100, 200, 300, 400];
+    data_len = 4;
+    match (data) {
+        [] -> { print("  No data to process\n"); }
+        [first|rest] -> {
+            print("  First element (special): ");
+            print(first);
+            print("\n");
+            print("  Sum of all: ");
+            print(sum_array(100, 200, 300, 400));
+            print("\n");
+        }
+    }
+
+    print("\n=== Match Expressions Complete ===\n");
+}

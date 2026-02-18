@@ -1,0 +1,25 @@
+// Local Utils Module Definition
+// This defines the interface for the utils package
+//
+// When the module system is fully wired up:
+//   import utils
+//   result = utils.double_value(5)
+
+// Module functions (would be extern when imported)
+double_value(x) {
+    return x * 2;
+}
+
+triple_value(x) {
+    return x * 3;
+}
+
+main() {
+    print("=== Utils Module ===\n");
+    print("double_value(5) = ");
+    print(double_value(5));
+    print("\n");
+    print("triple_value(5) = ");
+    print(triple_value(5));
+    print("\n");
+}

@@ -1,0 +1,14 @@
+// std.map - HashMap Operations
+// Import with: import std.map
+// Usage: map.new(), map.put(m, key, value), etc.
+
+extern map_new() -> ptr
+extern map_put(map: ptr, key: ptr, value: ptr)
+extern map_get(map: ptr, key: ptr) -> ptr
+extern map_has(map: ptr, key: ptr) -> int
+extern map_remove(map: ptr, key: ptr)
+extern map_size(map: ptr) -> int
+extern map_clear(map: ptr)
+extern map_free(map: ptr)
+extern map_keys(map: ptr) -> ptr
+extern map_keys_free(keys: ptr)

@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>io - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search io..." onkeyup="searchModule()">
+  <h2>Functions</h2>
+  <ul class="function-nav">
+    <li><a href="#io_print">io_print</a></li>
+    <li><a href="#io_print_line">io_print_line</a></li>
+    <li><a href="#io_print_int">io_print_int</a></li>
+    <li><a href="#io_print_float">io_print_float</a></li>
+    <li><a href="#io_read_file">io_read_file</a></li>
+    <li><a href="#io_write_file">io_write_file</a></li>
+    <li><a href="#io_append_file">io_append_file</a></li>
+    <li><a href="#io_file_exists">io_file_exists</a></li>
+    <li><a href="#io_delete_file">io_delete_file</a></li>
+    <li><a href="#io_file_info">io_file_info</a></li>
+    <li><a href="#io_file_info_free">io_file_info_free</a></li>
+    <li><a href="#io_getenv">io_getenv</a></li>
+    <li><a href="#io_setenv">io_setenv</a></li>
+    <li><a href="#io_unsetenv">io_unsetenv</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="net.html">net</a></li>
+    <li class="active"><a href="io.html">io</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="fs.html">fs</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>io</h1>
+    <p class="module-desc">Input/output and console</p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="io_print" data-name="io_print">
+      <h3 class="function-name">io_print</h3>
+      <pre class="usage"><code>io_print(str)</code></pre>
+      <p class="doc">Console I/O</p>
+    </div>
+    <div class="function" id="io_print_line" data-name="io_print_line">
+      <h3 class="function-name">io_print_line</h3>
+      <pre class="usage"><code>io_print_line(str)</code></pre>
+    </div>
+    <div class="function" id="io_print_int" data-name="io_print_int">
+      <h3 class="function-name">io_print_int</h3>
+      <pre class="usage"><code>io_print_int(value)</code></pre>
+    </div>
+    <div class="function" id="io_print_float" data-name="io_print_float">
+      <h3 class="function-name">io_print_float</h3>
+      <pre class="usage"><code>io_print_float(value)</code></pre>
+    </div>
+    <div class="function" id="io_read_file" data-name="io_read_file">
+      <h3 class="function-name">io_read_file</h3>
+      <pre class="usage"><code>io_read_file(path)</code></pre>
+      <p class="doc">File I/O</p>
+    </div>
+    <div class="function" id="io_write_file" data-name="io_write_file">
+      <h3 class="function-name">io_write_file</h3>
+      <pre class="usage"><code>io_write_file(path, content)</code></pre>
+    </div>
+    <div class="function" id="io_append_file" data-name="io_append_file">
+      <h3 class="function-name">io_append_file</h3>
+      <pre class="usage"><code>io_append_file(path, content)</code></pre>
+    </div>
+    <div class="function" id="io_file_exists" data-name="io_file_exists">
+      <h3 class="function-name">io_file_exists</h3>
+      <pre class="usage"><code>io_file_exists(path)</code></pre>
+    </div>
+    <div class="function" id="io_delete_file" data-name="io_delete_file">
+      <h3 class="function-name">io_delete_file</h3>
+      <pre class="usage"><code>io_delete_file(path)</code></pre>
+    </div>
+    <div class="function" id="io_file_info" data-name="io_file_info">
+      <h3 class="function-name">io_file_info</h3>
+      <pre class="usage"><code>io_file_info(path)</code></pre>
+    </div>
+    <div class="function" id="io_file_info_free" data-name="io_file_info_free">
+      <h3 class="function-name">io_file_info_free</h3>
+      <pre class="usage"><code>io_file_info_free(info)</code></pre>
+    </div>
+    <div class="function" id="io_getenv" data-name="io_getenv">
+      <h3 class="function-name">io_getenv</h3>
+      <pre class="usage"><code>io_getenv(name)</code></pre>
+      <p class="doc">Environment variables</p>
+    </div>
+    <div class="function" id="io_setenv" data-name="io_setenv">
+      <h3 class="function-name">io_setenv</h3>
+      <pre class="usage"><code>io_setenv(name, value)</code></pre>
+    </div>
+    <div class="function" id="io_unsetenv" data-name="io_unsetenv">
+      <h3 class="function-name">io_unsetenv</h3>
+      <pre class="usage"><code>io_unsetenv(name)</code></pre>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

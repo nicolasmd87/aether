@@ -8,64 +8,64 @@
 //   [h|t]   - matches head and tail (cons pattern)
 
 main() {
-    print("=== List Pattern Matching Demo ===\n\n")
+    print("=== List Pattern Matching Demo ===\n\n");
 
     // Arrays require a corresponding _len variable for pattern matching
-    nums = [1, 2, 3, 4, 5]
-    nums_len = 5
+    nums = [1, 2, 3, 4, 5];
+    nums_len = 5;
 
-    empty = []
-    empty_len = 0
+    empty = [];
+    empty_len = 0;
 
-    single = [42]
-    single_len = 1
+    single = [42];
+    single_len = 1;
 
     // Pattern match on empty array
-    print("Matching empty array:\n")
+    print("Matching empty array:\n");
     match (empty) {
-        [] -> { print("  Matched: empty array\n") }
-        _ -> { print("  No match\n") }
+        [] -> { print("  Matched: empty array\n"); }
+        _ -> { print("  No match\n"); }
     }
 
     // Pattern match on single element
-    print("\nMatching single element [42]:\n")
+    print("\nMatching single element [42]:\n");
     match (single) {
-        [] -> { print("  empty\n") }
+        [] -> { print("  empty\n"); }
         [x] -> {
-            print("  Matched single element: ")
-            print(x)
-            print("\n")
+            print("  Matched single element: ");
+            print(x);
+            print("\n");
         }
-        _ -> { print("  other\n") }
+        _ -> { print("  other\n"); }
     }
 
     // Pattern match with cons pattern [h|t]
-    print("\nMatching [1,2,3,4,5] with cons pattern:\n")
+    print("\nMatching [1,2,3,4,5] with cons pattern:\n");
     match (nums) {
-        [] -> { print("  empty\n") }
+        [] -> { print("  empty\n"); }
         [h|t] -> {
-            print("  Head: ")
-            print(h)
-            print("\n")
-            print("  Tail is remaining elements\n")
+            print("  Head: ");
+            print(h);
+            print("\n");
+            print("  Tail is remaining elements\n");
         }
     }
 
     // Direct array access still works
-    print("\nDirect array access:\n")
-    print("  nums[0] = ")
-    print(nums[0])
-    print("\n")
-    print("  nums[4] = ")
-    print(nums[4])
-    print("\n")
+    print("\nDirect array access:\n");
+    print("  nums[0] = ");
+    print(nums[0]);
+    print("\n");
+    print("  nums[4] = ");
+    print(nums[4]);
+    print("\n");
 
     // Sum using traditional loop
-    sum = 0
+    sum = 0;
     for (i = 0; i < nums_len; i = i + 1) {
-        sum = sum + nums[i]
+        sum = sum + nums[i];
     }
-    print("\nSum of array: ")
-    print(sum)
-    print("\n")
+    print("\nSum of array: ");
+    print(sum);
+    print("\n");
 }

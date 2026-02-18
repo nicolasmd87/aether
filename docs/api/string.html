@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>string - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search string..." onkeyup="searchModule()">
+  <h2>Functions</h2>
+  <ul class="function-nav">
+    <li><a href="#string_new">string_new</a></li>
+    <li><a href="#string_from_cstr">string_from_cstr</a></li>
+    <li><a href="#string_from_literal">string_from_literal</a></li>
+    <li><a href="#string_new_with_length">string_new_with_length</a></li>
+    <li><a href="#string_empty">string_empty</a></li>
+    <li><a href="#string_retain">string_retain</a></li>
+    <li><a href="#string_release">string_release</a></li>
+    <li><a href="#string_free">string_free</a></li>
+    <li><a href="#string_concat">string_concat</a></li>
+    <li><a href="#string_length">string_length</a></li>
+    <li><a href="#string_char_at">string_char_at</a></li>
+    <li><a href="#string_equals">string_equals</a></li>
+    <li><a href="#string_compare">string_compare</a></li>
+    <li><a href="#string_starts_with">string_starts_with</a></li>
+    <li><a href="#string_ends_with">string_ends_with</a></li>
+    <li><a href="#string_contains">string_contains</a></li>
+    <li><a href="#string_index_of">string_index_of</a></li>
+    <li><a href="#string_substring">string_substring</a></li>
+    <li><a href="#string_to_upper">string_to_upper</a></li>
+    <li><a href="#string_to_lower">string_to_lower</a></li>
+    <li><a href="#string_trim">string_trim</a></li>
+    <li><a href="#string_split">string_split</a></li>
+    <li><a href="#string_array_free">string_array_free</a></li>
+    <li><a href="#string_to_cstr">string_to_cstr</a></li>
+    <li><a href="#string_from_int">string_from_int</a></li>
+    <li><a href="#string_from_float">string_from_float</a></li>
+    <li><a href="#string_to_int">string_to_int</a></li>
+    <li><a href="#string_to_long">string_to_long</a></li>
+    <li><a href="#string_to_float">string_to_float</a></li>
+    <li><a href="#string_to_double">string_to_double</a></li>
+    <li><a href="#string_format">string_format</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="net.html">net</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="log.html">log</a></li>
+    <li class="active"><a href="string.html">string</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="fs.html">fs</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>string</h1>
+    <p class="module-desc">String manipulation and formatting</p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="string_new" data-name="string_new">
+      <h3 class="function-name">string_new</h3>
+      <pre class="usage"><code>string_new(cstr)</code></pre>
+      <p class="doc">String creation</p>
+    </div>
+    <div class="function" id="string_from_cstr" data-name="string_from_cstr">
+      <h3 class="function-name">string_from_cstr</h3>
+      <pre class="usage"><code>string_from_cstr(cstr)</code></pre>
+    </div>
+    <div class="function" id="string_from_literal" data-name="string_from_literal">
+      <h3 class="function-name">string_from_literal</h3>
+      <pre class="usage"><code>string_from_literal(cstr)</code></pre>
+    </div>
+    <div class="function" id="string_new_with_length" data-name="string_new_with_length">
+      <h3 class="function-name">string_new_with_length</h3>
+      <pre class="usage"><code>string_new_with_length(data, length)</code></pre>
+    </div>
+    <div class="function" id="string_empty" data-name="string_empty">
+      <h3 class="function-name">string_empty</h3>
+      <pre class="usage"><code>string_empty()</code></pre>
+    </div>
+    <div class="function" id="string_retain" data-name="string_retain">
+      <h3 class="function-name">string_retain</h3>
+      <pre class="usage"><code>string_retain(str)</code></pre>
+      <p class="doc">Reference counting</p>
+    </div>
+    <div class="function" id="string_release" data-name="string_release">
+      <h3 class="function-name">string_release</h3>
+      <pre class="usage"><code>string_release(str)</code></pre>
+    </div>
+    <div class="function" id="string_free" data-name="string_free">
+      <h3 class="function-name">string_free</h3>
+      <pre class="usage"><code>string_free(str)</code></pre>
+    </div>
+    <div class="function" id="string_concat" data-name="string_concat">
+      <h3 class="function-name">string_concat</h3>
+      <pre class="usage"><code>string_concat(a, b)</code></pre>
+      <p class="doc">String operations</p>
+    </div>
+    <div class="function" id="string_length" data-name="string_length">
+      <h3 class="function-name">string_length</h3>
+      <pre class="usage"><code>string_length(str)</code></pre>
+    </div>
+    <div class="function" id="string_char_at" data-name="string_char_at">
+      <h3 class="function-name">string_char_at</h3>
+      <pre class="usage"><code>string_char_at(str, index)</code></pre>
+    </div>
+    <div class="function" id="string_equals" data-name="string_equals">
+      <h3 class="function-name">string_equals</h3>
+      <pre class="usage"><code>string_equals(a, b)</code></pre>
+    </div>
+    <div class="function" id="string_compare" data-name="string_compare">
+      <h3 class="function-name">string_compare</h3>
+      <pre class="usage"><code>string_compare(a, b)</code></pre>
+    </div>
+    <div class="function" id="string_starts_with" data-name="string_starts_with">
+      <h3 class="function-name">string_starts_with</h3>
+      <pre class="usage"><code>string_starts_with(str, prefix)</code></pre>
+      <p class="doc">String methods</p>
+    </div>
+    <div class="function" id="string_ends_with" data-name="string_ends_with">
+      <h3 class="function-name">string_ends_with</h3>
+      <pre class="usage"><code>string_ends_with(str, suffix)</code></pre>
+    </div>
+    <div class="function" id="string_contains" data-name="string_contains">
+      <h3 class="function-name">string_contains</h3>
+      <pre class="usage"><code>string_contains(str, substring)</code></pre>
+    </div>
+    <div class="function" id="string_index_of" data-name="string_index_of">
+      <h3 class="function-name">string_index_of</h3>
+      <pre class="usage"><code>string_index_of(str, substring)</code></pre>
+    </div>
+    <div class="function" id="string_substring" data-name="string_substring">
+      <h3 class="function-name">string_substring</h3>
+      <pre class="usage"><code>string_substring(str, start, end)</code></pre>
+    </div>
+    <div class="function" id="string_to_upper" data-name="string_to_upper">
+      <h3 class="function-name">string_to_upper</h3>
+      <pre class="usage"><code>string_to_upper(str)</code></pre>
+    </div>
+    <div class="function" id="string_to_lower" data-name="string_to_lower">
+      <h3 class="function-name">string_to_lower</h3>
+      <pre class="usage"><code>string_to_lower(str)</code></pre>
+    </div>
+    <div class="function" id="string_trim" data-name="string_trim">
+      <h3 class="function-name">string_trim</h3>
+      <pre class="usage"><code>string_trim(str)</code></pre>
+    </div>
+    <div class="function" id="string_split" data-name="string_split">
+      <h3 class="function-name">string_split</h3>
+      <pre class="usage"><code>string_split(str, delimiter)</code></pre>
+    </div>
+    <div class="function" id="string_array_free" data-name="string_array_free">
+      <h3 class="function-name">string_array_free</h3>
+      <pre class="usage"><code>string_array_free(arr)</code></pre>
+    </div>
+    <div class="function" id="string_to_cstr" data-name="string_to_cstr">
+      <h3 class="function-name">string_to_cstr</h3>
+      <pre class="usage"><code>string_to_cstr(str)</code></pre>
+      <p class="doc">Conversion</p>
+    </div>
+    <div class="function" id="string_from_int" data-name="string_from_int">
+      <h3 class="function-name">string_from_int</h3>
+      <pre class="usage"><code>string_from_int(value)</code></pre>
+    </div>
+    <div class="function" id="string_from_float" data-name="string_from_float">
+      <h3 class="function-name">string_from_float</h3>
+      <pre class="usage"><code>string_from_float(value)</code></pre>
+    </div>
+    <div class="function" id="string_to_int" data-name="string_to_int">
+      <h3 class="function-name">string_to_int</h3>
+      <pre class="usage"><code>string_to_int(str, out_value)</code></pre>
+      <p class="doc">Parsing (string -&gt; number) Returns 1 on success, 0 on failure. Result stored in out_value.</p>
+    </div>
+    <div class="function" id="string_to_long" data-name="string_to_long">
+      <h3 class="function-name">string_to_long</h3>
+      <pre class="usage"><code>string_to_long(str, out_value)</code></pre>
+    </div>
+    <div class="function" id="string_to_float" data-name="string_to_float">
+      <h3 class="function-name">string_to_float</h3>
+      <pre class="usage"><code>string_to_float(str, out_value)</code></pre>
+    </div>
+    <div class="function" id="string_to_double" data-name="string_to_double">
+      <h3 class="function-name">string_to_double</h3>
+      <pre class="usage"><code>string_to_double(str, out_value)</code></pre>
+    </div>
+    <div class="function" id="string_format" data-name="string_format">
+      <h3 class="function-name">string_format</h3>
+      <pre class="usage"><code>string_format(fmt)</code></pre>
+      <p class="doc">Formatting (printf-style)</p>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

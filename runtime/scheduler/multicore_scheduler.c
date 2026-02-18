@@ -146,7 +146,7 @@ void* __attribute__((hot)) scheduler_thread(void* arg) {
             }
 
             // For actors processed on main thread, just deliver to mailbox (don't process)
-            if (unlikely(actor->main_thread_only)) {
+            if (unlikely(__atomic_load_n(&actor->main_thread_only, __ATOMIC_ACQUIRE))) {
                 mailbox_send(&actor->mailbox, msg);
                 work_done = 1;
                 continue;
@@ -190,7 +190,7 @@ void* __attribute__((hot)) scheduler_thread(void* arg) {
             if (unlikely(!actor)) continue;
 
             // Skip actors processed on main thread
-            if (unlikely(actor->main_thread_only)) continue;
+            if (unlikely(__atomic_load_n(&actor->main_thread_only, __ATOMIC_ACQUIRE))) continue;
 
             // auto_process actors own their mailbox and SPSC from their
             // own thread.  Skip entirely — touching either here would
@@ -719,11 +719,12 @@ ActorBase* scheduler_spawn_pooled(int preferred_core, void (*step)(void*), size_
     if (prev_count == 0 && !atomic_load(&g_aether_config.inline_mode_disabled)) {
         // First actor: enable main thread mode for synchronous processing
         aether_enable_main_thread_mode(actor);
-        actor->main_thread_only = 1;
+        __atomic_store_n(&actor->main_thread_only, 1, __ATOMIC_RELEASE);
     } else if (prev_count == 1 && prev_main_actor != NULL) {
         // Second actor: disable main thread mode on the first actor
         // so scheduler threads can process both actors normally
-        prev_main_actor->main_thread_only = 0;
+        // Use atomic store to prevent data race with scheduler thread reads
+        __atomic_store_n(&prev_main_actor->main_thread_only, 0, __ATOMIC_RELEASE);
     }
 
     scheduler_register_actor(actor, preferred_core);

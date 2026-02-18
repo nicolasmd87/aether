@@ -1,0 +1,138 @@
+// Pattern Matching - Erlang-style function clauses with guards
+// Demonstrates Aether's powerful pattern matching inspired by Erlang/Elixir
+//
+// Features shown:
+//   - Multiple function clauses
+//   - Guard clauses (when conditions)
+//   - Literal pattern matching
+//   - Arrow syntax for concise functions
+
+// Factorial using pattern matching and guards
+factorial(0) -> 1
+factorial(n) when n > 0 -> n * factorial(n - 1)
+
+// Fibonacci with pattern matching
+fib(0) -> 0
+fib(1) -> 1
+fib(n) when n > 1 -> fib(n - 1) + fib(n - 2)
+
+// Classify numbers using guards
+classify(x) when x < 0 -> print("negative\n")
+classify(x) when x == 0 -> print("zero\n")
+classify(x) when x > 0 -> print("positive\n")
+
+// Sign function with guards
+sign(n) when n < 0 -> -1
+sign(n) when n == 0 -> 0
+sign(n) when n > 0 -> 1
+
+// Grade calculation with multiple guard ranges
+grade(score) when score >= 90 -> print("A\n")
+grade(score) when score >= 80 -> print("B\n")
+grade(score) when score >= 70 -> print("C\n")
+grade(score) when score >= 60 -> print("D\n")
+grade(score) when score < 60 -> print("F\n")
+
+// Absolute value using guards
+abs_val(x) when x < 0 -> 0 - x
+abs_val(x) when x >= 0 -> x
+
+// Max of two numbers
+max_of(a, b) when a >= b -> a
+max_of(a, b) when a < b -> b
+
+// Min of two numbers
+min_of(a, b) when a <= b -> a
+min_of(a, b) when a > b -> b
+
+// Check if number is even
+is_even(n) when n == 0 -> 1
+is_even(n) when n > 0 -> is_odd(n - 1)
+
+is_odd(n) when n == 0 -> 0
+is_odd(n) when n > 0 -> is_even(n - 1)
+
+// GCD using Euclidean algorithm with pattern matching
+gcd(a, 0) -> a
+gcd(a, b) when b > 0 -> gcd(b, a - (a / b) * b)
+
+main() {
+    print("=== Pattern Matching Examples ===\n\n");
+
+    // Factorial
+    print("Factorial:\n");
+    print("  factorial(5) = ");
+    print(factorial(5));
+    print("\n");
+    print("  factorial(10) = ");
+    print(factorial(10));
+    print("\n\n");
+
+    // Fibonacci
+    print("Fibonacci:\n");
+    print("  fib(10) = ");
+    print(fib(10));
+    print("\n");
+    print("  First 10: ");
+    for (i = 0; i < 10; i = i + 1) {
+        print(fib(i));
+        print(" ");
+    }
+    print("\n\n");
+
+    // Classification with guards
+    print("Classification:\n");
+    print("  -5: ");
+    classify(-5);
+    print("  0: ");
+    classify(0);
+    print("  42: ");
+    classify(42);
+    print("\n");
+
+    // Grade calculation
+    print("Grades:\n");
+    print("  95: ");
+    grade(95);
+    print("  85: ");
+    grade(85);
+    print("  55: ");
+    grade(55);
+    print("\n");
+
+    // Absolute value
+    print("Absolute value:\n");
+    print("  abs(-42) = ");
+    print(abs_val(-42));
+    print("\n");
+    print("  abs(42) = ");
+    print(abs_val(42));
+    print("\n\n");
+
+    // Max/Min
+    print("Max/Min:\n");
+    print("  max(7, 12) = ");
+    print(max_of(7, 12));
+    print("\n");
+    print("  min(7, 12) = ");
+    print(min_of(7, 12));
+    print("\n\n");
+
+    // Even/Odd
+    print("Even/Odd:\n");
+    print("  is_even(8) = ");
+    print(is_even(8));
+    print("\n");
+    print("  is_even(7) = ");
+    print(is_even(7));
+    print("\n\n");
+
+    // GCD
+    print("GCD:\n");
+    print("  gcd(48, 18) = ");
+    print(gcd(48, 18));
+    print("\n");
+    print("  gcd(100, 35) = ");
+    print(gcd(100, 35));
+    print("\n");
+}

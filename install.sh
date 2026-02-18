@@ -196,10 +196,12 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
             cp runtime/$subdir/*.c runtime/$subdir/*.h "$SRC_DIR/runtime/$subdir/" 2>/dev/null || true
         fi
     done
-    for subdir in string math net collections json fs log io; do
+    for subdir in string math net collections json fs log io file dir path tcp http list map; do
         if [ -d "std/$subdir" ]; then
             mkdir -p "$SRC_DIR/std/$subdir"
             cp std/$subdir/*.c std/$subdir/*.h "$SRC_DIR/std/$subdir/" 2>/dev/null || true
+            # Copy module.ae files for import system
+            cp std/$subdir/*.ae "$SRC_DIR/std/$subdir/" 2>/dev/null || true
         fi
     done
 

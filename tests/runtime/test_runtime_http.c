@@ -5,16 +5,16 @@
 TEST_CATEGORY(http_response_structure, TEST_CATEGORY_NETWORK) {
     HttpResponse* resp = (HttpResponse*)malloc(sizeof(HttpResponse));
     resp->status_code = 200;
-    resp->body = aether_string_new("test body");
-    resp->headers = aether_string_new("Content-Type: text/html");
+    resp->body = string_new("test body");
+    resp->headers = string_new("Content-Type: text/html");
     resp->error = NULL;
-    
+
     ASSERT_EQ(200, resp->status_code);
     ASSERT_NOT_NULL(resp->body);
     ASSERT_NOT_NULL(resp->headers);
     ASSERT_NULL(resp->error);
-    
-    aether_http_response_free(resp);
+
+    http_response_free(resp);
 }
 
 TEST_CATEGORY(http_url_parsing, TEST_CATEGORY_NETWORK) {
@@ -25,11 +25,10 @@ TEST_CATEGORY(http_url_parsing, TEST_CATEGORY_NETWORK) {
 TEST_CATEGORY(http_response_cleanup, TEST_CATEGORY_NETWORK) {
     HttpResponse* resp = (HttpResponse*)malloc(sizeof(HttpResponse));
     resp->status_code = 404;
-    resp->body = aether_string_new("Not Found");
+    resp->body = string_new("Not Found");
     resp->headers = NULL;
-    resp->error = aether_string_new("Error message");
-    
-    aether_http_response_free(resp);
+    resp->error = string_new("Error message");
+
+    http_response_free(resp);
     ASSERT_TRUE(1);
 }
-

@@ -169,39 +169,85 @@ Use `wait_for_idle()` to block until all actors have finished processing their m
 Import modules using the `import` statement:
 
 ```aether
-import std.collections.HashMap
-import std.log as Log
+import std.map
+import std.log
 
 main() {
-    Log.info("Starting application")
+    log.info("Starting application");
 
-    map = HashMap.new()
-    map.insert("key", "value")
+    mymap = map.new();
+    key = "greeting";
+    map.put(mymap, key, "hello");
 
-    print(map.get("key"))
+    print("Map created\n");
 }
 ```
+
+Functions are called using **namespace-style syntax**: `namespace.function()`.
+
+| Import | Namespace | Example |
+|--------|-----------|---------|
+| `import std.string` | `string` | `string.new("hello")` |
+| `import std.file` | `file` | `file.exists("path")` |
+| `import std.map` | `map` | `map.new()`, `map.put()` |
+| `import std.list` | `list` | `list.new()`, `list.add()` |
+| `import std.json` | `json` | `json.parse(str)` |
+
+See [Module System Design](module-system-design.md) for creating your own packages.
 
 ## Standard Library
 
 Aether includes a standard library with the following modules:
 
-### Collections
-- **HashMap**: Hash map with Robin Hood hashing
-- **Set**: Set operations (union, intersection, difference)
-- **Vector**: Dynamic array with amortized O(1) append
-- **PriorityQueue**: Binary heap for priority-based scheduling
+| Module | Description |
+|--------|-------------|
+| `std.string` | String operations |
+| `std.file` | File operations |
+| `std.dir` | Directory operations |
+| `std.path` | Path utilities |
+| `std.list` | Dynamic array (ArrayList) |
+| `std.map` | Hash map (HashMap) |
+| `std.json` | JSON parsing and creation |
+| `std.http` | HTTP client and server |
+| `std.tcp` | TCP sockets |
+| `std.log` | Structured logging |
+| `std.math` | Math functions |
 
-### Utilities
-- **log**: Structured logging with levels
-- **fs**: File system operations
-- **net**: Networking utilities
-
-See [stdlib-reference.md](stdlib-reference.md) for the full API reference.
+See [stdlib-api.md](stdlib-api.md) for the full API reference.
 
 ## Pattern Matching
 
-Aether supports pattern matching in match statements:
+Aether features Erlang-inspired pattern matching, one of its most powerful features.
+
+### Function Pattern Matching
+
+Define functions with multiple clauses that match on argument values:
+
+```aether
+// Match on literal values
+factorial(0) -> 1;
+factorial(n) when n > 0 -> n * factorial(n - 1);
+
+// Fibonacci with multiple base cases
+fib(0) -> 0;
+fib(1) -> 1;
+fib(n) when n > 1 -> fib(n - 1) + fib(n - 2);
+
+// Guards for conditional matching
+classify(x) when x < 0 -> "negative";
+classify(x) when x == 0 -> "zero";
+classify(x) when x > 0 -> "positive";
+
+// Multi-parameter pattern matching
+gcd(a, 0) -> a;
+gcd(a, b) when b > 0 -> gcd(b, a - (a / b) * b);
+```
+
+This style replaces verbose if/else chains with declarative, readable code.
+
+### Match Statements
+
+Use `match` for value dispatch:
 
 ```aether
 match (value) {
@@ -211,7 +257,9 @@ match (value) {
 }
 ```
 
-List patterns work with arrays (requires corresponding `_len` variable):
+### List Patterns
+
+Match on arrays (requires corresponding `_len` variable):
 
 ```aether
 nums = [1, 2, 3]

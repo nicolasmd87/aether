@@ -23,6 +23,10 @@ typedef struct {
     int emit_header;         // Whether to emit a C header file
     FILE* header_file;       // Output stream for header
     const char* header_path; // Path to header file
+
+    // Track generated pattern matching functions to avoid duplicates
+    char** generated_functions;
+    int generated_function_count;
 } CodeGenerator;
 
 // Code generation functions

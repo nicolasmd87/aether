@@ -1,0 +1,11 @@
+// std.file - File Operations
+// Import with: import std.file
+// Usage: file.exists("path"), file.open("path", "r"), etc.
+
+extern file_open(path: string, mode: string) -> ptr
+extern file_close(file: ptr) -> int
+extern file_read_all(file: ptr) -> ptr
+extern file_write(file: ptr, data: string, length: int) -> int
+extern file_exists(path: string) -> int
+extern file_delete(path: string) -> int
+extern file_size(path: string) -> int

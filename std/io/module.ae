@@ -1,0 +1,24 @@
+// std.io - Input/Output Module
+// Import with: import std.io
+
+// Console I/O
+extern io_print(str: ptr)
+extern io_print_line(str: ptr)
+extern io_print_int(value: int)
+extern io_print_float(value: float)
+
+// File I/O
+extern io_read_file(path: ptr) -> ptr
+extern io_write_file(path: ptr, content: ptr) -> int
+extern io_append_file(path: ptr, content: ptr) -> int
+extern io_file_exists(path: ptr) -> int
+extern io_delete_file(path: ptr) -> int
+
+// File info
+extern io_file_info(path: ptr) -> ptr
+extern io_file_info_free(info: ptr)
+
+// Environment variables
+extern io_getenv(name: string) -> ptr
+extern io_setenv(name: string, value: string) -> int
+extern io_unsetenv(name: string) -> int
