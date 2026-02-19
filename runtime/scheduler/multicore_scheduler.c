@@ -14,11 +14,15 @@
 #include <sched.h>
 #include <errno.h>
 #include <unistd.h>
+#include <time.h>
 #include "multicore_scheduler.h"
 #include "../utils/aether_cpu_detect.h"
 #include "../config/aether_optimization_config.h"
 #include "../aether_numa.h"
 #include "../actors/aether_send_buffer.h"
+
+// Forward declaration to avoid header cycle with aether_send_message.h
+extern void aether_send_message(void* actor_ptr, void* message_data, size_t message_size);
 
 #ifdef __APPLE__
 #include <mach/mach.h>
@@ -616,11 +620,14 @@ void scheduler_send_local(ActorBase* actor, Message msg) {
 }
 
 void scheduler_send_remote(ActorBase* actor, Message msg, int from_core) {
-    // INLINE MODE: For single-actor programs, redirect to local send
-    // which will process the message synchronously.
-    // NOTE: Profile-based inline mode disabled here - it's unsafe when
-    // main thread sends to actors being processed by scheduler threads.
-    // The existing same-core optimizations below handle the safe cases.
+    // INLINE MODE: For single-actor programs, process synchronously on the main thread.
+    // scheduler_send_batch_add has the same check; keep them in sync.
+    if (unlikely(aether_main_thread_mode_active())) {
+        mailbox_send(&actor->mailbox, msg);
+        actor->step(actor);
+        AETHER_STAT_INC(inline_sends);
+        return;
+    }
 
     // Per-core sent counter - no atomic contention on hot path!
     if (likely(current_core_id >= 0)) {
@@ -829,6 +836,7 @@ ActorBase* scheduler_spawn_pooled(int preferred_core, void (*step)(void*), size_
     actor->assigned_core = preferred_core;
     actor->migrate_to = -1;
     actor->main_thread_only = 0;
+    actor->reply_slot = NULL;
 
     // Track actor count for inline mode auto-detection
     // Get previous count and main_actor BEFORE aether_on_actor_spawn modifies them
@@ -879,11 +887,104 @@ void scheduler_enable_features(int use_pool, int use_lockfree, int use_adaptive,
     (void)use_pool;      // Actor pooling is always on
     (void)use_adaptive;  // Adaptive batching is always on
     (void)use_direct;    // Direct send is always on
-    
+
     // TIER 3 opt-in: Lock-free mailbox
     if (use_lockfree) {
         aether_enable_opt(AETHER_OPT_LOCKFREE_MAILBOX);
     } else {
         aether_disable_opt(AETHER_OPT_LOCKFREE_MAILBOX);
     }
+}
+
+// ============================================================================
+// Ask/Reply support (experimental)
+// ============================================================================
+
+// Decrement the slot refcount; free when it reaches zero.
+// NOTE: reply_data is NOT freed here — it is transferred to the ask caller.
+static void reply_slot_decref(ActorReplySlot* slot) {
+    if (atomic_fetch_sub_explicit(&slot->refcount, 1, memory_order_acq_rel) == 1) {
+        pthread_cond_destroy(&slot->cond);
+        pthread_mutex_destroy(&slot->mutex);
+        free(slot);
+    }
+}
+
+// Send a message to target and block until a reply is received or timeout_ms expires.
+// Returns a malloc'd pointer to the reply payload (caller must free), or NULL on timeout.
+void* scheduler_ask_message(ActorBase* target, void* msg_data, size_t msg_size, int timeout_ms) {
+    if (!target || !msg_data) return NULL;
+
+    // Allocate and initialize the reply slot (refcount starts at 2: asker + actor).
+    ActorReplySlot* slot = (ActorReplySlot*)calloc(1, sizeof(ActorReplySlot));
+    if (!slot) return NULL;
+
+    pthread_mutex_init(&slot->mutex, NULL);
+    pthread_cond_init(&slot->cond, NULL);
+    atomic_init(&slot->refcount, 2);
+
+    // Publish the slot before sending so the actor can reply immediately.
+    __atomic_store_n(&target->reply_slot, slot, __ATOMIC_SEQ_CST);
+
+    // Deliver the ask message using the same path as fire-and-forget.
+    aether_send_message((void*)target, msg_data, msg_size);
+
+    // Build absolute timeout deadline.
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec  += timeout_ms / 1000;
+    ts.tv_nsec += (long)(timeout_ms % 1000) * 1000000L;
+    if (ts.tv_nsec >= 1000000000L) {
+        ts.tv_sec++;
+        ts.tv_nsec -= 1000000000L;
+    }
+
+    // Wait for the reply (or timeout).
+    pthread_mutex_lock(&slot->mutex);
+    while (!slot->reply_ready) {
+        if (pthread_cond_timedwait(&slot->cond, &slot->mutex, &ts) == ETIMEDOUT) break;
+    }
+    void* result = slot->reply_ready ? slot->reply_data : NULL;
+
+    if (!slot->reply_ready) {
+        // Timed out: mark slot so the actor won't try to signal it.
+        slot->timed_out = 1;
+        // Try to detach the slot from the actor atomically.
+        // If the CAS succeeds:  actor hasn't exchanged yet; we take the actor's ref.
+        // If the CAS fails:     actor already owns the slot and will decref its own ref.
+        ActorReplySlot* expected = slot;
+        if (__atomic_compare_exchange_n(&target->reply_slot, &expected, NULL,
+                                        0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST)) {
+            reply_slot_decref(slot);  // release the actor's ref (actor won't use the slot)
+        }
+    }
+    pthread_mutex_unlock(&slot->mutex);
+
+    reply_slot_decref(slot);  // release the asker's ref
+    return result;
+}
+
+// Called from within an actor's receive handler to reply to a pending ask.
+// data/data_size are copied internally; the asker is responsible for freeing the result.
+void scheduler_reply(ActorBase* self, void* data, size_t data_size) {
+    // Atomically take the slot so concurrent timeout cannot race with us.
+    ActorReplySlot* slot = __atomic_exchange_n(&self->reply_slot, NULL, __ATOMIC_SEQ_CST);
+    if (!slot) return;  // no pending ask, or asker already timed out and cleared it
+
+    pthread_mutex_lock(&slot->mutex);
+    if (!slot->timed_out) {
+        // Copy the reply payload for the waiting caller.
+        if (data && data_size > 0) {
+            slot->reply_data = malloc(data_size);
+            if (slot->reply_data) {
+                memcpy(slot->reply_data, data, data_size);
+                slot->reply_size = data_size;
+            }
+        }
+        slot->reply_ready = 1;
+        pthread_cond_signal(&slot->cond);
+    }
+    pthread_mutex_unlock(&slot->mutex);
+
+    reply_slot_decref(slot);  // release the actor's ref
 }

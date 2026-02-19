@@ -146,9 +146,9 @@ make help                        # Show all targets
 ```
 aether/
 ├── compiler/           # Aether compiler (lexer, parser, codegen)
-│   ├── frontend/      # Lexer, parser, tokens
+│   ├── parser/        # Lexer, parser, tokens
 │   ├── analysis/      # Type checker, type inference
-│   ├── backend/       # C code generation, optimizer
+│   ├── codegen/       # C code generation, optimizer
 │   └── aetherc.c      # Compiler entry point
 ├── runtime/           # Runtime system
 │   ├── actors/        # Actor implementation and lock-free mailboxes

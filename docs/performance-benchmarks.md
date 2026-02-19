@@ -99,12 +99,12 @@ Dynamic batch size adjustment based on queue utilization. Range: 64 to 1024 mess
 ### Inline Single-Int Messages
 Messages with exactly one integer field bypass pool allocation. The value is stored directly in `Message.payload_int`.
 
-**Implementation:** `compiler/backend/codegen.c`
+**Implementation:** `compiler/codegen/codegen.c`
 
 ### Computed Goto Dispatch
 Message handlers use a dispatch table with GCC computed goto for direct label jumps.
 
-**Implementation:** `compiler/backend/codegen.c` (generated code)
+**Implementation:** `compiler/codegen/codegen.c` (generated code)
 
 ## Methodology
 

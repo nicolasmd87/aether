@@ -342,9 +342,10 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             }
                         }
                         
-                        fprintf(gen->output, " }; aether_ask_message(");
+                        fprintf(gen->output, " }; void* _ask_r = scheduler_ask_message((ActorBase*)(");
                         generate_expression(gen, target);
-                        fprintf(gen->output, ", &_msg, sizeof(%s), 5000); })", message->value);
+                        // Cast void* → intptr_t to avoid pointer-to-integer error; NULL check still works.
+                        fprintf(gen->output, "), &_msg, sizeof(%s), 5000); (intptr_t)(uintptr_t)_ask_r; })", message->value);
                     } else {
                         fprintf(gen->output, "/* ERROR: unknown message type %s */", message->value);
                     }

@@ -2,7 +2,7 @@
 #define AETHER_LSP_H
 
 #include <stdio.h>
-#include "../compiler/frontend/parser.h"
+#include "../compiler/parser/parser.h"
 #include "../compiler/analysis/typechecker.h"
 
 // LSP Server state

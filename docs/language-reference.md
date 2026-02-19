@@ -462,7 +462,10 @@ counter ! Reset {};
 
 ### Ask Pattern (Request-Reply) — *Experimental*
 
-> **Status: Experimental.** The `?` operator compiles but the reply path is not yet connected to the scheduler. Messages are sent but replies are not delivered back to the caller. Use fire-and-forget (`!`) for production code.
+> **Status: Experimental.** The `?` operator is functional end-to-end — the reply is
+> delivered back to the caller via `scheduler_ask_message` in the multicore scheduler.
+> Current limitations: the result type is `void*` (caller must cast and free), concurrent
+> asks to the same actor are not supported, and timeout is fixed at 5 seconds.
 
 The `?` operator sends a message and waits for a reply:
 
@@ -473,7 +476,9 @@ result = calculator ? Add { a: 5, b: 3 };
 
 ### Reply Statement — *Experimental*
 
-> **Status: Experimental.** The `reply` statement compiles and validates message fields at compile time, but the reply is not actually sent back to the caller at runtime. Full ask/reply requires request-tracking infrastructure in the scheduler.
+> **Status: Experimental.** The `reply` statement sends the response back to the waiting
+> `?` caller via `scheduler_reply` in the multicore scheduler. Omitting `reply` in a
+> handler will cause the caller to time out after 5 seconds.
 
 Actors respond using the `reply` statement:
 

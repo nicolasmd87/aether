@@ -103,7 +103,7 @@ The batch dequeue reads `head` and `tail` once, copies all available messages, t
 
 ### Batch Send for Fan-Out Patterns
 
-**Implementation:** `runtime/scheduler/multicore_scheduler.c`, `compiler/backend/codegen.c`
+**Implementation:** `runtime/scheduler/multicore_scheduler.c`, `compiler/codegen/codegen.c`
 
 For main thread fan-out patterns (fork-join), batch send reduces atomic operations from N to num_cores. The compiler detects while loops containing sends in `main()` and wraps them with batch start/flush calls.
 
@@ -209,13 +209,13 @@ Migration uses ascending core-id lock ordering to prevent deadlock between concu
 
 ### Inline Single-Int Messages
 
-**Implementation:** `compiler/backend/codegen.c`
+**Implementation:** `compiler/codegen/codegen.c`
 
 The code generator detects messages with exactly one integer field and emits an inline fast path. Instead of allocating a pool buffer and copying the message struct, the message ID is stored in `msg.type` and the field value in `msg.payload_int`. The receiver reconstructs the struct on the stack. This eliminates pool allocation and deallocation for the most common message pattern.
 
 ### Computed Goto Dispatch
 
-**Implementation:** `compiler/backend/codegen.c` (generated code)
+**Implementation:** `compiler/codegen/codegen.c` (generated code)
 
 The code generator emits a dispatch table with GCC computed goto (`goto *dispatch_table[msg_id]`) for message handler selection. This replaces indirect function calls or switch statements with direct label jumps. The message ID is read from `msg.type` rather than dereferencing the payload pointer.
 

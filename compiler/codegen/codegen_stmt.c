@@ -617,8 +617,9 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                             }
                         }
 
-                        // Mark reply as constructed (for debugging), actual send not yet implemented
-                        fprintf(gen->output, " }; (void)_reply; /* reply pending: scheduler ask/reply TODO */ }\n");
+                        // Send reply back to the waiting asker via the scheduler reply slot.
+                        fprintf(gen->output, " }; scheduler_reply((ActorBase*)self, &_reply, sizeof(%s)); }\n",
+                                reply_expr->value);
                     } else {
                         print_line(gen, "/* ERROR: unknown reply message type %s */", reply_expr->value);
                     }

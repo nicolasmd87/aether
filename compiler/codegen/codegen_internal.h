@@ -2,8 +2,8 @@
 #define CODEGEN_INTERNAL_H
 
 #include "codegen.h"
-#include "../frontend/lexer.h"
-#include "../frontend/parser.h"
+#include "../parser/lexer.h"
+#include "../parser/parser.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

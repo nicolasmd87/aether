@@ -1,8 +1,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include "../../compiler/frontend/lexer.h"
-#include "../../compiler/frontend/parser.h"
+#include "../../compiler/parser/lexer.h"
+#include "../../compiler/parser/parser.h"
 #include "../../compiler/ast.h"
 #include "../../compiler/analysis/typechecker.h"
 #include "../../compiler/codegen.h"

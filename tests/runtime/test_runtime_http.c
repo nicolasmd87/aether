@@ -32,6 +32,9 @@ TEST_CATEGORY(http_response_cleanup, TEST_CATEGORY_NETWORK) {
     resp->headers = NULL;
     resp->error = string_new("Error message");
 
+    ASSERT_EQ(404, resp->status_code);
+    ASSERT_NOT_NULL(resp->body);
+    ASSERT_NOT_NULL(resp->error);
+    ASSERT_NULL(resp->headers);
     http_response_free(resp);
-    ASSERT_TRUE(1);
 }

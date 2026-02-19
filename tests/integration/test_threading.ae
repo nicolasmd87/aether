@@ -1,15 +1,56 @@
-message Increment {
-    amount: int
-}
+// Integration test: Multi-actor concurrency
+// Tests spawning multiple actors and sending concurrent messages
+
+extern exit(code: int) -> void;
+
+message Increment { amount: int }
 
 actor Counter {
+    state count = 0;
+
     receive {
         Increment(amount) -> {
-            print(amount);
+            count = count + amount;
         }
     }
 }
 
-fn main() {
-    print(42);
+main() {
+    c1 = spawn(Counter());
+    c2 = spawn(Counter());
+    c3 = spawn(Counter());
+
+    c1 ! Increment { amount: 10 }
+    c2 ! Increment { amount: 20 }
+    c3 ! Increment { amount: 30 }
+
+    c1 ! Increment { amount: 5 }
+    c2 ! Increment { amount: 5 }
+    c3 ! Increment { amount: 5 }
+
+    wait_for_idle();
+
+    print("c1: ");
+    print(c1.count);
+    print("\n");
+    print("c2: ");
+    print(c2.count);
+    print("\n");
+    print("c3: ");
+    print(c3.count);
+    print("\n");
+
+    if c1.count != 15 {
+        print("FAIL: c1 expected 15\n");
+        exit(1);
+    }
+    if c2.count != 25 {
+        print("FAIL: c2 expected 25\n");
+        exit(1);
+    }
+    if c3.count != 35 {
+        print("FAIL: c3 expected 35\n");
+        exit(1);
+    }
+    print("PASS\n");
 }

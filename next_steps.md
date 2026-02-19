@@ -95,11 +95,11 @@ This is a real, working implementation now.
 - Hardcoded 5000ms timeout (not configurable)
 - First argument type mismatch (passes user actor struct, runtime expects `Actor`*)
 
-`reply` is explicitly non-functional. The codegen comment at [codegen.c:1660-1662](aether/compiler/backend/codegen.c) says: *"scheduler-based actors don't have the request-tracking infrastructure yet. The reply message is logged but not actually sent back to caller."* Generated code: `(void)_reply; /* reply pending: scheduler ask/reply TODO */`
+`reply` is explicitly non-functional. The codegen comment at [codegen.c:1660-1662](aether/compiler/codegen/codegen.c) says: *"scheduler-based actors don't have the request-tracking infrastructure yet. The reply message is logged but not actually sent back to caller."* Generated code: `(void)_reply; /* reply pending: scheduler ask/reply TODO */`
 
 ### 2. Tail Call Optimization -- Still a Counter
 
-[optimizer.c:233](aether/compiler/backend/optimizer.c) increments `tail_calls_optimized++` but does not transform the code. Comment: *"In a real compiler, this would involve more complex transformations."*
+[optimizer.c:233](aether/compiler/codegen/optimizer.c) increments `tail_calls_optimized++` but does not transform the code. Comment: *"In a real compiler, this would involve more complex transformations."*
 
 ### 3. LSP Server -- Still a Skeleton (~15%)
 

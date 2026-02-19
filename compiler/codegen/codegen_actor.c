@@ -33,7 +33,10 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
     print_line(gen, "pthread_t thread;        // Warm: thread handle");
     print_line(gen, "int auto_process;        // Warm: auto-processing flag");
     print_line(gen, "int assigned_core;       // Cold: core assignment");
+    print_line(gen, "int migrate_to;          // Cold: affinity hint (-1 = none)");
+    print_line(gen, "int main_thread_only;    // Cold: scheduler skip flag");
     print_line(gen, "SPSCQueue spsc_queue;    // Lock-free same-core messaging");
+    print_line(gen, "ActorReplySlot* reply_slot; // Non-NULL only during ask/reply");
     print_line(gen, "");
 
     // State fields (user-defined)

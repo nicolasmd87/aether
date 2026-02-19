@@ -2,8 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdarg.h>
-#include "../compiler/frontend/lexer.h"
-#include "../compiler/frontend/parser.h"
+#include "../compiler/parser/lexer.h"
+#include "../compiler/parser/parser.h"
 #include "../compiler/ast.h"
 
 /* Extract a JSON string value for a given key from raw JSON content.
@@ -483,23 +483,36 @@ void lsp_free_message(JSONRPCMessage* msg) {
 }
 
 void lsp_send_response(LSPServer* server, const char* id, const char* result) {
-    char response[4096];
-    snprintf(response, sizeof(response),
+    const char* id_str = id ? id : "null";
+    // Compute required size, then allocate exactly that much
+    int needed = snprintf(NULL, 0,
+                          "{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":%s}",
+                          id_str, result);
+    if (needed < 0) return;
+    char* response = (char*)malloc((size_t)needed + 1);
+    if (!response) return;
+    snprintf(response, (size_t)needed + 1,
              "{\"jsonrpc\":\"2.0\",\"id\":%s,\"result\":%s}",
-             id ? id : "null", result);
-    
-    fprintf(server->output, "Content-Length: %zu\r\n\r\n%s", strlen(response), response);
+             id_str, result);
+    fprintf(server->output, "Content-Length: %zu\r\n\r\n%s", (size_t)needed, response);
     fflush(server->output);
+    free(response);
 }
 
 void lsp_send_notification(LSPServer* server, const char* method, const char* params) {
-    char notification[4096];
-    snprintf(notification, sizeof(notification),
+    // Compute required size, then allocate exactly that much
+    int needed = snprintf(NULL, 0,
+                          "{\"jsonrpc\":\"2.0\",\"method\":\"%s\",\"params\":%s}",
+                          method, params);
+    if (needed < 0) return;
+    char* notification = (char*)malloc((size_t)needed + 1);
+    if (!notification) return;
+    snprintf(notification, (size_t)needed + 1,
              "{\"jsonrpc\":\"2.0\",\"method\":\"%s\",\"params\":%s}",
              method, params);
-    
-    fprintf(server->output, "Content-Length: %zu\r\n\r\n%s", strlen(notification), notification);
+    fprintf(server->output, "Content-Length: %zu\r\n\r\n%s", (size_t)needed, notification);
     fflush(server->output);
+    free(notification);
 }
 
 void lsp_log(LSPServer* server, const char* format, ...) {

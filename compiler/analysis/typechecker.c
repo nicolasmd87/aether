@@ -3,8 +3,8 @@
 #include <string.h>
 #include "typechecker.h"
 #include "type_inference.h"
-#include "../frontend/lexer.h"
-#include "../frontend/parser.h"
+#include "../parser/lexer.h"
+#include "../parser/parser.h"
 
 #ifdef _WIN32
     #include <io.h>

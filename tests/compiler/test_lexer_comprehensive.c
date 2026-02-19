@@ -1,5 +1,5 @@
 #include "../runtime/test_harness.h"
-#include "../../compiler/frontend/lexer.h"
+#include "../../compiler/parser/lexer.h"
 #include <string.h>
 
 TEST(lexer_integer) {
