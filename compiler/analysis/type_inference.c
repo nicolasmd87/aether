@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdbool.h>
 #include <ctype.h>
 
 #define MAX_INFERENCE_ITERATIONS 100
@@ -360,11 +361,12 @@ void collect_expression_constraints(ASTNode* node, InferenceContext* ctx) {
     }
 }
 
-// Infer return type from return statements in function body
-Type* infer_return_type_from_body(ASTNode* body, SymbolTable* symbols) {
+// Infer return type from return statements in function body.
+// Called with is_top_level=true only from infer_function_return_types; the
+// recursive descent into control-flow children uses is_top_level=false.
+static Type* infer_return_type_impl(ASTNode* body, SymbolTable* symbols, bool is_top_level) {
     if (!body) return NULL;
 
-    // If this is a return statement, infer from the expression
     if (body->type == AST_RETURN_STATEMENT && body->child_count > 0) {
         ASTNode* return_expr = body->children[0];
         if (return_expr->node_type && return_expr->node_type->kind != TYPE_UNKNOWN) {
@@ -372,28 +374,42 @@ Type* infer_return_type_from_body(ASTNode* body, SymbolTable* symbols) {
         }
     }
 
-    // Arrow function: the body IS the return expression (not a block or return stmt)
-    // e.g. factorial(n) -> n * factorial(n-1)  =>  body is AST_BINARY_EXPRESSION etc.
-    if (body->type != AST_BLOCK && body->type != AST_RETURN_STATEMENT &&
-        body->type != AST_FUNCTION_DEFINITION && body->type != AST_IF_STATEMENT &&
-        body->type != AST_FOR_LOOP && body->type != AST_WHILE_LOOP) {
+    // Arrow function: the body IS the return expression (not a block).
+    // Only applies at the top level (direct child of the function node).
+    if (is_top_level &&
+        body->type != AST_BLOCK && body->type != AST_RETURN_STATEMENT) {
         if (body->node_type && body->node_type->kind != TYPE_UNKNOWN &&
             body->node_type->kind != TYPE_VOID) {
             return clone_type(body->node_type);
         }
     }
 
-    // Recursively search children for return statements
-    for (int i = 0; i < body->child_count; i++) {
-        if (!body->children[i]) continue;
-        Type* return_type = infer_return_type_from_body(body->children[i], symbols);
-        if (return_type) {
-            // Found a typed return statement
-            return return_type;
-        }
+    // Only descend into control-flow nodes that may contain return statements.
+    // This avoids mistaking a string literal inside print() for a return type.
+    switch (body->type) {
+        case AST_BLOCK:
+        case AST_IF_STATEMENT:
+        case AST_FOR_LOOP:
+        case AST_WHILE_LOOP:
+        case AST_SWITCH_STATEMENT:
+        case AST_MATCH_STATEMENT:
+        case AST_MATCH_ARM:
+        case AST_DEFER_STATEMENT:
+            for (int i = 0; i < body->child_count; i++) {
+                if (!body->children[i]) continue;
+                Type* rt = infer_return_type_impl(body->children[i], symbols, false);
+                if (rt) return rt;
+            }
+            break;
+        default:
+            break;
     }
 
     return NULL;
+}
+
+Type* infer_return_type_from_body(ASTNode* body, SymbolTable* symbols) {
+    return infer_return_type_impl(body, symbols, true);
 }
 
 // Collect constraints from function

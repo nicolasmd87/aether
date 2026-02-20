@@ -5,6 +5,47 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0]
+
+### Added
+
+- **`ae` CLI tool**: Single entry point for building, running, testing, and managing Aether projects (`ae run`, `ae build`, `ae test`, `ae init`)
+- **Version manager**: `ae version list/install/use` to install and switch between Aether releases
+- **Package manager (`apkg`)**: Project scaffolding with `aether.toml`, dependency declarations, and `ae add`
+- **`println` and string interpolation**: `println("Hello ${name}!")` with `${}` expressions in strings
+- **`defer` statement**: Deferred cleanup in LIFO order, matching Go-style resource management
+- **`switch` statement**: C-style switch with fall-through and break
+- **Match expressions**: Pattern matching with literal, wildcard, list, and head|tail patterns
+- **List patterns**: `[]`, `[x]`, `[h|t]`, `[a, b]` destructuring in match arms
+- **Standard library**: Collections (HashMap, Vector, Set, List), JSON parser, HTTP server, TCP/UDP networking, file I/O
+- **REPL**: Interactive read-eval-print loop (`ae repl`)
+- **LSP server**: Diagnostics from lexer and parser errors for editor integration
+- **VS Code / Cursor extension**: Syntax highlighting, file icons, and custom theme
+- **Cross-language benchmarks**: Actor-model benchmark suite comparing 11 languages with interactive visualization UI
+- **Docker support**: Development container with all toolchains pre-installed
+
+### Changed
+
+- **Toolchain resolver**: Dev builds (`./build/ae`) now take priority over `$AETHER_HOME`, preventing stale installed compilers from shadowing fresh builds
+- **Type inference**: Function return types are now inferred only from explicit `return` statements and arrow-body expressions; no longer incorrectly inferred from arguments to `print()` or other nested expressions
+- **Codegen split**: `codegen.c` refactored into `codegen_expr.c`, `codegen_stmt.c`, `codegen_actor.c`, `codegen_func.c` for maintainability
+- **Valgrind CI target**: Reports all Valgrind errors (uninitialised reads, not just leaks)
+- **Benchmark visualization**: All methodology descriptions and message counts are dynamic from JSON data (no hardcoded values)
+- **Latency metric**: Benchmarks report `ns/msg` (nanoseconds per message) instead of architecture-dependent `cycles/msg`
+
+### Fixed
+
+- Functions with no return statement now correctly generate `void` in C (previously defaulted to `const char*`)
+- Match expressions returning strings now generate correct return types
+- `ae version use` now actually switches the active compiler on POSIX (copies binaries to `~/.aether/bin/`)
+- `snprintf` truncation warnings in type checker and codegen path buffers
+- Valgrind uninitialized-memory reads in scheduler tests (replaced `malloc` with `calloc`, aligned test actor structs to `ActorBase` layout)
+- NUMA allocator mismatch: `aether_numa_alloc` fallback now uses `numa_alloc_local()` instead of `malloc()` when libnuma is available
+- JSON parser string buffer: replaced fixed 4KB stack buffer with dynamically growing heap allocation
+- HTTP server response buffer: replaced static 64KB buffer with heap-allocated, correctly sized buffer
+- HTTP server request reading: now reads body up to `Content-Length` with dynamic reallocation
+- `realloc` failure handling in AST, module registry, and type inference (prevents memory leaks on OOM)
+
 ## [0.5.0] 
 
 ### Added
