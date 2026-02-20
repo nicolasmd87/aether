@@ -1,269 +1,192 @@
 # Aether Memory Management
 
-Aether uses a lightweight, predictable memory management system designed for performance and safety without the overhead of traditional garbage collection.
+Aether's memory model is **deterministic scope-exit cleanup**, not garbage collection.
 
-## Philosophy
+The guiding principle:
+> **Allocations visible at call site. Cleanup automatic by default. Manual when needed.**
 
-Instead of heavy runtime GC (mark-sweep, generational), Aether combines:
+No hidden allocations. No GC pauses. No dangling pointers from forgotten `free()`.
 
-1. **Arena Allocators** - Fast bulk allocation/deallocation
-2. **Memory Pools** - Fixed-size object pools
-3. **Reference Counting** - For shared strings
-4. **Compile-time Analysis** - Future: lifetime tracking
+---
 
-## Arena Allocators
+## The Actual Model
 
-### What are Arenas?
+Aether uses two allocation mechanisms:
 
-Arenas (also called bump allocators or region allocators) allocate memory from a contiguous block by simply incrementing a pointer. All allocations are freed at once when the arena is destroyed.
+| Layer | What | When |
+|-------|------|------|
+| **Actor arena** | Actor state, message queues | Freed when actor is destroyed |
+| **Stdlib heap** | `map_new()`, `list_new()`, etc. | Freed at scope exit (auto) or explicitly (manual) |
 
-### Benefits
+There is **no garbage collector**. Docs that previously said "reference counting" or "GC" were incorrect.
 
-- **O(1) allocation** - Just bump a pointer
-- **O(1) deallocation** - Free entire arena at once
-- **Zero fragmentation** - Linear memory layout
-- **Cache-friendly** - Sequential access patterns
-- **No GC pauses** - Predictable performance
+---
 
-### Usage
+## Stdlib Convention
 
-```c
-#include "runtime/aether_arena.h"
+All stdlib types follow one consistent naming pattern:
 
-// Create arena with 1MB
-Arena* arena = arena_create(1024 * 1024);
-
-// Allocate objects
-int* numbers = arena_alloc(arena, 100 * sizeof(int));
-char* buffer = arena_alloc(arena, 1024);
-
-// Use objects...
-
-// Free everything at once
-arena_destroy(arena);
+```
+type_new()    → allocates on the heap, returns a pointer (must be freed)
+type_free(t)  → frees the allocation
 ```
 
-### Scoped Arenas
+| Module | Constructor | Destructor |
+|--------|-------------|------------|
+| `std.map` | `map_new()` | `map_free(m)` |
+| `std.list` | `list_new()` | `list_free(l)` |
+| `std.string` | `string_new()` | `string_free(s)` |
+| `std.fs` | `dir_list(path)` | `dir_list_free(l)` |
 
-```c
-Arena* arena = arena_create(4096);
+**Rule**: Any function whose name ends in `_new()` returns an allocated object. Its matching `_free()` is its destructor.
 
-ArenaScope scope = arena_begin(arena);
+---
 
-// Allocate temporary data
-void* temp = arena_alloc(arena, 1000);
-// Use temp...
+## Memory Modes
 
-// Restore arena to previous state
-arena_end(scope);
-```
+Aether gives you three levels of control.
 
-### Automatic Chain Growth
+### Auto Mode (default)
 
-If an allocation exceeds arena capacity, a new arena is automatically chained:
+The compiler automatically injects `*_free()` calls at scope exit for any local variable assigned from a `*_new()` call.
 
-```c
-Arena* arena = arena_create(1024);
+```aether
+import std.map
 
-// This works - creates new arena in chain
-void* large = arena_alloc(arena, 1024 * 1024);
-```
-
-## Memory Pools
-
-### What are Memory Pools?
-
-Pre-allocated pools for fixed-size objects with O(1) alloc/free via free lists.
-
-### Benefits
-
-- **O(1) allocation and deallocation**
-- **No fragmentation**
-- **Predictable performance**
-- **Ideal for common sizes**
-
-### Usage
-
-```c
-#include "runtime/aether_pool.h"
-
-// Create pool for 64-byte objects, 100 capacity
-MemoryPool* pool = pool_create(64, 100);
-
-// Allocate
-void* obj = pool_alloc(pool);
-
-// Free (returns to pool)
-pool_free(pool, obj);
-
-// Destroy pool
-pool_destroy(pool);
-```
-
-### Standard Pools
-
-Pre-configured pools for common sizes (8, 16, 32, 64, 128, 256 bytes):
-
-```c
-StandardPools* pools = standard_pools_create();
-
-// Automatically selects appropriate pool
-void* obj = standard_pools_alloc(pools, 50);  // Uses 64-byte pool
-
-standard_pools_free(pools, obj, 50);
-standard_pools_destroy(pools);
-```
-
-## Memory Tracking
-
-Enable memory statistics tracking:
-
-```c
-#define AETHER_MEMORY_TRACKING
-#include "runtime/aether_memory_stats.h"
-
-memory_stats_init();
-
-// ... allocations ...
-
-memory_stats_print();
-```
-
-Output:
-```
-========== Memory Statistics ==========
-Allocations:
-  Total:   1000
-  Frees:   1000
-  Current: 0
-  Peak:    50
-  Failures: 0
-
-Bytes:
-  Allocated: 102400 (0.10 MB)
-  Freed:     102400 (0.10 MB)
-  Current:   0 (0.00 MB)
-  Peak:      51200 (0.05 MB)
-
-Leak Detection:
-  No memory leaks detected
-=======================================
-```
-
-## Use Cases
-
-### Actor Messages
-
-Actors use arenas for message processing:
-
-```c
-// Per-actor mailbox arena
-Arena* mailbox_arena = arena_create(64 * 1024);
-
-// Process messages
-while (has_messages()) {
-    ArenaScope scope = arena_begin(mailbox_arena);
-    
-    Message* msg = receive_message();
-    process_message(msg, mailbox_arena);
-    
-    // Free all message allocations
-    arena_end(scope);
+main() {
+    m = map_new()          // allocated here
+    map_put(m, "k", "v")
+    print(map_get(m, "k"))
+    print("\n")
+    // map_free(m) ← injected automatically at end of scope
 }
 ```
 
-### Compilation
+You never write `map_free`. The compiler does it.
 
-Compiler uses arenas for temporary AST nodes:
+### Manual Mode
 
-```c
-Arena* parse_arena = arena_create(1024 * 1024);
+Disable auto-free for an entire project in `aether.toml`:
 
-// Parse creates many temporary nodes
-ASTNode* ast = parse(source, parse_arena);
+```toml
+[package]
+name = "myapp"
+version = "0.1.0"
 
-// Generate code
-generate_code(ast);
-
-// Free all parse data at once
-arena_destroy(parse_arena);
+[memory]
+mode = "manual"    # default is "auto"
 ```
 
-### String Operations
-
-Temporary string operations use arenas:
-
-```c
-Arena* temp_arena = arena_create(4096);
-
-char* result = arena_alloc(temp_arena, 1024);
-strcpy(result, str1);
-strcat(result, str2);
-
-// Use result...
-
-arena_destroy(temp_arena);
-```
-
-## Testing for Memory Leaks
-
-### Valgrind
+Or for a single compile/run:
 
 ```bash
-make test-valgrind
+ae run --no-auto-free file.ae
+ae build --no-auto-free file.ae
 ```
 
-Runs full test suite with Valgrind leak detection.
+In manual mode, you are fully responsible for every allocation:
 
-### AddressSanitizer
+```aether
+import std.map
 
-```bash
-make test-asan
+main() {
+    m = map_new()
+    map_put(m, "k", "v")
+    print(map_get(m, "k"))
+    print("\n")
+    map_free(m)    // required in manual mode
+}
 ```
 
-Detects memory leaks, use-after-free, buffer overflows.
+### Per-Variable: `@manual`
 
-### Memory Tracking
+Use `@manual` to skip auto-free for a **single variable** while keeping auto mode everywhere else.
 
-```bash
-make test-memory
+This is required when a value **escapes its declaration scope**:
+
+```aether
+import std.list
+
+// The list escapes via return — do NOT auto-free it here.
+// The caller receives ownership and is responsible for freeing.
+build_items(n) {
+    @manual result = list_new()
+    i = 0
+    while i < n {
+        list_add(result, i)
+        i = i + 1
+    }
+    return result    // ownership transferred to caller
+}
+
+main() {
+    items = build_items(10)   // auto mode: list_free(items) injected here
+    print(list_size(items))
+    print("\n")
+}
 ```
 
-Runs tests with built-in memory statistics tracking.
+**Rule of thumb**: Use `@manual` when you return a value, pass it to an actor via `!`, or store it somewhere that outlives the current block.
 
-## 64-bit Support
+---
 
-Aether fully supports 64-bit architectures:
+## Actor State
 
-- `int64_t` and `uint64_t` types
-- Large memory allocations (>4GB)
-- 64-bit pointers
-- Tested on x86_64 and ARM64
+Actor `state` variables initialized with `*_new()` **must always be `@manual`**:
 
-## Performance
+```aether
+import std.map
 
-Allocation characteristics:
+message Store { key: string, value: string }
+message Lookup { key: string }
 
-- **Arena allocation**: Constant-time bump-pointer allocation, faster than general-purpose allocators for batch workloads
-- **Pool allocation**: Constant-time free-list allocation, suited for fixed-size objects
-- **No GC pauses**: Deterministic deallocation timing
-- **Low overhead**: Minimal bookkeeping per allocation
+actor Cache {
+    @manual state data = map_new()   // lives for the actor's entire lifetime
 
-## Best Practices
+    receive {
+        Store(key, value) -> {
+            map_put(data, key, value)
+        }
+        Lookup(key) -> {
+            print(map_get(data, key))
+            print("\n")
+        }
+    }
+}
+```
 
-1. **Use arenas for temporary data** - Compilation, message processing, string operations
-2. **Use pools for fixed-size objects** - Common data structures
-3. **Profile memory usage** - Use memory tracking in development
-4. **Test for leaks** - Run Valgrind/ASAN in CI/CD
+Without `@manual`, auto mode would inject `map_free(data)` at the end of each message handler — destroying the map after the first message. `@manual` tells the compiler "I own this for the actor's lifetime."
 
-## CI/CD Integration
+The actor runtime frees the actor's arena (and its internal state) when the actor is shut down.
 
-Memory checks can be integrated into CI pipelines:
+---
 
-- **Valgrind** - Full leak detection
-- **AddressSanitizer** - Runtime error detection
-- **Memory profiling** - Peak usage tracking
-- **64-bit tests** - Architecture verification
+## Summary: When to Use What
 
-See `.github/workflows/memory-check.yml` for details.
+| Situation | Mode |
+|-----------|------|
+| Typical local variable — used and discarded | **auto** (default, write nothing) |
+| Value returned from function | `@manual` on the declaration |
+| Value passed to an actor via `!` | `@manual` |
+| Actor `state` initialized with `*_new()` | `@manual state ...` |
+| Whole project: you want full control | `[memory] mode = "manual"` in aether.toml |
+| Single file override | `ae run --no-auto-free file.ae` |
 
+---
+
+## Examples
+
+See the following runnable examples:
+
+- [examples/basics/memory_auto.ae](../examples/basics/memory_auto.ae) — auto mode, no explicit free
+- [examples/basics/memory_manual.ae](../examples/basics/memory_manual.ae) — manual mode with explicit free
+- [examples/basics/memory_escape.ae](../examples/basics/memory_escape.ae) — `@manual` for returned values
+- [examples/actors/memory_actor.ae](../examples/actors/memory_actor.ae) — `@manual state` in an actor
+
+---
+
+## Future Work (post v0.5.0)
+
+**Arena-per-actor for stdlib types**: Actor state variables using `map_new()` / `list_new()` would automatically allocate from the actor's arena. Actor death → total cleanup, zero explicit `*_free()` needed anywhere in actor code.
+
+Requires threading an allocator parameter through the stdlib C implementations. Tracked in `next_steps.md`.

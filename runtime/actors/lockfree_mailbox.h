@@ -28,14 +28,15 @@ typedef struct {
 
 // Initialize mailbox
 static inline void lockfree_mailbox_init(LockFreeMailbox* mbox) {
+    memset(mbox, 0, sizeof(*mbox));
     atomic_store_explicit(&mbox->head, 0, memory_order_relaxed);
     atomic_store_explicit(&mbox->tail, 0, memory_order_relaxed);
 }
 
 // Send message (producer side)
-static inline int __attribute__((hot)) lockfree_mailbox_send(
-    LockFreeMailbox* __restrict__ mbox, 
-    Message msg) 
+static inline int AETHER_HOT lockfree_mailbox_send(
+    LockFreeMailbox* AETHER_RESTRICT mbox,
+    Message msg)
 {
     int tail = atomic_load_explicit(&mbox->tail, memory_order_relaxed);
     int next_tail = (tail + 1) & LOCKFREE_MAILBOX_MASK;
@@ -45,7 +46,7 @@ static inline int __attribute__((hot)) lockfree_mailbox_send(
     
     // Check if full (need acquire to see consumer's head update)
     int head = atomic_load_explicit(&mbox->head, memory_order_acquire);
-    if (__builtin_expect(next_tail == head, 0)) {
+    if (unlikely(next_tail == head)) {
         return 0;  // Full
     }
     
@@ -58,9 +59,9 @@ static inline int __attribute__((hot)) lockfree_mailbox_send(
 }
 
 // Receive message (consumer side)
-static inline int __attribute__((hot)) lockfree_mailbox_receive(
-    LockFreeMailbox* __restrict__ mbox, 
-    Message* __restrict__ out_msg) 
+static inline int AETHER_HOT lockfree_mailbox_receive(
+    LockFreeMailbox* AETHER_RESTRICT mbox,
+    Message* AETHER_RESTRICT out_msg)
 {
     int head = atomic_load_explicit(&mbox->head, memory_order_relaxed);
     
@@ -68,7 +69,7 @@ static inline int __attribute__((hot)) lockfree_mailbox_receive(
     
     // Check if empty (need acquire to see producer's tail update)
     int tail = atomic_load_explicit(&mbox->tail, memory_order_acquire);
-    if (__builtin_expect(head == tail, 0)) {
+    if (unlikely(head == tail)) {
         return 0;  // Empty
     }
     
@@ -82,9 +83,9 @@ static inline int __attribute__((hot)) lockfree_mailbox_receive(
 }
 
 // Batch receive (consumer side)
-static inline int __attribute__((hot)) lockfree_mailbox_receive_batch(
-    LockFreeMailbox* __restrict__ mbox,
-    Message* __restrict__ out_msgs,
+static inline int AETHER_HOT lockfree_mailbox_receive_batch(
+    LockFreeMailbox* AETHER_RESTRICT mbox,
+    Message* AETHER_RESTRICT out_msgs,
     int max_count)
 {
     int head = atomic_load_explicit(&mbox->head, memory_order_relaxed);
@@ -109,9 +110,9 @@ static inline int __attribute__((hot)) lockfree_mailbox_receive_batch(
 }
 
 // Batch send (producer side)
-static inline int __attribute__((hot)) lockfree_mailbox_send_batch(
-    LockFreeMailbox* __restrict__ mbox,
-    const Message* __restrict__ msgs,
+static inline int AETHER_HOT lockfree_mailbox_send_batch(
+    LockFreeMailbox* AETHER_RESTRICT mbox,
+    const Message* AETHER_RESTRICT msgs,
     int count)
 {
     int tail = atomic_load_explicit(&mbox->tail, memory_order_relaxed);

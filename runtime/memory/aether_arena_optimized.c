@@ -1,4 +1,5 @@
 #include "aether_arena_optimized.h"
+#include "../utils/aether_compiler.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -9,7 +10,7 @@
 #define DEFAULT_BLOCK_SIZE_LARGE (2 * 1024 * 1024) // 2MB blocks for large
 
 static ArenaManager global_manager = {0};
-static __thread ThreadLocalArena* tl_arena = NULL;
+static AETHER_TLS ThreadLocalArena* tl_arena = NULL;
 
 // Create a new arena block
 static ArenaBlock* arena_block_create(size_t size) {

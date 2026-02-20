@@ -1,0 +1,86 @@
+// JSON Demo - Demonstrates JSON creation and parsing
+// Run with: ae run examples/stdlib/json-demo.ae
+//
+// Uses namespace-style calls: json.create_number(), json.type(), etc.
+
+import std.json
+
+main() {
+    print("=== Aether JSON Demo ===\n\n")
+
+    // JSON type constants (from JsonType enum)
+    JSON_NULL = 0
+    JSON_BOOL = 1
+    JSON_NUMBER = 2
+    JSON_STRING = 3
+    JSON_ARRAY = 4
+    JSON_OBJECT = 5
+
+    // Create JSON values
+    print("Creating JSON values:\n")
+
+    // Create a number
+    num = json.create_number(42.5)
+    print("  Created number: 42.5\n")
+    print("  Type: ")
+    print(json.type(num))
+    print(" (expected: 2 = JSON_NUMBER)\n")
+
+    // Get the number back
+    value = json.get_number(num)
+    print("  Retrieved value: ")
+    print(value)
+    print("\n\n")
+
+    // Create a boolean
+    bool_true = json.create_bool(1)
+    print("  Created boolean: true\n")
+    print("  Type: ")
+    print(json.type(bool_true))
+    print(" (expected: 1 = JSON_BOOL)\n")
+    print("  Value: ")
+    print(json.get_bool(bool_true))
+    print("\n\n")
+
+    // Create null
+    null_val = json.create_null()
+    print("  Created null value\n")
+    print("  Is null: ")
+    print(json.is_null(null_val))
+    print("\n\n")
+
+    // Create an array
+    print("Creating JSON array:\n")
+    arr = json.create_array()
+    print("  Created empty array\n")
+    print("  Initial size: ")
+    print(json.array_size(arr))
+    print("\n")
+
+    // Add elements to array
+    json.array_add(arr, json.create_number(1.0))
+    json.array_add(arr, json.create_number(2.0))
+    json.array_add(arr, json.create_number(3.0))
+    print("  Added 3 numbers to array\n")
+    print("  New size: ")
+    print(json.array_size(arr))
+    print("\n\n")
+
+    // Create an object
+    print("Creating JSON object:\n")
+    obj = json.create_object()
+    print("  Created empty object\n")
+    print("  Type: ")
+    print(json.type(obj))
+    print(" (expected: 5 = JSON_OBJECT)\n\n")
+
+    // Clean up
+    print("Cleaning up...\n")
+    json.free(num)
+    json.free(bool_true)
+    json.free(null_val)
+    json.free(arr)
+    json.free(obj)
+
+    print("\nJSON demo complete!\n")
+}

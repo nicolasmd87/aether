@@ -5,7 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-extern __thread int current_core_id;
+extern AETHER_TLS int current_core_id;
 
 void* aether_actor_thread(void* arg) {
     ActorBase* actor = (ActorBase*)arg;

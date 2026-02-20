@@ -1,6 +1,6 @@
 #include "../runtime/test_harness.h"
-#include "../../compiler/frontend/lexer.h"
-#include "../../compiler/frontend/tokens.h"
+#include "../../compiler/parser/lexer.h"
+#include "../../compiler/parser/tokens.h"
 #include <string.h>
 
 TEST_CATEGORY(lexer_basic_tokens, TEST_CATEGORY_COMPILER) {

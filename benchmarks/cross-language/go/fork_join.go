@@ -76,8 +76,8 @@ func main() {
 
 	elapsedSec := elapsed.Seconds()
 	throughput := float64(total) / elapsedSec / 1e6
-	cyclesPerMsg := elapsedSec * 3e9 / float64(total)
+	nsPerMsg := elapsedSec * 1e9 / float64(total)
 
-	fmt.Printf("Cycles/msg:     %.2f\n", cyclesPerMsg)
+	fmt.Printf("ns/msg:         %.2f\n", nsPerMsg)
 	fmt.Printf("Throughput:     %.2f M msg/sec\n", throughput)
 }

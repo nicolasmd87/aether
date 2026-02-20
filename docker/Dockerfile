@@ -13,7 +13,7 @@ FROM gcc:13-bookworm
 
 LABEL maintainer="Aether Development Team"
 LABEL description="Aether Programming Language Compiler and Runtime"
-LABEL version="0.4.0"
+LABEL version="0.5.0"
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \

@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aether Standard Library</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1>Aether</h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search functions..." onkeyup="search()">
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="net.html">net</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="fs.html">fs</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="hero">
+    <h1>Standard Library</h1>
+    <p>Built-in functions for strings, collections, networking, file I/O, and more.</p>
+  </div>
+  <div class="module-grid">
+    <a href="net.html" class="module-card">
+      <h3>net</h3>
+      <p>HTTP client, server, and networking</p>
+    </a>
+    <a href="io.html" class="module-card">
+      <h3>io</h3>
+      <p>Input/output and console</p>
+    </a>
+    <a href="math.html" class="module-card">
+      <h3>math</h3>
+      <p>Mathematical functions</p>
+    </a>
+    <a href="json.html" class="module-card">
+      <h3>json</h3>
+      <p>JSON parsing and serialization</p>
+    </a>
+    <a href="log.html" class="module-card">
+      <h3>log</h3>
+      <p>Logging and diagnostics</p>
+    </a>
+    <a href="string.html" class="module-card">
+      <h3>string</h3>
+      <p>String manipulation and formatting</p>
+    </a>
+    <a href="collections.html" class="module-card">
+      <h3>collections</h3>
+      <p>Lists, maps, sets, and data structures</p>
+    </a>
+    <a href="fs.html" class="module-card">
+      <h3>fs</h3>
+      <p>File system operations</p>
+    </a>
+  </div>
+  <div id="search-results" class="search-results hidden">
+    <h2>Search Results</h2>
+    <ul class="function-list" id="all-functions">
+      <li class="function-item" data-name="http_server_bind"><a href="net.html#http_server_bind"><span class="fn-name">http_server_bind</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_server_start"><a href="net.html#http_server_start"><span class="fn-name">http_server_start</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_server_stop"><a href="net.html#http_server_stop"><span class="fn-name">http_server_stop</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_server_free"><a href="net.html#http_server_free"><span class="fn-name">http_server_free</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_server_add_route"><a href="net.html#http_server_add_route"><span class="fn-name">http_server_add_route</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_server_get"><a href="net.html#http_server_get"><span class="fn-name">http_server_get</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_server_post"><a href="net.html#http_server_post"><span class="fn-name">http_server_post</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_server_put"><a href="net.html#http_server_put"><span class="fn-name">http_server_put</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_server_delete"><a href="net.html#http_server_delete"><span class="fn-name">http_server_delete</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_server_use_middleware"><a href="net.html#http_server_use_middleware"><span class="fn-name">http_server_use_middleware</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_get_header"><a href="net.html#http_get_header"><span class="fn-name">http_get_header</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_get_query_param"><a href="net.html#http_get_query_param"><span class="fn-name">http_get_query_param</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_get_path_param"><a href="net.html#http_get_path_param"><span class="fn-name">http_get_path_param</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_request_free"><a href="net.html#http_request_free"><span class="fn-name">http_request_free</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_response_set_status"><a href="net.html#http_response_set_status"><span class="fn-name">http_response_set_status</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_response_set_header"><a href="net.html#http_response_set_header"><span class="fn-name">http_response_set_header</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_response_set_body"><a href="net.html#http_response_set_body"><span class="fn-name">http_response_set_body</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_response_json"><a href="net.html#http_response_json"><span class="fn-name">http_response_json</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_response_serialize"><a href="net.html#http_response_serialize"><span class="fn-name">http_response_serialize</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_server_response_free"><a href="net.html#http_server_response_free"><span class="fn-name">http_server_response_free</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_route_matches"><a href="net.html#http_route_matches"><span class="fn-name">http_route_matches</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_status_text"><a href="net.html#http_status_text"><span class="fn-name">http_status_text</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_mime_type"><a href="net.html#http_mime_type"><span class="fn-name">http_mime_type</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_serve_file"><a href="net.html#http_serve_file"><span class="fn-name">http_serve_file</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_serve_static"><a href="net.html#http_serve_static"><span class="fn-name">http_serve_static</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_get"><a href="net.html#http_get"><span class="fn-name">http_get</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_post"><a href="net.html#http_post"><span class="fn-name">http_post</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_put"><a href="net.html#http_put"><span class="fn-name">http_put</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_delete"><a href="net.html#http_delete"><span class="fn-name">http_delete</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="http_response_free"><a href="net.html#http_response_free"><span class="fn-name">http_response_free</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="tcp_connect"><a href="net.html#tcp_connect"><span class="fn-name">tcp_connect</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="tcp_send"><a href="net.html#tcp_send"><span class="fn-name">tcp_send</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="tcp_receive"><a href="net.html#tcp_receive"><span class="fn-name">tcp_receive</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="tcp_close"><a href="net.html#tcp_close"><span class="fn-name">tcp_close</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="tcp_server_close"><a href="net.html#tcp_server_close"><span class="fn-name">tcp_server_close</span><span class="fn-module">net</span></a></li>
+      <li class="function-item" data-name="io_print"><a href="io.html#io_print"><span class="fn-name">io_print</span><span class="fn-module">io</span></a></li>
+      <li class="function-item" data-name="io_print_line"><a href="io.html#io_print_line"><span class="fn-name">io_print_line</span><span class="fn-module">io</span></a></li>
+      <li class="function-item" data-name="io_print_int"><a href="io.html#io_print_int"><span class="fn-name">io_print_int</span><span class="fn-module">io</span></a></li>
+      <li class="function-item" data-name="io_print_float"><a href="io.html#io_print_float"><span class="fn-name">io_print_float</span><span class="fn-module">io</span></a></li>
+      <li class="function-item" data-name="io_read_file"><a href="io.html#io_read_file"><span class="fn-name">io_read_file</span><span class="fn-module">io</span></a></li>
+      <li class="function-item" data-name="io_write_file"><a href="io.html#io_write_file"><span class="fn-name">io_write_file</span><span class="fn-module">io</span></a></li>
+      <li class="function-item" data-name="io_append_file"><a href="io.html#io_append_file"><span class="fn-name">io_append_file</span><span class="fn-module">io</span></a></li>
+      <li class="function-item" data-name="io_file_exists"><a href="io.html#io_file_exists"><span class="fn-name">io_file_exists</span><span class="fn-module">io</span></a></li>
+      <li class="function-item" data-name="io_delete_file"><a href="io.html#io_delete_file"><span class="fn-name">io_delete_file</span><span class="fn-module">io</span></a></li>
+      <li class="function-item" data-name="io_file_info"><a href="io.html#io_file_info"><span class="fn-name">io_file_info</span><span class="fn-module">io</span></a></li>
+      <li class="function-item" data-name="io_file_info_free"><a href="io.html#io_file_info_free"><span class="fn-name">io_file_info_free</span><span class="fn-module">io</span></a></li>
+      <li class="function-item" data-name="io_getenv"><a href="io.html#io_getenv"><span class="fn-name">io_getenv</span><span class="fn-module">io</span></a></li>
+      <li class="function-item" data-name="io_setenv"><a href="io.html#io_setenv"><span class="fn-name">io_setenv</span><span class="fn-module">io</span></a></li>
+      <li class="function-item" data-name="io_unsetenv"><a href="io.html#io_unsetenv"><span class="fn-name">io_unsetenv</span><span class="fn-module">io</span></a></li>
+      <li class="function-item" data-name="abs_int"><a href="math.html#abs_int"><span class="fn-name">abs_int</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="abs_float"><a href="math.html#abs_float"><span class="fn-name">abs_float</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="min_int"><a href="math.html#min_int"><span class="fn-name">min_int</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="max_int"><a href="math.html#max_int"><span class="fn-name">max_int</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="min_float"><a href="math.html#min_float"><span class="fn-name">min_float</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="max_float"><a href="math.html#max_float"><span class="fn-name">max_float</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="clamp_int"><a href="math.html#clamp_int"><span class="fn-name">clamp_int</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="clamp_float"><a href="math.html#clamp_float"><span class="fn-name">clamp_float</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="math_sqrt"><a href="math.html#math_sqrt"><span class="fn-name">math_sqrt</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="math_pow"><a href="math.html#math_pow"><span class="fn-name">math_pow</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="math_sin"><a href="math.html#math_sin"><span class="fn-name">math_sin</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="math_cos"><a href="math.html#math_cos"><span class="fn-name">math_cos</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="math_tan"><a href="math.html#math_tan"><span class="fn-name">math_tan</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="math_asin"><a href="math.html#math_asin"><span class="fn-name">math_asin</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="math_acos"><a href="math.html#math_acos"><span class="fn-name">math_acos</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="math_atan"><a href="math.html#math_atan"><span class="fn-name">math_atan</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="math_atan2"><a href="math.html#math_atan2"><span class="fn-name">math_atan2</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="math_floor"><a href="math.html#math_floor"><span class="fn-name">math_floor</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="math_ceil"><a href="math.html#math_ceil"><span class="fn-name">math_ceil</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="math_round"><a href="math.html#math_round"><span class="fn-name">math_round</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="math_log"><a href="math.html#math_log"><span class="fn-name">math_log</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="math_log10"><a href="math.html#math_log10"><span class="fn-name">math_log10</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="math_exp"><a href="math.html#math_exp"><span class="fn-name">math_exp</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="random_seed"><a href="math.html#random_seed"><span class="fn-name">random_seed</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="random_int"><a href="math.html#random_int"><span class="fn-name">random_int</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="random_float"><a href="math.html#random_float"><span class="fn-name">random_float</span><span class="fn-module">math</span></a></li>
+      <li class="function-item" data-name="json_parse"><a href="json.html#json_parse"><span class="fn-name">json_parse</span><span class="fn-module">json</span></a></li>
+      <li class="function-item" data-name="json_stringify"><a href="json.html#json_stringify"><span class="fn-name">json_stringify</span><span class="fn-module">json</span></a></li>
+      <li class="function-item" data-name="json_free"><a href="json.html#json_free"><span class="fn-name">json_free</span><span class="fn-module">json</span></a></li>
+      <li class="function-item" data-name="json_type"><a href="json.html#json_type"><span class="fn-name">json_type</span><span class="fn-module">json</span></a></li>
+      <li class="function-item" data-name="json_is_null"><a href="json.html#json_is_null"><span class="fn-name">json_is_null</span><span class="fn-module">json</span></a></li>
+      <li class="function-item" data-name="json_get_bool"><a href="json.html#json_get_bool"><span class="fn-name">json_get_bool</span><span class="fn-module">json</span></a></li>
+      <li class="function-item" data-name="json_get_number"><a href="json.html#json_get_number"><span class="fn-name">json_get_number</span><span class="fn-module">json</span></a></li>
+      <li class="function-item" data-name="json_get_int"><a href="json.html#json_get_int"><span class="fn-name">json_get_int</span><span class="fn-module">json</span></a></li>
+      <li class="function-item" data-name="json_get_string"><a href="json.html#json_get_string"><span class="fn-name">json_get_string</span><span class="fn-module">json</span></a></li>
+      <li class="function-item" data-name="json_object_get"><a href="json.html#json_object_get"><span class="fn-name">json_object_get</span><span class="fn-module">json</span></a></li>
+      <li class="function-item" data-name="json_object_set"><a href="json.html#json_object_set"><span class="fn-name">json_object_set</span><span class="fn-module">json</span></a></li>
+      <li class="function-item" data-name="json_object_has"><a href="json.html#json_object_has"><span class="fn-name">json_object_has</span><span class="fn-module">json</span></a></li>
+      <li class="function-item" data-name="json_array_get"><a href="json.html#json_array_get"><span class="fn-name">json_array_get</span><span class="fn-module">json</span></a></li>
+      <li class="function-item" data-name="json_array_add"><a href="json.html#json_array_add"><span class="fn-name">json_array_add</span><span class="fn-module">json</span></a></li>
+      <li class="function-item" data-name="json_array_size"><a href="json.html#json_array_size"><span class="fn-name">json_array_size</span><span class="fn-module">json</span></a></li>
+      <li class="function-item" data-name="json_create_null"><a href="json.html#json_create_null"><span class="fn-name">json_create_null</span><span class="fn-module">json</span></a></li>
+      <li class="function-item" data-name="json_create_bool"><a href="json.html#json_create_bool"><span class="fn-name">json_create_bool</span><span class="fn-module">json</span></a></li>
+      <li class="function-item" data-name="json_create_number"><a href="json.html#json_create_number"><span class="fn-name">json_create_number</span><span class="fn-module">json</span></a></li>
+      <li class="function-item" data-name="json_create_string"><a href="json.html#json_create_string"><span class="fn-name">json_create_string</span><span class="fn-module">json</span></a></li>
+      <li class="function-item" data-name="json_create_array"><a href="json.html#json_create_array"><span class="fn-name">json_create_array</span><span class="fn-module">json</span></a></li>
+      <li class="function-item" data-name="json_create_object"><a href="json.html#json_create_object"><span class="fn-name">json_create_object</span><span class="fn-module">json</span></a></li>
+      <li class="function-item" data-name="log_init"><a href="log.html#log_init"><span class="fn-name">log_init</span><span class="fn-module">log</span></a></li>
+      <li class="function-item" data-name="log_init_with_config"><a href="log.html#log_init_with_config"><span class="fn-name">log_init_with_config</span><span class="fn-module">log</span></a></li>
+      <li class="function-item" data-name="log_shutdown"><a href="log.html#log_shutdown"><span class="fn-name">log_shutdown</span><span class="fn-module">log</span></a></li>
+      <li class="function-item" data-name="log_write"><a href="log.html#log_write"><span class="fn-name">log_write</span><span class="fn-module">log</span></a></li>
+      <li class="function-item" data-name="log_set_level"><a href="log.html#log_set_level"><span class="fn-name">log_set_level</span><span class="fn-module">log</span></a></li>
+      <li class="function-item" data-name="log_set_colors"><a href="log.html#log_set_colors"><span class="fn-name">log_set_colors</span><span class="fn-module">log</span></a></li>
+      <li class="function-item" data-name="log_set_timestamps"><a href="log.html#log_set_timestamps"><span class="fn-name">log_set_timestamps</span><span class="fn-module">log</span></a></li>
+      <li class="function-item" data-name="log_set_format"><a href="log.html#log_set_format"><span class="fn-name">log_set_format</span><span class="fn-module">log</span></a></li>
+      <li class="function-item" data-name="log_print_stats"><a href="log.html#log_print_stats"><span class="fn-name">log_print_stats</span><span class="fn-module">log</span></a></li>
+      <li class="function-item" data-name="string_new"><a href="string.html#string_new"><span class="fn-name">string_new</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_from_cstr"><a href="string.html#string_from_cstr"><span class="fn-name">string_from_cstr</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_from_literal"><a href="string.html#string_from_literal"><span class="fn-name">string_from_literal</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_new_with_length"><a href="string.html#string_new_with_length"><span class="fn-name">string_new_with_length</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_empty"><a href="string.html#string_empty"><span class="fn-name">string_empty</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_retain"><a href="string.html#string_retain"><span class="fn-name">string_retain</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_release"><a href="string.html#string_release"><span class="fn-name">string_release</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_free"><a href="string.html#string_free"><span class="fn-name">string_free</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_concat"><a href="string.html#string_concat"><span class="fn-name">string_concat</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_length"><a href="string.html#string_length"><span class="fn-name">string_length</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_char_at"><a href="string.html#string_char_at"><span class="fn-name">string_char_at</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_equals"><a href="string.html#string_equals"><span class="fn-name">string_equals</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_compare"><a href="string.html#string_compare"><span class="fn-name">string_compare</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_starts_with"><a href="string.html#string_starts_with"><span class="fn-name">string_starts_with</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_ends_with"><a href="string.html#string_ends_with"><span class="fn-name">string_ends_with</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_contains"><a href="string.html#string_contains"><span class="fn-name">string_contains</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_index_of"><a href="string.html#string_index_of"><span class="fn-name">string_index_of</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_substring"><a href="string.html#string_substring"><span class="fn-name">string_substring</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_to_upper"><a href="string.html#string_to_upper"><span class="fn-name">string_to_upper</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_to_lower"><a href="string.html#string_to_lower"><span class="fn-name">string_to_lower</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_trim"><a href="string.html#string_trim"><span class="fn-name">string_trim</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_split"><a href="string.html#string_split"><span class="fn-name">string_split</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_array_free"><a href="string.html#string_array_free"><span class="fn-name">string_array_free</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_to_cstr"><a href="string.html#string_to_cstr"><span class="fn-name">string_to_cstr</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_from_int"><a href="string.html#string_from_int"><span class="fn-name">string_from_int</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_from_float"><a href="string.html#string_from_float"><span class="fn-name">string_from_float</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_to_int"><a href="string.html#string_to_int"><span class="fn-name">string_to_int</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_to_long"><a href="string.html#string_to_long"><span class="fn-name">string_to_long</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_to_float"><a href="string.html#string_to_float"><span class="fn-name">string_to_float</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_to_double"><a href="string.html#string_to_double"><span class="fn-name">string_to_double</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="string_format"><a href="string.html#string_format"><span class="fn-name">string_format</span><span class="fn-module">string</span></a></li>
+      <li class="function-item" data-name="list_add"><a href="collections.html#list_add"><span class="fn-name">list_add</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="list_get"><a href="collections.html#list_get"><span class="fn-name">list_get</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="list_set"><a href="collections.html#list_set"><span class="fn-name">list_set</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="list_size"><a href="collections.html#list_size"><span class="fn-name">list_size</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="list_remove"><a href="collections.html#list_remove"><span class="fn-name">list_remove</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="list_clear"><a href="collections.html#list_clear"><span class="fn-name">list_clear</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="list_free"><a href="collections.html#list_free"><span class="fn-name">list_free</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="map_new"><a href="collections.html#map_new"><span class="fn-name">map_new</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="map_put"><a href="collections.html#map_put"><span class="fn-name">map_put</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="map_get"><a href="collections.html#map_get"><span class="fn-name">map_get</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="map_has"><a href="collections.html#map_has"><span class="fn-name">map_has</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="map_remove"><a href="collections.html#map_remove"><span class="fn-name">map_remove</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="map_size"><a href="collections.html#map_size"><span class="fn-name">map_size</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="map_clear"><a href="collections.html#map_clear"><span class="fn-name">map_clear</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="map_free"><a href="collections.html#map_free"><span class="fn-name">map_free</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="map_keys"><a href="collections.html#map_keys"><span class="fn-name">map_keys</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="map_keys_free"><a href="collections.html#map_keys_free"><span class="fn-name">map_keys_free</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name=""><a href="collections.html#"><span class="fn-name"></span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="set_free"><a href="collections.html#set_free"><span class="fn-name">set_free</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="set_add"><a href="collections.html#set_add"><span class="fn-name">set_add</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="set_remove"><a href="collections.html#set_remove"><span class="fn-name">set_remove</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="set_contains"><a href="collections.html#set_contains"><span class="fn-name">set_contains</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="set_clear"><a href="collections.html#set_clear"><span class="fn-name">set_clear</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="set_size"><a href="collections.html#set_size"><span class="fn-name">set_size</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="set_is_empty"><a href="collections.html#set_is_empty"><span class="fn-name">set_is_empty</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="set_union"><a href="collections.html#set_union"><span class="fn-name">set_union</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="set_intersection"><a href="collections.html#set_intersection"><span class="fn-name">set_intersection</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="set_difference"><a href="collections.html#set_difference"><span class="fn-name">set_difference</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="set_is_subset"><a href="collections.html#set_is_subset"><span class="fn-name">set_is_subset</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="set_is_superset"><a href="collections.html#set_is_superset"><span class="fn-name">set_is_superset</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="set_iterator"><a href="collections.html#set_iterator"><span class="fn-name">set_iterator</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="set_iterator_next"><a href="collections.html#set_iterator_next"><span class="fn-name">set_iterator_next</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="set_create_string"><a href="collections.html#set_create_string"><span class="fn-name">set_create_string</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="set_create_int"><a href="collections.html#set_create_int"><span class="fn-name">set_create_int</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name=""><a href="collections.html#"><span class="fn-name"></span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="uint64_t"><a href="collections.html#uint64_t"><span class="fn-name">uint64_t</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="bool"><a href="collections.html#bool"><span class="fn-name">bool</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="void"><a href="collections.html#void"><span class="fn-name">void</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="void"><a href="collections.html#void"><span class="fn-name">void</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name=""><a href="collections.html#"><span class="fn-name"></span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name=""><a href="collections.html#"><span class="fn-name"></span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name=""><a href="collections.html#"><span class="fn-name"></span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="hashmap_free"><a href="collections.html#hashmap_free"><span class="fn-name">hashmap_free</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="hashmap_insert"><a href="collections.html#hashmap_insert"><span class="fn-name">hashmap_insert</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="hashmap_get"><a href="collections.html#hashmap_get"><span class="fn-name">hashmap_get</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="hashmap_remove"><a href="collections.html#hashmap_remove"><span class="fn-name">hashmap_remove</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="hashmap_contains"><a href="collections.html#hashmap_contains"><span class="fn-name">hashmap_contains</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="hashmap_clear"><a href="collections.html#hashmap_clear"><span class="fn-name">hashmap_clear</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="hashmap_size"><a href="collections.html#hashmap_size"><span class="fn-name">hashmap_size</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="hashmap_is_empty"><a href="collections.html#hashmap_is_empty"><span class="fn-name">hashmap_is_empty</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="hashmap_iterator"><a href="collections.html#hashmap_iterator"><span class="fn-name">hashmap_iterator</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="hashmap_iterator_next"><a href="collections.html#hashmap_iterator_next"><span class="fn-name">hashmap_iterator_next</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="hashmap_hash_string"><a href="collections.html#hashmap_hash_string"><span class="fn-name">hashmap_hash_string</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="hashmap_equals_string"><a href="collections.html#hashmap_equals_string"><span class="fn-name">hashmap_equals_string</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="hashmap_free_string"><a href="collections.html#hashmap_free_string"><span class="fn-name">hashmap_free_string</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="hashmap_clone_string"><a href="collections.html#hashmap_clone_string"><span class="fn-name">hashmap_clone_string</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="hashmap_hash_int"><a href="collections.html#hashmap_hash_int"><span class="fn-name">hashmap_hash_int</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="hashmap_equals_int"><a href="collections.html#hashmap_equals_int"><span class="fn-name">hashmap_equals_int</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="hashmap_free_int"><a href="collections.html#hashmap_free_int"><span class="fn-name">hashmap_free_int</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="hashmap_clone_int"><a href="collections.html#hashmap_clone_int"><span class="fn-name">hashmap_clone_int</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="hashmap_create_string_to_int"><a href="collections.html#hashmap_create_string_to_int"><span class="fn-name">hashmap_create_string_to_int</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="hashmap_create_string_to_string"><a href="collections.html#hashmap_create_string_to_string"><span class="fn-name">hashmap_create_string_to_string</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="hashmap_create_int_to_int"><a href="collections.html#hashmap_create_int_to_int"><span class="fn-name">hashmap_create_int_to_int</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="int"><a href="collections.html#int"><span class="fn-name">int</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="void"><a href="collections.html#void"><span class="fn-name">void</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name=""><a href="collections.html#"><span class="fn-name"></span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name=""><a href="collections.html#"><span class="fn-name"></span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="pqueue_free"><a href="collections.html#pqueue_free"><span class="fn-name">pqueue_free</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="pqueue_insert"><a href="collections.html#pqueue_insert"><span class="fn-name">pqueue_insert</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="pqueue_extract"><a href="collections.html#pqueue_extract"><span class="fn-name">pqueue_extract</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="pqueue_peek"><a href="collections.html#pqueue_peek"><span class="fn-name">pqueue_peek</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="pqueue_size"><a href="collections.html#pqueue_size"><span class="fn-name">pqueue_size</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="pqueue_is_empty"><a href="collections.html#pqueue_is_empty"><span class="fn-name">pqueue_is_empty</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="pqueue_clear"><a href="collections.html#pqueue_clear"><span class="fn-name">pqueue_clear</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="bool"><a href="collections.html#bool"><span class="fn-name">bool</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name=""><a href="collections.html#"><span class="fn-name"></span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="pqueue_compare_int_min"><a href="collections.html#pqueue_compare_int_min"><span class="fn-name">pqueue_compare_int_min</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="pqueue_compare_int_max"><a href="collections.html#pqueue_compare_int_max"><span class="fn-name">pqueue_compare_int_max</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="void"><a href="collections.html#void"><span class="fn-name">void</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name=""><a href="collections.html#"><span class="fn-name"></span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name=""><a href="collections.html#"><span class="fn-name"></span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="vector_free"><a href="collections.html#vector_free"><span class="fn-name">vector_free</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="vector_push"><a href="collections.html#vector_push"><span class="fn-name">vector_push</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="vector_pop"><a href="collections.html#vector_pop"><span class="fn-name">vector_pop</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="vector_get"><a href="collections.html#vector_get"><span class="fn-name">vector_get</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="vector_set"><a href="collections.html#vector_set"><span class="fn-name">vector_set</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="vector_insert"><a href="collections.html#vector_insert"><span class="fn-name">vector_insert</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="vector_remove"><a href="collections.html#vector_remove"><span class="fn-name">vector_remove</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="vector_clear"><a href="collections.html#vector_clear"><span class="fn-name">vector_clear</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="vector_size"><a href="collections.html#vector_size"><span class="fn-name">vector_size</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="vector_is_empty"><a href="collections.html#vector_is_empty"><span class="fn-name">vector_is_empty</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="vector_capacity"><a href="collections.html#vector_capacity"><span class="fn-name">vector_capacity</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="vector_reserve"><a href="collections.html#vector_reserve"><span class="fn-name">vector_reserve</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="vector_shrink_to_fit"><a href="collections.html#vector_shrink_to_fit"><span class="fn-name">vector_shrink_to_fit</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="vector_find"><a href="collections.html#vector_find"><span class="fn-name">vector_find</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="vector_contains"><a href="collections.html#vector_contains"><span class="fn-name">vector_contains</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="vector_reverse"><a href="collections.html#vector_reverse"><span class="fn-name">vector_reverse</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="vector_sort"><a href="collections.html#vector_sort"><span class="fn-name">vector_sort</span><span class="fn-module">collections</span></a></li>
+      <li class="function-item" data-name="file_read_all"><a href="fs.html#file_read_all"><span class="fn-name">file_read_all</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="file_write"><a href="fs.html#file_write"><span class="fn-name">file_write</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="file_close"><a href="fs.html#file_close"><span class="fn-name">file_close</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="file_exists"><a href="fs.html#file_exists"><span class="fn-name">file_exists</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="file_delete"><a href="fs.html#file_delete"><span class="fn-name">file_delete</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="file_size"><a href="fs.html#file_size"><span class="fn-name">file_size</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="dir_exists"><a href="fs.html#dir_exists"><span class="fn-name">dir_exists</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="dir_create"><a href="fs.html#dir_create"><span class="fn-name">dir_create</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="dir_delete"><a href="fs.html#dir_delete"><span class="fn-name">dir_delete</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="path_join"><a href="fs.html#path_join"><span class="fn-name">path_join</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="path_dirname"><a href="fs.html#path_dirname"><span class="fn-name">path_dirname</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="path_basename"><a href="fs.html#path_basename"><span class="fn-name">path_basename</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="path_extension"><a href="fs.html#path_extension"><span class="fn-name">path_extension</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="path_is_absolute"><a href="fs.html#path_is_absolute"><span class="fn-name">path_is_absolute</span><span class="fn-module">fs</span></a></li>
+      <li class="function-item" data-name="dir_list_free"><a href="fs.html#dir_list_free"><span class="fn-name">dir_list_free</span><span class="fn-module">fs</span></a></li>
+    </ul>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

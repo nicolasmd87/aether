@@ -40,9 +40,9 @@ defmodule ForkJoin do
     end
 
     throughput = total / elapsed_sec / 1_000_000
-    cycles_per_msg = elapsed_sec * 3.0e9 / total
+    ns_per_msg = elapsed_ns / total
 
-    IO.puts("Cycles/msg:     #{:io_lib.format("~.2f", [cycles_per_msg])}")
+    IO.puts("ns/msg:         #{:io_lib.format("~.2f", [ns_per_msg])}")
     IO.puts("Throughput:     #{:io_lib.format("~.2f", [throughput])} M msg/sec")
   end
 

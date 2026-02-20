@@ -33,11 +33,16 @@ FRAMEWORK_FILES=(
 
 # Compiler dependencies
 COMPILER_DEPS=(
-    "compiler/frontend/lexer.c"
-    "compiler/frontend/parser.c"
+    "compiler/parser/lexer.c"
+    "compiler/parser/parser.c"
     "compiler/analysis/typechecker.c"
     "compiler/analysis/type_inference.c"
-    "compiler/backend/codegen.c"
+    "compiler/codegen/codegen.c"
+    "compiler/codegen/codegen_expr.c"
+    "compiler/codegen/codegen_stmt.c"
+    "compiler/codegen/codegen_actor.c"
+    "compiler/codegen/codegen_func.c"
+    "compiler/codegen/optimizer.c"
     "compiler/ast.c"
     "compiler/aether_error.c"
     "compiler/aether_module.c"

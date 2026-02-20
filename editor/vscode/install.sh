@@ -16,27 +16,10 @@ install_extension() {
     
     cd "$SCRIPT_DIR"
     
-    if ! command -v npm &> /dev/null; then
-        echo "Warning: npm not found. Installing syntax highlighting only."
-        mkdir -p "$target_path"
-        cp "$SCRIPT_DIR/package.json" "$target_path/"
-        cp "$SCRIPT_DIR/aether.tmLanguage.json" "$target_path/"
-        cp "$SCRIPT_DIR/language-configuration.json" "$target_path/"
-    else
-        echo "Building extension with LSP support..."
-        npm install
-        npm run compile
-        
-        mkdir -p "$target_path"
-        cp "$SCRIPT_DIR/package.json" "$target_path/"
-        cp "$SCRIPT_DIR/aether.tmLanguage.json" "$target_path/"
-        cp "$SCRIPT_DIR/language-configuration.json" "$target_path/"
-        cp -r "$SCRIPT_DIR/out" "$target_path/"
-        if [ -d "$SCRIPT_DIR/node_modules/vscode-languageclient" ]; then
-            mkdir -p "$target_path/node_modules"
-            cp -r "$SCRIPT_DIR/node_modules/vscode-languageclient" "$target_path/node_modules/"
-        fi
-    fi
+    mkdir -p "$target_path"
+    cp "$SCRIPT_DIR/package.json" "$target_path/"
+    cp "$SCRIPT_DIR/aether.tmLanguage.json" "$target_path/"
+    cp "$SCRIPT_DIR/language-configuration.json" "$target_path/"
     
     echo "✓ Extension installed successfully!"
     echo "Please restart VS Code/Cursor for changes to take effect."

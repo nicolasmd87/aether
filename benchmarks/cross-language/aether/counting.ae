@@ -50,24 +50,20 @@ main() {
         print("\n");
     }
 
-    // Calculate metrics
+    // Calculate throughput: messages / elapsed_us = M msg/sec
     elapsed_ns = end_time - start_time;
-    elapsed_ms = elapsed_ns / 1000000;
+    elapsed_us = elapsed_ns / 1000;
 
-    // Cycles/msg (assuming 3GHz clock)
-    if (actual > 0) {
-        total_cycles = elapsed_ns * 3;
-        cycles_per_msg = total_cycles / actual;
-        print("Cycles/msg:     ");
-        print(cycles_per_msg);
+    if (elapsed_us > 0) {
+        ns_per_msg = elapsed_ns / actual;
+        print("ns/msg:         ");
+        print(ns_per_msg);
         print("\n");
-    }
 
-    // Throughput: messages / seconds = messages * 1000 / elapsed_ms
-    if (elapsed_ms > 0) {
-        msg_per_sec = (actual * 1000) / elapsed_ms;
-        throughput_m = msg_per_sec / 1000000;
-        throughput_frac = (msg_per_sec / 10000) - (throughput_m * 100);
+        throughput_m = actual / elapsed_us;
+        leftover = actual - (throughput_m * elapsed_us);
+        throughput_frac = (leftover * 100) / elapsed_us;
+
         print("Throughput:     ");
         print(throughput_m);
         print(".");

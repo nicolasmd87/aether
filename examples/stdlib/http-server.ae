@@ -1,0 +1,47 @@
+// HTTP Server - Working HTTP server example
+// Run with: ae run examples/stdlib/http-server.ae
+//
+// Creates a real HTTP server that binds to port 8080.
+// Test with: curl http://localhost:8080/
+
+import std.http
+
+main() {
+    print("=== Aether HTTP Server ===\n\n")
+
+    // Create server
+    print("Creating HTTP server...\n")
+    server = http.server_create(8080)
+
+    if (server != 0) {
+        print("Server created.\n")
+
+        // Bind to address
+        print("Binding to 127.0.0.1:8080...\n")
+        result = http.server_bind(server, "127.0.0.1", 8080)
+
+        if (result == 0) {
+            print("SUCCESS: Server bound to port 8080!\n")
+            print("The server is ready to accept connections.\n\n")
+
+            // In a real application, you would:
+            // 1. Register route handlers
+            // 2. Start the server (blocking)
+            //
+            // For this demo, we just show it binds successfully.
+
+            print("Stopping server...\n")
+            http.server_stop(server)
+        } else {
+            print("ERROR: Failed to bind (port may be in use)\n")
+        }
+
+        // Cleanup
+        http.server_free(server)
+        print("Server freed.\n")
+    } else {
+        print("ERROR: Failed to create server\n")
+    }
+
+    print("\nHTTP server example complete!\n")
+}

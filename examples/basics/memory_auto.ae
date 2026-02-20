@@ -1,0 +1,35 @@
+// Memory Auto Mode — Default behavior
+//
+// In auto mode (the default), the compiler automatically injects free calls
+// at scope exit for any stdlib allocation (list_new, map_new, etc.).
+// You never write *_free() manually — the compiler handles it.
+//
+// Run: ae run examples/basics/memory_auto.ae
+
+import std.list
+
+main() {
+    // Auto mode: compiler injects list_free(items) at end of scope
+    items = list_new();
+    list_add(items, "Aether");
+    list_add(items, "is");
+    list_add(items, "fast");
+
+    n = list_size(items);
+    print("Item count: ");
+    print(n);
+    print("\n");
+
+    // Second list is also auto-freed at scope exit
+    nums = list_new();
+    list_add(nums, "one");
+    list_add(nums, "two");
+    list_add(nums, "three");
+
+    m = list_size(nums);
+    print("Number count: ");
+    print(m);
+    print("\n");
+
+    // list_free(items) and list_free(nums) injected automatically here
+}

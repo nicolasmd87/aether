@@ -24,7 +24,7 @@ This document provides an overview of Aether's compiler pipeline, runtime design
 
 ## Compiler Pipeline
 
-### 1. Lexer (`compiler/lexer.c`)
+### 1. Lexer (`compiler/parser/lexer.c`)
 
 **Purpose:** Convert source text into tokens
 
@@ -49,10 +49,10 @@ IDENTIFIER("x") EQUALS NUMBER(42) PLUS IDENTIFIER("y")
 ```
 
 **Key Files:**
-- `compiler/lexer.c` - Implementation
-- `compiler/tokens.h` - Token type definitions
+- `compiler/parser/lexer.c` - Implementation
+- `compiler/parser/tokens.h` - Token type definitions
 
-### 2. Parser (`compiler/parser.c`)
+### 2. Parser (`compiler/parser/parser.c`)
 
 **Purpose:** Build Abstract Syntax Tree (AST) from tokens
 
@@ -72,10 +72,10 @@ IDENTIFIER("x") EQUALS NUMBER(42) PLUS IDENTIFIER("y")
 - **Error Recovery:** Attempts to continue parsing after errors
 
 **Key Files:**
-- `compiler/parser.c` - Implementation
+- `compiler/parser/parser.c` - Implementation
 - `compiler/ast.h` - AST node definitions
 
-### 3. Type Checker (`compiler/type_checker.c`)
+### 3. Type Checker (`compiler/analysis/typechecker.c`)
 
 **Purpose:** Infer and verify types for local variables
 
@@ -84,54 +84,42 @@ IDENTIFIER("x") EQUALS NUMBER(42) PLUS IDENTIFIER("y")
 **Output:** Type-annotated AST
 
 **Process:**
-1. Walk AST and assign type variables to expressions
-2. Generate type constraints
-3. Solve constraints using unification
-4. Report type errors if constraints cannot be satisfied
+1. Two-pass: first collects declarations, then checks all nodes
+2. Constraint-based type inference (Hindley-Milner style, max 100 iterations)
+3. Report type errors with location information
 
 **Key Algorithms:**
 - **Type Inference:** Automatic type deduction for local variables
-- **Unification:** Solving type equations
-- **Occurs Check:** Preventing infinite types
+- **Two-Pass Checking:** Declarations collected before use-sites are checked
 
 **Key Files:**
-- `compiler/type_checker.c` - Implementation
-- `compiler/types.h` - Type definitions
+- `compiler/analysis/typechecker.c` - Type checking (two-pass)
+- `compiler/analysis/type_inference.c` - Constraint-based inference
 
-### 4. Optimizer (`compiler/optimizer.c`)
+### 4. Optimizer (`compiler/codegen/optimizer.c`)
 
-**Purpose:** Apply optimizations to improve performance
+**Purpose:** Apply AST-level optimizations before code generation
 
 **Input:** Type-checked AST
 
 **Output:** Optimized AST
 
-**Optimizations:**
+**Optimizations (always on):**
 
-1. **Constant Folding**
-   ```aether
-   x = 2 + 3 * 4    // Becomes: x = 14
-   ```
+1. **Constant Folding** — `2 + 3 * 4` → `14` at compile time
+2. **Dead Code Elimination** — `if false { ... }` block removed
+3. **Tail Call Detection** — identifies recursive tail calls (detection only; loop transformation is pending)
 
-2. **Dead Code Elimination**
-   ```aether
-   if (false) {      // Entire block removed
-       expensive_call()
-   }
-   ```
+**Optimizations (applied during codegen, `compiler/codegen/codegen_stmt.c`):**
 
-3. **Tail Call Optimization**
-   ```aether
-   factorial(n, acc) {
-       if (n == 0) return acc
-       return factorial(n-1, n*acc)  // Optimized to loop
-   }
-   ```
+4. **Arithmetic Series Collapse** — `while i < n { acc += C; i++ }` → O(1) closed form
+5. **Linear Counter Sum** — `while i < n { total += i; i++ }` → triangular-number formula
 
 **Key Files:**
-- `compiler/optimizer.c` - Implementation
+- `compiler/codegen/optimizer.c` - AST-level passes
+- `compiler/codegen/codegen_stmt.c` - Series and linear loop collapse
 
-### 5. Code Generator (`compiler/codegen.c`)
+### 5. Code Generator (`compiler/codegen/codegen.c`)
 
 **Purpose:** Generate C code from AST
 
@@ -153,8 +141,12 @@ IDENTIFIER("x") EQUALS NUMBER(42) PLUS IDENTIFIER("y")
 - NUMA-aware actor allocation via `scheduler_spawn_pooled` with derived-struct size
 
 **Key Files:**
-- `compiler/codegen.c` - Implementation
-- `compiler/codegen.h` - API
+- `compiler/codegen/codegen.c` - Entry point and includes
+- `compiler/codegen/codegen_expr.c` - Expression generation
+- `compiler/codegen/codegen_stmt.c` - Statement generation and loop optimizations
+- `compiler/codegen/codegen_actor.c` - Actor dispatch tables
+- `compiler/codegen/codegen_func.c` - Function definitions
+- `compiler/codegen/codegen.h` - API
 
 ## Runtime Architecture
 

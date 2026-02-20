@@ -55,7 +55,8 @@ class CoordinatorActor(promise: Promise[Int], numWorkers: Int, messagesPerWorker
 
 object ForkJoinBenchmark extends App {
   val numWorkers = 8
-  val messagesPerWorker = 1000000
+  val totalMessages = sys.env.get("BENCHMARK_MESSAGES").flatMap(s => scala.util.Try(s.toInt).toOption).getOrElse(100000)
+  val messagesPerWorker = totalMessages / numWorkers
   val total = numWorkers * messagesPerWorker
 
   println("=== Scala Akka Fork-Join Throughput Benchmark ===")
@@ -77,9 +78,9 @@ object ForkJoinBenchmark extends App {
   }
 
   val throughput = total / elapsed / 1e6
-  val cyclesPerMsg = elapsed * 3e9 / total
+  val nsPerMsg = elapsed * 1e9 / total
 
-  println(f"Cycles/msg:     $cyclesPerMsg%.2f")
+  println(f"ns/msg:         $nsPerMsg%.2f")
   println(f"Throughput:     $throughput%.2f M msg/sec")
 
   Await.result(system.whenTerminated, 10.seconds)

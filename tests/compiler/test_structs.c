@@ -2,10 +2,10 @@
 #include <assert.h>
 #include <string.h>
 #include "../runtime/test_harness.h"
-#include "../../compiler/tokens.h"
-#include "../../compiler/frontend/lexer.h"
+#include "../../compiler/parser/tokens.h"
+#include "../../compiler/parser/lexer.h"
 #include "../../compiler/ast.h"
-#include "../../compiler/frontend/parser.h"
+#include "../../compiler/parser/parser.h"
 #include "../../compiler/analysis/typechecker.h"
 
 // Helper function to create parser with error suppression

@@ -394,7 +394,7 @@ body {
             <th>Language</th>
             <th>Runtime</th>
             <th>Throughput</th>
-            <th>Latency (cyc/msg)</th>
+            <th>Latency (ns/msg)</th>
             <th>Memory</th>
             <th>Notes</th>
           </tr>
@@ -411,11 +411,11 @@ body {
 
 <script>
 const PATTERNS = ['ping_pong', 'counting', 'thread_ring', 'fork_join'];
-const PATTERN_DESCRIPTIONS = {
-  ping_pong: 'Two actors exchange 10 million messages back and forth. Measures pure message passing overhead with minimal computation.',
-  counting: 'A single counter actor receives and counts messages sequentially. Tests single-actor throughput without contention.',
-  thread_ring: 'A token is passed through a ring of 100 actors. Measures scheduling overhead with many actors and sequential dependencies.',
-  fork_join: 'Messages are distributed round-robin to 8 worker actors. Tests parallel processing with work distribution.'
+const PATTERN_INSIGHTS = {
+  ping_pong: 'Measures pure message passing overhead with minimal computation.',
+  counting: 'Tests single-actor throughput without contention.',
+  thread_ring: 'Measures scheduling overhead with many actors and sequential dependencies.',
+  fork_join: 'Tests parallel processing with work distribution.'
 };
 
 let allResults = {};
@@ -527,14 +527,21 @@ function renderDashboard() {
       <div class="system-info-value">${currentPattern.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())}</div>
     </div>
     <div class="system-info-item">
+      <div class="system-info-label">Messages</div>
+      <div class="system-info-value">${data.messages ? Number(data.messages).toLocaleString() : 'N/A'}</div>
+    </div>
+    <div class="system-info-item">
       <div class="system-info-label">Languages</div>
       <div class="system-info-value">${languages.length}</div>
     </div>
   `;
 
-  // Methodology
+  // Methodology (built from JSON data, not hardcoded)
+  const msgCount = data.messages ? Number(data.messages).toLocaleString() : 'N/A';
+  const desc = data.description || 'No description available.';
+  const insight = PATTERN_INSIGHTS[currentPattern] || '';
   document.getElementById('methodology-text').textContent =
-    PATTERN_DESCRIPTIONS[currentPattern] || 'No description available.';
+    `${desc} (${msgCount} messages). ${insight}`;
 
   // Metrics
   const topLang = benchmarks[0];
@@ -552,8 +559,8 @@ function renderDashboard() {
     </div>
     <div class="metric-card">
       <div class="metric-label">Aether Latency</div>
-      <div class="metric-value">${(aetherData?.cycles_per_msg || 0).toFixed(0)}</div>
-      <div class="metric-detail">cycles/message</div>
+      <div class="metric-value">${(aetherData?.ns_per_msg || 0).toFixed(0)}</div>
+      <div class="metric-detail">ns/message</div>
     </div>
     <div class="metric-card">
       <div class="metric-label">Lowest Memory</div>
@@ -685,7 +692,7 @@ function renderTable(languages, benchmarks) {
     const rank = index + 1;
     const rankClass = rank === 1 ? 'rank-1' : rank === 2 ? 'rank-2' : rank === 3 ? 'rank-3' : 'rank-other';
     const throughput = ((bench.msg_per_sec || 0) / 1e6).toFixed(2);
-    const latency = (bench.cycles_per_msg || 0).toFixed(1);
+    const latency = (bench.ns_per_msg || 0).toFixed(1);
     const memory = bench.memory_mb > 0 ? `${bench.memory_mb.toFixed(2)} MB` : 'N/A';
     const isWinner = rank === 1;
 

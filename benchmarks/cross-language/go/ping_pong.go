@@ -68,8 +68,7 @@ func main() {
 	totalNs := float64(elapsed.Nanoseconds())
 	nsPerMsg := totalNs / float64(MESSAGES)
 	throughput := 1e9 / nsPerMsg
-	cyclesPerMsg := nsPerMsg * 3.0
 
-	fmt.Printf("Cycles/msg:     %.2f\n", cyclesPerMsg)
+	fmt.Printf("ns/msg:         %.2f\n", nsPerMsg)
 	fmt.Printf("Throughput:     %.2f M msg/sec\n", throughput/1e6)
 }

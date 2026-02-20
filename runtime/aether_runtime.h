@@ -1,7 +1,7 @@
 #ifndef AETHER_RUNTIME_H
 #define AETHER_RUNTIME_H
 
-#include <pthread.h>
+#include "utils/aether_thread.h"
 #include <stdint.h>
 
 // Error codes

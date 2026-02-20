@@ -99,9 +99,9 @@ pub fn main() !void {
     const end = getTimeNs();
     const elapsed_ns = end - start;
     const elapsed_sec = @as(f64, @floatFromInt(elapsed_ns)) / 1e9;
-    const cycles_per_msg = elapsed_sec * 3e9 / @as(f64, @floatFromInt(MESSAGES));
+    const ns_per_msg = @as(f64, @floatFromInt(elapsed_ns)) / @as(f64, @floatFromInt(MESSAGES));
     const throughput = @as(f64, @floatFromInt(MESSAGES)) / elapsed_sec / 1e6;
 
-    print("Cycles/msg:     {d:.2}\n", .{cycles_per_msg});
+    print("ns/msg:         {d:.2}\n", .{ns_per_msg});
     print("Throughput:     {d:.2} M msg/sec\n", .{throughput});
 }

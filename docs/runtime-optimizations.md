@@ -101,6 +101,28 @@ for (int i = 0; i < count; i++) {
 
 The batch dequeue reads `head` and `tail` once, copies all available messages, then advances `head` with a single `atomic_store`. This matches the existing batch enqueue pattern used by `queue_enqueue_batch`.
 
+### Batch Send for Fan-Out Patterns
+
+**Implementation:** `runtime/scheduler/multicore_scheduler.c`, `compiler/codegen/codegen.c`
+
+For main thread fan-out patterns (fork-join), batch send reduces atomic operations from N to num_cores. The compiler detects while loops containing sends in `main()` and wraps them with batch start/flush calls.
+
+```c
+// Generated code for fork-join pattern:
+scheduler_send_batch_start();
+while (i < total) {
+    worker ! Work { value: i };  // Buffered, not sent immediately
+    i = i + 1;
+}
+scheduler_send_batch_flush();  // Bulk send with one atomic per core
+```
+
+The flush sorts messages by target core using radix sort, then calls `queue_enqueue_batch` for each core. This reduces atomics from N (one per message) to num_cores (one per core).
+
+**Runtime auto-detection:** The batch send path automatically detects when Main Thread Actor Mode is active (single-actor programs) and uses the synchronous zero-copy path instead of batching. This ensures single-actor benchmarks like counting use the optimal path while multi-actor fan-out patterns like fork-join benefit from batch send. No manual configuration is required.
+
+**Pattern detection:** Only applied in `main()` function loops, not inside actor receive handlers. This preserves low-latency actor-to-actor messaging while optimizing main-to-actors fan-out.
+
 ### Adaptive Batch Size
 
 **Implementation:** `runtime/actors/aether_adaptive_batch.h`
@@ -187,13 +209,13 @@ Migration uses ascending core-id lock ordering to prevent deadlock between concu
 
 ### Inline Single-Int Messages
 
-**Implementation:** `compiler/backend/codegen.c`
+**Implementation:** `compiler/codegen/codegen.c`
 
 The code generator detects messages with exactly one integer field and emits an inline fast path. Instead of allocating a pool buffer and copying the message struct, the message ID is stored in `msg.type` and the field value in `msg.payload_int`. The receiver reconstructs the struct on the stack. This eliminates pool allocation and deallocation for the most common message pattern.
 
 ### Computed Goto Dispatch
 
-**Implementation:** `compiler/backend/codegen.c` (generated code)
+**Implementation:** `compiler/codegen/codegen.c` (generated code)
 
 The code generator emits a dispatch table with GCC computed goto (`goto *dispatch_table[msg_id]`) for message handler selection. This replaces indirect function calls or switch statements with direct label jumps. The message ID is read from `msg.type` rather than dereferencing the payload pointer.
 
@@ -368,27 +390,126 @@ The following optimizations are available but disabled by default. Enable them v
 - Auto-detected based on hardware capabilities
 - Trade-off: overhead exceeds benefit for small message batches
 
-## Benchmarking
+## Compiler Optimizations
 
-### Cross-Language Benchmarks
+The Aether compiler (`aetherc`) runs its own optimization passes on the AST before emitting C, separate from whatever the downstream C compiler does. All passes are safe-by-default: if a pattern is not recognized, the compiler falls through to normal code generation.
 
-```bash
-cd benchmarks/cross-language
-./run_benchmarks.sh
+### Hot/Cold Path Fixes (scheduler-level)
+
+**Problem A — `aether_main_thread_mode_active()` branch hint** (`runtime/config/aether_optimization_config.h`)
+
+The inline accessor previously carried `__builtin_expect(..., 0)`, marking the main-thread path as *unlikely*. For single-actor programs this path is always taken, so the hint put the fast code in the cold instruction-cache section. Removed the hint; the C compiler now places the branch neutrally.
+
+**Problem B — Dead branch in generated send code** (`compiler/codegen/codegen_expr.c`)
+
+Generated code for `actor ! Msg` from the main thread previously emitted:
+```c
+if (current_core_id >= 0 && current_core_id == actor->assigned_core) {
+    scheduler_send_local(...);   // never taken: main thread has core_id = -1
+} else {
+    scheduler_send_remote(...);  // always taken
+}
+```
+When the codegen is in a main-function context (`gen->current_actor == NULL`), it now emits the always-taken branch directly, eliminating the dead conditional.
+
+### Arithmetic Series Loop Collapse (`compiler/codegen/codegen_stmt.c`)
+
+Detects `while` loops of the form:
+
+```aether
+while counter < N {
+    acc1 = acc1 + C1   // loop-invariant addend
+    acc2 = acc2 + C2
+    counter = counter + step
+}
 ```
 
-### Test Suite
+And replaces them with O(1) closed-form assignments:
 
-```bash
-make test  # Runs all 153 tests
+```c
+if ((counter) < (N)) {
+    acc1 = acc1 + (C1) * ((N) - counter);
+    acc2 = acc2 + (C2) * ((N) - counter);
+    counter = (N);
+}
 ```
 
-### Methodology
+The guard prevents the collapsed form from running when the loop would not have executed at all (counter ≥ bound). The formula `(N - counter)` computes remaining trip count correctly for any initial counter value.
 
-- Compiler: GCC or Clang with `-O3 -march=native -flto`
-- Multiple runs to account for variance
-- Median values reported to avoid outlier bias
-- Cold-start and warm-cache scenarios measured separately
+**What this handles that the C compiler cannot:**
+
+| Loop type | Clang `-O2` | Aether collapse |
+|-----------|------------|-----------------|
+| `while i < 10 { total += 5; i++ }` | Collapses (constant bound, scalar evolution) | Collapses |
+| `while i < n { total += 5; i++ }` | Cannot collapse (variable bound) | **Collapses** |
+| Multi-accumulator `while i < n { a += 3; b += 7; i++ }` | Cannot collapse | **Collapses** |
+
+For constant-bound loops the Aether collapse is redundant with clang's scalar evolution pass, so both emit equivalent O(1) code. The unique value is for *variable-bound* loops, which clang cannot analyze without the semantics that Aether's type system provides (no aliasing, no pointers, no side effects in the body).
+
+**Detection requirements (all must hold):**
+1. Condition is `var < bound` or `var <= bound`
+2. Every body statement is `target = target + expr` (no other forms)
+3. One statement increments the counter variable by a positive literal step
+4. All addend expressions are loop-invariant (no reference to counter or other modified variables)
+5. Bound expression is not modified by any loop body statement
+6. No function calls or actor sends in the loop body (sends get batch-send treatment instead)
+
+**Pure counter elimination** is a subcase handled automatically (zero accumulators):
+
+```aether
+i = 0
+while i < n { i = i + 1 }   // n can be a runtime variable
+```
+→ `if ((i) < (n)) { i = (n); }` — clang can collapse only when `n` is a compile-time constant.
+
+**Reported in optimization stats:**
+```
+Optimization Statistics:
+  Series loops collapsed: 3
+```
+
+---
+
+### Linear Counter Sum (`compiler/codegen/codegen_stmt.c`)
+
+Detects loops where an accumulator adds the **counter variable itself** (or a scaled version of it):
+
+```aether
+j = 0
+total = 0
+while j < N {
+    total = total + j     // addend IS the induction variable
+    j = j + 1
+}
+```
+
+Replaced with the **triangular-number closed form**:
+
+```c
+if ((j) < (N)) {
+    total = total + ((N) * ((N) - 1) / 2 - j * (j - 1) / 2);
+    j = (N);
+}
+```
+
+This is the sum Σ(i = j₀ to N−1) i = N(N−1)/2 − j₀(j₀−1)/2.
+
+Also handles a scaled counter: `total = total + j * 3` → scale factor applied to the formula.
+
+**Why clang cannot do this:** LLVM's Scalar Evolution (SCEV) identifies induction variables but does not synthesize the triangular-number closed form in the code generator. Polly (an optional LLVM extension, rarely enabled) can do affine loop transformations but is not part of the standard `-O2` pipeline.
+
+| Loop type | Clang `-O2` | Aether collapse |
+|-----------|------------|-----------------|
+| `while j < n { total += 5; j++ }` | Cannot collapse (variable bound) | Series collapse |
+| `while j < n { total += j; j++ }` | Cannot collapse (addend = counter) | **Linear collapse** |
+| `while j < n { total += j * 3; j++ }` | Cannot collapse | **Linear collapse (scaled)** |
+| Mixed: `while j < n { a += 5; b += j; j++ }` | Cannot collapse | **Both in one pass** |
+
+**Reported in optimization stats:**
+```
+Optimization Statistics:
+  Linear loops collapsed: 3
+```
 
 ## References
 

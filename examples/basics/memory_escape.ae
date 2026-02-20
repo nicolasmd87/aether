@@ -1,0 +1,44 @@
+// Memory Escape — @manual annotation
+//
+// Use @manual when a value must OUTLIVE its declaration scope:
+//   - Returned from a function
+//   - Passed as actor state (owned by the actor for its lifetime)
+//   - Stored in a structure that outlives the current block
+//
+// Without @manual, auto mode would inject a free at the end of build_list(),
+// causing a use-after-free in the caller.
+//
+// Note: auto-free only fires for direct *_new() calls, not for function
+// return values. So in main(), 'items = build_list(n)' does NOT get
+// auto-freed. The caller must free it explicitly.
+//
+// Run: ae run examples/basics/memory_escape.ae
+
+import std.list
+
+// build_list returns an allocated list — the CALLER owns it.
+// @manual tells the compiler: do not auto-free 'result' here.
+// : ptr declares the return type (pointer to the allocated list).
+build_list(n) : ptr {
+    @manual result = list_new();
+    i = 0;
+    while i < n {
+        list_add(result, i);
+        i = i + 1;
+    }
+    return result;
+}
+
+main() {
+    // 'items' comes from a user function, not directly from list_new() —
+    // auto-free does NOT fire here. Caller is responsible for freeing.
+    items = build_list(5);
+
+    size = list_size(items);
+    print("List has ");
+    print(size);
+    print(" items\n");
+
+    // Explicit free: required because items escapes build_list
+    list_free(items);
+}

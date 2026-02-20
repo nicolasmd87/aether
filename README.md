@@ -1,6 +1,7 @@
 # Aether Programming Language
 
-[![Build Status](https://img.shields.io/badge/build-passing-brightgreen)]()
+[![CI](https://github.com/nicolasmd87/aether/actions/workflows/ci.yml/badge.svg)](https://github.com/nicolasmd87/aether/actions/workflows/ci.yml)
+[![Windows](https://github.com/nicolasmd87/aether/actions/workflows/windows.yml/badge.svg)](https://github.com/nicolasmd87/aether/actions/workflows/windows.yml)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 
@@ -21,8 +22,8 @@ Aether is a compiled language that brings actor-based concurrency to systems pro
 The Aether runtime implements a native actor system with optimized message passing:
 
 ### Concurrency Model
-- **Multi-core scheduler** with per-core actor queues
-- **Work-stealing** for dynamic load balancing
+- **Multi-core partitioned scheduler** with per-core actor queues
+- **Work-stealing fallback** for idle core balancing (primary strategy is partitioned assignment)
 - **Lock-free SPSC queues** for same-core messaging
 - **Cross-core messaging** with lock-free mailboxes
 
@@ -30,7 +31,7 @@ The Aether runtime implements a native actor system with optimized message passi
 - **Arena allocators** for actor lifetimes
 - **Memory pools** with thread-local allocation
 - **Actor pooling** reducing allocation overhead
-- **Zero-copy message passing** for large messages
+- **Zero-copy message delivery** in single-actor main-thread mode (caller stack passed directly)
 
 ### Message Optimization
 - **Sender-side batching** for reduced overhead
@@ -55,19 +56,32 @@ See [benchmarks/cross-language/](benchmarks/cross-language/) for methodology and
 
 ### Install
 
+**Linux / macOS — one-line install:**
+
 ```bash
 git clone https://github.com/nicolasmd87/aether.git
 cd aether
 ./install.sh
 ```
 
-This builds Aether and installs it to `~/.aether`. After restarting your terminal (or running `source ~/.zshrc`), the `ae` command is available system-wide.
+Installs to `~/.aether` and adds `ae` to your PATH. Restart your terminal or run `source ~/.zshrc` (or `~/.bash_profile`).
 
-To install to a custom location: `./install.sh /usr/local` (requires sudo).
+**Windows — download and run:**
 
-**Prerequisites:** GCC or Clang, Make, Git. The installer checks for these and tells you what's missing.
+1. Download `aether-*-windows-x86_64.zip` from [Releases](https://github.com/nicolasmd87/aether/releases)
+2. Extract to any folder (e.g. `C:\aether`)
+3. Add `C:\aether\bin` to your PATH
+4. Open any terminal (PowerShell or CMD) and run `ae run hello.ae`
 
-**Windows:** Use `mingw32-make ae` instead (see [Getting Started](docs/getting-started.md) for Windows setup).
+GCC is downloaded automatically the first time you run a program — no MSYS2 or manual toolchain setup required.
+
+**All platforms — manage versions with `ae version`:**
+
+```bash
+ae version list              # see all available releases
+ae version install v0.6.0    # download and install a specific version
+ae version use v0.6.0        # switch to that version
+```
 
 ### Your First Program
 
@@ -120,38 +134,43 @@ ae build [file.ae]       # Compile to executable
 ae test [file|dir]       # Discover and run tests
 ae add <package>         # Add a dependency
 ae repl                  # Start interactive REPL
-ae version               # Show version
+ae version               # Show current version
+ae version list          # List all available releases
+ae version install <v>   # Install a specific version
+ae version use <v>       # Switch to an installed version
 ae help                  # Show all commands
 ```
 
-In a project directory (with `aether.toml`), `ae run` and `ae build` work without arguments.
+In a project directory (with `aether.toml`), `ae run` and `ae build` compile `src/main.ae` as the program entry point. You can also pass `.` as the directory: `ae run .` or `ae build .`.
 
 **Using Make (alternative):**
 
 ```bash
 make compiler                    # Build compiler only
 make ae                          # Build ae CLI tool
-make test                        # Run C test suite (153 tests)
+make test                        # Run runtime C test suite (162 tests)
+make test-ae                     # Run .ae source tests (24 tests)
+make test-all                    # Run all tests
 make examples                    # Build all examples
 make -j8                         # Parallel build
 make help                        # Show all targets
 ```
 
-**Windows:** Use `mingw32-make` instead of `make` and `.\\build\\ae.exe` instead of `./build/ae`.
+**Windows:** Use the [release binary](https://github.com/nicolasmd87/aether/releases) — no MSYS2 needed. To build from source, use MSYS2 MinGW 64-bit shell with `make ae`.
 
 ## Project Structure
 
 ```
 aether/
 ├── compiler/           # Aether compiler (lexer, parser, codegen)
-│   ├── frontend/      # Lexer, parser, tokens
+│   ├── parser/        # Lexer, parser, tokens
 │   ├── analysis/      # Type checker, type inference
-│   ├── backend/       # C code generation, optimizer
+│   ├── codegen/       # C code generation, optimizer
 │   └── aetherc.c      # Compiler entry point
 ├── runtime/           # Runtime system
 │   ├── actors/        # Actor implementation and lock-free mailboxes
 │   ├── memory/        # Arena allocators, memory pools, batch allocation
-│   ├── scheduler/     # Multi-core work-stealing scheduler
+│   ├── scheduler/     # Multi-core partitioned scheduler with work-stealing fallback
 │   └── utils/         # CPU detection, SIMD, tracing, profiling
 ├── std/               # Standard library
 │   ├── collections/   # HashMap, Vector, Set, List
@@ -191,9 +210,7 @@ actor Counter {
             count = count - 1
         }
         GetCount() -> {
-            print("Current count: ")
-            print(count)
-            print("\n")
+            println("Current count: ${count}")
         }
         Reset() -> {
             count = 0
@@ -274,7 +291,7 @@ The runtime employs a tiered optimization strategy:
 - [Language Reference](docs/language-reference.md) - Complete language specification
 - [C Interoperability](docs/c-interop.md) - Using C libraries and the `extern` keyword
 - [Architecture Overview](docs/architecture.md) - Runtime and compiler design
-- [Memory Management](docs/memory-management.md) - Arena GC and pooling strategies
+- [Memory Management](docs/memory-management.md) - Arena allocators and pooling strategies
 - [Runtime Optimizations](docs/runtime-optimizations.md) - Performance techniques
 - [Cross-Language Benchmarks](benchmarks/cross-language/README.md) - Comparative performance analysis
 - [Docker Setup](docker/README.md) - Container development environment
@@ -284,14 +301,16 @@ The runtime employs a tiered optimization strategy:
 ### Running Tests
 
 ```bash
-# Runtime test suite (153 tests)
+# Runtime C test suite
 make test
 
-# Aether syntax and integration tests
-./build/ae test tests/syntax/
-./build/ae test tests/integration/
+# Aether source tests
+make test-ae
 
-# Build all examples (24 programs)
+# All tests
+make test-all
+
+# Build all examples
 make examples
 ```
 
@@ -315,11 +334,17 @@ Aether is under active development. The compiler, runtime, and standard library 
 
 **What works today:**
 - Full compiler pipeline (lexer, parser, type checker, code generator)
-- Multi-core actor runtime with work-stealing scheduler
+- Multi-core actor runtime with partitioned scheduler and work-stealing fallback
 - Lock-free message passing with adaptive optimizations
 - Standard library (collections, networking, JSON, file I/O)
 - IDE support (VS Code, Cursor) with syntax highlighting
 - Cross-platform (macOS, Linux, Windows)
+
+**Known Limitations:**
+- HTTP server is single-threaded (one connection at a time)
+- No generics or parameterized types
+- Module system is nascent (imports resolve to C includes; no versioned packages yet)
+- Error messages are basic (line/column only, no suggestions)
 
 **Roadmap:**
 - Distribution (multi-node actor systems)

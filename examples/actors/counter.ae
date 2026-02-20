@@ -9,14 +9,10 @@ actor Counter {
     receive {
         Increment(amount) -> {
             count = count + amount;
-            print("Count is now ");
-            print(count);
-            print("\n");
+            println("Count is now ${count}");
         }
         GetValue() -> {
-            print("Current value: ");
-            print(count);
-            print("\n");
+            println("Current value: ${count}");
         }
     }
 }
@@ -30,8 +26,4 @@ main() {
 
     // Wait for all messages to be processed
     wait_for_idle();
-
-    print("Final count: ");
-    print(c.count);
-    print("\n");
 }

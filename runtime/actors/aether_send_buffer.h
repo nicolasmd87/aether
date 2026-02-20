@@ -2,7 +2,7 @@
 #define AETHER_SEND_BUFFER_H
 
 #include "actor_state_machine.h"
-#include <pthread.h>
+#include "../utils/aether_thread.h"
 
 // Forward declarations to avoid circular dependencies
 struct ActorBase;
@@ -30,7 +30,7 @@ typedef struct {
 } SendBuffer;
 
 // Thread-local send buffer instance
-extern __thread SendBuffer g_send_buffer;
+extern AETHER_TLS SendBuffer g_send_buffer;
 
 // Initialize send buffer for current thread
 static inline void send_buffer_init(int core_id) {

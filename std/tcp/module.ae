@@ -1,0 +1,16 @@
+// std.tcp - TCP Socket Operations (alias for std.net)
+//
+// This is a convenience module that re-exports TCP functions from std.net.
+// You can use either:
+//   import std.tcp   (this module)
+//   import std.net   (consolidated networking module)
+//
+// The implementations are in std/net/aether_net.c which is compiled into libaether.a
+
+extern tcp_connect(host: ptr, port: int) -> ptr
+extern tcp_send(sock: ptr, data: ptr) -> int
+extern tcp_receive(sock: ptr, max_bytes: int) -> ptr
+extern tcp_close(sock: ptr) -> int
+extern tcp_listen(port: int) -> ptr
+extern tcp_accept(server: ptr) -> ptr
+extern tcp_server_close(server: ptr) -> int

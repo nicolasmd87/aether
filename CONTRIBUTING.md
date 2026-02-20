@@ -219,7 +219,7 @@ Brief description of changes
 
 ### Review Process
 
-1. Automated CI checks must pass (all platforms, memory safety, benchmarks)
+1. Automated CI checks must pass (Linux/macOS, memory safety, benchmarks)
 2. Code review by maintainer
 3. Address feedback
 4. Merge when approved

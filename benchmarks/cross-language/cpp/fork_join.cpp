@@ -1,5 +1,6 @@
 // C++ Fork-Join Benchmark (Savina-style)
 #include <iostream>
+#include <iomanip>
 #include <thread>
 #include <mutex>
 #include <condition_variable>
@@ -96,10 +97,10 @@ int main() {
     }
 
     double throughput = total / elapsed / 1e6;
-    double cycles_per_msg = elapsed * 3e9 / total;
+    double ns_per_msg = elapsed * 1e9 / total;
 
-    std::cout << "Cycles/msg:     " << std::fixed << cycles_per_msg << std::endl;
-    std::cout << "Throughput:     " << throughput << " M msg/sec" << std::endl;
+    std::cout << "ns/msg:         " << std::fixed << std::setprecision(2) << ns_per_msg << std::endl;
+    std::cout << "Throughput:     " << std::setprecision(2) << throughput << " M msg/sec" << std::endl;
 
     return 0;
 }

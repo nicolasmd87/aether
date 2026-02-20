@@ -40,8 +40,10 @@ void add_constraint(InferenceContext* ctx, ASTNode* node, Type* type, const char
     // Grow array if needed
     if (ctx->constraint_count >= ctx->constraint_capacity) {
         int new_capacity = ctx->constraint_capacity == 0 ? 16 : ctx->constraint_capacity * 2;
-        ctx->constraints = (TypeConstraint*)realloc(ctx->constraints, 
+        TypeConstraint* new_constraints = (TypeConstraint*)realloc(ctx->constraints, 
                                                      new_capacity * sizeof(TypeConstraint));
+        if (!new_constraints) return;
+        ctx->constraints = new_constraints;
         ctx->constraint_capacity = new_capacity;
     }
     
@@ -361,7 +363,7 @@ void collect_expression_constraints(ASTNode* node, InferenceContext* ctx) {
 // Infer return type from return statements in function body
 Type* infer_return_type_from_body(ASTNode* body, SymbolTable* symbols) {
     if (!body) return NULL;
-    
+
     // If this is a return statement, infer from the expression
     if (body->type == AST_RETURN_STATEMENT && body->child_count > 0) {
         ASTNode* return_expr = body->children[0];
@@ -369,7 +371,18 @@ Type* infer_return_type_from_body(ASTNode* body, SymbolTable* symbols) {
             return clone_type(return_expr->node_type);
         }
     }
-    
+
+    // Arrow function: the body IS the return expression (not a block or return stmt)
+    // e.g. factorial(n) -> n * factorial(n-1)  =>  body is AST_BINARY_EXPRESSION etc.
+    if (body->type != AST_BLOCK && body->type != AST_RETURN_STATEMENT &&
+        body->type != AST_FUNCTION_DEFINITION && body->type != AST_IF_STATEMENT &&
+        body->type != AST_FOR_LOOP && body->type != AST_WHILE_LOOP) {
+        if (body->node_type && body->node_type->kind != TYPE_UNKNOWN &&
+            body->node_type->kind != TYPE_VOID) {
+            return clone_type(body->node_type);
+        }
+    }
+
     // Recursively search children for return statements
     for (int i = 0; i < body->child_count; i++) {
         if (!body->children[i]) continue;
@@ -379,7 +392,7 @@ Type* infer_return_type_from_body(ASTNode* body, SymbolTable* symbols) {
             return return_type;
         }
     }
-    
+
     return NULL;
 }
 
@@ -391,13 +404,16 @@ void collect_function_constraints(ASTNode* node, InferenceContext* ctx) {
     int body_index = node->child_count - 1;
     for (int i = 0; i < body_index; i++) {
         ASTNode* param = node->children[i];
-        if (param && param->type == AST_VARIABLE_DECLARATION && param->value && param->node_type) {
+        if (param && param->value && param->node_type &&
+            (param->type == AST_VARIABLE_DECLARATION || param->type == AST_PATTERN_VARIABLE)) {
             // Check if parameter already exists in symbol table
             Symbol* existing = lookup_symbol(ctx->symbols, param->value);
             if (existing) {
-                // Update existing symbol's type
-                if (existing->type) free_type(existing->type);
-                existing->type = clone_type(param->node_type);
+                // Update existing symbol's type if we now have a more specific type
+                if (param->node_type->kind != TYPE_UNKNOWN) {
+                    if (existing->type) free_type(existing->type);
+                    existing->type = clone_type(param->node_type);
+                }
             } else {
                 // Add new symbol
                 add_symbol(ctx->symbols, param->value, clone_type(param->node_type), 0, 0, 0);
@@ -545,7 +561,8 @@ void propagate_call_types_in_tree(ASTNode* tree, const char* func_name, ASTNode*
             ASTNode* arg = tree->children[i];
             ASTNode* param = func_def->children[i];
             
-            if (arg && param && param->type == AST_VARIABLE_DECLARATION) {
+            if (arg && param &&
+                (param->type == AST_VARIABLE_DECLARATION || param->type == AST_PATTERN_VARIABLE)) {
                 // If parameter type is unknown and argument type is known, propagate it
                 if ((!param->node_type || param->node_type->kind == TYPE_UNKNOWN) &&
                     arg->node_type && arg->node_type->kind != TYPE_UNKNOWN) {

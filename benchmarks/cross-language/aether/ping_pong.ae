@@ -13,7 +13,6 @@ actor PingActor {
 
     receive {
         Pong(count) -> {
-            // Validate sequence
             if (count != received) {
                 errors = errors + 1;
             }
@@ -32,19 +31,16 @@ actor PongActor {
 
     receive {
         Ping(count) -> {
-            // Validate sequence
             if (count != expected) {
-                // Sequence error detected
+                // Sequence error
             }
             expected = expected + 1;
-            // Echo back the count
             ping_ref ! Pong { count: count };
         }
     }
 }
 
 main() {
-    // Read from BENCHMARK_MESSAGES env var, default 100K
     total_messages = 100000;
     env_val = getenv("BENCHMARK_MESSAGES");
     if (env_val != 0) {
@@ -54,24 +50,15 @@ main() {
     ping = spawn(PingActor());
     pong = spawn(PongActor());
 
-    // Wire up actor references
     ping.pong_ref = pong;
     ping.target = total_messages;
     pong.ping_ref = ping;
 
-    // Get start time
     start_time = clock_ns();
-
-    // Start the ping-pong chain
     pong ! Ping { count: 0 };
-
-    // Wait for completion
     wait_for_idle();
-
-    // Get end time
     end_time = clock_ns();
 
-    // Verify results
     if (ping.errors > 0) {
         print("VALIDATION FAILED: ");
         print(ping.errors);
@@ -87,26 +74,20 @@ main() {
         print(" messages\n");
     }
 
-    // Calculate metrics
+    // Calculate throughput: messages / elapsed_us = M msg/sec
     elapsed_ns = end_time - start_time;
-    elapsed_ms = elapsed_ns / 1000000;
+    elapsed_us = elapsed_ns / 1000;
 
-    // Cycles/msg (assuming 3GHz clock)
-    // cycles = elapsed_ns * 3 (ns * GHz = cycles)
-    // cycles_per_msg = cycles / messages
-    if (actual_received > 0) {
-        total_cycles = elapsed_ns * 3;
-        cycles_per_msg = total_cycles / actual_received;
-        print("Cycles/msg:     ");
-        print(cycles_per_msg);
+    if (elapsed_us > 0) {
+        ns_per_msg = elapsed_ns / actual_received;
+        print("ns/msg:         ");
+        print(ns_per_msg);
         print("\n");
-    }
 
-    // Throughput: messages / seconds = messages * 1000 / elapsed_ms
-    if (elapsed_ms > 0) {
-        msg_per_sec = (actual_received * 1000) / elapsed_ms;
-        throughput_m = msg_per_sec / 1000000;
-        throughput_frac = (msg_per_sec / 10000) - (throughput_m * 100);
+        throughput_m = actual_received / elapsed_us;
+        leftover = actual_received - (throughput_m * elapsed_us);
+        throughput_frac = (leftover * 100) / elapsed_us;
+
         print("Throughput:     ");
         print(throughput_m);
         print(".");

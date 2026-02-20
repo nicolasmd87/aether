@@ -6,10 +6,12 @@ Aether uses a multi-tier build system with different optimization profiles for d
 
 ## Build Tiers
 
+All builds go through the Makefile, which handles the full source list across subdirectories (`compiler/parser/`, `compiler/analysis/`, `compiler/codegen/`, `runtime/scheduler/`, `runtime/memory/`, etc.).
+
 ### Development Build
 
 ```bash
-gcc compiler/*.c runtime/*.c -I runtime -o aetherc -O0 -g
+make compiler CFLAGS="-O0 -g -Icompiler -Iruntime -Iruntime/actors -Iruntime/scheduler -Wall -Wextra -Wno-unused-parameter"
 ```
 
 **Purpose**: Fast compilation with debug symbols for active development.
@@ -17,7 +19,7 @@ gcc compiler/*.c runtime/*.c -I runtime -o aetherc -O0 -g
 ### Testing Build
 
 ```bash
-gcc compiler/*.c runtime/*.c -I runtime -o aetherc -O2
+make compiler    # Uses -O2 by default
 ```
 
 **Purpose**: Moderate optimization for CI and testing.
@@ -25,7 +27,7 @@ gcc compiler/*.c runtime/*.c -I runtime -o aetherc -O2
 ### Release Build
 
 ```bash
-gcc compiler/*.c runtime/*.c -I runtime -o aetherc -O3 -march=native -flto
+make compiler CFLAGS="-O3 -march=native -flto -Icompiler -Iruntime -Iruntime/actors -Iruntime/scheduler -Wall -Wextra -Wno-unused-parameter"
 ```
 
 **Purpose**: Full optimization for production use and benchmarking.

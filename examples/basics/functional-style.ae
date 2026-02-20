@@ -3,126 +3,177 @@
 // Aether supports both imperative (loops) and functional (recursion)
 // programming styles. This example demonstrates the functional approach
 // inspired by Erlang.
+//
+// Note: Pattern matching syntax (factorial(0) -> 1) is also supported
+// but this example uses the traditional recursive style for clarity.
 
 // Factorial - classic recursive example
 factorial(n) {
-    if (n <= 1) { return 1 }
-    return n * factorial(n - 1)
+    if (n <= 1) { return 1; }
+    return n * factorial(n - 1);
 }
 
 // Fibonacci using recursion
-fibonacci(n) {
-    if (n <= 1) { return n }
-    return fibonacci(n - 1) + fibonacci(n - 2)
+fib(n) {
+    if (n <= 1) { return n; }
+    return fib(n - 1) + fib(n - 2);
 }
 
 // Power function using recursion
 power(base, exp) {
-    if (exp == 0) { return 1 }
-    return base * power(base, exp - 1)
+    if (exp == 0) { return 1; }
+    return base * power(base, exp - 1);
 }
 
 // Sum from 1 to n using recursion
-sum_to_n(n) {
-    if (n <= 0) { return 0 }
-    return n + sum_to_n(n - 1)
+sum_to(n) {
+    if (n <= 0) { return 0; }
+    return n + sum_to(n - 1);
 }
 
 // Greatest Common Divisor (Euclidean algorithm)
 gcd(a, b) {
-    if (b == 0) { return a }
-    return gcd(b, a - (a / b) * b)  // a % b using integer arithmetic
+    if (b == 0) { return a; }
+    return gcd(b, a - (a / b) * b);
 }
 
 // Count digits recursively
 count_digits(n) {
-    if (n < 10) { return 1 }
-    return 1 + count_digits(n / 10)
+    if (n < 10) { return 1; }
+    return 1 + count_digits(n / 10);
 }
 
 // Sum of digits
 sum_digits(n) {
-    if (n < 10) { return n }
-    return (n - (n / 10) * 10) + sum_digits(n / 10)  // n % 10 + recursive
+    if (n < 10) { return n; }
+    return (n - (n / 10) * 10) + sum_digits(n / 10);
 }
 
-// Is palindrome (number)
+// Reverse a number (helper with accumulator pattern)
 reverse_num(n, acc) {
-    if (n == 0) { return acc }
-    return reverse_num(n / 10, acc * 10 + (n - (n / 10) * 10))
+    if (n == 0) { return acc; }
+    return reverse_num(n / 10, acc * 10 + (n - (n / 10) * 10));
 }
 
+// Check palindrome
 is_palindrome(n) {
-    return n == reverse_num(n, 0)
+    return n == reverse_num(n, 0);
+}
+
+// Max of two numbers
+max_of(a, b) {
+    if (a >= b) { return a; }
+    return b;
+}
+
+// Min of two numbers
+min_of(a, b) {
+    if (a <= b) { return a; }
+    return b;
+}
+
+// Absolute value
+abs_val(x) {
+    if (x < 0) { return 0 - x; }
+    return x;
+}
+
+// Sign function
+sign(n) {
+    if (n < 0) { return -1; }
+    if (n == 0) { return 0; }
+    return 1;
 }
 
 main() {
-    print("=== Functional Style Examples ===\n\n")
+    print("=== Functional Style Examples ===\n\n");
 
     // Factorial
-    print("Factorial:\n")
-    print("  5! = ")
-    print(factorial(5))
-    print("\n")
-    print("  10! = ")
-    print(factorial(10))
-    print("\n\n")
+    print("Factorial:\n");
+    print("  factorial(5) = ");
+    print(factorial(5));
+    print("\n");
+    print("  factorial(10) = ");
+    print(factorial(10));
+    print("\n\n");
 
     // Fibonacci
-    print("Fibonacci sequence (first 10):\n  ")
+    print("Fibonacci sequence:\n  ");
     for (i = 0; i < 10; i = i + 1) {
-        print(fibonacci(i))
-        print(" ")
+        print(fib(i));
+        print(" ");
     }
-    print("\n\n")
+    print("\n\n");
 
     // Power
-    print("Power:\n")
-    print("  2^10 = ")
-    print(power(2, 10))
-    print("\n")
-    print("  3^4 = ")
-    print(power(3, 4))
-    print("\n\n")
+    print("Power:\n");
+    print("  power(2, 10) = ");
+    print(power(2, 10));
+    print("\n");
+    print("  power(3, 4) = ");
+    print(power(3, 4));
+    print("\n\n");
 
     // Sum to n
-    print("Sum 1 to n:\n")
-    print("  sum(10) = ")
-    print(sum_to_n(10))
-    print("\n")
-    print("  sum(100) = ")
-    print(sum_to_n(100))
-    print("\n\n")
+    print("Sum 1 to n:\n");
+    print("  sum_to(10) = ");
+    print(sum_to(10));
+    print("\n");
+    print("  sum_to(100) = ");
+    print(sum_to(100));
+    print("\n\n");
 
     // GCD
-    print("GCD (Euclidean algorithm):\n")
-    print("  gcd(48, 18) = ")
-    print(gcd(48, 18))
-    print("\n")
-    print("  gcd(100, 35) = ")
-    print(gcd(100, 35))
-    print("\n\n")
+    print("GCD (Euclidean algorithm):\n");
+    print("  gcd(48, 18) = ");
+    print(gcd(48, 18));
+    print("\n");
+    print("  gcd(100, 35) = ");
+    print(gcd(100, 35));
+    print("\n\n");
 
     // Digit operations
-    print("Digit operations:\n")
-    print("  Digits in 12345: ")
-    print(count_digits(12345))
-    print("\n")
-    print("  Sum of digits in 12345: ")
-    print(sum_digits(12345))
-    print("\n\n")
+    print("Digit operations:\n");
+    print("  count_digits(12345) = ");
+    print(count_digits(12345));
+    print("\n");
+    print("  sum_digits(12345) = ");
+    print(sum_digits(12345));
+    print("\n\n");
+
+    // Max/Min
+    print("Max/Min:\n");
+    print("  max_of(7, 12) = ");
+    print(max_of(7, 12));
+    print("\n");
+    print("  min_of(7, 12) = ");
+    print(min_of(7, 12));
+    print("\n\n");
+
+    // Absolute value and sign
+    print("Abs and Sign:\n");
+    print("  abs_val(-42) = ");
+    print(abs_val(-42));
+    print("\n");
+    print("  sign(-5) = ");
+    print(sign(-5));
+    print(", sign(0) = ");
+    print(sign(0));
+    print(", sign(5) = ");
+    print(sign(5));
+    print("\n\n");
 
     // Palindrome check
-    print("Palindrome check:\n")
-    print("  121 is palindrome: ")
-    print(is_palindrome(121))
-    print("\n")
-    print("  123 is palindrome: ")
-    print(is_palindrome(123))
-    print("\n\n")
+    print("Palindrome check:\n");
+    print("  is_palindrome(121) = ");
+    print(is_palindrome(121));
+    print("\n");
+    print("  is_palindrome(123) = ");
+    print(is_palindrome(123));
+    print("\n\n");
 
-    print("Functional programming emphasizes:\n")
-    print("  - Recursion instead of loops\n")
-    print("  - Pure functions (no side effects)\n")
-    print("  - Composing small functions\n")
+    print("Functional programming emphasizes:\n");
+    print("  - Recursion instead of loops\n");
+    print("  - Pure functions (no side effects)\n");
+    print("  - Composing small functions\n");
 }

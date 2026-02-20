@@ -3,8 +3,9 @@
 
 #include "actor_state_machine.h"
 #include "lockfree_mailbox.h"
-#include <pthread.h>
+#include "../utils/aether_thread.h"
 #include <stdint.h>
+#include "../utils/aether_compiler.h"
 
 // Cache line size for alignment (typically 64 bytes)
 #define CACHE_LINE_SIZE 64
@@ -25,7 +26,7 @@ typedef struct MessagePool {
     int count;
     int is_thread_local;  // If true, no mutex needed
     pthread_mutex_t lock; // Only used for shared pools
-} __attribute__((aligned(CACHE_LINE_SIZE))) MessagePool;
+} AETHER_ALIGNED(CACHE_LINE_SIZE) MessagePool;
 
 typedef struct Actor Actor;
 typedef void* (*ActorReply)(void*);
@@ -39,7 +40,7 @@ typedef struct PendingRequest {
     pthread_mutex_t mutex;
     pthread_cond_t cond;
     struct PendingRequest* next;
-} __attribute__((aligned(CACHE_LINE_SIZE))) PendingRequest;
+} AETHER_ALIGNED(CACHE_LINE_SIZE) PendingRequest;
 
 // Optimize field order: frequent access first, align to cache line
 typedef struct Actor {
@@ -58,7 +59,7 @@ typedef struct Actor {
     PendingRequest* pending_requests;
     int next_request_id;
     pthread_mutex_t request_mutex;
-} __attribute__((aligned(CACHE_LINE_SIZE))) Actor;
+} AETHER_ALIGNED(CACHE_LINE_SIZE) Actor;
 
 Actor* aether_actor_create(void (*process_fn)(Actor*, void*, int));
 void aether_actor_destroy(Actor* actor);

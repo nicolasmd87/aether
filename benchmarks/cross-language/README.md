@@ -1,107 +1,73 @@
 # Aether Cross-Language Benchmark Suite
 
-Comparative benchmarking of actor model implementations across multiple languages.
+Comparative benchmarking of actor/message-passing implementations across languages.
 
 ## Quick Start
 
 ```bash
-cd benchmarks/cross-language
 ./run_benchmarks.sh
 ```
 
-To view results in an interactive dashboard:
-```bash
-make benchmark-ui
-# Open http://localhost:8080
-```
+## Benchmark Patterns
 
-## What This Benchmarks
+| Pattern | What It Measures |
+|---------|-----------------|
+| **ping_pong** | Round-trip message latency between two actors |
+| **counting** | Single-actor message throughput |
+| **thread_ring** | Multi-actor coordination (N actors in ring) |
+| **fork_join** | Fan-out/fan-in parallelism |
 
-This suite compares baseline actor implementations using a ping-pong message passing test.
+## Languages & Implementations
 
-**Languages tested:**
-- Aether
-- C (pthreads)
-- C++
-- Go
-- Rust
-- Java
-- Zig
-- Erlang
-- Elixir
-- Pony
-- Scala (Akka)
+| Language | Implementation | Notes |
+|----------|---------------|-------|
+| **Aether** | Native actors | Lock-free SPSC queues, computed goto dispatch |
+| **Go** | Goroutines + channels | Idiomatic Go concurrency |
+| **Rust** | std::sync::mpsc | Standard library channels |
+| **Erlang** | Native processes | Built-in actor model |
+| **Elixir** | Native processes | Built-in actor model |
+| **Pony** | Native actors | Reference capabilities |
+| **C** | pthreads + mutex | Baseline (no actor framework) |
+| **C++** | std::mutex + cv | Baseline (no actor framework) |
+| **Zig** | std.Thread | Baseline (no actor framework) |
 
-**Test characteristics:**
-- Ping-pong pattern with full round-trip validation
-- Configurable message count (default: 10,000,000)
-- All languages use standard optimizations (-O3 equivalent)
-- No specialized tuning or non-standard optimizations
-- Validates message integrity on every exchange
+**Note on C/C++/Zig**: These languages lack native actor support. The implementations use basic synchronization primitives, not actor frameworks like [CAF](https://github.com/actor-framework/actor-framework). Results for these languages represent baseline thread synchronization overhead, not optimized actor performance.
 
-## What This Measures
+## Metrics
 
-- Actor message passing latency
-- Basic scheduler overhead
-- Message validation performance
-
-## What This Does Not Measure
-
-- I/O performance
-- Concurrent workload scaling beyond message passing
-- Real-world application performance
-- Production-ready system behavior
-- Memory allocation patterns
-- GC performance
+All benchmarks report:
+- **ns/msg**: Nanoseconds per message (wall-clock time)
+- **Throughput**: Messages per second (M msg/sec)
 
 ## Configuration
 
-Edit `benchmark_config.json` to adjust parameters:
+Edit `benchmark_config.json`:
 
 ```json
 {
-  "messages": 10000000,
+  "messages": 1000000,
   "timeout_seconds": 60
 }
 ```
 
-See `config.md` for detailed configuration options.
+## What This Does NOT Measure
 
-## Scripts
+- I/O performance
+- Memory allocation patterns
+- GC pauses
+- Real-world application workloads
+- Distributed messaging
 
-- `run_benchmarks.sh` - Main entry point. Runs all benchmarks and generates results.
-- `build_server.sh` - Builds the visualization HTTP server (standalone utility).
-- `measure_memory.sh` - Cross-platform memory measurement helper (internal use).
+## Methodology
 
-## Requirements
+Based on the [Savina Actor Benchmark Suite](https://github.com/shamsimam/savina).
 
-**Minimum:**
-- Python 3
-- GCC or Clang
-- GNU sed or BSD sed
+- All languages compiled with `-O3` or equivalent
+- No specialized tuning or non-standard optimizations
+- Message validation on every exchange
+- Results are system-dependent; run on your hardware
 
-**Optional (for additional languages):**
-- Java 17+
-- Go
-- Rust
-- Zig
-- Erlang/Elixir
-- Pony
-- sbt (for Scala)
+## References
 
-The script will prompt to install missing dependencies.
-
-## Important Notes
-
-- Results are highly system-dependent
-- Benchmarks measure baseline implementations only
-- Not representative of all workload types
-- Intended for comparative analysis on your specific hardware
-- Performance varies based on CPU, OS, memory, and system load
-- Run on your own system to evaluate performance characteristics
-
-## Stopping the Server
-
-```bash
-pkill -f "visualize/server"
-```
+- [Savina Benchmark Paper](http://soft.vub.ac.be/AGERE14/papers/ageresplash2014_submission_19.pdf)
+- [Savina GitHub](https://github.com/shamsimam/savina)

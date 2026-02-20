@@ -26,7 +26,7 @@ make profiler
 ./build/profiler_demo
 ```
 
-Then open your browser to: **http://localhost:8080**
+Then open your browser to: **http://localhost:8081**
 
 ## Integration
 
@@ -47,7 +47,7 @@ CFLAGS += -DAETHER_PROFILING
 int main() {
     ProfilerConfig config = {
         .enabled = 1,
-        .port = 8080,
+        .port = 8081,
         .max_events = 10000
     };
     
@@ -89,7 +89,7 @@ profiler_record_event(&event);
 ```c
 typedef struct {
     int enabled;               // Enable profiling
-    int port;                  // Server port (default: 8080)
+    int port;                  // Server port (default: 8081)
     const char* bind_address;  // Bind address (default: "0.0.0.0")
     int max_events;            // Event buffer size (default: 10000)
     int collection_interval_ms; // Metrics collection interval
@@ -144,14 +144,14 @@ See `profiler_demo.c` for a complete example demonstrating:
 
 **Port already in use:**
 ```
-Failed to bind to port 8080
+Failed to bind to port 8081
 ```
-Solution: Change port in config or kill process using port 8080
+Solution: Change port in config or kill process using port 8081
 
 **Can't connect to dashboard:**
 - Check firewall settings
 - Ensure program is still running
-- Try http://127.0.0.1:8080 instead of localhost
+- Try http://127.0.0.1:8081 instead of localhost
 
 **No events showing:**
 - Verify `config.enabled = 1`

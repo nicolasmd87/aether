@@ -22,17 +22,30 @@
 #ifdef _WIN32
 #include <windows.h>
 #include <direct.h>
+#include <process.h>   // getpid() / _getpid() on MinGW and MSVC
 #define PATH_SEP "\\"
 #define EXE_EXT ".exe"
 #define mkdir_p(path) _mkdir(path)
+// MSVC uses _popen/_pclose; MinGW maps popen/pclose but be explicit
+#ifndef popen
+#  define popen  _popen
+#  define pclose _pclose
+#endif
+// MinGW exposes getpid() in <process.h>; MSVC only has _getpid()
+#ifndef getpid
+#  define getpid _getpid
+#endif
 #else
 #include <unistd.h>
+#include <fcntl.h>
 #include <sys/wait.h>
+#include <spawn.h>
 #include <libgen.h>
 #include <dirent.h>
 #define PATH_SEP "/"
 #define EXE_EXT ""
 #define mkdir_p(path) mkdir(path, 0755)
+extern char** environ;
 #endif
 
 #ifdef __APPLE__
@@ -43,7 +56,7 @@
 
 // Version is set by Makefile from VERSION file
 #ifndef AETHER_VERSION
-#define AETHER_VERSION "0.0.0-dev"
+#define AETHER_VERSION "0.5.0"
 #endif
 #define AE_VERSION AETHER_VERSION
 
@@ -65,12 +78,138 @@ typedef struct {
 static Toolchain tc = {0};
 
 // --------------------------------------------------------------------------
+// Cache infrastructure
+// --------------------------------------------------------------------------
+
+static void mkdirs(const char* path);  // forward declaration
+
+static char s_cache_dir[512] = "";
+
+// Portable home-directory lookup.
+// On Windows: USERPROFILE (native shell) → HOME (MSYS2) → fallback.
+// On POSIX:   HOME → /tmp fallback.
+static const char* get_home_dir(void) {
+#ifdef _WIN32
+    const char* h = getenv("USERPROFILE");
+    if (!h || !h[0]) h = getenv("HOME");
+    return h ? h : "C:\\Users\\Public";
+#else
+    const char* h = getenv("HOME");
+    return h ? h : "/tmp";
+#endif
+}
+
+static void init_cache_dir(void) {
+    if (s_cache_dir[0]) return;
+    const char* home = get_home_dir();
+    snprintf(s_cache_dir, sizeof(s_cache_dir), "%s/.aether/cache", home);
+    mkdirs(s_cache_dir);
+}
+
+// FNV-64 hash of a string
+static unsigned long long fnv64_str(const char* s) {
+    unsigned long long h = 14695981039346656037ULL;
+    while (*s) { h ^= (unsigned char)*s++; h *= 1099511628211ULL; }
+    return h;
+}
+
+// FNV-64 hash of a file's contents
+static unsigned long long fnv64_file(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return 0;
+    unsigned long long h = 14695981039346656037ULL;
+    unsigned char buf[4096];
+    size_t n;
+    while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+        for (size_t i = 0; i < n; i++) { h ^= buf[i]; h *= 1099511628211ULL; }
+    }
+    fclose(f);
+    return h;
+}
+
+// Compute a cache key from: source content + compiler mtime + lib mtime + flags
+// Returns 0 if source cannot be read (caching disabled)
+static unsigned long long compute_cache_key(const char* ae_file, const char* flags) {
+    unsigned long long src_hash = fnv64_file(ae_file);
+    if (src_hash == 0) return 0;
+
+    char key_buf[1024];
+    int pos = 0;
+    pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, "%016llx", src_hash);
+
+    struct stat st;
+    if (stat(tc.compiler, &st) == 0)
+        pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, ":%lld", (long long)st.st_mtime);
+    if (tc.has_lib && stat(tc.lib, &st) == 0)
+        pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, ":%lld", (long long)st.st_mtime);
+    snprintf(key_buf + pos, sizeof(key_buf) - pos, ":%s:O0", flags ? flags : "");
+
+    unsigned long long h = fnv64_str(key_buf);
+    return h ? h : 1ULL;
+}
+
+// --------------------------------------------------------------------------
 // Utility functions
 // --------------------------------------------------------------------------
 
+#ifndef _WIN32
+// Run a command via posix_spawnp (faster than system() — no /bin/sh overhead)
+// Space-splits the command string into argv (no shell quoting supported,
+// but our controlled commands never need it).
+static int posix_run(const char* cmd_str, bool quiet) {
+    if (tc.verbose) fprintf(stderr, "[cmd] %s\n", cmd_str);
+    char buf[8192];
+    strncpy(buf, cmd_str, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+
+    char* toks[512];
+    int n = 0;
+    for (char* p = buf; *p && n < 511; ) {
+        while (*p == ' ') p++;
+        if (!*p) break;
+        toks[n++] = p;
+        while (*p && *p != ' ') p++;
+        if (*p) *p++ = '\0';
+    }
+    toks[n] = NULL;
+    if (n == 0) return 0;
+
+    posix_spawn_file_actions_t fa;
+    posix_spawn_file_actions_init(&fa);
+    if (quiet) {
+        posix_spawn_file_actions_addopen(&fa, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
+        posix_spawn_file_actions_addopen(&fa, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+    }
+
+    pid_t pid;
+    int ret = posix_spawnp(&pid, toks[0], &fa, NULL, toks, environ);
+    posix_spawn_file_actions_destroy(&fa);
+    if (ret != 0) return -1;
+
+    int status = 0;
+    waitpid(pid, &status, 0);
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+}
+#endif
+
 static int run_cmd(const char* cmd) {
+#ifndef _WIN32
+    return posix_run(cmd, false);
+#else
     if (tc.verbose) fprintf(stderr, "[cmd] %s\n", cmd);
     return system(cmd);
+#endif
+}
+
+// Run a command, suppressing all output (quiet mode)
+static int run_cmd_quiet(const char* cmd) {
+#ifndef _WIN32
+    return posix_run(cmd, true);
+#else
+    char full[8192 + 16];
+    snprintf(full, sizeof(full), "%s >nul 2>&1", cmd);
+    return system(full);
+#endif
 }
 
 static bool path_exists(const char* path) {
@@ -310,6 +449,29 @@ found_root:
     }
 }
 
+// Check if aether.toml has [memory] mode = "manual"
+// Returns "--no-auto-free" if set, empty string otherwise
+static const char* get_memory_flag(void) {
+    static char flag[32] = "";
+    static bool checked = false;
+
+    if (checked) return flag;
+    checked = true;
+
+    if (!path_exists("aether.toml")) return flag;
+
+    TomlDocument* doc = toml_parse_file("aether.toml");
+    if (!doc) return flag;
+
+    const char* val = toml_get_value(doc, "memory", "mode");
+    if (val && strcmp(val, "manual") == 0) {
+        strncpy(flag, "--no-auto-free", sizeof(flag) - 1);
+    }
+
+    toml_free_document(doc);
+    return flag;
+}
+
 // Get link_flags from aether.toml [build] section
 // Returns empty string if not found or no aether.toml
 static const char* get_link_flags(void) {
@@ -334,14 +496,138 @@ static const char* get_link_flags(void) {
     return flags;
 }
 
-// Build GCC command for linking an Aether-compiled C file
+// --------------------------------------------------------------------------
+// Windows: auto-install bundled GCC (WinLibs) if none found on PATH
+// --------------------------------------------------------------------------
+#ifdef _WIN32
+
+// Pinned WinLibs release — GCC 13.2.0 UCRT, x86-64, no LLVM (~80 MB).
+// Update WINLIBS_TAG + WINLIBS_ZIP together when upgrading.
+#define WINLIBS_TAG "13.2.0posix-17.0.6-11.0.1-ucrt-r5"
+#define WINLIBS_ZIP "winlibs-x86_64-posix-seh-gcc-13.2.0-mingw-w64ucrt-11.0.1-r5.zip"
+#define WINLIBS_URL \
+    "https://github.com/brechtsanders/winlibs_mingw/releases/download/" \
+    WINLIBS_TAG "/" WINLIBS_ZIP
+
+static char s_gcc_bin[1024] = "gcc";  // path to gcc; updated by ensure_gcc_windows()
+static bool s_gcc_ready      = false; // set after first successful check
+
+// Checks PATH, then ~/.aether/tools/, then downloads WinLibs on demand.
+// Returns true when gcc is usable; false means the user must intervene.
+static bool ensure_gcc_windows(void) {
+    if (s_gcc_ready) return true;
+
+    // 1. Already on PATH?
+    if (system("gcc --version >nul 2>&1") == 0) {
+        s_gcc_ready = true;
+        return true;
+    }
+
+    // 2. Already installed to ~/.aether/tools/ from a previous run?
+    const char* home  = get_home_dir();
+    char tools_dir[1024], tools_bin[1024], tools_gcc[1024];
+    snprintf(tools_dir, sizeof(tools_dir), "%s\\.aether\\tools",           home);
+    snprintf(tools_bin, sizeof(tools_bin), "%s\\mingw64\\bin",             tools_dir);
+    snprintf(tools_gcc, sizeof(tools_gcc), "%s\\mingw64\\bin\\gcc.exe",    tools_dir);
+
+    struct stat st;
+    if (stat(tools_gcc, &st) == 0) goto found;
+
+    // 3. Auto-download (one-time, ~80 MB).
+    printf("[ae] GCC not found. Downloading MinGW-w64 GCC (~80 MB) — one-time setup...\n");
+    fflush(stdout);
+
+    _mkdir(tools_dir);  // OK if it already exists
+
+    // Write a tiny PowerShell script to avoid shell-quoting nightmares.
+    char ps_path[1024], zip_path[1024];
+    snprintf(ps_path,  sizeof(ps_path),  "%s\\install_gcc.ps1", tools_dir);
+    snprintf(zip_path, sizeof(zip_path), "%s\\mingw.zip",        tools_dir);
+
+    FILE* ps = fopen(ps_path, "w");
+    if (!ps) {
+        fprintf(stderr, "[ae] Cannot write installer script to %s\n", tools_dir);
+        goto fail;
+    }
+    fprintf(ps,
+        "$ProgressPreference = 'SilentlyContinue'\n"
+        "Write-Host '[ae] Downloading GCC...'\n"
+        "Invoke-WebRequest -Uri '%s' -OutFile '%s'\n"
+        "Write-Host '[ae] Extracting...'\n"
+        "Expand-Archive -Path '%s' -DestinationPath '%s' -Force\n"
+        "Remove-Item -Path '%s' -Force\n"
+        "Write-Host '[ae] GCC ready.'\n",
+        WINLIBS_URL, zip_path, zip_path, tools_dir, zip_path);
+    fclose(ps);
+
+    {
+        char run_ps[2048];
+        snprintf(run_ps, sizeof(run_ps),
+            "powershell -NoProfile -ExecutionPolicy Bypass -File \"%s\"", ps_path);
+        int ret = system(run_ps);
+        remove(ps_path);
+        if (ret != 0 || stat(tools_gcc, &st) != 0) goto fail;
+    }
+
+found:
+    // Add bundled bin dir to PATH for this process so gcc is found by name too.
+    {
+        char cur[8192] = "", updated[8192];
+        GetEnvironmentVariableA("PATH", cur, sizeof(cur));
+        snprintf(updated, sizeof(updated), "%s;%s", tools_bin, cur);
+        SetEnvironmentVariableA("PATH", updated);
+    }
+    snprintf(s_gcc_bin, sizeof(s_gcc_bin), "%s", tools_gcc);
+    s_gcc_ready = true;
+    return true;
+
+fail:
+    fprintf(stderr, "[ae] GCC auto-install failed. Install it manually:\n");
+    fprintf(stderr, "[ae]   Option A: WinLibs (easiest) — https://winlibs.com\n");
+    fprintf(stderr, "[ae]             Extract the zip, add the bin\\ folder to PATH.\n");
+    fprintf(stderr, "[ae]   Option B: MSYS2 — https://www.msys2.org\n");
+    fprintf(stderr, "[ae]             pacman -S mingw-w64-x86_64-gcc\n");
+    return false;
+}
+
+#endif // _WIN32
+
+// --------------------------------------------------------------------------
+// Build GCC/MinGW command for linking an Aether-compiled C file
 static void build_gcc_cmd(char* cmd, size_t size,
                           const char* c_file, const char* out_file,
                           bool optimize, const char* extra_files) {
-    const char* opt = optimize ? "-O2" : "-O0 -g";
     const char* link_flags = get_link_flags();
     const char* extra = extra_files ? extra_files : "";
 
+#ifdef _WIN32
+    // Ensure GCC is available (auto-downloads WinLibs on first run if needed).
+    if (!ensure_gcc_windows()) {
+        snprintf(cmd, size, "exit 1");  // will fail; error already printed
+        return;
+    }
+    // Windows (MinGW): no -pthread (Win32 threads via aether_thread.h), no -lm (CRT).
+    // -lws2_32 is required for Winsock2 (aether_http/net always compiled into runtime).
+    // Quote s_gcc_bin in case the path contains spaces.
+    const char* opt = optimize ? "-O2" : "-O0";
+    char lib_dir[1024];
+    if (tc.has_lib) {
+        strncpy(lib_dir, tc.lib, sizeof(lib_dir) - 1);
+        lib_dir[sizeof(lib_dir) - 1] = '\0';
+        char* slash = strrchr(lib_dir, '\\');
+        if (!slash) slash = strrchr(lib_dir, '/');
+        if (slash) *slash = '\0';
+        snprintf(cmd, size,
+            "\"%s\" %s %s %s %s -L%s -laether -o %s -lws2_32 %s",
+            s_gcc_bin, opt, tc.include_flags, c_file, extra, lib_dir, out_file, link_flags);
+    } else {
+        snprintf(cmd, size,
+            "\"%s\" %s %s %s %s %s -o %s -lws2_32 %s",
+            s_gcc_bin, opt, tc.include_flags, c_file, extra, tc.runtime_srcs, out_file, link_flags);
+    }
+#else
+    // POSIX (Linux/macOS): -pthread for POSIX threads, -lm for math
+    const char* opt = optimize ? "-O2 -pipe" : "-O0 -pipe";
     if (tc.has_lib) {
         char lib_dir[1024];
         strncpy(lib_dir, tc.lib, sizeof(lib_dir) - 1);
@@ -357,6 +643,7 @@ static void build_gcc_cmd(char* cmd, size_t size,
             "gcc %s %s %s %s %s -o %s -pthread -lm %s",
             opt, tc.include_flags, c_file, extra, tc.runtime_srcs, out_file, link_flags);
     }
+#endif
 }
 
 // --------------------------------------------------------------------------
@@ -365,9 +652,28 @@ static void build_gcc_cmd(char* cmd, size_t size,
 
 static int cmd_run(int argc, char** argv) {
     const char* file = NULL;
+    bool run_no_auto_free = false;
 
     for (int i = 0; i < argc; i++) {
-        if (argv[i][0] != '-') { file = argv[i]; break; }
+        if (strcmp(argv[i], "--no-auto-free") == 0) { run_no_auto_free = true; }
+        else if (argv[i][0] != '-') { file = argv[i]; break; }
+    }
+
+    // Resolve directory argument (e.g. "." or "myproject/") to src/main.ae
+    if (file && dir_exists(file)) {
+        static char resolved_run_file[512];
+        snprintf(resolved_run_file, sizeof(resolved_run_file), "%s/src/main.ae", file);
+        if (path_exists(resolved_run_file)) {
+            file = resolved_run_file;
+        } else {
+            char toml_path[512];
+            snprintf(toml_path, sizeof(toml_path), "%s/aether.toml", file);
+            if (path_exists(toml_path))
+                fprintf(stderr, "Error: No src/main.ae found in %s\n", file);
+            else
+                fprintf(stderr, "Error: '%s' is not an Aether project directory\n", file);
+            return 1;
+        }
     }
 
     // Project mode: no file argument, look for aether.toml
@@ -388,48 +694,78 @@ static int cmd_run(int argc, char** argv) {
     }
 
     char c_file[1024], exe_file[1024], cmd[8192];
+    const char* mem_flag = run_no_auto_free ? "--no-auto-free" : get_memory_flag();
 
+    // --- Cache check ---
+    // ae run uses -O0 (fast dev builds). Check if we have a cached exe for
+    // this exact source + compiler + flags combination.
+    bool using_cache = false;
+    char cached_exe[512] = "";
+    unsigned long long cache_key = compute_cache_key(file, mem_flag);
+    if (cache_key != 0) {
+        init_cache_dir();
+        snprintf(cached_exe, sizeof(cached_exe), "%s/%016llx" EXE_EXT, s_cache_dir, cache_key);
+        if (path_exists(cached_exe)) {
+            if (tc.verbose) fprintf(stderr, "[cache] hit: %016llx\n", cache_key);
+            snprintf(cmd, sizeof(cmd), "%s", cached_exe);
+            return run_cmd(cmd);
+        }
+        if (tc.verbose) fprintf(stderr, "[cache] miss: %016llx\n", cache_key);
+        using_cache = true;
+    }
+
+    // Determine temp .c file path and exe path
+    // If caching: write exe directly to cache slot (no extra copy needed)
     if (tc.dev_mode) {
         snprintf(c_file, sizeof(c_file), "%s/build/_ae_tmp.c", tc.root);
-        snprintf(exe_file, sizeof(exe_file), "%s/build/_ae_tmp" EXE_EXT, tc.root);
     } else {
         snprintf(c_file, sizeof(c_file), "/tmp/_ae_tmp.c");
+    }
+    if (using_cache) {
+        strncpy(exe_file, cached_exe, sizeof(exe_file) - 1);
+    } else if (tc.dev_mode) {
+        snprintf(exe_file, sizeof(exe_file), "%s/build/_ae_tmp" EXE_EXT, tc.root);
+    } else {
         snprintf(exe_file, sizeof(exe_file), "/tmp/_ae_tmp" EXE_EXT);
     }
 
     // Step 1: Compile .ae to .c
     if (tc.verbose) printf("Compiling %s...\n", file);
-    snprintf(cmd, sizeof(cmd), "%s %s %s %s",
-        tc.compiler, file, c_file,
-        tc.verbose ? "" : ">/dev/null 2>&1");
-    if (run_cmd(cmd) != 0) {
+    if (mem_flag[0])
+        snprintf(cmd, sizeof(cmd), "%s %s %s %s", tc.compiler, mem_flag, file, c_file);
+    else
+        snprintf(cmd, sizeof(cmd), "%s %s %s", tc.compiler, file, c_file);
+
+    int aetherc_ret = tc.verbose ? run_cmd(cmd) : run_cmd_quiet(cmd);
+    if (aetherc_ret != 0) {
         // Re-run with output visible so user can see the error
-        snprintf(cmd, sizeof(cmd), "%s %s %s 2>&1", tc.compiler, file, c_file);
+        snprintf(cmd, sizeof(cmd), "%s %s %s", tc.compiler, file, c_file);
         run_cmd(cmd);
         fprintf(stderr, "Compilation failed.\n");
         return 1;
     }
 
-    // Step 2: Compile .c to executable with runtime
-    build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, true, NULL);
-    if (!tc.verbose) {
-        strncat(cmd, " >/dev/null 2>&1", sizeof(cmd) - strlen(cmd) - 1);
-    }
-    if (run_cmd(cmd) != 0) {
+    // Step 2: Compile .c to executable with runtime (-O0 for fast dev builds)
+    build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, false, NULL);
+    int gcc_ret = tc.verbose ? run_cmd(cmd) : run_cmd_quiet(cmd);
+    if (gcc_ret != 0) {
         // Re-run with output for error diagnosis
-        build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, true, NULL);
+        build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, false, NULL);
         run_cmd(cmd);
         fprintf(stderr, "Build failed.\n");
+        remove(c_file);
         return 1;
     }
+
+    // Clean up temp .c file (exe stays in cache if caching, else clean up too)
+    remove(c_file);
 
     // Step 3: Run
     snprintf(cmd, sizeof(cmd), "%s", exe_file);
     int rc = run_cmd(cmd);
 
-    // Clean up
-    remove(c_file);
-    remove(exe_file);
+    // If not cached, remove the temp exe
+    if (!using_cache) remove(exe_file);
 
     return rc;
 }
@@ -439,6 +775,7 @@ static int cmd_build(int argc, char** argv) {
     const char* output_name = NULL;
     char extra_files[2048] = "";
 
+    bool build_no_auto_free = false;
     for (int i = 0; i < argc; i++) {
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             output_name = argv[++i];
@@ -446,8 +783,27 @@ static int cmd_build(int argc, char** argv) {
             // Append extra C files (space-separated)
             if (extra_files[0]) strncat(extra_files, " ", sizeof(extra_files) - strlen(extra_files) - 1);
             strncat(extra_files, argv[++i], sizeof(extra_files) - strlen(extra_files) - 1);
+        } else if (strcmp(argv[i], "--no-auto-free") == 0) {
+            build_no_auto_free = true;
         } else if (argv[i][0] != '-') {
             file = argv[i];
+        }
+    }
+
+    // Resolve directory argument (e.g. "." or "myproject/") to src/main.ae
+    if (file && dir_exists(file)) {
+        static char resolved_build_file[512];
+        snprintf(resolved_build_file, sizeof(resolved_build_file), "%s/src/main.ae", file);
+        if (path_exists(resolved_build_file)) {
+            file = resolved_build_file;
+        } else {
+            char toml_path[512];
+            snprintf(toml_path, sizeof(toml_path), "%s/aether.toml", file);
+            if (path_exists(toml_path))
+                fprintf(stderr, "Error: No src/main.ae found in %s\n", file);
+            else
+                fprintf(stderr, "Error: '%s' is not an Aether project directory\n", file);
+            return 1;
         }
     }
 
@@ -490,23 +846,25 @@ static int cmd_build(int argc, char** argv) {
     printf("Building %s...\n", file);
 
     // Step 1: .ae to .c
-    snprintf(cmd, sizeof(cmd), "%s %s %s %s",
-        tc.compiler, file, c_file,
-        tc.verbose ? "" : ">/dev/null 2>&1");
-    if (run_cmd(cmd) != 0) {
-        snprintf(cmd, sizeof(cmd), "%s %s %s 2>&1", tc.compiler, file, c_file);
+    const char* build_mem_flag = build_no_auto_free ? "--no-auto-free" : get_memory_flag();
+    if (build_mem_flag[0])
+        snprintf(cmd, sizeof(cmd), "%s %s %s %s", tc.compiler, build_mem_flag, file, c_file);
+    else
+        snprintf(cmd, sizeof(cmd), "%s %s %s", tc.compiler, file, c_file);
+
+    int aetherc_ret = tc.verbose ? run_cmd(cmd) : run_cmd_quiet(cmd);
+    if (aetherc_ret != 0) {
+        snprintf(cmd, sizeof(cmd), "%s %s %s", tc.compiler, file, c_file);
         run_cmd(cmd);
         fprintf(stderr, "Compilation failed.\n");
         return 1;
     }
 
-    // Step 2: .c to executable with runtime
+    // Step 2: .c to executable with runtime (-O2 for release builds)
     const char* extra = extra_files[0] ? extra_files : NULL;
     build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, true, extra);
-    if (!tc.verbose) {
-        strncat(cmd, " >/dev/null 2>&1", sizeof(cmd) - strlen(cmd) - 1);
-    }
-    if (run_cmd(cmd) != 0) {
+    int gcc_ret = tc.verbose ? run_cmd(cmd) : run_cmd_quiet(cmd);
+    if (gcc_ret != 0) {
         build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, true, extra);
         run_cmd(cmd);
         fprintf(stderr, "Build failed.\n");
@@ -618,7 +976,11 @@ static int cmd_test(int argc, char** argv) {
     } else {
         // Discover from directory
         const char* test_dir = "tests";
-        if (target && dir_exists(target)) test_dir = target;
+        if (target && dir_exists(target)) {
+            static char resolved_test_dir[512];
+            snprintf(resolved_test_dir, sizeof(resolved_test_dir), "%s/tests", target);
+            test_dir = dir_exists(resolved_test_dir) ? resolved_test_dir : target;
+        }
 
         if (!dir_exists(test_dir)) {
             printf("No tests/ directory found.\n");
@@ -671,8 +1033,8 @@ static int cmd_test(int argc, char** argv) {
         }
 
         // Compile .ae to .c
-        snprintf(cmd, sizeof(cmd), "%s %s %s >/dev/null 2>&1", tc.compiler, test, c_file);
-        if (run_cmd(cmd) != 0) {
+        snprintf(cmd, sizeof(cmd), "%s %s %s", tc.compiler, test, c_file);
+        if (run_cmd_quiet(cmd) != 0) {
             printf("FAIL (compile)\n");
             failed++;
             continue;
@@ -680,9 +1042,7 @@ static int cmd_test(int argc, char** argv) {
 
         // Compile .c to executable
         build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, false, NULL);
-        char full_cmd[8192];
-        snprintf(full_cmd, sizeof(full_cmd), "%s >/dev/null 2>&1", cmd);
-        if (run_cmd(full_cmd) != 0) {
+        if (run_cmd_quiet(cmd) != 0) {
             printf("FAIL (build)\n");
             failed++;
             remove(c_file);
@@ -690,8 +1050,8 @@ static int cmd_test(int argc, char** argv) {
         }
 
         // Run
-        snprintf(cmd, sizeof(cmd), "%s >/dev/null 2>&1", exe_file);
-        int rc = run_cmd(cmd);
+        snprintf(cmd, sizeof(cmd), "%s", exe_file);
+        int rc = run_cmd_quiet(cmd);
         if (rc == 0) {
             printf("PASS\n");
             passed++;
@@ -797,49 +1157,384 @@ static int cmd_add(int argc, char** argv) {
 }
 
 static int cmd_repl(void) {
-    char repl_path[1024];
+    printf("Aether %s REPL\n", AE_VERSION);
+    printf("Press Enter twice (or close a block) to run. 'exit' to quit.\n\n");
 
-    if (tc.dev_mode) {
-        snprintf(repl_path, sizeof(repl_path), "%s/build/aether_repl" EXE_EXT, tc.root);
-    } else {
-        snprintf(repl_path, sizeof(repl_path), "%s/bin/aether_repl" EXE_EXT, tc.root);
-    }
+    char session[16384] = {0};
+    char line[1024];
+    int brace_depth = 0;
 
-    // Set env vars so the REPL can find compiler and link flags
-    setenv("AETHERC", tc.compiler, 1);
-    setenv("AETHER_CFLAGS", tc.include_flags, 1);
+    char ae_file[256], c_file[256], exe_file[256];
+    snprintf(ae_file,  sizeof(ae_file),  "/tmp/_aether_repl_%d.ae",  (int)getpid());
+    snprintf(c_file,   sizeof(c_file),   "/tmp/_aether_repl_%d.c",   (int)getpid());
+    snprintf(exe_file, sizeof(exe_file), "/tmp/_aether_repl_%d" EXE_EXT, (int)getpid());
 
-    char ldflags[2048];
-    if (tc.has_lib) {
-        char lib_dir[1024];
-        strncpy(lib_dir, tc.lib, sizeof(lib_dir) - 1);
-        lib_dir[sizeof(lib_dir) - 1] = '\0';
-        char* slash = strrchr(lib_dir, '/');
-        if (slash) *slash = '\0';
-        snprintf(ldflags, sizeof(ldflags), "-L%s -laether", lib_dir);
-    } else {
-        strncpy(ldflags, tc.runtime_srcs, sizeof(ldflags) - 1);
-        ldflags[sizeof(ldflags) - 1] = '\0';
-    }
-    setenv("AETHER_LDFLAGS", ldflags, 1);
+    while (1) {
+        printf(brace_depth > 0 ? "...  " : "ae> ");
+        fflush(stdout);
+        if (!fgets(line, sizeof(line), stdin)) break;
+        line[strcspn(line, "\n")] = '\0';
 
-    if (path_exists(repl_path)) {
-        return run_cmd(repl_path);
-    }
+        if (strcmp(line, "exit") == 0 || strcmp(line, "quit") == 0) break;
 
-    // Try building it in dev mode
-    if (tc.dev_mode) {
-        printf("Building REPL...\n");
-        char cmd[2048];
-        snprintf(cmd, sizeof(cmd), "make -C %s repl 2>&1", tc.root);
-        if (run_cmd(cmd) == 0 && path_exists(repl_path)) {
-            return run_cmd(repl_path);
+        int prev_depth = brace_depth;
+        for (char* p = line; *p; p++) {
+            if (*p == '{') brace_depth++;
+            else if (*p == '}' && brace_depth > 0) brace_depth--;
+        }
+        int is_empty = (strlen(line) == 0);
+        int block_closed = (prev_depth > 0 && brace_depth == 0);
+
+        if (!is_empty) {
+            if (session[0]) strncat(session, "\n", sizeof(session) - strlen(session) - 1);
+            strncat(session, "    ", sizeof(session) - strlen(session) - 1);
+            strncat(session, line, sizeof(session) - strlen(session) - 1);
+        }
+
+        if ((is_empty || block_closed) && session[0]) {
+            FILE* f = fopen(ae_file, "w");
+            if (f) {
+                fprintf(f, "main() {\n%s\n}\n", session);
+                fclose(f);
+
+                char cmd[8192];
+                snprintf(cmd, sizeof(cmd), "%s %s %s", tc.compiler, ae_file, c_file);
+                if (run_cmd_quiet(cmd) != 0) {
+                    run_cmd(cmd);  // show error
+                } else {
+                    build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, false, NULL);
+                    if (run_cmd_quiet(cmd) == 0) {
+                        run_cmd(exe_file);
+                    } else {
+                        build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, false, NULL);
+                        run_cmd(cmd);  // show build error
+                    }
+                }
+                remove(c_file);
+                remove(exe_file);
+            }
+            session[0] = '\0';
+            brace_depth = 0;
         }
     }
 
-    fprintf(stderr, "Error: REPL binary not found at %s\n", repl_path);
-    fprintf(stderr, "Build it with: make repl\n");
-    return 1;
+    remove(ae_file);
+    remove(c_file);
+    remove(exe_file);
+    printf("\nGoodbye!\n");
+    return 0;
+}
+
+// --------------------------------------------------------------------------
+// Version manager: list available releases, install, and switch versions
+// --------------------------------------------------------------------------
+
+// Compile-time platform string used to pick the right release archive.
+#if defined(_WIN32)
+#  define AE_PLATFORM "windows-x86_64"
+#  define AE_ARCHIVE_EXT ".zip"
+#elif defined(__APPLE__) && (defined(__arm64__) || defined(__aarch64__))
+#  define AE_PLATFORM "macos-arm64"
+#  define AE_ARCHIVE_EXT ".tar.gz"
+#elif defined(__APPLE__)
+#  define AE_PLATFORM "macos-x86_64"
+#  define AE_ARCHIVE_EXT ".tar.gz"
+#else
+#  define AE_PLATFORM "linux-x86_64"
+#  define AE_ARCHIVE_EXT ".tar.gz"
+#endif
+
+#define AE_GITHUB_REPO "nicolasmd87/aether"
+
+// Download url → dest file. Uses curl/wget on POSIX, PowerShell on Windows.
+static int ae_download(const char* url, const char* dest) {
+#ifdef _WIN32
+    char tmp[64];
+    snprintf(tmp, sizeof(tmp), "ae_dl_%u.ps1", (unsigned)GetCurrentProcessId());
+    char ps_path[1024];
+    snprintf(ps_path, sizeof(ps_path), "%s\\%s",
+             getenv("TEMP") ? getenv("TEMP") : "C:\\Temp", tmp);
+    FILE* ps = fopen(ps_path, "w");
+    if (!ps) return 1;
+    fprintf(ps,
+        "$ProgressPreference='SilentlyContinue'\n"
+        "Invoke-WebRequest -Uri '%s' -OutFile '%s' "
+        "-Headers @{'User-Agent'='ae-cli'}\n",
+        url, dest);
+    fclose(ps);
+    char cmd[2048];
+    snprintf(cmd, sizeof(cmd),
+        "powershell -NoProfile -ExecutionPolicy Bypass -File \"%s\"", ps_path);
+    int r = system(cmd);
+    remove(ps_path);
+    return r;
+#else
+    char cmd[2048];
+    if (system("curl --version >/dev/null 2>&1") == 0)
+        snprintf(cmd, sizeof(cmd), "curl -L --progress-bar -o \"%s\" \"%s\"", dest, url);
+    else
+        snprintf(cmd, sizeof(cmd), "wget -q --show-progress -O \"%s\" \"%s\"", dest, url);
+    return system(cmd);
+#endif
+}
+
+// Extract archive → dest_dir.
+static int ae_extract(const char* archive, const char* dest_dir) {
+#ifdef _WIN32
+    char tmp[64];
+    snprintf(tmp, sizeof(tmp), "ae_ex_%u.ps1", (unsigned)GetCurrentProcessId());
+    char ps_path[1024];
+    snprintf(ps_path, sizeof(ps_path), "%s\\%s",
+             getenv("TEMP") ? getenv("TEMP") : "C:\\Temp", tmp);
+    FILE* ps = fopen(ps_path, "w");
+    if (!ps) return 1;
+    fprintf(ps,
+        "$ProgressPreference='SilentlyContinue'\n"
+        "Expand-Archive -Path '%s' -DestinationPath '%s' -Force\n",
+        archive, dest_dir);
+    fclose(ps);
+    char cmd[2048];
+    snprintf(cmd, sizeof(cmd),
+        "powershell -NoProfile -ExecutionPolicy Bypass -File \"%s\"", ps_path);
+    int r = system(cmd);
+    remove(ps_path);
+    return r;
+#else
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "tar -xzf \"%s\" -C \"%s\"", archive, dest_dir);
+    return system(cmd);
+#endif
+}
+
+// List available releases from GitHub. Marks installed + current versions.
+static int cmd_version_list(void) {
+    const char* home = get_home_dir();
+
+    // Fetch the GitHub releases JSON into a temp file
+    char json_path[512];
+#ifdef _WIN32
+    snprintf(json_path, sizeof(json_path), "%s\\.aether\\releases.json", home);
+#else
+    snprintf(json_path, sizeof(json_path), "/tmp/ae_releases_%d.json", (int)getpid());
+#endif
+    char url[256];
+    snprintf(url, sizeof(url),
+        "https://api.github.com/repos/" AE_GITHUB_REPO "/releases?per_page=20");
+
+    printf("Fetching release list...\n");
+    if (ae_download(url, json_path) != 0) {
+        fprintf(stderr, "Failed to fetch releases. Check your internet connection.\n");
+        return 1;
+    }
+
+    FILE* f = fopen(json_path, "r");
+    if (!f) {
+        fprintf(stderr, "Failed to read release data.\n");
+        return 1;
+    }
+
+    printf("\nAvailable Aether releases  (platform: " AE_PLATFORM "):\n\n");
+    printf("  %-16s  %s\n", "Version", "Status");
+    printf("  %-16s  %s\n", "-------", "------");
+
+    // Read whole file, scan for "tag_name" occurrences
+    char buf[131072];
+    size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+    fclose(f);
+    remove(json_path);
+    buf[n] = '\0';
+
+    int found = 0;
+    char* p = buf;
+    while ((p = strstr(p, "\"tag_name\"")) != NULL) {
+        p += 10;  // skip past "tag_name"
+        char* q = strchr(p, '"'); if (!q) break; q++;   // opening "
+        char* end = strchr(q, '"'); if (!end) break;
+        size_t len = (size_t)(end - q);
+        if (len == 0 || len > 32) { p = end + 1; continue; }
+
+        char tag[33];
+        memcpy(tag, q, len);
+        tag[len] = '\0';
+        p = end + 1;
+
+        // v-prefix normalisation: strip 'v' to compare with AE_VERSION
+        const char* ver = (tag[0] == 'v') ? tag + 1 : tag;
+        bool is_current = strcmp(ver, AE_VERSION) == 0;
+
+        // Check locally installed
+        char ver_dir[512];
+        snprintf(ver_dir, sizeof(ver_dir), "%s/.aether/versions/%s", home, tag);
+        bool installed = dir_exists(ver_dir);
+
+        const char* status = is_current ? "* current"
+                           : installed  ? "  installed"
+                                        : "";
+        printf("  %-16s  %s\n", tag, status);
+        found++;
+    }
+
+    if (!found) {
+        printf("  (no releases found)\n");
+    }
+    printf("\n");
+    printf("Install a version:  ae version install v0.6.0\n");
+    printf("Switch versions:    ae version use v0.6.0\n");
+    return 0;
+}
+
+// Download and install a specific version into ~/.aether/versions/<tag>/
+static int cmd_version_install(const char* version) {
+    char vtag[64];
+    if (version[0] != 'v') snprintf(vtag, sizeof(vtag), "v%s", version);
+    else { strncpy(vtag, version, sizeof(vtag) - 1); vtag[sizeof(vtag)-1] = '\0'; }
+
+    const char* ver = vtag + 1;  // strip leading 'v'
+    const char* home = get_home_dir();
+
+    char ver_dir[512];
+    snprintf(ver_dir, sizeof(ver_dir), "%s/.aether/versions/%s", home, vtag);
+    if (dir_exists(ver_dir)) {
+        printf("Version %s is already installed.\n", vtag);
+        printf("Switch to it with: ae version use %s\n", vtag);
+        return 0;
+    }
+
+    // Build URL and local archive path
+    char filename[256], url[1024], archive[512];
+    snprintf(filename, sizeof(filename),
+        "aether-%s-" AE_PLATFORM AE_ARCHIVE_EXT, ver);
+    snprintf(url, sizeof(url),
+        "https://github.com/" AE_GITHUB_REPO "/releases/download/%s/%s",
+        vtag, filename);
+    snprintf(archive, sizeof(archive), "%s/.aether/%s", home, filename);
+
+    printf("Downloading Aether %s for " AE_PLATFORM "...\n", vtag);
+    if (ae_download(url, archive) != 0) {
+        fprintf(stderr, "Download failed. Check the version name and your connection.\n");
+        fprintf(stderr, "URL: %s\n", url);
+        return 1;
+    }
+
+    mkdirs(ver_dir);
+    printf("Extracting...\n");
+
+    // The release archive contains a top-level directory (e.g. "release/").
+    // Extract to a temp dir first, then move the contents into ver_dir.
+    char tmp_dir[512];
+    snprintf(tmp_dir, sizeof(tmp_dir), "%s/.aether/_tmp_install", home);
+    mkdirs(tmp_dir);
+
+    if (ae_extract(archive, tmp_dir) != 0) {
+        fprintf(stderr, "Extraction failed.\n");
+        remove(archive);
+        return 1;
+    }
+    remove(archive);
+
+    // Move extracted contents into ver_dir (the archive extracts a flat dir)
+#ifdef _WIN32
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "xcopy /E /Y /Q \"%s\\*\" \"%s\\\"", tmp_dir, ver_dir);
+    system(cmd);
+    snprintf(cmd, sizeof(cmd), "rmdir /S /Q \"%s\"", tmp_dir);
+    system(cmd);
+#else
+    {
+        char cmd[1024];
+        // Find the single top-level directory inside tmp_dir
+        snprintf(cmd, sizeof(cmd),
+            "src=$(ls -d '%s'/*/ 2>/dev/null | head -1); "
+            "[ -n \"$src\" ] && cp -r \"$src\"* '%s/' || cp -r '%s'/* '%s/'",
+            tmp_dir, ver_dir, tmp_dir, ver_dir);
+        system(cmd);
+        snprintf(cmd, sizeof(cmd), "rm -rf '%s'", tmp_dir);
+        system(cmd);
+    }
+#endif
+
+    printf("Installed Aether %s → %s\n", vtag, ver_dir);
+    printf("Switch to it with: ae version use %s\n", vtag);
+    return 0;
+}
+
+// Switch the active Aether installation to a specific installed version.
+static int cmd_version_use(const char* version) {
+    char vtag[64];
+    if (version[0] != 'v') snprintf(vtag, sizeof(vtag), "v%s", version);
+    else { strncpy(vtag, version, sizeof(vtag) - 1); vtag[sizeof(vtag)-1] = '\0'; }
+
+    const char* home = get_home_dir();
+    char ver_dir[512];
+    snprintf(ver_dir, sizeof(ver_dir), "%s/.aether/versions/%s", home, vtag);
+
+    if (!dir_exists(ver_dir)) {
+        fprintf(stderr, "Version %s is not installed.\n", vtag);
+        fprintf(stderr, "Install it first: ae version install %s\n", vtag);
+        return 1;
+    }
+
+#ifdef _WIN32
+    // Windows: copy binaries to ~/.aether/bin/ (overwrites current)
+    char dest_bin[512], src_bin[512];
+    snprintf(dest_bin, sizeof(dest_bin), "%s\\.aether\\bin", home);
+    snprintf(src_bin,  sizeof(src_bin),  "%s\\bin",           ver_dir);
+    mkdirs(dest_bin);
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd),
+        "xcopy /Y /Q \"%s\\*\" \"%s\\\"", src_bin, dest_bin);
+    if (system(cmd) != 0) {
+        fprintf(stderr, "Failed to copy binaries.\n");
+        return 1;
+    }
+#else
+    // POSIX: update ~/.aether/current symlink
+    char current[512];
+    snprintf(current, sizeof(current), "%s/.aether/current", home);
+    remove(current);   // remove old symlink (ignore if not present)
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd), "ln -sf \"%s\" \"%s\"", ver_dir, current);
+    if (system(cmd) != 0) {
+        fprintf(stderr, "Failed to create symlink. Try manually:\n");
+        fprintf(stderr, "  ln -sf %s %s\n", ver_dir, current);
+        return 1;
+    }
+    // Helpful PATH reminder
+    char current_bin[512];
+    snprintf(current_bin, sizeof(current_bin), "%s/bin", current);
+    printf("Switched to Aether %s.\n", vtag);
+    printf("Make sure %s/bin is first in your PATH:\n", current);
+    printf("  export PATH=\"%s/bin:$PATH\"\n", current);
+    return 0;
+#endif
+    printf("Switched to Aether %s.\n", vtag);
+    return 0;
+}
+
+// "ae version [list|install|use]"
+static int cmd_version(int argc, char** argv) {
+    if (argc == 0) {
+        printf("ae %s (Aether Language)\n", AE_VERSION);
+        printf("Platform: " AE_PLATFORM "\n");
+        printf("\nSubcommands:\n");
+        printf("  ae version list              List all available releases\n");
+        printf("  ae version install <v>       Download and install a release\n");
+        printf("  ae version use <v>           Switch to an installed release\n");
+        return 0;
+    }
+    const char* sub = argv[0];
+    if (strcmp(sub, "list") == 0)    return cmd_version_list();
+    if (strcmp(sub, "install") == 0) {
+        if (argc < 2) { fprintf(stderr, "Usage: ae version install <v>\n"); return 1; }
+        return cmd_version_install(argv[1]);
+    }
+    if (strcmp(sub, "use") == 0) {
+        if (argc < 2) { fprintf(stderr, "Usage: ae version use <v>\n"); return 1; }
+        return cmd_version_use(argv[1]);
+    }
+    // Fall-through: treat unknown sub as "ae version" (backward compat)
+    printf("ae %s (Aether Language)\n", AE_VERSION);
+    return 0;
 }
 
 // --------------------------------------------------------------------------
@@ -979,6 +1674,107 @@ static int cmd_release(int argc, char** argv) {
 }
 
 // --------------------------------------------------------------------------
+// Cache management command
+// --------------------------------------------------------------------------
+
+static int cmd_cache(int argc, char** argv) {
+    const char* sub = argc > 0 ? argv[0] : "info";
+
+    const char* home = getenv("HOME");
+    char cache_path[512];
+    snprintf(cache_path, sizeof(cache_path), "%s/.aether/cache", home ? home : "/tmp");
+
+    if (strcmp(sub, "clear") == 0) {
+#ifdef _WIN32
+        char pattern[600];
+        snprintf(pattern, sizeof(pattern), "%s\\*", cache_path);
+        WIN32_FIND_DATAA fd;
+        HANDLE h = FindFirstFileA(pattern, &fd);
+        if (h == INVALID_HANDLE_VALUE) {
+            printf("Cache is empty (no cache directory).\n");
+            return 0;
+        }
+        int count = 0;
+        do {
+            if (fd.cFileName[0] == '.') continue;
+            char full[1024];
+            snprintf(full, sizeof(full), "%s\\%s", cache_path, fd.cFileName);
+            remove(full);
+            count++;
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+#else
+        DIR* d = opendir(cache_path);
+        if (!d) {
+            printf("Cache is empty (no cache directory).\n");
+            return 0;
+        }
+        int count = 0;
+        struct dirent* entry;
+        while ((entry = readdir(d)) != NULL) {
+            if (entry->d_name[0] == '.') continue;
+            char full[1024];
+            snprintf(full, sizeof(full), "%s/%s", cache_path, entry->d_name);
+            remove(full);
+            count++;
+        }
+        closedir(d);
+#endif
+        printf("Cleared %d cached build(s) from %s\n", count, cache_path);
+        return 0;
+    }
+
+    // Default: show cache info
+#ifdef _WIN32
+    {
+        char pattern[600];
+        snprintf(pattern, sizeof(pattern), "%s\\*", cache_path);
+        WIN32_FIND_DATAA fd;
+        HANDLE h = FindFirstFileA(pattern, &fd);
+        if (h == INVALID_HANDLE_VALUE) {
+            printf("Cache: empty\nLocation: %s\n", cache_path);
+            return 0;
+        }
+        int count = 0;
+        long long total_bytes = 0;
+        do {
+            if (fd.cFileName[0] == '.') continue;
+            char full[1024];
+            snprintf(full, sizeof(full), "%s\\%s", cache_path, fd.cFileName);
+            struct stat st;
+            if (stat(full, &st) == 0) { total_bytes += st.st_size; count++; }
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+        printf("Cache: %d build(s), %.1f MB\nLocation: %s\n",
+               count, (double)total_bytes / (1024.0 * 1024.0), cache_path);
+    }
+#else
+    {
+        DIR* d = opendir(cache_path);
+        if (!d) {
+            printf("Cache: empty\nLocation: %s\n", cache_path);
+            return 0;
+        }
+        int count = 0;
+        long long total_bytes = 0;
+        struct dirent* entry;
+        while ((entry = readdir(d)) != NULL) {
+            if (entry->d_name[0] == '.') continue;
+            char full[1024];
+            snprintf(full, sizeof(full), "%s/%s", cache_path, entry->d_name);
+            struct stat st;
+            if (stat(full, &st) == 0) { total_bytes += st.st_size; count++; }
+        }
+        closedir(d);
+        printf("Cache: %d build(s), %.1f MB\nLocation: %s\n",
+               count, (double)total_bytes / (1024.0 * 1024.0), cache_path);
+    }
+#endif
+    printf("Use 'ae cache clear' to free space.\n");
+    return 0;
+}
+
+// --------------------------------------------------------------------------
 // Help and main
 // --------------------------------------------------------------------------
 
@@ -992,10 +1788,13 @@ static void print_usage(void) {
     printf("  build [file.ae]      Compile to executable\n");
     printf("  test [file|dir]      Discover and run tests\n");
     printf("  add <package>        Add a dependency\n");
+    printf("  cache [clear]        Show or clear build cache\n");
     printf("  repl                 Start interactive REPL\n");
     printf("  fmt [file]           Format source code\n");
-    printf("  release <type>       Bump version (major|minor|patch)\n");
-    printf("  version              Show version\n");
+    printf("  version              Show version / manage installed versions\n");
+    printf("  version list         List all available releases\n");
+    printf("  version install <v>  Download and install a specific version\n");
+    printf("  version use <v>      Switch to an installed version\n");
     printf("  help                 Show this help\n");
     printf("\nExamples:\n");
     printf("  ae init myproject          Create a new project\n");
@@ -1044,8 +1843,7 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (strcmp(cmd, "version") == 0 || strcmp(cmd, "--version") == 0) {
-        printf("ae %s (Aether Language)\n", AE_VERSION);
-        return 0;
+        return cmd_version(sub_argc, sub_argv);
     }
     if (strcmp(cmd, "init") == 0) {
         return cmd_init(sub_argc, sub_argv);
@@ -1066,6 +1864,7 @@ int main(int argc, char** argv) {
     if (strcmp(cmd, "build") == 0)   return cmd_build(sub_argc, sub_argv);
     if (strcmp(cmd, "test") == 0)    return cmd_test(sub_argc, sub_argv);
     if (strcmp(cmd, "add") == 0)     return cmd_add(sub_argc, sub_argv);
+    if (strcmp(cmd, "cache") == 0)   return cmd_cache(sub_argc, sub_argv);
     if (strcmp(cmd, "repl") == 0)    return cmd_repl();
 
     fprintf(stderr, "Unknown command '%s'. Run 'ae help' for usage.\n", cmd);

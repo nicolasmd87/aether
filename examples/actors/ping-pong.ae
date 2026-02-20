@@ -9,9 +9,7 @@ actor PingActor {
     receive {
         Pong(seq) -> {
             received = received + 1;
-            print("Got pong #");
-            print(seq);
-            print("\n");
+            println("Got pong #${seq}");
         }
     }
 }
@@ -22,9 +20,7 @@ actor PongActor {
     receive {
         Ping(seq) -> {
             received = received + 1;
-            print("Got ping #");
-            print(seq);
-            print(", replying...\n");
+            println("Got ping #${seq}, replying...");
         }
     }
 }
@@ -42,11 +38,4 @@ main() {
 
     // Wait for all messages to be processed
     wait_for_idle();
-
-    print("Ping received: ");
-    print(ping.received);
-    print(" pongs\n");
-    print("Pong received: ");
-    print(pong.received);
-    print(" pings\n");
 }

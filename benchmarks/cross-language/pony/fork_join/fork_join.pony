@@ -25,7 +25,7 @@ actor Main
   let _env: Env
   var _start: U64 = 0
   let _num_workers: USize = 8
-  var _total_messages: U64 = 8_000_000
+  var _total_messages: U64 = 100_000
   var _workers_done: USize = 0
   var _total_processed: U64 = 0
 
@@ -77,8 +77,7 @@ actor Main
       let elapsed_ns = finish - _start
       let ns_per_msg = elapsed_ns.f64() / _total_messages.f64()
       let throughput = 1_000_000_000.0 / ns_per_msg
-      let cycles_per_msg = ns_per_msg * 3.0
 
-      _env.out.print("Cycles/msg:     " + cycles_per_msg.string())
+      _env.out.print("ns/msg:         " + ns_per_msg.string())
       _env.out.print("Throughput:     " + (throughput / 1_000_000.0).string() + " M msg/sec")
     end

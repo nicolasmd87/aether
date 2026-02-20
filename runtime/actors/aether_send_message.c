@@ -1,13 +1,14 @@
 #include "actor_state_machine.h"
 #include "../scheduler/multicore_scheduler.h"
 #include "../config/aether_optimization_config.h"
+#include "../utils/aether_compiler.h"
 #include <string.h>
 #include <stdlib.h>
-#include <pthread.h>
+#include "../utils/aether_thread.h"
 #include <stdatomic.h>
 
 // Thread-local core ID for optimization
-extern __thread int current_core_id;
+extern AETHER_TLS int current_core_id;
 
 // ActorBase is defined in multicore_scheduler.h
 
@@ -32,7 +33,7 @@ typedef struct {
 } PayloadPool;
 
 // Thread-local payload pool
-static __thread PayloadPool* g_payload_pool = NULL;
+static AETHER_TLS PayloadPool* g_payload_pool = NULL;
 
 // Global statistics (atomic, shared across all threads)
 static _Atomic uint64_t g_pool_hits = 0;
@@ -119,14 +120,14 @@ static inline int payload_pool_release(void* ptr) {
 }
 
 // TLS flag: when set, skip freeing (used for sync mode zero-copy)
-extern __thread int g_skip_free;
+extern AETHER_TLS int g_skip_free;
 
 // Free message payload - try pool first, then fall back to free()
 void aether_free_message(void* msg_data) {
     if (!msg_data) return;
 
     // SYNC MODE: Skip free when processing messages with zero-copy stack pointers
-    if (__builtin_expect(g_skip_free, 0)) {
+    if (unlikely(g_skip_free)) {
         return;  // Caller's stack memory - don't free!
     }
 
@@ -155,9 +156,9 @@ void aether_free_message(void* msg_data) {
 
 // TLS flag: when set, aether_free_message skips freeing (used for sync mode)
 // Declared here, accessed by aether_free_message below
-__thread int g_skip_free = 0;
+AETHER_TLS int g_skip_free = 0;
 
-static inline void __attribute__((hot)) aether_send_message_sync(ActorBase* actor, void* message_data, size_t message_size) {
+static inline void AETHER_HOT aether_send_message_sync(ActorBase* actor, void* message_data, size_t message_size) {
     // ULTRA-FAST PATH: Pass original message directly without copying
     // Since processing is synchronous, caller's stack memory is still valid
     // We mark g_skip_free so step() doesn't try to free the caller's stack

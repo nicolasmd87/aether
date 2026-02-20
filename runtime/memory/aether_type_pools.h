@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include "../utils/aether_compiler.h"
 
 // Pool configuration
 #define TYPE_POOL_SIZE 1024  // Must be power of 2
@@ -31,7 +32,7 @@
     } \
     \
     static inline TypeName* TypeName##Pool_alloc(TypeName##Pool* p) { \
-        if (__builtin_expect(p->count == 0, 0)) { \
+        if (unlikely(p->count == 0)) { \
             return NULL; \
         } \
         uint16_t idx = p->free_list[p->head]; \
@@ -41,9 +42,9 @@
     } \
     \
     static inline void TypeName##Pool_free(TypeName##Pool* p, TypeName* obj) { \
-        if (__builtin_expect(!obj, 0)) return; \
+        if (unlikely(!obj)) return; \
         uint16_t idx = (uint16_t)(obj - p->pool); \
-        if (__builtin_expect(idx >= TYPE_POOL_SIZE, 0)) return; \
+        if (unlikely(idx >= TYPE_POOL_SIZE)) return; \
         uint16_t tail = (p->head + p->count) & TYPE_POOL_MASK; \
         p->free_list[tail] = idx; \
         p->count++; \
@@ -51,11 +52,11 @@
 
 // Thread-local pool declaration
 #define DECLARE_TLS_POOL(TypeName) \
-    static __thread TypeName##Pool TypeName##_tls_pool = {0}; \
-    static __thread int TypeName##_pool_initialized = 0; \
+    static AETHER_TLS TypeName##Pool TypeName##_tls_pool = {0}; \
+    static AETHER_TLS int TypeName##_pool_initialized = 0; \
     \
     static inline TypeName* TypeName##_alloc(void) { \
-        if (__builtin_expect(!TypeName##_pool_initialized, 0)) { \
+        if (unlikely(!TypeName##_pool_initialized)) { \
             TypeName##Pool_init(&TypeName##_tls_pool); \
             TypeName##_pool_initialized = 1; \
         } \

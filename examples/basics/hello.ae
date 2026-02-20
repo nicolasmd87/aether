@@ -2,21 +2,19 @@
 // Run with: ae run examples/basics/hello.ae
 
 main() {
-    print("Hello, Aether!\n");
+    println("Hello, Aether!");
 
     // Variables with type inference
     x = 42;
     y = 8;
 
     if (x > y) {
-        print("x is greater than y\n");
+        println("x is greater than y");
     }
 
     // Simple arithmetic
     sum = x + y;
-    print("Sum: ");
-    print(sum);
-    print("\n");
+    println("Sum: ${sum}");
 
-    print("Welcome to Aether!\n");
+    println("Welcome to Aether!");
 }

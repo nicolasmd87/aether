@@ -25,7 +25,7 @@ The extension provides comprehensive syntax highlighting with Erlang-inspired co
 - **Control Keywords** (`if`, `else`, `for`, `while`, `return`) - Red
 - **Actor Keywords** (`receive`, `send`, `spawn`, `actor`) - Red
 - **Function Names** - Red (except `main()` which is yellow)
-- **Declarations** (`let`, `var`, `struct`, `func`) - Purple
+- **Declarations** (`message`, `actor`, `struct`, `state`) - Purple
 - **Strings** - Dark green
 - **Numbers & Constants** - Yellow
 - **Comments** - Gray-green (italic)
@@ -46,18 +46,17 @@ struct Point {
     y
 }
 
-func distance(p1, p2) {
-    let dx = p2.x - p1.x;
-    let dy = p2.y - p1.y;
-    return dx * dx + dy * dy;
+distance(p1, p2) {
+    dx = p2.x - p1.x
+    dy = p2.y - p1.y
+    return dx * dx + dy * dy
 }
 
 main() {
-    let p1 = Point{ x: 0, y: 0 };
-    let p2 = Point{ x: 3, y: 4 };
-    
-    let d = distance(p1, p2);
-    print(d);  // 25
+    p1 = Point { x: 0, y: 0 }
+    p2 = Point { x: 3, y: 4 }
+    d = distance(p1, p2)
+    print(d)  // 25
 }
 ```
 

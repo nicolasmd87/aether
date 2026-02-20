@@ -1,7 +1,7 @@
 #ifndef AST_H
 #define AST_H
 
-#include "frontend/tokens.h"
+#include "parser/tokens.h"
 
 typedef enum {
     // Program structure
@@ -68,7 +68,8 @@ typedef enum {
     AST_ARRAY_ACCESS,
     AST_MEMBER_ACCESS,
     AST_STRUCT_LITERAL,
-    
+    AST_STRING_INTERP,      // interpolated string "Hello ${expr}"
+
     // Types
     AST_TYPE_ANNOTATION,
     AST_ACTOR_REF_TYPE,
@@ -110,6 +111,7 @@ typedef struct ASTNode {
     int child_count;
     int line;
     int column;
+    int is_manual;              // 1 = @manual annotation: skip auto-free for this var
 } ASTNode;
 
 // Type functions

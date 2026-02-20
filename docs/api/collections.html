@@ -1,0 +1,550 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>collections - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search collections..." onkeyup="searchModule()">
+  <h2>Functions</h2>
+  <ul class="function-nav">
+    <li><a href="#list_add">list_add</a></li>
+    <li><a href="#list_get">list_get</a></li>
+    <li><a href="#list_set">list_set</a></li>
+    <li><a href="#list_size">list_size</a></li>
+    <li><a href="#list_remove">list_remove</a></li>
+    <li><a href="#list_clear">list_clear</a></li>
+    <li><a href="#list_free">list_free</a></li>
+    <li><a href="#map_new">map_new</a></li>
+    <li><a href="#map_put">map_put</a></li>
+    <li><a href="#map_get">map_get</a></li>
+    <li><a href="#map_has">map_has</a></li>
+    <li><a href="#map_remove">map_remove</a></li>
+    <li><a href="#map_size">map_size</a></li>
+    <li><a href="#map_clear">map_clear</a></li>
+    <li><a href="#map_free">map_free</a></li>
+    <li><a href="#map_keys">map_keys</a></li>
+    <li><a href="#map_keys_free">map_keys_free</a></li>
+    <li><a href="#"></a></li>
+    <li><a href="#set_free">set_free</a></li>
+    <li><a href="#set_add">set_add</a></li>
+    <li><a href="#set_remove">set_remove</a></li>
+    <li><a href="#set_contains">set_contains</a></li>
+    <li><a href="#set_clear">set_clear</a></li>
+    <li><a href="#set_size">set_size</a></li>
+    <li><a href="#set_is_empty">set_is_empty</a></li>
+    <li><a href="#set_union">set_union</a></li>
+    <li><a href="#set_intersection">set_intersection</a></li>
+    <li><a href="#set_difference">set_difference</a></li>
+    <li><a href="#set_is_subset">set_is_subset</a></li>
+    <li><a href="#set_is_superset">set_is_superset</a></li>
+    <li><a href="#set_iterator">set_iterator</a></li>
+    <li><a href="#set_iterator_next">set_iterator_next</a></li>
+    <li><a href="#set_create_string">set_create_string</a></li>
+    <li><a href="#set_create_int">set_create_int</a></li>
+    <li><a href="#"></a></li>
+    <li><a href="#uint64_t">uint64_t</a></li>
+    <li><a href="#bool">bool</a></li>
+    <li><a href="#void">void</a></li>
+    <li><a href="#void">void</a></li>
+    <li><a href="#"></a></li>
+    <li><a href="#"></a></li>
+    <li><a href="#"></a></li>
+    <li><a href="#hashmap_free">hashmap_free</a></li>
+    <li><a href="#hashmap_insert">hashmap_insert</a></li>
+    <li><a href="#hashmap_get">hashmap_get</a></li>
+    <li><a href="#hashmap_remove">hashmap_remove</a></li>
+    <li><a href="#hashmap_contains">hashmap_contains</a></li>
+    <li><a href="#hashmap_clear">hashmap_clear</a></li>
+    <li><a href="#hashmap_size">hashmap_size</a></li>
+    <li><a href="#hashmap_is_empty">hashmap_is_empty</a></li>
+    <li><a href="#hashmap_iterator">hashmap_iterator</a></li>
+    <li><a href="#hashmap_iterator_next">hashmap_iterator_next</a></li>
+    <li><a href="#hashmap_hash_string">hashmap_hash_string</a></li>
+    <li><a href="#hashmap_equals_string">hashmap_equals_string</a></li>
+    <li><a href="#hashmap_free_string">hashmap_free_string</a></li>
+    <li><a href="#hashmap_clone_string">hashmap_clone_string</a></li>
+    <li><a href="#hashmap_hash_int">hashmap_hash_int</a></li>
+    <li><a href="#hashmap_equals_int">hashmap_equals_int</a></li>
+    <li><a href="#hashmap_free_int">hashmap_free_int</a></li>
+    <li><a href="#hashmap_clone_int">hashmap_clone_int</a></li>
+    <li><a href="#hashmap_create_string_to_int">hashmap_create_string_to_int</a></li>
+    <li><a href="#hashmap_create_string_to_string">hashmap_create_string_to_string</a></li>
+    <li><a href="#hashmap_create_int_to_int">hashmap_create_int_to_int</a></li>
+    <li><a href="#int">int</a></li>
+    <li><a href="#void">void</a></li>
+    <li><a href="#"></a></li>
+    <li><a href="#"></a></li>
+    <li><a href="#pqueue_free">pqueue_free</a></li>
+    <li><a href="#pqueue_insert">pqueue_insert</a></li>
+    <li><a href="#pqueue_extract">pqueue_extract</a></li>
+    <li><a href="#pqueue_peek">pqueue_peek</a></li>
+    <li><a href="#pqueue_size">pqueue_size</a></li>
+    <li><a href="#pqueue_is_empty">pqueue_is_empty</a></li>
+    <li><a href="#pqueue_clear">pqueue_clear</a></li>
+    <li><a href="#bool">bool</a></li>
+    <li><a href="#"></a></li>
+    <li><a href="#pqueue_compare_int_min">pqueue_compare_int_min</a></li>
+    <li><a href="#pqueue_compare_int_max">pqueue_compare_int_max</a></li>
+    <li><a href="#void">void</a></li>
+    <li><a href="#"></a></li>
+    <li><a href="#"></a></li>
+    <li><a href="#vector_free">vector_free</a></li>
+    <li><a href="#vector_push">vector_push</a></li>
+    <li><a href="#vector_pop">vector_pop</a></li>
+    <li><a href="#vector_get">vector_get</a></li>
+    <li><a href="#vector_set">vector_set</a></li>
+    <li><a href="#vector_insert">vector_insert</a></li>
+    <li><a href="#vector_remove">vector_remove</a></li>
+    <li><a href="#vector_clear">vector_clear</a></li>
+    <li><a href="#vector_size">vector_size</a></li>
+    <li><a href="#vector_is_empty">vector_is_empty</a></li>
+    <li><a href="#vector_capacity">vector_capacity</a></li>
+    <li><a href="#vector_reserve">vector_reserve</a></li>
+    <li><a href="#vector_shrink_to_fit">vector_shrink_to_fit</a></li>
+    <li><a href="#vector_find">vector_find</a></li>
+    <li><a href="#vector_contains">vector_contains</a></li>
+    <li><a href="#vector_reverse">vector_reverse</a></li>
+    <li><a href="#vector_sort">vector_sort</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="net.html">net</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="string.html">string</a></li>
+    <li class="active"><a href="collections.html">collections</a></li>
+    <li><a href="fs.html">fs</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>collections</h1>
+    <p class="module-desc">Lists, maps, sets, and data structures</p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="list_add" data-name="list_add">
+      <h3 class="function-name">list_add</h3>
+      <pre class="usage"><code>list_add(list, item)</code></pre>
+    </div>
+    <div class="function" id="list_get" data-name="list_get">
+      <h3 class="function-name">list_get</h3>
+      <pre class="usage"><code>list_get(list, index)</code></pre>
+    </div>
+    <div class="function" id="list_set" data-name="list_set">
+      <h3 class="function-name">list_set</h3>
+      <pre class="usage"><code>list_set(list, index, item)</code></pre>
+    </div>
+    <div class="function" id="list_size" data-name="list_size">
+      <h3 class="function-name">list_size</h3>
+      <pre class="usage"><code>list_size(list)</code></pre>
+    </div>
+    <div class="function" id="list_remove" data-name="list_remove">
+      <h3 class="function-name">list_remove</h3>
+      <pre class="usage"><code>list_remove(list, index)</code></pre>
+    </div>
+    <div class="function" id="list_clear" data-name="list_clear">
+      <h3 class="function-name">list_clear</h3>
+      <pre class="usage"><code>list_clear(list)</code></pre>
+    </div>
+    <div class="function" id="list_free" data-name="list_free">
+      <h3 class="function-name">list_free</h3>
+      <pre class="usage"><code>list_free(list)</code></pre>
+    </div>
+    <div class="function" id="map_new" data-name="map_new">
+      <h3 class="function-name">map_new</h3>
+      <pre class="usage"><code>map_new()</code></pre>
+    </div>
+    <div class="function" id="map_put" data-name="map_put">
+      <h3 class="function-name">map_put</h3>
+      <pre class="usage"><code>map_put(map, key, value)</code></pre>
+    </div>
+    <div class="function" id="map_get" data-name="map_get">
+      <h3 class="function-name">map_get</h3>
+      <pre class="usage"><code>map_get(map, key)</code></pre>
+    </div>
+    <div class="function" id="map_has" data-name="map_has">
+      <h3 class="function-name">map_has</h3>
+      <pre class="usage"><code>map_has(map, key)</code></pre>
+    </div>
+    <div class="function" id="map_remove" data-name="map_remove">
+      <h3 class="function-name">map_remove</h3>
+      <pre class="usage"><code>map_remove(map, key)</code></pre>
+    </div>
+    <div class="function" id="map_size" data-name="map_size">
+      <h3 class="function-name">map_size</h3>
+      <pre class="usage"><code>map_size(map)</code></pre>
+    </div>
+    <div class="function" id="map_clear" data-name="map_clear">
+      <h3 class="function-name">map_clear</h3>
+      <pre class="usage"><code>map_clear(map)</code></pre>
+    </div>
+    <div class="function" id="map_free" data-name="map_free">
+      <h3 class="function-name">map_free</h3>
+      <pre class="usage"><code>map_free(map)</code></pre>
+    </div>
+    <div class="function" id="map_keys" data-name="map_keys">
+      <h3 class="function-name">map_keys</h3>
+      <pre class="usage"><code>map_keys(map)</code></pre>
+    </div>
+    <div class="function" id="map_keys_free" data-name="map_keys_free">
+      <h3 class="function-name">map_keys_free</h3>
+      <pre class="usage"><code>map_keys_free(keys)</code></pre>
+    </div>
+    <div class="function" id="" data-name="">
+      <h3 class="function-name"></h3>
+      <pre class="usage"><code>(key_clone)</code></pre>
+    </div>
+    <div class="function" id="set_free" data-name="set_free">
+      <h3 class="function-name">set_free</h3>
+      <pre class="usage"><code>set_free(set)</code></pre>
+    </div>
+    <div class="function" id="set_add" data-name="set_add">
+      <h3 class="function-name">set_add</h3>
+      <pre class="usage"><code>set_add(set, element)</code></pre>
+      <p class="doc">Core operations</p>
+    </div>
+    <div class="function" id="set_remove" data-name="set_remove">
+      <h3 class="function-name">set_remove</h3>
+      <pre class="usage"><code>set_remove(set, element)</code></pre>
+    </div>
+    <div class="function" id="set_contains" data-name="set_contains">
+      <h3 class="function-name">set_contains</h3>
+      <pre class="usage"><code>set_contains(set, element)</code></pre>
+    </div>
+    <div class="function" id="set_clear" data-name="set_clear">
+      <h3 class="function-name">set_clear</h3>
+      <pre class="usage"><code>set_clear(set)</code></pre>
+    </div>
+    <div class="function" id="set_size" data-name="set_size">
+      <h3 class="function-name">set_size</h3>
+      <pre class="usage"><code>set_size(set)</code></pre>
+      <p class="doc">Size operations</p>
+    </div>
+    <div class="function" id="set_is_empty" data-name="set_is_empty">
+      <h3 class="function-name">set_is_empty</h3>
+      <pre class="usage"><code>set_is_empty(set)</code></pre>
+    </div>
+    <div class="function" id="set_union" data-name="set_union">
+      <h3 class="function-name">set_union</h3>
+      <pre class="usage"><code>set_union(a, b)</code></pre>
+      <p class="doc">Set operations</p>
+    </div>
+    <div class="function" id="set_intersection" data-name="set_intersection">
+      <h3 class="function-name">set_intersection</h3>
+      <pre class="usage"><code>set_intersection(a, b)</code></pre>
+    </div>
+    <div class="function" id="set_difference" data-name="set_difference">
+      <h3 class="function-name">set_difference</h3>
+      <pre class="usage"><code>set_difference(a, b)</code></pre>
+    </div>
+    <div class="function" id="set_is_subset" data-name="set_is_subset">
+      <h3 class="function-name">set_is_subset</h3>
+      <pre class="usage"><code>set_is_subset(a, b)</code></pre>
+    </div>
+    <div class="function" id="set_is_superset" data-name="set_is_superset">
+      <h3 class="function-name">set_is_superset</h3>
+      <pre class="usage"><code>set_is_superset(a, b)</code></pre>
+    </div>
+    <div class="function" id="set_iterator" data-name="set_iterator">
+      <h3 class="function-name">set_iterator</h3>
+      <pre class="usage"><code>set_iterator(set)</code></pre>
+    </div>
+    <div class="function" id="set_iterator_next" data-name="set_iterator_next">
+      <h3 class="function-name">set_iterator_next</h3>
+      <pre class="usage"><code>set_iterator_next(iter, element)</code></pre>
+    </div>
+    <div class="function" id="set_create_string" data-name="set_create_string">
+      <h3 class="function-name">set_create_string</h3>
+      <pre class="usage"><code>set_create_string(initial_capacity)</code></pre>
+      <p class="doc">Convenience constructors</p>
+    </div>
+    <div class="function" id="set_create_int" data-name="set_create_int">
+      <h3 class="function-name">set_create_int</h3>
+      <pre class="usage"><code>set_create_int(initial_capacity)</code></pre>
+    </div>
+    <div class="function" id="" data-name="">
+      <h3 class="function-name"></h3>
+      <pre class="usage"><code>()</code></pre>
+    </div>
+    <div class="function" id="uint64_t" data-name="uint64_t">
+      <h3 class="function-name">uint64_t</h3>
+      <pre class="usage"><code>uint64_t(hash_func)</code></pre>
+      <p class="doc">Function pointers for generic key/value operations</p>
+    </div>
+    <div class="function" id="bool" data-name="bool">
+      <h3 class="function-name">bool</h3>
+      <pre class="usage"><code>bool(key_equals)</code></pre>
+    </div>
+    <div class="function" id="void" data-name="void">
+      <h3 class="function-name">void</h3>
+      <pre class="usage"><code>void(key_free)</code></pre>
+    </div>
+    <div class="function" id="void" data-name="void">
+      <h3 class="function-name">void</h3>
+      <pre class="usage"><code>void(value_free)</code></pre>
+    </div>
+    <div class="function" id="" data-name="">
+      <h3 class="function-name"></h3>
+      <pre class="usage"><code>(key_clone)</code></pre>
+    </div>
+    <div class="function" id="" data-name="">
+      <h3 class="function-name"></h3>
+      <pre class="usage"><code>(value_clone)</code></pre>
+    </div>
+    <div class="function" id="" data-name="">
+      <h3 class="function-name"></h3>
+      <pre class="usage"><code>(value_clone)</code></pre>
+    </div>
+    <div class="function" id="hashmap_free" data-name="hashmap_free">
+      <h3 class="function-name">hashmap_free</h3>
+      <pre class="usage"><code>hashmap_free(map)</code></pre>
+    </div>
+    <div class="function" id="hashmap_insert" data-name="hashmap_insert">
+      <h3 class="function-name">hashmap_insert</h3>
+      <pre class="usage"><code>hashmap_insert(map, key, value)</code></pre>
+      <p class="doc">Core operations</p>
+    </div>
+    <div class="function" id="hashmap_get" data-name="hashmap_get">
+      <h3 class="function-name">hashmap_get</h3>
+      <pre class="usage"><code>hashmap_get(map, key)</code></pre>
+    </div>
+    <div class="function" id="hashmap_remove" data-name="hashmap_remove">
+      <h3 class="function-name">hashmap_remove</h3>
+      <pre class="usage"><code>hashmap_remove(map, key)</code></pre>
+    </div>
+    <div class="function" id="hashmap_contains" data-name="hashmap_contains">
+      <h3 class="function-name">hashmap_contains</h3>
+      <pre class="usage"><code>hashmap_contains(map, key)</code></pre>
+    </div>
+    <div class="function" id="hashmap_clear" data-name="hashmap_clear">
+      <h3 class="function-name">hashmap_clear</h3>
+      <pre class="usage"><code>hashmap_clear(map)</code></pre>
+    </div>
+    <div class="function" id="hashmap_size" data-name="hashmap_size">
+      <h3 class="function-name">hashmap_size</h3>
+      <pre class="usage"><code>hashmap_size(map)</code></pre>
+      <p class="doc">Size operations</p>
+    </div>
+    <div class="function" id="hashmap_is_empty" data-name="hashmap_is_empty">
+      <h3 class="function-name">hashmap_is_empty</h3>
+      <pre class="usage"><code>hashmap_is_empty(map)</code></pre>
+    </div>
+    <div class="function" id="hashmap_iterator" data-name="hashmap_iterator">
+      <h3 class="function-name">hashmap_iterator</h3>
+      <pre class="usage"><code>hashmap_iterator(map)</code></pre>
+      <p class="doc">Iterator operations</p>
+    </div>
+    <div class="function" id="hashmap_iterator_next" data-name="hashmap_iterator_next">
+      <h3 class="function-name">hashmap_iterator_next</h3>
+      <pre class="usage"><code>hashmap_iterator_next(iter, key, value)</code></pre>
+    </div>
+    <div class="function" id="hashmap_hash_string" data-name="hashmap_hash_string">
+      <h3 class="function-name">hashmap_hash_string</h3>
+      <pre class="usage"><code>hashmap_hash_string(key)</code></pre>
+      <p class="doc">Utility functions for common types</p>
+    </div>
+    <div class="function" id="hashmap_equals_string" data-name="hashmap_equals_string">
+      <h3 class="function-name">hashmap_equals_string</h3>
+      <pre class="usage"><code>hashmap_equals_string(a, b)</code></pre>
+    </div>
+    <div class="function" id="hashmap_free_string" data-name="hashmap_free_string">
+      <h3 class="function-name">hashmap_free_string</h3>
+      <pre class="usage"><code>hashmap_free_string(str)</code></pre>
+    </div>
+    <div class="function" id="hashmap_clone_string" data-name="hashmap_clone_string">
+      <h3 class="function-name">hashmap_clone_string</h3>
+      <pre class="usage"><code>hashmap_clone_string(str)</code></pre>
+    </div>
+    <div class="function" id="hashmap_hash_int" data-name="hashmap_hash_int">
+      <h3 class="function-name">hashmap_hash_int</h3>
+      <pre class="usage"><code>hashmap_hash_int(key)</code></pre>
+    </div>
+    <div class="function" id="hashmap_equals_int" data-name="hashmap_equals_int">
+      <h3 class="function-name">hashmap_equals_int</h3>
+      <pre class="usage"><code>hashmap_equals_int(a, b)</code></pre>
+    </div>
+    <div class="function" id="hashmap_free_int" data-name="hashmap_free_int">
+      <h3 class="function-name">hashmap_free_int</h3>
+      <pre class="usage"><code>hashmap_free_int(ptr)</code></pre>
+    </div>
+    <div class="function" id="hashmap_clone_int" data-name="hashmap_clone_int">
+      <h3 class="function-name">hashmap_clone_int</h3>
+      <pre class="usage"><code>hashmap_clone_int(ptr)</code></pre>
+    </div>
+    <div class="function" id="hashmap_create_string_to_int" data-name="hashmap_create_string_to_int">
+      <h3 class="function-name">hashmap_create_string_to_int</h3>
+      <pre class="usage"><code>hashmap_create_string_to_int(initial_capacity)</code></pre>
+      <p class="doc">Convenience constructors</p>
+    </div>
+    <div class="function" id="hashmap_create_string_to_string" data-name="hashmap_create_string_to_string">
+      <h3 class="function-name">hashmap_create_string_to_string</h3>
+      <pre class="usage"><code>hashmap_create_string_to_string(initial_capacity)</code></pre>
+    </div>
+    <div class="function" id="hashmap_create_int_to_int" data-name="hashmap_create_int_to_int">
+      <h3 class="function-name">hashmap_create_int_to_int</h3>
+      <pre class="usage"><code>hashmap_create_int_to_int(initial_capacity)</code></pre>
+    </div>
+    <div class="function" id="int" data-name="int">
+      <h3 class="function-name">int</h3>
+      <pre class="usage"><code>int(compare)</code></pre>
+    </div>
+    <div class="function" id="void" data-name="void">
+      <h3 class="function-name">void</h3>
+      <pre class="usage"><code>void(element_free)</code></pre>
+    </div>
+    <div class="function" id="" data-name="">
+      <h3 class="function-name"></h3>
+      <pre class="usage"><code>(element_clone)</code></pre>
+    </div>
+    <div class="function" id="" data-name="">
+      <h3 class="function-name"></h3>
+      <pre class="usage"><code>(element_clone)</code></pre>
+    </div>
+    <div class="function" id="pqueue_free" data-name="pqueue_free">
+      <h3 class="function-name">pqueue_free</h3>
+      <pre class="usage"><code>pqueue_free(pq)</code></pre>
+    </div>
+    <div class="function" id="pqueue_insert" data-name="pqueue_insert">
+      <h3 class="function-name">pqueue_insert</h3>
+      <pre class="usage"><code>pqueue_insert(pq, element)</code></pre>
+      <p class="doc">Core operations - O(log n)</p>
+    </div>
+    <div class="function" id="pqueue_extract" data-name="pqueue_extract">
+      <h3 class="function-name">pqueue_extract</h3>
+      <pre class="usage"><code>pqueue_extract(pq)</code></pre>
+    </div>
+    <div class="function" id="pqueue_peek" data-name="pqueue_peek">
+      <h3 class="function-name">pqueue_peek</h3>
+      <pre class="usage"><code>pqueue_peek(pq)</code></pre>
+      <p class="doc">Query operations - O(1)</p>
+    </div>
+    <div class="function" id="pqueue_size" data-name="pqueue_size">
+      <h3 class="function-name">pqueue_size</h3>
+      <pre class="usage"><code>pqueue_size(pq)</code></pre>
+    </div>
+    <div class="function" id="pqueue_is_empty" data-name="pqueue_is_empty">
+      <h3 class="function-name">pqueue_is_empty</h3>
+      <pre class="usage"><code>pqueue_is_empty(pq)</code></pre>
+    </div>
+    <div class="function" id="pqueue_clear" data-name="pqueue_clear">
+      <h3 class="function-name">pqueue_clear</h3>
+      <pre class="usage"><code>pqueue_clear(pq)</code></pre>
+      <p class="doc">Utility</p>
+    </div>
+    <div class="function" id="bool" data-name="bool">
+      <h3 class="function-name">bool</h3>
+      <pre class="usage"><code>bool(equals)</code></pre>
+    </div>
+    <div class="function" id="" data-name="">
+      <h3 class="function-name"></h3>
+      <pre class="usage"><code>(element_clone)</code></pre>
+    </div>
+    <div class="function" id="pqueue_compare_int_min" data-name="pqueue_compare_int_min">
+      <h3 class="function-name">pqueue_compare_int_min</h3>
+      <pre class="usage"><code>pqueue_compare_int_min(a, b)</code></pre>
+      <p class="doc">Common comparators</p>
+    </div>
+    <div class="function" id="pqueue_compare_int_max" data-name="pqueue_compare_int_max">
+      <h3 class="function-name">pqueue_compare_int_max</h3>
+      <pre class="usage"><code>pqueue_compare_int_max(a, b)</code></pre>
+    </div>
+    <div class="function" id="void" data-name="void">
+      <h3 class="function-name">void</h3>
+      <pre class="usage"><code>void(element_free)</code></pre>
+    </div>
+    <div class="function" id="" data-name="">
+      <h3 class="function-name"></h3>
+      <pre class="usage"><code>(element_clone)</code></pre>
+    </div>
+    <div class="function" id="" data-name="">
+      <h3 class="function-name"></h3>
+      <pre class="usage"><code>(element_clone)</code></pre>
+    </div>
+    <div class="function" id="vector_free" data-name="vector_free">
+      <h3 class="function-name">vector_free</h3>
+      <pre class="usage"><code>vector_free(vec)</code></pre>
+    </div>
+    <div class="function" id="vector_push" data-name="vector_push">
+      <h3 class="function-name">vector_push</h3>
+      <pre class="usage"><code>vector_push(vec, element)</code></pre>
+      <p class="doc">Core operations (amortized O(1) for push)</p>
+    </div>
+    <div class="function" id="vector_pop" data-name="vector_pop">
+      <h3 class="function-name">vector_pop</h3>
+      <pre class="usage"><code>vector_pop(vec)</code></pre>
+    </div>
+    <div class="function" id="vector_get" data-name="vector_get">
+      <h3 class="function-name">vector_get</h3>
+      <pre class="usage"><code>vector_get(vec, index)</code></pre>
+    </div>
+    <div class="function" id="vector_set" data-name="vector_set">
+      <h3 class="function-name">vector_set</h3>
+      <pre class="usage"><code>vector_set(vec, index, element)</code></pre>
+    </div>
+    <div class="function" id="vector_insert" data-name="vector_insert">
+      <h3 class="function-name">vector_insert</h3>
+      <pre class="usage"><code>vector_insert(vec, index, element)</code></pre>
+    </div>
+    <div class="function" id="vector_remove" data-name="vector_remove">
+      <h3 class="function-name">vector_remove</h3>
+      <pre class="usage"><code>vector_remove(vec, index)</code></pre>
+    </div>
+    <div class="function" id="vector_clear" data-name="vector_clear">
+      <h3 class="function-name">vector_clear</h3>
+      <pre class="usage"><code>vector_clear(vec)</code></pre>
+    </div>
+    <div class="function" id="vector_size" data-name="vector_size">
+      <h3 class="function-name">vector_size</h3>
+      <pre class="usage"><code>vector_size(vec)</code></pre>
+      <p class="doc">Size operations</p>
+    </div>
+    <div class="function" id="vector_is_empty" data-name="vector_is_empty">
+      <h3 class="function-name">vector_is_empty</h3>
+      <pre class="usage"><code>vector_is_empty(vec)</code></pre>
+    </div>
+    <div class="function" id="vector_capacity" data-name="vector_capacity">
+      <h3 class="function-name">vector_capacity</h3>
+      <pre class="usage"><code>vector_capacity(vec)</code></pre>
+    </div>
+    <div class="function" id="vector_reserve" data-name="vector_reserve">
+      <h3 class="function-name">vector_reserve</h3>
+      <pre class="usage"><code>vector_reserve(vec, new_capacity)</code></pre>
+    </div>
+    <div class="function" id="vector_shrink_to_fit" data-name="vector_shrink_to_fit">
+      <h3 class="function-name">vector_shrink_to_fit</h3>
+      <pre class="usage"><code>vector_shrink_to_fit(vec)</code></pre>
+    </div>
+    <div class="function" id="vector_find" data-name="vector_find">
+      <h3 class="function-name">vector_find</h3>
+      <pre class="usage"><code>vector_find(vec, element, equals)</code></pre>
+      <p class="doc">Search operations</p>
+    </div>
+    <div class="function" id="vector_contains" data-name="vector_contains">
+      <h3 class="function-name">vector_contains</h3>
+      <pre class="usage"><code>vector_contains(vec, element, equals)</code></pre>
+    </div>
+    <div class="function" id="vector_reverse" data-name="vector_reverse">
+      <h3 class="function-name">vector_reverse</h3>
+      <pre class="usage"><code>vector_reverse(vec)</code></pre>
+      <p class="doc">Utility operations</p>
+    </div>
+    <div class="function" id="vector_sort" data-name="vector_sort">
+      <h3 class="function-name">vector_sort</h3>
+      <pre class="usage"><code>vector_sort(vec, compare)</code></pre>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

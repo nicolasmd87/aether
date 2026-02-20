@@ -1,13 +1,36 @@
-message Increment {
-    amount: int
-}
+// Integration test: Message construction and field access
+// Verifies message types can be created with correct field values
 
-message Response {
-    value: int
-    status: int
+extern exit(code: int) -> void;
+
+message Increment { amount: int }
+
+actor Adder {
+    state total = 0;
+
+    receive {
+        Increment(amount) -> {
+            total = total + amount;
+        }
+    }
 }
 
 main() {
-    msg = Increment { amount: 5 };
-    resp = Response { value: 10, status: 1 };
+    a = spawn(Adder());
+
+    a ! Increment { amount: 5 }
+    a ! Increment { amount: 10 }
+    a ! Increment { amount: 20 }
+
+    wait_for_idle();
+
+    print("total: ");
+    print(a.total);
+    print("\n");
+
+    if a.total != 35 {
+        print("FAIL: expected 35\n");
+        exit(1);
+    }
+    print("PASS\n");
 }

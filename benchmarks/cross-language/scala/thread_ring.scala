@@ -50,7 +50,7 @@ class ParentActor(promise: Promise[Int], ringSize: Int, numHops: Int) extends Ac
 
 object ThreadRingBenchmark extends App {
   val ringSize = 100
-  val numHops = 1000000
+  val numHops = sys.env.get("BENCHMARK_MESSAGES").flatMap(s => scala.util.Try(s.toInt).toOption).getOrElse(100000)
   println("=== Scala Akka Thread Ring Benchmark ===")
   println(s"Ring size: $ringSize, Hops: $numHops\n")
 
@@ -72,9 +72,9 @@ object ThreadRingBenchmark extends App {
   }
 
   val throughput = totalMessages / elapsed / 1e6
-  val cyclesPerMsg = elapsed * 3e9 / totalMessages
+  val nsPerMsg = elapsed * 1e9 / totalMessages
 
-  println(f"Cycles/msg:     $cyclesPerMsg%.2f")
+  println(f"ns/msg:         $nsPerMsg%.2f")
   println(f"Throughput:     $throughput%.2f M msg/sec")
 
   Await.result(system.whenTerminated, 10.seconds)

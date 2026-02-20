@@ -1,5 +1,6 @@
 // C++ Thread Ring Benchmark (Savina-style)
 #include <iostream>
+#include <iomanip>
 #include <thread>
 #include <mutex>
 #include <condition_variable>
@@ -115,10 +116,10 @@ int main() {
     int total_messages = NUM_HOPS + 1;
 
     double throughput = total_messages / elapsed / 1e6;
-    double cycles_per_msg = elapsed * 3e9 / total_messages;
+    double ns_per_msg = elapsed * 1e9 / total_messages;
 
-    std::cout << "Cycles/msg:     " << std::fixed << cycles_per_msg << std::endl;
-    std::cout << "Throughput:     " << throughput << " M msg/sec" << std::endl;
+    std::cout << "ns/msg:         " << std::fixed << std::setprecision(2) << ns_per_msg << std::endl;
+    std::cout << "Throughput:     " << std::setprecision(2) << throughput << " M msg/sec" << std::endl;
 
     return 0;
 }

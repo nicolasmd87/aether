@@ -73,9 +73,9 @@ int main() {
 
     double elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
     double throughput = MESSAGES / elapsed / 1e6;
-    double cycles_per_msg = (elapsed * 3e9) / MESSAGES;
+    double ns_per_msg = elapsed * 1e9 / MESSAGES;
 
-    printf("Cycles/msg:     %.2f\n", cycles_per_msg);
+    printf("ns/msg:         %.2f\n", ns_per_msg);
     printf("Throughput:     %.2f M msg/sec\n", throughput);
 
     pthread_mutex_destroy(&counter.mutex);

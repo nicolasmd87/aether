@@ -36,7 +36,9 @@ typedef struct {
     int auto_process;
     int assigned_core;
     int migrate_to;
+    int main_thread_only;
     SPSCQueue spsc_queue;
+    ActorReplySlot* reply_slot;
     // Test-specific fields below
     atomic_int count;
     atomic_int errors;
@@ -62,7 +64,9 @@ typedef struct {
     int auto_process;
     int assigned_core;
     int migrate_to;
+    int main_thread_only;
     SPSCQueue spsc_queue;
+    ActorReplySlot* reply_slot;
     // Test-specific fields below
     atomic_int count;
     int last_seq;
@@ -92,7 +96,9 @@ typedef struct {
     int auto_process;
     int assigned_core;
     int migrate_to;
+    int main_thread_only;
     SPSCQueue spsc_queue;
+    ActorReplySlot* reply_slot;
     // Test-specific fields below
     atomic_int count;
     void* next_actor;

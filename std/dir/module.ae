@@ -1,0 +1,14 @@
+// std.dir - Directory Operations (alias for std.fs)
+//
+// This is a convenience module that re-exports directory functions from std.fs.
+// You can use either:
+//   import std.dir    (this module)
+//   import std.fs     (consolidated filesystem module)
+//
+// The implementations are in std/fs/aether_fs.c which is compiled into libaether.a
+
+extern dir_exists(path: string) -> int
+extern dir_create(path: string) -> int
+extern dir_delete(path: string) -> int
+extern dir_list(path: string) -> ptr
+extern dir_list_free(list: ptr)

@@ -4,10 +4,11 @@
 -define(NUM_WORKERS, 8).
 
 get_messages_per_worker() ->
-    case os:getenv("BENCHMARK_MESSAGES") of
+    Total = case os:getenv("BENCHMARK_MESSAGES") of
         false -> 100000;
-        Val -> list_to_integer(Val) div ?NUM_WORKERS
-    end.
+        Val -> list_to_integer(Val)
+    end,
+    Total div ?NUM_WORKERS.
 
 start() ->
     MessagesPerWorker = get_messages_per_worker(),
@@ -42,9 +43,9 @@ start() ->
         true -> ok
     end,
 
-    CyclesPerMsg = (ElapsedNs * 3.0) / Total,
+    NsPerMsg = ElapsedNs / Total,
     MsgPerSec = Total / ElapsedSec,
-    io:format("Cycles/msg:     ~.2f~n", [CyclesPerMsg]),
+    io:format("ns/msg:         ~.2f~n", [NsPerMsg]),
     io:format("Throughput:     ~.2f M msg/sec~n", [MsgPerSec / 1000000]),
 
     halt(0).

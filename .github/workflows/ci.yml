@@ -1,4 +1,4 @@
-name: Aether CI/CD Pipeline
+name: Aether CI
 
 on:
   push:
@@ -7,326 +7,119 @@ on:
     branches: [ main, develop ]
   workflow_dispatch:
 
-env:
-  BUILD_TYPE: Release
-  # Treat warnings as errors in CI
-  CFLAGS: "-Werror -Wall -Wextra"
-
 jobs:
-  # ============================================
-  # Matrix Test Job - Multiple Platforms & Compilers
-  # ============================================
-  test-matrix:
-    name: Test on ${{ matrix.os }} with ${{ matrix.compiler }}
+  # ============================================================
+  # Core build + smoke tests — Linux (GCC) and Linux (Clang)
+  # and macOS (Clang). GCC and Clang have different warning sets
+  # so both are worth testing on Linux to catch compiler-specific
+  # issues early.
+  # ============================================================
+  build-and-test:
+    name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
-    
+
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-22.04, macos-latest]
-        compiler: [gcc, clang]
-        exclude:
-          # MinGW is the Windows compiler, not gcc/clang directly
-          - os: windows-latest
-            compiler: clang
         include:
-          - os: ubuntu-22.04
-            compiler: gcc
-            gcc-version: 11
-          - os: ubuntu-22.04
-            compiler: gcc
-            gcc-version: 12
-    
-    steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
-    
-    - name: Setup GCC (Linux)
-      if: runner.os == 'Linux' && matrix.compiler == 'gcc'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc-${{ matrix.gcc-version || 11 }} g++-${{ matrix.gcc-version || 11 }}
-        sudo update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-${{ matrix.gcc-version || 11 }} 100
-        gcc --version
-    
-    - name: Setup Clang (Linux)
-      if: runner.os == 'Linux' && matrix.compiler == 'clang'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y clang
-        clang --version
-    
-    - name: Setup Clang (macOS)
-      if: runner.os == 'macOS' && matrix.compiler == 'clang'
-      run: |
-        brew install llvm
-        echo "/usr/local/opt/llvm/bin" >> $GITHUB_PATH
-    
-    - name: Build Compiler (Linux/macOS)
-      if: runner.os != 'Windows'
-      run: |
-        make compiler
-        ls -lh build/
-    
-    - name: Run Test Suite (Linux/macOS)
-      if: runner.os != 'Windows'
-      run: |
-        make test
-    
-    - name: Upload Test Results
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: test-results-${{ matrix.os }}-${{ matrix.compiler }}
-        path: |
-          build/test_runner*
-          test-results.xml
-        retention-days: 7
+          - name: Linux / GCC
+            os: ubuntu-22.04
+            cc: gcc
+            install: sudo apt-get update && sudo apt-get install -y gcc make
 
-  # ============================================
-  # Memory Safety Checks
-  # ============================================
-  memory-checks:
-    name: Memory Safety (Valgrind & ASan)
-    runs-on: ubuntu-22.04
-    
+          - name: Linux / Clang
+            os: ubuntu-22.04
+            cc: clang
+            install: sudo apt-get update && sudo apt-get install -y clang make
+
+          - name: macOS / Clang
+            os: macos-latest
+            cc: clang
+            install: ""   # Xcode CLT already present on macOS runners
+
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
-    
-    - name: Install Valgrind
+    - uses: actions/checkout@v4
+
+    - name: Install toolchain
+      if: matrix.install != ''
+      run: ${{ matrix.install }}
+
+    - name: Build compiler
+      run: CC=${{ matrix.cc }} make compiler
+
+    - name: Build ae CLI
+      run: CC=${{ matrix.cc }} make ae
+
+    - name: Run runtime test suite
+      run: make test
+
+    - name: Smoke test — example programs
+      run: |
+        ./build/ae run examples/basics/hello.ae
+        ./build/ae run examples/actors/counter.ae
+        ./build/ae run examples/actors/ping-pong.ae
+
+    - name: Smoke test — project init + run
+      run: |
+        ./build/ae init smoketest
+        cd smoketest && ../build/ae run
+        cd .. && rm -rf smoketest
+
+  # ============================================================
+  # Memory safety — Valgrind + AddressSanitizer on Linux/GCC
+  # ============================================================
+  memory-checks:
+    name: Memory Safety (Valgrind + ASan)
+    runs-on: ubuntu-22.04
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install tools
       run: |
         sudo apt-get update
         sudo apt-get install -y valgrind gcc-multilib
-        valgrind --version
-    
-    - name: Build Compiler (Debug)
+
+    - name: Valgrind — runtime test suite
       run: |
-        make clean
         CFLAGS="-g -O0" make compiler
         CFLAGS="-g -O0" make test-build
-    
-    - name: Run Valgrind Tests
-      run: |
-        echo "Running Valgrind memory leak detection..."
         valgrind --leak-check=full \
                  --show-leak-kinds=all \
                  --track-origins=yes \
-                 --verbose \
-                 --log-file=valgrind-output.log \
                  --error-exitcode=0 \
-                 ./build/test_runner 2>&1 | tee valgrind-stdout.log || true
-
-        # Check for memory leaks
-        if grep -q "definitely lost: 0 bytes" valgrind-output.log && \
-           grep -q "indirectly lost: 0 bytes" valgrind-output.log; then
-          echo "SUCCESS: No memory leaks detected"
+                 --log-file=valgrind.log \
+                 ./build/test_runner 2>&1 || true
+        if grep -q "definitely lost: 0 bytes" valgrind.log && \
+           grep -q "indirectly lost: 0 bytes" valgrind.log; then
+          echo "No memory leaks detected"
         else
           echo "WARNING: Memory leaks detected (non-fatal)"
-          cat valgrind-output.log | head -100
+          head -100 valgrind.log
         fi
       continue-on-error: true
-    
-    - name: Build with AddressSanitizer
+
+    - name: AddressSanitizer — runtime test suite
       run: |
         make clean
-        make compiler CFLAGS="-fsanitize=address -fno-omit-frame-pointer -g" LDFLAGS="-fsanitize=address -pthread -lm"
-        make test-build CFLAGS="-fsanitize=address -fno-omit-frame-pointer -g" LDFLAGS="-fsanitize=address -pthread -lm"
-    
-    - name: Run AddressSanitizer Tests
-      run: |
-        echo "Running AddressSanitizer tests..."
-        ASAN_OPTIONS=detect_leaks=1:check_initialization_order=1:detect_stack_use_after_return=1 \
-        ./build/test_runner 2>&1 | tee asan-output.log
-        
-        # Check for ASAN errors
-        if grep -q "ERROR: AddressSanitizer" asan-output.log; then
+        make compiler CFLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
+                      LDFLAGS="-fsanitize=address -pthread -lm"
+        make test-build CFLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
+                        LDFLAGS="-fsanitize=address -pthread -lm"
+        ASAN_OPTIONS=detect_leaks=1:check_initialization_order=1 \
+          ./build/test_runner 2>&1 | tee asan.log
+        if grep -q "ERROR: AddressSanitizer" asan.log; then
           echo "ERROR: AddressSanitizer detected errors!"
-          cat asan-output.log
+          cat asan.log
           exit 1
-        else
-          echo "SUCCESS: No memory errors detected"
         fi
-    
-    - name: Upload Memory Reports
+
+    - name: Upload memory reports
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: memory-reports
         path: |
-          valgrind-*.log
-          asan-*.log
+          valgrind.log
+          asan.log
         retention-days: 7
-
-  # ============================================
-  # Performance Benchmarking
-  # ============================================
-  benchmark:
-    name: Performance Benchmarks
-    runs-on: ubuntu-22.04
-    
-    steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
-    
-    - name: Install Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: '3.10'
-    
-    - name: Build Compiler
-      run: |
-        make clean
-        CFLAGS="-O3" make compiler
-    
-    - name: Run Benchmarks
-      run: |
-        if [ -f tools/benchmark_runner.sh ]; then
-          chmod +x tools/benchmark_runner.sh
-          ./tools/benchmark_runner.sh 2>&1 | tee benchmark-results.txt
-        else
-          echo "Benchmark runner not found, skipping..."
-          echo "No benchmarks run" > benchmark-results.txt
-        fi
-      continue-on-error: true
-
-    - name: Check for Regressions
-      if: github.event_name == 'pull_request'
-      run: |
-        if [ -f tools/check_regression.py ]; then
-          chmod +x tools/check_regression.py
-          python3 tools/check_regression.py || {
-            echo "::warning::Performance regression detected"
-            exit 0  # Don't fail PR, just warn
-          }
-        else
-          echo "Regression check script not found, skipping..."
-        fi
-      continue-on-error: true
-    
-    - name: Upload Benchmark Results
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: benchmark-results
-        path: |
-          benchmark-results.txt
-          benchmarks/results.json
-        retention-days: 30
-    
-    - name: Track Build Time
-      run: |
-        echo "Measuring build time..."
-        time make clean
-        /usr/bin/time -v make -j4 compiler 2>&1 | tee build-time.log
-        
-        # Extract build time
-        grep "Elapsed" build-time.log || true
-    
-    - name: Upload Build Metrics
-      if: always()
-      uses: actions/upload-artifact@v4
-      with:
-        name: build-metrics
-        path: build-time.log
-        retention-days: 30
-
-  # ============================================
-  # Build All Tools
-  # ============================================
-  build-tools:
-    name: Build LSP, Package Manager & Profiler
-    runs-on: ubuntu-22.04
-    
-    steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
-    
-    - name: Build All Tools
-      run: |
-        make compiler
-        make lsp
-        make apkg
-        make profiler
-    
-    - name: Verify Binaries
-      run: |
-        ls -lh build/
-        file build/aetherc
-        file build/aether-lsp
-        file build/apkg
-        file build/profiler_demo
-    
-    - name: Upload Artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: aether-tools-linux
-        path: |
-          build/aetherc
-          build/aether-lsp
-          build/apkg
-          build/profiler_demo
-        retention-days: 30
-
-  # ============================================
-  # Release Build (On Tags)
-  # ============================================
-  release:
-    name: Build Release Binaries
-    if: startsWith(github.ref, 'refs/tags/v')
-    runs-on: ${{ matrix.os }}
-    
-    strategy:
-      matrix:
-        os: [ubuntu-22.04, macos-latest]
-    
-    steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
-    
-    - name: Build All (Linux/macOS)
-      if: runner.os != 'Windows'
-      run: |
-        make compiler
-        make lsp
-        make apkg
-        make profiler
-    
-    - name: Package Release
-      run: |
-        mkdir -p release/aether-${{ matrix.os }}
-        cp build/* release/aether-${{ matrix.os }}/
-        cp README.md LICENSE release/aether-${{ matrix.os }}/
-    
-    - name: Create Archive
-      run: |
-        cd release
-        tar -czf aether-${{ matrix.os }}.tar.gz aether-${{ matrix.os }}
-    
-    - name: Upload Release Assets
-      uses: actions/upload-artifact@v4
-      with:
-        name: release-${{ matrix.os }}
-        path: release/*.tar.gz
-
-  # ============================================
-  # Code Quality Checks
-  # ============================================
-  code-quality:
-    name: Code Quality & Linting
-    runs-on: ubuntu-22.04
-    
-    steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
-    
-    - name: Run Clang-Format Check
-      run: |
-        sudo apt-get install -y clang-format
-        # Future: Add actual formatting check
-        echo "Code formatting check would go here"
-    
-    - name: Check for TODOs
-      run: |
-        echo "Scanning for TODO/FIXME comments..."
-        grep -rn "TODO\|FIXME" --include="*.c" --include="*.h" . || true

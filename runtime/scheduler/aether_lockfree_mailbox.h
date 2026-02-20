@@ -13,18 +13,18 @@
 // Lock-free SPSC queue (Single-Producer, Single-Consumer)
 #define LOCKFREE_MAILBOX_SIZE 64  // Power of 2 for fast modulo
 
-typedef struct __attribute__((aligned(64))) {
+typedef struct {
     // Producer fields (written by sender, read by receiver)
     _Atomic uint32_t head;      // Write position
     char pad1[60];              // Cache line padding
-    
+
     // Consumer fields (written by receiver, read by sender)
-    _Atomic uint32_t tail;      // Read position  
+    _Atomic uint32_t tail;      // Read position
     char pad2[60];              // Cache line padding
-    
+
     // Shared data (read by both)
     Message messages[LOCKFREE_MAILBOX_SIZE];
-} LockFreeMailbox;
+} AETHER_ALIGNED(64) LockFreeMailbox;
 
 // Initialize mailbox
 static inline void lockfree_mailbox_init(LockFreeMailbox* mbox) {
@@ -47,15 +47,15 @@ static inline bool lockfree_mailbox_is_full(LockFreeMailbox* mbox) {
 }
 
 // Send message (producer side)
-static inline __attribute__((hot)) bool lockfree_mailbox_send(
-    LockFreeMailbox* __restrict__ mbox, 
-    Message msg) 
+static inline bool AETHER_HOT lockfree_mailbox_send(
+    LockFreeMailbox* AETHER_RESTRICT mbox,
+    Message msg)
 {
     uint32_t head = atomic_load_explicit(&mbox->head, memory_order_relaxed);
     uint32_t next = (head + 1) & (LOCKFREE_MAILBOX_SIZE - 1);
     uint32_t tail = atomic_load_explicit(&mbox->tail, memory_order_acquire);
     
-    if (__builtin_expect(next == tail, 0)) {
+    if (unlikely(next == tail)) {
         return false;  // Full
     }
     
@@ -68,14 +68,14 @@ static inline __attribute__((hot)) bool lockfree_mailbox_send(
 }
 
 // Receive message (consumer side)
-static inline __attribute__((hot)) bool lockfree_mailbox_receive(
-    LockFreeMailbox* __restrict__ mbox,
-    Message* __restrict__ out_msg)
+static inline bool AETHER_HOT lockfree_mailbox_receive(
+    LockFreeMailbox* AETHER_RESTRICT mbox,
+    Message* AETHER_RESTRICT out_msg)
 {
     uint32_t tail = atomic_load_explicit(&mbox->tail, memory_order_relaxed);
     uint32_t head = atomic_load_explicit(&mbox->head, memory_order_acquire);
     
-    if (__builtin_expect(tail == head, 0)) {
+    if (unlikely(tail == head)) {
         return false;  // Empty
     }
     
@@ -89,9 +89,9 @@ static inline __attribute__((hot)) bool lockfree_mailbox_receive(
 }
 
 // Batch receive (up to max_count messages)
-static inline __attribute__((hot)) int lockfree_mailbox_receive_batch(
-    LockFreeMailbox* __restrict__ mbox,
-    Message* __restrict__ out_msgs,
+static inline int AETHER_HOT lockfree_mailbox_receive_batch(
+    LockFreeMailbox* AETHER_RESTRICT mbox,
+    Message* AETHER_RESTRICT out_msgs,
     int max_count)
 {
     int received = 0;

@@ -29,7 +29,7 @@ All benchmark parameters are configured in a single JSON file: **`benchmark_conf
 
 ```json
 {
-  "messages": 10000000,
+  "messages": 1000000,
   "timeout_seconds": 60
 }
 ```
@@ -39,7 +39,7 @@ Just edit the values and run `./run_benchmarks.sh` - the configuration is applie
 ## Configuration Options
 
 ### messages
-Number of ping-pong messages to exchange (default: 10,000,000)
+Number of messages to exchange (default: 1,000,000)
 
 - **Higher values**: More accurate results, longer runtime
 - **Lower values**: Faster benchmarks, suitable for low-spec systems
@@ -51,17 +51,17 @@ Maximum time to wait for each benchmark (default: 60)
 
 The config file includes presets for common scenarios:
 
-### Full (Default)
+### Full
 ```json
 "messages": 10000000
 ```
-Standard benchmark - 10M messages. Takes 5-30 seconds per language.
+Full benchmark - 10M messages. Takes 5-30 seconds per language.
 
-### Medium
+### Medium (Default)
 ```json
 "messages": 1000000
 ```
-Reduced load - 1M messages. 10x faster, good for quick tests.
+Default benchmark - 1M messages. Good balance of accuracy and speed.
 
 ### Low Spec
 ```json
@@ -80,8 +80,8 @@ Heavy load - 100M messages. May take several minutes per language.
 | System RAM | CPU Cores | Recommended Messages | Expected Runtime |
 |-----------|-----------|---------------------|------------------|
 | <4 GB     | 1-2       | 100,000            | ~5 minutes total |
-| 4-8 GB    | 2-4       | 1,000,000          | ~10 minutes total |
-| 8-16 GB   | 4-8       | 10,000,000 (default) | ~15 minutes total |
+| 4-8 GB    | 2-4       | 1,000,000 (default) | ~10 minutes total |
+| 8-16 GB   | 4-8       | 10,000,000         | ~15 minutes total |
 | >16 GB    | 8+        | 100,000,000        | ~30+ minutes total |
 
 ## Usage Examples

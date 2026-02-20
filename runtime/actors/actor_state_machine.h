@@ -9,6 +9,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "../utils/aether_runtime_profile.h"
+#include "../utils/aether_compiler.h"
 
 #define ZEROCOPY_THRESHOLD 256  // Messages larger than this use zero-copy
 
@@ -50,9 +51,9 @@ typedef struct {
 // Mailbox operations with optimization hints
 // Note: Manual prefetch removed - benchmarks showed 16% performance loss
 // Hardware prefetcher handles sequential ring buffer access more efficiently
-static inline int __attribute__((hot)) mailbox_send(Mailbox* __restrict__ mbox, Message msg) {
+static inline int AETHER_HOT mailbox_send(Mailbox* AETHER_RESTRICT mbox, Message msg) {
     PROFILE_START();
-    if (__builtin_expect(mbox->count >= MAILBOX_SIZE, 0)) return 0; // Full (unlikely)
+    if (unlikely(mbox->count >= MAILBOX_SIZE)) return 0; // Full (unlikely)
     
     mbox->messages[mbox->tail] = msg;
     mbox->tail = (mbox->tail + 1) & MAILBOX_MASK;  // Fast power-of-2 masking
@@ -61,9 +62,9 @@ static inline int __attribute__((hot)) mailbox_send(Mailbox* __restrict__ mbox, 
     return 1;
 }
 
-static inline int __attribute__((hot)) mailbox_receive(Mailbox* __restrict__ mbox, Message* __restrict__ out_msg) {
+static inline int AETHER_HOT mailbox_receive(Mailbox* AETHER_RESTRICT mbox, Message* AETHER_RESTRICT out_msg) {
     PROFILE_START();
-    if (__builtin_expect(mbox->count == 0, 0)) return 0; // Empty (unlikely)
+    if (unlikely(mbox->count == 0)) return 0; // Empty (unlikely)
     
     *out_msg = mbox->messages[mbox->head];
     mbox->head = (mbox->head + 1) & MAILBOX_MASK;  // Fast power-of-2 masking
@@ -79,9 +80,9 @@ static inline void mailbox_init(Mailbox* mbox) {
 }
 
 // Batch operations for high-throughput scenarios
-static inline int __attribute__((hot)) mailbox_receive_batch(
-    Mailbox* __restrict__ mbox, 
-    Message* __restrict__ out_msgs, 
+static inline int AETHER_HOT mailbox_receive_batch(
+    Mailbox* AETHER_RESTRICT mbox,
+    Message* AETHER_RESTRICT out_msgs,
     int max_count) 
 {
     int received = 0;
@@ -94,9 +95,9 @@ static inline int __attribute__((hot)) mailbox_receive_batch(
     return received;
 }
 
-static inline int __attribute__((hot)) mailbox_send_batch(
-    Mailbox* __restrict__ mbox,
-    const Message* __restrict__ msgs,
+static inline int AETHER_HOT mailbox_send_batch(
+    Mailbox* AETHER_RESTRICT mbox,
+    const Message* AETHER_RESTRICT msgs,
     int count)
 {
     int sent = 0;
@@ -111,12 +112,22 @@ static inline int __attribute__((hot)) mailbox_send_batch(
 
 // Zero-copy message helpers
 static inline Message message_create_zerocopy(int type, int sender_id, void* data, int size) {
-    Message msg = {type, sender_id, 0, NULL, {data, size, 1}};
+    Message msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = type;
+    msg.sender_id = sender_id;
+    msg.zerocopy.data = data;
+    msg.zerocopy.size = size;
+    msg.zerocopy.owned = 1;
     return msg;
 }
 
 static inline Message message_create_simple(int type, int sender_id, int payload) {
-    Message msg = {type, sender_id, payload, NULL, {NULL, 0, 0}};
+    Message msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.type = type;
+    msg.sender_id = sender_id;
+    msg.payload_int = payload;
     return msg;
 }
 

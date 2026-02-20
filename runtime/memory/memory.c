@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <pthread.h>
+#include "../utils/aether_thread.h"
 #include "../aether_runtime.h"
 
 // Memory pool for efficient allocation

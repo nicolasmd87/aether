@@ -129,7 +129,7 @@ int ends_with(const char* s, const char* suffix) {
 }
 
 // String helper: get length
-int string_length(const char* s) {
+int cstr_length(const char* s) {
     return s ? (int)strlen(s) : 0;
 }
 

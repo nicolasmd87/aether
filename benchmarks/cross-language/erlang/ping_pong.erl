@@ -72,12 +72,10 @@ start() ->
     ElapsedNs = End - Start,
     ElapsedSec = ElapsedNs / 1000000000.0,
 
-    % Estimate cycles (assuming 3GHz)
-    TotalCycles = ElapsedNs * 3.0,
-    CyclesPerMsg = TotalCycles / Messages,
+    NsPerMsg = ElapsedNs / Messages,
     MsgPerSec = Messages / ElapsedSec,
 
-    io:format("Cycles/msg:     ~.2f~n", [CyclesPerMsg]),
+    io:format("ns/msg:         ~.2f~n", [NsPerMsg]),
     io:format("Throughput:     ~.2f M msg/sec~n", [MsgPerSec / 1000000]),
 
     halt(0).

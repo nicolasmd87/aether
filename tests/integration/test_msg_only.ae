@@ -1,12 +1,61 @@
-message Increment {
-    amount: int
-}
+// Integration test: Actor state mutation via messages
+// Verifies that actor state changes persist across messages
 
-actor Counter {
+extern exit(code: int) -> void;
+
+message Add { value: int }
+message Reset {}
+
+actor Accumulator {
     state count = 0;
+    state ops = 0;
+
+    receive {
+        Add(value) -> {
+            count = count + value;
+            ops = ops + 1;
+        }
+        Reset() -> {
+            count = 0;
+        }
+    }
 }
 
 main() {
-    msg = Increment { amount: 5 };
-    print("Message test complete\n");
+    acc = spawn(Accumulator());
+
+    acc ! Add { value: 1 }
+    acc ! Add { value: 2 }
+    acc ! Add { value: 3 }
+
+    wait_for_idle();
+
+    print("count: ");
+    print(acc.count);
+    print("\n");
+    print("ops: ");
+    print(acc.ops);
+    print("\n");
+
+    if acc.count != 6 {
+        print("FAIL: count expected 6\n");
+        exit(1);
+    }
+    if acc.ops != 3 {
+        print("FAIL: ops expected 3\n");
+        exit(1);
+    }
+
+    acc ! Reset {}
+    wait_for_idle();
+
+    print("after reset: ");
+    print(acc.count);
+    print("\n");
+
+    if acc.count != 0 {
+        print("FAIL: count after reset expected 0\n");
+        exit(1);
+    }
+    print("PASS\n");
 }

@@ -2,6 +2,7 @@
 #define AETHER_TEST_H
 
 #include <stdio.h>
+#include "aether_compiler.h"
 
 // Test framework structures
 typedef struct {
@@ -27,7 +28,7 @@ void aether_test_summary(void);
 // Assertion macros
 #define AETHER_TEST(test_name) \
     void test_##test_name(void); \
-    __attribute__((constructor)) void register_test_##test_name(void) { \
+    AETHER_CONSTRUCTOR void register_test_##test_name(void) { \
         aether_register_test(#test_name, test_##test_name); \
     } \
     void test_##test_name(void)

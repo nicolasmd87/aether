@@ -58,8 +58,8 @@ fn main() {
     }
 
     let throughput = total as f64 / elapsed / 1e6;
-    let cycles_per_msg = elapsed * 3e9 / total as f64;
+    let ns_per_msg = elapsed * 1e9 / total as f64;
 
-    println!("Cycles/msg:     {:.2}", cycles_per_msg);
+    println!("ns/msg:         {:.2}", ns_per_msg);
     println!("Throughput:     {:.2} M msg/sec", throughput);
 }

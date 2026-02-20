@@ -1,7 +1,7 @@
 #ifndef MULTICORE_SCHEDULER_H
 #define MULTICORE_SCHEDULER_H
 
-#include <pthread.h>
+#include "../utils/aether_thread.h"
 #include <stdatomic.h>
 #include "../actors/actor_state_machine.h"
 #include "../actors/aether_actor_pool.h"
@@ -20,6 +20,18 @@
 // Legacy compatibility - use g_aether_config instead
 #define g_sched_features g_aether_config
 
+// Reply slot for ask/reply pattern (experimental)
+// Heap-allocated per ask call; freed by whoever holds the last reference (refcounted).
+typedef struct {
+    void*              reply_data;   // malloc'd reply payload; returned to caller, caller must free
+    size_t             reply_size;   // size of reply_data
+    volatile int       reply_ready;  // 1 when reply has been set
+    volatile int       timed_out;    // 1 when asker has given up
+    pthread_mutex_t    mutex;        // protects reply_ready / timed_out / cond
+    pthread_cond_t     cond;         // signalled by scheduler_reply()
+    atomic_int         refcount;     // starts at 2 (asker + actor); freed when hits 0
+} ActorReplySlot;
+
 // Optimized spinlock with PAUSE instruction (3x faster than standard spinlock)
 typedef struct {
     atomic_flag lock;
@@ -32,11 +44,7 @@ static inline void spinlock_init(OptimizedSpinlock* lock) {
 
 static inline void spinlock_lock(OptimizedSpinlock* lock) {
     while (atomic_flag_test_and_set_explicit(&lock->lock, memory_order_acquire)) {
-        #if defined(__x86_64__) || defined(_M_X64)
-        __asm__ __volatile__("pause" ::: "memory");
-        #elif defined(__aarch64__)
-        __asm__ __volatile__("yield" ::: "memory");
-        #endif
+        AETHER_CPU_PAUSE();
     }
 }
 
@@ -52,9 +60,10 @@ typedef struct {
     pthread_t thread;
     int auto_process;
     int assigned_core;
-    int migrate_to;        // Affinity hint: core to migrate to (-1 = none)
-    int main_thread_only;  // If set, scheduler threads must not process this actor
-    SPSCQueue spsc_queue;  // Lock-free same-core messaging
+    int migrate_to;           // Affinity hint: core to migrate to (-1 = none)
+    atomic_int main_thread_only;         // If set, scheduler threads must not process this actor
+    SPSCQueue spsc_queue;                // Lock-free same-core messaging
+    _Atomic(ActorReplySlot*) reply_slot; // Non-NULL only while an ask/reply is in flight
 } ActorBase;
 
 typedef struct {
@@ -107,11 +116,24 @@ int scheduler_register_actor(ActorBase* actor, int preferred_core);
 void scheduler_send_local(ActorBase* actor, Message msg);
 void scheduler_send_remote(ActorBase* actor, Message msg, int from_core);
 
+// Batch send for main thread fan-out patterns (fork-join)
+void scheduler_send_batch_start(void);
+void scheduler_send_batch_add(ActorBase* actor, Message msg);
+void scheduler_send_batch_flush(void);
+
 // Optimized APIs using integrated features (TIER 1 - always on)
 ActorBase* scheduler_spawn_pooled(int preferred_core, void (*step)(void*), size_t actor_size);
 void scheduler_release_pooled(ActorBase* actor);
 
 // Legacy API - now controls only TIER 3 opt-in features
 void scheduler_enable_features(int use_pool, int use_lockfree, int use_adaptive, int use_direct);
+
+// Ask/reply (experimental): send a message and block until a reply arrives or timeout.
+// Returns malloc'd reply payload on success (caller must free), NULL on timeout.
+void* scheduler_ask_message(ActorBase* target, void* msg_data, size_t msg_size, int timeout_ms);
+
+// Reply to the pending ask on self (called from inside an actor's receive handler).
+// data/data_size describe the reply payload; it is copied internally.
+void scheduler_reply(ActorBase* self, void* data, size_t data_size);
 
 #endif

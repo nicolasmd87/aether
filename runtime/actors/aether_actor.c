@@ -1,22 +1,19 @@
 #include "aether_actor.h"
 #include "../aether_runtime.h"
+#include "../utils/aether_compiler.h"
 #define _ISOC11_SOURCE
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
-// Branch prediction hints for hot paths
-#define likely(x)   __builtin_expect(!!(x), 1)
-#define unlikely(x) __builtin_expect(!!(x), 0)
-
 // Forward declarations
 static MessagePool* message_pool_create_tls();
 
 // Global message pool (per-thread in production)
-static __thread MessagePool* tls_message_pool = NULL;
+static AETHER_TLS MessagePool* tls_message_pool = NULL;
 
 // Initialize thread-local message pool (call once per thread)
-void __attribute__((constructor)) init_thread_local_pool() {
+void AETHER_CONSTRUCTOR init_thread_local_pool() {
     if (!tls_message_pool) {
         tls_message_pool = message_pool_create_tls();  // Create lock-free TLS pool
     }
@@ -24,7 +21,7 @@ void __attribute__((constructor)) init_thread_local_pool() {
 
 // Don't use destructor on Windows - causes issues with thread cleanup ordering
 #ifndef _WIN32
-void __attribute__((destructor)) cleanup_thread_local_pool() {
+void AETHER_DESTRUCTOR cleanup_thread_local_pool() {
     if (tls_message_pool) {
         message_pool_destroy(tls_message_pool);
         tls_message_pool = NULL;
@@ -70,7 +67,7 @@ void message_pool_destroy(MessagePool* pool) {
     free(pool);
 }
 
-void* __attribute__((hot)) message_pool_alloc(MessagePool* pool, int size) {
+void* AETHER_HOT message_pool_alloc(MessagePool* pool, int size) {
     // Use TLS pool if no explicit pool provided
     if (!pool) {
         if (!tls_message_pool) {
@@ -109,7 +106,7 @@ void* __attribute__((hot)) message_pool_alloc(MessagePool* pool, int size) {
     return buffer;
 }
 
-void __attribute__((hot)) message_pool_free(MessagePool* pool, void* ptr) {
+void AETHER_HOT message_pool_free(MessagePool* pool, void* ptr) {
     if (unlikely(!pool || !ptr)) {
         free(ptr);
         return;

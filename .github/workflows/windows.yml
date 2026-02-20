@@ -1,0 +1,107 @@
+name: Windows Build
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+# Build the Aether compiler and ae CLI on Windows using MinGW (GCC).
+# MinGW gives us the same GCC/Clang toolchain surface without an MSVC license,
+# while our aether_thread.h Win32 compat layer keeps the runtime fully native.
+
+jobs:
+  # ============================================================
+  # MinGW build — primary Windows target
+  # ============================================================
+  build-mingw:
+    name: Build (Windows / MinGW-w64)
+    runs-on: windows-latest
+
+    defaults:
+      run:
+        shell: msys2 {0}
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up MSYS2 / MinGW-w64
+      uses: msys2/setup-msys2@v2
+      with:
+        msystem: MINGW64
+        update: true
+        install: >-
+          mingw-w64-x86_64-gcc
+          mingw-w64-x86_64-make
+          make
+
+    - name: Build compiler (aetherc)
+      run: make compiler
+
+    - name: Build ae CLI
+      run: make ae
+
+    - name: Verify binaries
+      run: |
+        ls -lh build/
+        ./build/aetherc --version || true
+        ./build/ae version
+
+    - name: Smoke test — hello world
+      run: ./build/ae run examples/basics/hello.ae
+
+    - name: Smoke test — actor counter
+      run: ./build/ae run examples/actors/counter.ae
+
+    - name: Smoke test — project init + run
+      run: |
+        ./build/ae init smoketest_win
+        cd smoketest_win && ../build/ae run
+        cd .. && rm -rf smoketest_win
+
+    - name: Upload Windows binaries
+      uses: actions/upload-artifact@v4
+      with:
+        name: aether-windows-mingw64
+        path: |
+          build/aetherc.exe
+          build/ae.exe
+        retention-days: 30
+
+  # ============================================================
+  # MSVC compatibility check — ensure headers compile under cl.exe
+  # No full build yet (runtime needs Win32 threading wiring), but
+  # we verify that all public headers pass the MSVC parser.
+  # ============================================================
+  headers-msvc:
+    name: Header compatibility (MSVC)
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v4
+
+    - name: Set up Visual Studio developer environment
+      uses: ilammy/msvc-dev-cmd@v1
+
+    - name: Check portable headers compile under cl.exe
+      shell: cmd
+      run: |
+        :: Compile each portable header as a standalone translation unit.
+        :: This catches any GCC-isms that slipped through the guards.
+        :: Note: cl.exe cannot open 'nul' as a source file — use a real empty file.
+        echo. > _probe.c
+
+        cl /nologo /W3 /std:c11 /Zc:preprocessor ^
+           /I runtime /I runtime/utils /I runtime/actors ^
+           /I runtime/scheduler /I runtime/memory /I runtime/config ^
+           /FI runtime/utils/aether_compiler.h /c _probe.c ^
+           && echo "aether_compiler.h OK" || exit 1
+
+        cl /nologo /W3 /std:c11 /Zc:preprocessor ^
+           /I runtime /I runtime/utils /I runtime/actors ^
+           /I runtime/scheduler /I runtime/memory /I runtime/config ^
+           /FI runtime/utils/aether_thread.h /c _probe.c ^
+           && echo "aether_thread.h OK" || exit 1
+
+        del _probe.c _probe.obj 2>nul

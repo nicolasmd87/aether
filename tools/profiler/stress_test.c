@@ -87,7 +87,7 @@ int main() {
     
     ProfilerConfig config = {
         .enabled = 1,
-        .port = 8080,
+        .port = 8081,
         .bind_address = "0.0.0.0",
         .max_events = 50000,  // Larger buffer for stress test
         .collection_interval_ms = 50
@@ -96,7 +96,7 @@ int main() {
     profiler_init(&config);
     profiler_start_server();
     
-    printf("Open browser: http://localhost:8080\n\n");
+    printf("Open browser: http://localhost:8081\n\n");
     sleep(2);
     
     // Test 1: Many actors, few messages each

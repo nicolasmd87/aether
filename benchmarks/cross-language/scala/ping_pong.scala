@@ -10,9 +10,9 @@ case class Pong(value: Long)
 case class Start(pong: ActorRef)
 case class Done(count: Long)
 
-class PingActor(promise: Promise[Long]) extends Actor {
+class PingActor(promise: Promise[Long], messages: Long) extends Actor {
   var i = 0L
-  val maxCount = 10000000L
+  val maxCount = messages
   var startTime = 0L
   var pongRef: ActorRef = null
 
@@ -57,24 +57,26 @@ class PongActor(ping: ActorRef) extends Actor {
 }
 
 object PingPongBenchmark extends App {
+  val messages = sys.env.get("BENCHMARK_MESSAGES").flatMap(s => scala.util.Try(s.toLong).toOption).getOrElse(100000L)
+
   println("=== Scala Akka Ping-Pong Benchmark ===")
-  println("Messages: 10000000\n")
+  println(s"Messages: $messages\n")
 
   val system = ActorSystem("PingPong")
   val promise = Promise[Long]()
 
-  val ping = system.actorOf(Props(classOf[PingActor], promise))
+  val ping = system.actorOf(Props(classOf[PingActor], promise, messages: java.lang.Long))
   val pong = system.actorOf(Props(classOf[PongActor], ping))
 
   ping ! Start(pong)
 
-  val elapsed = Await.result(promise.future, 60.seconds)
+  val elapsed = Await.result(promise.future, 120.seconds)
   val elapsedSec = elapsed.toDouble / 1e9
-  val cyclesPerMsg = (elapsed.toDouble / 10000000.0) * 3.0  // Approximate at 3GHz
-  val throughput = 10000000.0 / elapsedSec / 1e6  // Convert to M msg/sec
+  val nsPerMsg = elapsed.toDouble / messages
+  val throughput = messages / elapsedSec / 1e6
 
-  println(s"Cycles/msg:     ${cyclesPerMsg}")
-  println(s"Throughput:     ${throughput} M msg/sec")
+  println(f"ns/msg:         $nsPerMsg%.2f")
+  println(f"Throughput:     $throughput%.2f M msg/sec")
 
   Await.result(system.whenTerminated, 10.seconds)
 }

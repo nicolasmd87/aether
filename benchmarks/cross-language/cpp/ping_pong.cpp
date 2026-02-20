@@ -2,10 +2,9 @@
  * C++ Ping-Pong Benchmark
  * Fair comparison using proper synchronization primitives
  *
- * Three implementations provided:
+ * Two implementations provided:
  * 1. std::mutex + std::condition_variable (default, fair comparison to C pthread)
  * 2. std::atomic with proper barriers (lock-free but busy-wait)
- * 3. std::promise/std::future (message passing style)
  *
  * Compile with: g++ -O3 -std=c++17 -march=native ping_pong.cpp -o ping_pong -pthread
  */
@@ -18,20 +17,6 @@
 #include <chrono>
 #include <atomic>
 #include <cstdlib>
-
-#ifdef _WIN32
-#include <intrin.h>
-static inline uint64_t rdtsc() { return __rdtsc(); }
-#elif defined(__x86_64__) || defined(__i386__)
-#include <x86intrin.h>
-static inline uint64_t rdtsc() { return __rdtsc(); }
-#else
-// Fallback for non-x86
-#include <chrono>
-static inline uint64_t rdtsc() {
-    return std::chrono::steady_clock::now().time_since_epoch().count();
-}
-#endif
 
 static int MESSAGES = 100000;  // Default for "low" preset
 #define USE_MUTEX 1  // Set to 0 for atomic busy-wait (unfair), 1 for mutex (fair)
@@ -145,7 +130,7 @@ int main() {
 #endif
     std::cout << std::endl;
 
-    uint64_t start = rdtsc();
+    auto start = std::chrono::high_resolution_clock::now();
 
     std::thread t1(ping_thread);
     std::thread t2(pong_thread);
@@ -153,12 +138,12 @@ int main() {
     t1.join();
     t2.join();
 
-    uint64_t end = rdtsc();
-    uint64_t cycles = end - start;
-    double cycles_per_msg = (double)cycles / MESSAGES;
-    double throughput = 3000.0 / cycles_per_msg; // MHz
+    auto end = std::chrono::high_resolution_clock::now();
+    double elapsed = std::chrono::duration<double>(end - start).count();
+    double throughput = MESSAGES / elapsed / 1e6;
+    double ns_per_msg = elapsed * 1e9 / MESSAGES;
 
-    std::cout << "Cycles/msg:     " << cycles_per_msg << std::endl;
+    std::cout << "ns/msg:         " << std::fixed << std::setprecision(2) << ns_per_msg << std::endl;
     std::cout << "Throughput:     " << std::fixed << std::setprecision(2) << throughput << " M msg/sec" << std::endl;
 
     return 0;

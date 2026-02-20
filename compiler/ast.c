@@ -118,9 +118,14 @@ ASTNode* create_ast_node(ASTNodeType type, const char* value, int line, int colu
 void add_child(ASTNode* parent, ASTNode* child) {
     if (!parent || !child) return;
     
+    ASTNode** new_children = realloc(parent->children, (parent->child_count + 1) * sizeof(ASTNode*));
+    if (!new_children) {
+        fprintf(stderr, "Fatal: out of memory adding AST child\n");
+        return;
+    }
+    parent->children = new_children;
+    parent->children[parent->child_count] = child;
     parent->child_count++;
-    parent->children = realloc(parent->children, parent->child_count * sizeof(ASTNode*));
-    parent->children[parent->child_count - 1] = child;
 }
 
 void free_ast_node(ASTNode* node) {

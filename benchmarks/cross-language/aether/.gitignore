@@ -1,0 +1,9 @@
+# Compiled binaries
+ping_pong
+counting
+thread_ring
+fork_join
+
+# Compiler-generated C files (Aether compiles .ae -> .c -> binary)
+*.c
+!Makefile

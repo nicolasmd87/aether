@@ -19,78 +19,88 @@ actor RingNode {
 }
 
 main() {
-    // Read from BENCHMARK_MESSAGES env var, default 100K
     num_hops = 100000;
     env_val = getenv("BENCHMARK_MESSAGES");
     if (env_val != 0) {
         num_hops = atoi(env_val);
     }
-    ring_size = 20;
+    ring_size = 100;
 
-    // Create ring of actors (20 nodes)
-    nodes_0 = spawn(RingNode());
-    nodes_1 = spawn(RingNode());
-    nodes_2 = spawn(RingNode());
-    nodes_3 = spawn(RingNode());
-    nodes_4 = spawn(RingNode());
-    nodes_5 = spawn(RingNode());
-    nodes_6 = spawn(RingNode());
-    nodes_7 = spawn(RingNode());
-    nodes_8 = spawn(RingNode());
-    nodes_9 = spawn(RingNode());
-    nodes_10 = spawn(RingNode());
-    nodes_11 = spawn(RingNode());
-    nodes_12 = spawn(RingNode());
-    nodes_13 = spawn(RingNode());
-    nodes_14 = spawn(RingNode());
-    nodes_15 = spawn(RingNode());
-    nodes_16 = spawn(RingNode());
-    nodes_17 = spawn(RingNode());
-    nodes_18 = spawn(RingNode());
-    nodes_19 = spawn(RingNode());
+    // Create ring of 100 actors (matches C/C++/Go/Rust/Java/Zig/Erlang/Elixir/Pony/Scala)
+    n0 = spawn(RingNode()); n1 = spawn(RingNode()); n2 = spawn(RingNode()); n3 = spawn(RingNode()); n4 = spawn(RingNode());
+    n5 = spawn(RingNode()); n6 = spawn(RingNode()); n7 = spawn(RingNode()); n8 = spawn(RingNode()); n9 = spawn(RingNode());
+    n10 = spawn(RingNode()); n11 = spawn(RingNode()); n12 = spawn(RingNode()); n13 = spawn(RingNode()); n14 = spawn(RingNode());
+    n15 = spawn(RingNode()); n16 = spawn(RingNode()); n17 = spawn(RingNode()); n18 = spawn(RingNode()); n19 = spawn(RingNode());
+    n20 = spawn(RingNode()); n21 = spawn(RingNode()); n22 = spawn(RingNode()); n23 = spawn(RingNode()); n24 = spawn(RingNode());
+    n25 = spawn(RingNode()); n26 = spawn(RingNode()); n27 = spawn(RingNode()); n28 = spawn(RingNode()); n29 = spawn(RingNode());
+    n30 = spawn(RingNode()); n31 = spawn(RingNode()); n32 = spawn(RingNode()); n33 = spawn(RingNode()); n34 = spawn(RingNode());
+    n35 = spawn(RingNode()); n36 = spawn(RingNode()); n37 = spawn(RingNode()); n38 = spawn(RingNode()); n39 = spawn(RingNode());
+    n40 = spawn(RingNode()); n41 = spawn(RingNode()); n42 = spawn(RingNode()); n43 = spawn(RingNode()); n44 = spawn(RingNode());
+    n45 = spawn(RingNode()); n46 = spawn(RingNode()); n47 = spawn(RingNode()); n48 = spawn(RingNode()); n49 = spawn(RingNode());
+    n50 = spawn(RingNode()); n51 = spawn(RingNode()); n52 = spawn(RingNode()); n53 = spawn(RingNode()); n54 = spawn(RingNode());
+    n55 = spawn(RingNode()); n56 = spawn(RingNode()); n57 = spawn(RingNode()); n58 = spawn(RingNode()); n59 = spawn(RingNode());
+    n60 = spawn(RingNode()); n61 = spawn(RingNode()); n62 = spawn(RingNode()); n63 = spawn(RingNode()); n64 = spawn(RingNode());
+    n65 = spawn(RingNode()); n66 = spawn(RingNode()); n67 = spawn(RingNode()); n68 = spawn(RingNode()); n69 = spawn(RingNode());
+    n70 = spawn(RingNode()); n71 = spawn(RingNode()); n72 = spawn(RingNode()); n73 = spawn(RingNode()); n74 = spawn(RingNode());
+    n75 = spawn(RingNode()); n76 = spawn(RingNode()); n77 = spawn(RingNode()); n78 = spawn(RingNode()); n79 = spawn(RingNode());
+    n80 = spawn(RingNode()); n81 = spawn(RingNode()); n82 = spawn(RingNode()); n83 = spawn(RingNode()); n84 = spawn(RingNode());
+    n85 = spawn(RingNode()); n86 = spawn(RingNode()); n87 = spawn(RingNode()); n88 = spawn(RingNode()); n89 = spawn(RingNode());
+    n90 = spawn(RingNode()); n91 = spawn(RingNode()); n92 = spawn(RingNode()); n93 = spawn(RingNode()); n94 = spawn(RingNode());
+    n95 = spawn(RingNode()); n96 = spawn(RingNode()); n97 = spawn(RingNode()); n98 = spawn(RingNode()); n99 = spawn(RingNode());
 
-    // Wire up the ring
-    nodes_0.next_ref = nodes_1;
-    nodes_1.next_ref = nodes_2;
-    nodes_2.next_ref = nodes_3;
-    nodes_3.next_ref = nodes_4;
-    nodes_4.next_ref = nodes_5;
-    nodes_5.next_ref = nodes_6;
-    nodes_6.next_ref = nodes_7;
-    nodes_7.next_ref = nodes_8;
-    nodes_8.next_ref = nodes_9;
-    nodes_9.next_ref = nodes_10;
-    nodes_10.next_ref = nodes_11;
-    nodes_11.next_ref = nodes_12;
-    nodes_12.next_ref = nodes_13;
-    nodes_13.next_ref = nodes_14;
-    nodes_14.next_ref = nodes_15;
-    nodes_15.next_ref = nodes_16;
-    nodes_16.next_ref = nodes_17;
-    nodes_17.next_ref = nodes_18;
-    nodes_18.next_ref = nodes_19;
-    nodes_19.next_ref = nodes_0;
+    // Wire up the ring: n0 -> n1 -> ... -> n99 -> n0
+    n0.next_ref = n1; n1.next_ref = n2; n2.next_ref = n3; n3.next_ref = n4;
+    n4.next_ref = n5; n5.next_ref = n6; n6.next_ref = n7; n7.next_ref = n8;
+    n8.next_ref = n9; n9.next_ref = n10; n10.next_ref = n11; n11.next_ref = n12;
+    n12.next_ref = n13; n13.next_ref = n14; n14.next_ref = n15; n15.next_ref = n16;
+    n16.next_ref = n17; n17.next_ref = n18; n18.next_ref = n19; n19.next_ref = n20;
+    n20.next_ref = n21; n21.next_ref = n22; n22.next_ref = n23; n23.next_ref = n24;
+    n24.next_ref = n25; n25.next_ref = n26; n26.next_ref = n27; n27.next_ref = n28;
+    n28.next_ref = n29; n29.next_ref = n30; n30.next_ref = n31; n31.next_ref = n32;
+    n32.next_ref = n33; n33.next_ref = n34; n34.next_ref = n35; n35.next_ref = n36;
+    n36.next_ref = n37; n37.next_ref = n38; n38.next_ref = n39; n39.next_ref = n40;
+    n40.next_ref = n41; n41.next_ref = n42; n42.next_ref = n43; n43.next_ref = n44;
+    n44.next_ref = n45; n45.next_ref = n46; n46.next_ref = n47; n47.next_ref = n48;
+    n48.next_ref = n49; n49.next_ref = n50; n50.next_ref = n51; n51.next_ref = n52;
+    n52.next_ref = n53; n53.next_ref = n54; n54.next_ref = n55; n55.next_ref = n56;
+    n56.next_ref = n57; n57.next_ref = n58; n58.next_ref = n59; n59.next_ref = n60;
+    n60.next_ref = n61; n61.next_ref = n62; n62.next_ref = n63; n63.next_ref = n64;
+    n64.next_ref = n65; n65.next_ref = n66; n66.next_ref = n67; n67.next_ref = n68;
+    n68.next_ref = n69; n69.next_ref = n70; n70.next_ref = n71; n71.next_ref = n72;
+    n72.next_ref = n73; n73.next_ref = n74; n74.next_ref = n75; n75.next_ref = n76;
+    n76.next_ref = n77; n77.next_ref = n78; n78.next_ref = n79; n79.next_ref = n80;
+    n80.next_ref = n81; n81.next_ref = n82; n82.next_ref = n83; n83.next_ref = n84;
+    n84.next_ref = n85; n85.next_ref = n86; n86.next_ref = n87; n87.next_ref = n88;
+    n88.next_ref = n89; n89.next_ref = n90; n90.next_ref = n91; n91.next_ref = n92;
+    n92.next_ref = n93; n93.next_ref = n94; n94.next_ref = n95; n95.next_ref = n96;
+    n96.next_ref = n97; n97.next_ref = n98; n98.next_ref = n99; n99.next_ref = n0;
 
-    // Get start time
     start_time = clock_ns();
-
-    // Start the token
-    nodes_0 ! Token { hops: num_hops };
-
-    // Wait for completion
+    n0 ! Token { hops: num_hops };
     wait_for_idle();
-
-    // Get end time
     end_time = clock_ns();
 
     // Verify
-    total_received = nodes_0.received + nodes_1.received + nodes_2.received +
-                     nodes_3.received + nodes_4.received + nodes_5.received +
-                     nodes_6.received + nodes_7.received + nodes_8.received +
-                     nodes_9.received + nodes_10.received + nodes_11.received +
-                     nodes_12.received + nodes_13.received + nodes_14.received +
-                     nodes_15.received + nodes_16.received + nodes_17.received +
-                     nodes_18.received + nodes_19.received;
+    total_received = n0.received + n1.received + n2.received + n3.received + n4.received +
+                     n5.received + n6.received + n7.received + n8.received + n9.received +
+                     n10.received + n11.received + n12.received + n13.received + n14.received +
+                     n15.received + n16.received + n17.received + n18.received + n19.received +
+                     n20.received + n21.received + n22.received + n23.received + n24.received +
+                     n25.received + n26.received + n27.received + n28.received + n29.received +
+                     n30.received + n31.received + n32.received + n33.received + n34.received +
+                     n35.received + n36.received + n37.received + n38.received + n39.received +
+                     n40.received + n41.received + n42.received + n43.received + n44.received +
+                     n45.received + n46.received + n47.received + n48.received + n49.received +
+                     n50.received + n51.received + n52.received + n53.received + n54.received +
+                     n55.received + n56.received + n57.received + n58.received + n59.received +
+                     n60.received + n61.received + n62.received + n63.received + n64.received +
+                     n65.received + n66.received + n67.received + n68.received + n69.received +
+                     n70.received + n71.received + n72.received + n73.received + n74.received +
+                     n75.received + n76.received + n77.received + n78.received + n79.received +
+                     n80.received + n81.received + n82.received + n83.received + n84.received +
+                     n85.received + n86.received + n87.received + n88.received + n89.received +
+                     n90.received + n91.received + n92.received + n93.received + n94.received +
+                     n95.received + n96.received + n97.received + n98.received + n99.received;
 
     expected = num_hops + 1;
     if (total_received != expected) {
@@ -101,25 +111,21 @@ main() {
         print("\n");
     }
 
-    // Calculate metrics
+    // Calculate throughput: messages / elapsed_us = M msg/sec
     elapsed_ns = end_time - start_time;
-    elapsed_ms = elapsed_ns / 1000000;
+    elapsed_us = elapsed_ns / 1000;
     actual_messages = total_received;
 
-    // Cycles/msg (assuming 3GHz clock)
-    if (actual_messages > 0) {
-        total_cycles = elapsed_ns * 3;
-        cycles_per_msg = total_cycles / actual_messages;
-        print("Cycles/msg:     ");
-        print(cycles_per_msg);
+    if (elapsed_us > 0) {
+        ns_per_msg = elapsed_ns / actual_messages;
+        print("ns/msg:         ");
+        print(ns_per_msg);
         print("\n");
-    }
 
-    // Throughput: messages / seconds = messages * 1000 / elapsed_ms
-    if (elapsed_ms > 0) {
-        msg_per_sec = (actual_messages * 1000) / elapsed_ms;
-        throughput_m = msg_per_sec / 1000000;
-        throughput_frac = (msg_per_sec / 10000) - (throughput_m * 100);
+        throughput_m = actual_messages / elapsed_us;
+        leftover = actual_messages - (throughput_m * elapsed_us);
+        throughput_frac = (leftover * 100) / elapsed_us;
+
         print("Throughput:     ");
         print(throughput_m);
         print(".");

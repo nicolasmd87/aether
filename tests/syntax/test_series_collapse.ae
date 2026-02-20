@@ -1,0 +1,79 @@
+// Test: arithmetic series loop collapse optimization
+// The compiler should fold these loops into O(1) closed-form expressions.
+
+extern exit(code: int) -> void;
+
+main() {
+    // Test 1: constant bound, step 1
+    // Expected: total = 50 (5 added 10 times), i = 10
+    i = 0
+    total = 0
+    while i < 10 {
+        total = total + 5
+        i = i + 1
+    }
+    if total != 50 {
+        print("FAIL test1: wrong total\n")
+        exit(1)
+    }
+    if i != 10 {
+        print("FAIL test1: wrong i\n")
+        exit(1)
+    }
+
+    // Test 2: loop that should not execute (counter already past bound)
+    // The collapsed form must be guarded: total and j must stay unchanged
+    j = 20
+    while j < 10 {
+        total = total + 5
+        j = j + 1
+    }
+    if total != 50 {
+        print("FAIL test2: total changed when loop should not have run\n")
+        exit(1)
+    }
+    if j != 20 {
+        print("FAIL test2: j changed when loop should not have run\n")
+        exit(1)
+    }
+
+    // Test 3: multiple accumulators
+    a = 0
+    b = 0
+    k = 0
+    while k < 8 {
+        a = a + 3
+        b = b + 7
+        k = k + 1
+    }
+    if a != 24 {
+        print("FAIL test3: a wrong\n")
+        exit(1)
+    }
+    if b != 56 {
+        print("FAIL test3: b wrong\n")
+        exit(1)
+    }
+    if k != 8 {
+        print("FAIL test3: k wrong\n")
+        exit(1)
+    }
+
+    // Test 4: <= bound (6 iterations: m=0,1,2,3,4,5)
+    sum = 0
+    m = 0
+    while m <= 5 {
+        sum = sum + 2
+        m = m + 1
+    }
+    if sum != 12 {
+        print("FAIL test4: sum wrong\n")
+        exit(1)
+    }
+    if m != 6 {
+        print("FAIL test4: m wrong\n")
+        exit(1)
+    }
+
+    print("PASS: all series collapse tests correct\n")
+}

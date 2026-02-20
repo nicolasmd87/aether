@@ -1,0 +1,14 @@
+// std.path - Path Utilities (alias for std.fs)
+//
+// This is a convenience module that re-exports path functions from std.fs.
+// You can use either:
+//   import std.path   (this module)
+//   import std.fs     (consolidated filesystem module)
+//
+// The implementations are in std/fs/aether_fs.c which is compiled into libaether.a
+
+extern path_join(path1: string, path2: string) -> ptr
+extern path_dirname(path: string) -> ptr
+extern path_basename(path: string) -> ptr
+extern path_extension(path: string) -> ptr
+extern path_is_absolute(path: string) -> int

@@ -135,7 +135,7 @@ int main() {
     // Initialize profiler
     ProfilerConfig config = {
         .enabled = 1,
-        .port = 8080,
+        .port = 8081,
         .bind_address = "0.0.0.0",
         .max_events = 10000,
         .collection_interval_ms = 100
@@ -146,7 +146,7 @@ int main() {
     
     printf("\n┌─────────────────────────────────────────────┐\n");
     printf("│ 🌐 OPEN YOUR BROWSER:                      │\n");
-    printf("│    http://localhost:8080                    │\n");
+    printf("│    http://localhost:8081                    │\n");
     printf("│                                             │\n");
     printf("│ Watch real-time updates as the demo runs!  │\n");
     printf("└─────────────────────────────────────────────┘\n\n");

@@ -5,7 +5,7 @@
 #include <string.h>
 
 // Thread-local send buffer
-__thread SendBuffer g_send_buffer = {NULL, {{0}}, 0, -1};
+AETHER_TLS SendBuffer g_send_buffer = {NULL, {{0}}, 0, -1};
 
 // Forward declare to access schedulers
 extern Scheduler schedulers[];

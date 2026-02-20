@@ -85,12 +85,13 @@ TEST(http_response_creation) {
     aether_http_response_set_header(res, "Content-Type", "text/plain");
     aether_http_response_set_body(res, "Not Found");
     
-    const char* serialized = aether_http_response_serialize(res);
+    char* serialized = aether_http_response_serialize(res);
     ASSERT_NOT_NULL(serialized);
     ASSERT_TRUE(strstr(serialized, "HTTP/1.1 404 Not Found") != NULL);
     ASSERT_TRUE(strstr(serialized, "Content-Type: text/plain") != NULL);
     ASSERT_TRUE(strstr(serialized, "Not Found") != NULL);
-    
+
+    free(serialized);
     aether_http_server_response_free(res);
 }
 
@@ -98,11 +99,12 @@ TEST(http_response_json) {
     HttpServerResponse* res = aether_http_response_create();
     aether_http_response_json(res, "{\"status\":\"ok\",\"count\":42}");
     
-    const char* serialized = aether_http_response_serialize(res);
+    char* serialized = aether_http_response_serialize(res);
     ASSERT_NOT_NULL(serialized);
     ASSERT_TRUE(strstr(serialized, "Content-Type: application/json") != NULL);
     ASSERT_TRUE(strstr(serialized, "{\"status\":\"ok\",\"count\":42}") != NULL);
-    
+
+    free(serialized);
     aether_http_server_response_free(res);
 }
 

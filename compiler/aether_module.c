@@ -80,10 +80,12 @@ void module_register(AetherModule* module) {
     // Grow array if needed
     if (global_module_registry->module_count >= global_module_registry->module_capacity) {
         int new_capacity = global_module_registry->module_capacity == 0 ? 8 : global_module_registry->module_capacity * 2;
-        global_module_registry->modules = (AetherModule**)realloc(
+        AetherModule** new_modules = (AetherModule**)realloc(
             global_module_registry->modules,
             new_capacity * sizeof(AetherModule*)
         );
+        if (!new_modules) return;
+        global_module_registry->modules = new_modules;
         global_module_registry->module_capacity = new_capacity;
     }
     
@@ -113,7 +115,9 @@ void module_add_export(AetherModule* module, const char* symbol) {
         }
     }
     
-    module->exports = (char**)realloc(module->exports, (module->export_count + 1) * sizeof(char*));
+    char** new_exports = (char**)realloc(module->exports, (module->export_count + 1) * sizeof(char*));
+    if (!new_exports) return;
+    module->exports = new_exports;
     module->exports[module->export_count++] = strdup(symbol);
 }
 
@@ -127,7 +131,9 @@ void module_add_import(AetherModule* module, const char* module_name) {
         }
     }
     
-    module->imports = (char**)realloc(module->imports, (module->import_count + 1) * sizeof(char*));
+    char** new_imports = (char**)realloc(module->imports, (module->import_count + 1) * sizeof(char*));
+    if (!new_imports) return;
+    module->imports = new_imports;
     module->imports[module->import_count++] = strdup(module_name);
 }
 
@@ -410,7 +416,9 @@ DependencyNode* dependency_graph_add_node(DependencyGraph* graph, const char* mo
     node->in_stack = 0;
     
     // Add to graph
-    graph->nodes = realloc(graph->nodes, (graph->node_count + 1) * sizeof(DependencyNode*));
+    DependencyNode** new_nodes = realloc(graph->nodes, (graph->node_count + 1) * sizeof(DependencyNode*));
+    if (!new_nodes) { free(node); return NULL; }
+    graph->nodes = new_nodes;
     graph->nodes[graph->node_count++] = node;
     
     return node;
@@ -430,8 +438,10 @@ void dependency_graph_add_edge(DependencyGraph* graph, const char* from, const c
     }
     
     // Add edge
-    from_node->dependencies = realloc(from_node->dependencies,
+    DependencyNode** new_deps = realloc(from_node->dependencies,
                                      (from_node->dependency_count + 1) * sizeof(DependencyNode*));
+    if (!new_deps) return;
+    from_node->dependencies = new_deps;
     from_node->dependencies[from_node->dependency_count++] = to_node;
 }
 

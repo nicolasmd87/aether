@@ -52,6 +52,11 @@ Master spawns N workers, distributes work, collects results. Tests fan-out/fan-i
 - Master sends tasks, workers reply with results
 - Measures parallel dispatch and aggregation
 
+**Notes:**
+- Activates Batch Send optimization (groups messages by target core)
+- Reduces atomic operations from N to num_cores
+- Main thread fan-out pattern benefits significantly from batching
+
 **Location:** `benchmarks/cross-language/aether/fork_join.ae`
 
 ## Cross-Language Benchmarks
@@ -94,12 +99,12 @@ Dynamic batch size adjustment based on queue utilization. Range: 64 to 1024 mess
 ### Inline Single-Int Messages
 Messages with exactly one integer field bypass pool allocation. The value is stored directly in `Message.payload_int`.
 
-**Implementation:** `compiler/backend/codegen.c`
+**Implementation:** `compiler/codegen/codegen.c`
 
 ### Computed Goto Dispatch
 Message handlers use a dispatch table with GCC computed goto for direct label jumps.
 
-**Implementation:** `compiler/backend/codegen.c` (generated code)
+**Implementation:** `compiler/codegen/codegen.c` (generated code)
 
 ## Methodology
 
@@ -146,7 +151,8 @@ make
 
 ### Key Metrics
 
-- **Throughput**: Messages processed per second
+- **Throughput**: Messages processed per second (M msg/sec)
+- **ns/msg**: Nanoseconds per message (lower is better)
 - **Latency**: Time from send to receive (per round-trip)
 
 ### Considerations

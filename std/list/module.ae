@@ -1,0 +1,17 @@
+// std.list - ArrayList Operations (alias for std.collections)
+//
+// This is a convenience module that re-exports list functions from std.collections.
+// You can use either:
+//   import std.list         (this module)
+//   import std.collections  (consolidated collections module)
+//
+// The implementations are in std/collections/aether_collections.c which is compiled into libaether.a
+
+extern list_new() -> ptr
+extern list_add(list: ptr, item: ptr)
+extern list_get(list: ptr, index: int) -> ptr
+extern list_set(list: ptr, index: int, item: ptr)
+extern list_size(list: ptr) -> int
+extern list_remove(list: ptr, index: int)
+extern list_clear(list: ptr)
+extern list_free(list: ptr)

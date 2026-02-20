@@ -15,13 +15,13 @@ typedef struct {
 } QueueItem;
 
 // Cache-line aligned to prevent false sharing between cores
-typedef struct __attribute__((aligned(64))) {
+typedef struct {
     atomic_int head;
     char padding1[60];  // Pad to 64 bytes
     atomic_int tail;
     char padding2[60];  // Pad to 64 bytes
     QueueItem items[QUEUE_SIZE];
-} LockFreeQueue;
+} AETHER_ALIGNED(64) LockFreeQueue;
 
 static inline void queue_init(LockFreeQueue* q) {
     atomic_store(&q->head, 0);
@@ -33,7 +33,7 @@ static inline int queue_enqueue(LockFreeQueue* q, void* actor, Message msg) {
     int next_tail = (tail + 1) & QUEUE_MASK;  // Fast power-of-2 masking
     int head = atomic_load_explicit(&q->head, memory_order_acquire);
     
-    if (__builtin_expect(next_tail == head, 0)) {  // Full is unlikely
+    if (unlikely(next_tail == head)) {  // Full is unlikely
         return 0;
     }
     
@@ -47,7 +47,7 @@ static inline int queue_dequeue(LockFreeQueue* q, void** actor, Message* msg) {
     int head = atomic_load_explicit(&q->head, memory_order_relaxed);
     int tail = atomic_load_explicit(&q->tail, memory_order_acquire);
     
-    if (__builtin_expect(head == tail, 0)) {  // Empty is unlikely
+    if (unlikely(head == tail)) {  // Empty is unlikely
         return 0;
     }
     
@@ -86,7 +86,7 @@ static inline int queue_dequeue_batch(LockFreeQueue* q, void** actors, Message* 
     int tail = atomic_load_explicit(&q->tail, memory_order_acquire);
 
     int available = (tail - head) & QUEUE_MASK;
-    if (__builtin_expect(available == 0, 0)) {
+    if (unlikely(available == 0)) {
         return 0;  // Empty
     }
 

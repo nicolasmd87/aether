@@ -77,47 +77,47 @@ typedef struct {
 } HttpServer;
 
 // Server lifecycle
-HttpServer* aether_http_server_create(int port);
-int aether_http_server_bind(HttpServer* server, const char* host, int port);
-int aether_http_server_start(HttpServer* server);
-void aether_http_server_stop(HttpServer* server);
-void aether_http_server_free(HttpServer* server);
+HttpServer* http_server_create(int port);
+int http_server_bind(HttpServer* server, const char* host, int port);
+int http_server_start(HttpServer* server);
+void http_server_stop(HttpServer* server);
+void http_server_free(HttpServer* server);
 
 // Routing
-void aether_http_server_add_route(HttpServer* server, const char* method, const char* path, HttpHandler handler, void* user_data);
-void aether_http_server_get(HttpServer* server, const char* path, HttpHandler handler, void* user_data);
-void aether_http_server_post(HttpServer* server, const char* path, HttpHandler handler, void* user_data);
-void aether_http_server_put(HttpServer* server, const char* path, HttpHandler handler, void* user_data);
-void aether_http_server_delete(HttpServer* server, const char* path, HttpHandler handler, void* user_data);
+void http_server_add_route(HttpServer* server, const char* method, const char* path, HttpHandler handler, void* user_data);
+void http_server_get(HttpServer* server, const char* path, HttpHandler handler, void* user_data);
+void http_server_post(HttpServer* server, const char* path, HttpHandler handler, void* user_data);
+void http_server_put(HttpServer* server, const char* path, HttpHandler handler, void* user_data);
+void http_server_delete(HttpServer* server, const char* path, HttpHandler handler, void* user_data);
 
 // Middleware
-void aether_http_server_use_middleware(HttpServer* server, HttpMiddleware middleware, void* user_data);
+void http_server_use_middleware(HttpServer* server, HttpMiddleware middleware, void* user_data);
 
 // Request parsing
-HttpRequest* aether_http_parse_request(const char* raw_request);
-const char* aether_http_get_header(HttpRequest* req, const char* key);
-const char* aether_http_get_query_param(HttpRequest* req, const char* key);
-const char* aether_http_get_path_param(HttpRequest* req, const char* key);
-void aether_http_request_free(HttpRequest* req);
+HttpRequest* http_parse_request(const char* raw_request);
+const char* http_get_header(HttpRequest* req, const char* key);
+const char* http_get_query_param(HttpRequest* req, const char* key);
+const char* http_get_path_param(HttpRequest* req, const char* key);
+void http_request_free(HttpRequest* req);
 
 // Response building
-HttpServerResponse* aether_http_response_create();
-void aether_http_response_set_status(HttpServerResponse* res, int code);
-void aether_http_response_set_header(HttpServerResponse* res, const char* key, const char* value);
-void aether_http_response_set_body(HttpServerResponse* res, const char* body);
-void aether_http_response_json(HttpServerResponse* res, const char* json);
-const char* aether_http_response_serialize(HttpServerResponse* res);
-void aether_http_server_response_free(HttpServerResponse* res);
+HttpServerResponse* http_response_create();
+void http_response_set_status(HttpServerResponse* res, int code);
+void http_response_set_header(HttpServerResponse* res, const char* key, const char* value);
+void http_response_set_body(HttpServerResponse* res, const char* body);
+void http_response_json(HttpServerResponse* res, const char* json);
+char* http_response_serialize(HttpServerResponse* res);  // caller must free()
+void http_server_response_free(HttpServerResponse* res);
 
 // Helpers
-int aether_http_route_matches(const char* pattern, const char* path, HttpRequest* req);
-const char* aether_http_status_text(int code);
+int http_route_matches(const char* pattern, const char* path, HttpRequest* req);
+const char* http_status_text(int code);
 
 // MIME type detection
-const char* aether_http_mime_type(const char* path);
+const char* http_mime_type(const char* path);
 
 // Static file serving
-void aether_http_serve_file(HttpServerResponse* res, const char* filepath);
-void aether_http_serve_static(HttpRequest* req, HttpServerResponse* res, void* base_dir);
+void http_serve_file(HttpServerResponse* res, const char* filepath);
+void http_serve_static(HttpRequest* req, HttpServerResponse* res, void* base_dir);
 
 #endif

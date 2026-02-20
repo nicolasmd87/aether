@@ -3,7 +3,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
-#include <pthread.h>
+#include "../utils/aether_thread.h"
 
 // Size classes for better memory allocation
 #define SIZE_CLASS_SMALL 128      // < 128 bytes

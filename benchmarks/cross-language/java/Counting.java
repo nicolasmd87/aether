@@ -48,9 +48,9 @@ public class Counting {
         }
 
         double throughput = MESSAGES / elapsedSec / 1e6;
-        double cyclesPerMsg = elapsedSec * 3e9 / MESSAGES;
+        double nsPerMsg = elapsedSec * 1e9 / MESSAGES;
 
-        System.out.printf("Cycles/msg:     %.2f%n", cyclesPerMsg);
+        System.out.printf("ns/msg:         %.2f%n", nsPerMsg);
         System.out.printf("Throughput:     %.2f M msg/sec%n", throughput);
     }
 }

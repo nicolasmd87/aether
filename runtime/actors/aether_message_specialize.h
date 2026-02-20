@@ -9,7 +9,7 @@
 // Template for specialized message send (no payload copy)
 #define DEFINE_SPECIALIZED_SEND(msg_type, msg_name) \
 static inline int send_##msg_name(Mailbox* mbox, int sender_id) { \
-    if (__builtin_expect(mbox->count >= MAILBOX_SIZE, 0)) return 0; \
+    if (unlikely(mbox->count >= MAILBOX_SIZE)) return 0; \
     Message* slot = &mbox->messages[mbox->tail]; \
     slot->type = msg_type; \
     slot->sender_id = sender_id; \
@@ -23,7 +23,7 @@ static inline int send_##msg_name(Mailbox* mbox, int sender_id) { \
 // Template for specialized receive with type check
 #define DEFINE_SPECIALIZED_RECEIVE(msg_type, msg_name) \
 static inline int receive_##msg_name(Mailbox* mbox, Message* out) { \
-    if (__builtin_expect(mbox->count == 0, 0)) return 0; \
+    if (unlikely(mbox->count == 0)) return 0; \
     Message* msg = &mbox->messages[mbox->head]; \
     if (msg->type == msg_type) { \
         *out = *msg; \
@@ -37,7 +37,7 @@ static inline int receive_##msg_name(Mailbox* mbox, Message* out) { \
 // Template for specialized send with int payload
 #define DEFINE_SPECIALIZED_SEND_INT(msg_type, msg_name) \
 static inline int send_##msg_name(Mailbox* mbox, int sender_id, int payload) { \
-    if (__builtin_expect(mbox->count >= MAILBOX_SIZE, 0)) return 0; \
+    if (unlikely(mbox->count >= MAILBOX_SIZE)) return 0; \
     Message* slot = &mbox->messages[mbox->tail]; \
     slot->type = msg_type; \
     slot->sender_id = sender_id; \

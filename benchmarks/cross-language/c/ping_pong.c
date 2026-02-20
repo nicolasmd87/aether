@@ -106,9 +106,9 @@ int main() {
     uint64_t end = get_time_ns();
     double elapsed_sec = (double)(end - start) / 1e9;
     double throughput = MESSAGES / elapsed_sec;
-    double cycles_per_msg = elapsed_sec * 3e9 / MESSAGES;
+    double ns_per_msg = elapsed_sec * 1e9 / MESSAGES;
 
-    printf("Cycles/msg:     %.2f\n", cycles_per_msg);
+    printf("ns/msg:         %.2f\n", ns_per_msg);
     printf("Throughput:     %.2f M msg/sec\n", throughput / 1e6);
 
     pthread_mutex_destroy(&chan_a->mutex);

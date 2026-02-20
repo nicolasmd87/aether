@@ -33,9 +33,9 @@ defmodule Counting do
         end
 
         throughput = @messages / elapsed_sec / 1_000_000
-        cycles_per_msg = elapsed_sec * 3.0e9 / @messages
+        ns_per_msg = elapsed_ns / @messages
 
-        IO.puts("Cycles/msg:     #{:io_lib.format("~.2f", [cycles_per_msg])}")
+        IO.puts("ns/msg:         #{:io_lib.format("~.2f", [ns_per_msg])}")
         IO.puts("Throughput:     #{:io_lib.format("~.2f", [throughput])} M msg/sec")
     after
       60_000 ->

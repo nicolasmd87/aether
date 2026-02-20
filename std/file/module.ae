@@ -1,0 +1,16 @@
+// std.file - File Operations (alias for std.fs)
+//
+// This is a convenience module that re-exports file functions from std.fs.
+// You can use either:
+//   import std.file   (this module)
+//   import std.fs     (consolidated filesystem module)
+//
+// The implementations are in std/fs/aether_fs.c which is compiled into libaether.a
+
+extern file_open(path: string, mode: string) -> ptr
+extern file_close(file: ptr) -> int
+extern file_read_all(file: ptr) -> ptr
+extern file_write(file: ptr, data: string, length: int) -> int
+extern file_exists(path: string) -> int
+extern file_delete(path: string) -> int
+extern file_size(path: string) -> int

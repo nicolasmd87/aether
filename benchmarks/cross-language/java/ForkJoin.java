@@ -5,11 +5,12 @@ import java.util.concurrent.CountDownLatch;
 
 public class ForkJoin {
     private static final int NUM_WORKERS = 8;
-    private static int getMessages() {
+    private static int getMessagesPerWorker() {
         String env = System.getenv("BENCHMARK_MESSAGES");
-        return env != null ? Integer.parseInt(env) : 100000;
+        int total = env != null ? Integer.parseInt(env) : 100000;
+        return total / NUM_WORKERS;
     }
-    private static final int MESSAGES_PER_WORKER = getMessages();
+    private static final int MESSAGES_PER_WORKER = getMessagesPerWorker();
 
     static class Worker implements Runnable {
         private final BlockingQueue<Integer> inbox;
@@ -91,9 +92,9 @@ public class ForkJoin {
         }
 
         double throughput = total / elapsedSec / 1e6;
-        double cyclesPerMsg = elapsedSec * 3e9 / total;
+        double nsPerMsg = elapsedSec * 1e9 / total;
 
-        System.out.printf("Cycles/msg:     %.2f%n", cyclesPerMsg);
+        System.out.printf("ns/msg:         %.2f%n", nsPerMsg);
         System.out.printf("Throughput:     %.2f M msg/sec%n", throughput);
     }
 }

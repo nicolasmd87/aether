@@ -1,0 +1,125 @@
+// Reply Pattern - Actors that respond using the 'reply' keyword
+// Demonstrates reply-based messaging (fire-and-forget with actor response)
+//
+// Features:
+//   - reply statement to send response back to sender
+//   - wait_for_idle() to block until all actors finish
+// For synchronous ask/reply using '?', see docs/language-reference.md
+
+// Messages for the calculator
+message Add { a: int, b: int }
+message Subtract { a: int, b: int }
+message Multiply { a: int, b: int }
+message GetCount {}
+
+// Response messages
+message Result { value: int }
+message CountResponse { count: int }
+
+// Calculator actor that responds to queries
+actor Calculator {
+    state operations = 0;
+
+    receive {
+        Add(a, b) -> {
+            operations = operations + 1;
+            print("[Calculator] ");
+            print(a);
+            print(" + ");
+            print(b);
+            print(" = ");
+            print(a + b);
+            print("\n");
+            reply Result { value: a + b };
+        }
+        Subtract(a, b) -> {
+            operations = operations + 1;
+            print("[Calculator] ");
+            print(a);
+            print(" - ");
+            print(b);
+            print(" = ");
+            print(a - b);
+            print("\n");
+            reply Result { value: a - b };
+        }
+        Multiply(a, b) -> {
+            operations = operations + 1;
+            print("[Calculator] ");
+            print(a);
+            print(" * ");
+            print(b);
+            print(" = ");
+            print(a * b);
+            print("\n");
+            reply Result { value: a * b };
+        }
+        GetCount() -> {
+            reply CountResponse { count: operations };
+        }
+    }
+}
+
+// Simple counter actor
+message Increment { amount: int }
+message GetValue {}
+message ValueResponse { val: int }
+
+actor Counter {
+    state value = 0;
+
+    receive {
+        Increment(amount) -> {
+            value = value + amount;
+            print("[Counter] Incremented by ");
+            print(amount);
+            print(", now: ");
+            print(value);
+            print("\n");
+        }
+        GetValue() -> {
+            reply ValueResponse { val: value };
+        }
+    }
+}
+
+main() {
+    print("=== Ask Pattern Examples ===\n\n");
+
+    // Create calculator
+    calc = spawn(Calculator());
+
+    print("1. Calculator with reply:\n");
+
+    // Send messages - the actor replies but we use fire-and-forget here
+    calc ! Add { a: 10, b: 5 };
+    calc ! Subtract { a: 20, b: 8 };
+    calc ! Multiply { a: 7, b: 6 };
+
+    wait_for_idle();
+    print("\n");
+
+    // Check history
+    print("2. Query actor state:\n");
+    print("   Operations performed: ");
+    print(calc.operations);
+    print("\n\n");
+
+    // Counter example
+    print("3. Counter with reply:\n");
+    counter = spawn(Counter());
+
+    counter ! Increment { amount: 10 };
+    counter ! Increment { amount: 5 };
+    counter ! Increment { amount: 3 };
+
+    wait_for_idle();
+
+    print("   Final value: ");
+    print(counter.value);
+    print("\n\n");
+
+    print("=== Ask Pattern Complete ===\n");
+    print("\nNote: The ? operator provides synchronous-style\n");
+    print("communication while maintaining actor isolation.\n");
+}

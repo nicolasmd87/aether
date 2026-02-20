@@ -1,0 +1,115 @@
+// Aether Documentation Server
+// Serves generated API documentation at http://localhost:3000
+
+// FFI declarations
+extern socket_create(port: int) -> int
+extern socket_accept(fd: int) -> int
+extern socket_read(fd: int, buf: string, size: int) -> int
+extern socket_write(fd: int, data: string, len: int) -> int
+extern socket_close(fd: int)
+extern file_read(path: string) -> string
+extern allocate_string(size: int) -> string
+extern cstr_length(s: string) -> int
+extern strcmp(a: string, b: string) -> int
+extern ends_with(s: string, suffix: string) -> int
+extern parse_http_path(request: string) -> string
+extern str_concat(a: string, b: string) -> string
+extern build_response(status: int, ctype: string, body: string) -> string
+
+main() {
+    port = 3000;
+
+    print("===========================================\n");
+    print("  Aether API Documentation Server\n");
+    print("===========================================\n\n");
+
+    server_fd = socket_create(port);
+    if (server_fd < 0) {
+        print("ERROR: Failed to create server socket\n");
+        print("Port 3000 may be in use\n");
+    }
+
+    if (server_fd >= 0) {
+        print("Server running at http://localhost:");
+        print(port);
+        print("\n");
+        print("Serving: docs/api/\n");
+        print("Press Ctrl+C to stop\n\n");
+
+        // Main accept loop
+        while (1 == 1) {
+            client_fd = socket_accept(server_fd);
+            if (client_fd >= 0) {
+                buf = allocate_string(4096);
+                n = socket_read(client_fd, buf, 4096);
+
+                if (n > 0) {
+                    path = parse_http_path(buf);
+
+                    status = 404;
+                    content_type = "text/plain";
+                    body = "Not Found";
+                    filepath = "";
+                    content = "";
+
+                    // Route: / -> index.html
+                    if (strcmp(path, "/") == 0) {
+                        filepath = "docs/api/index.html";
+                        content = file_read(filepath);
+                        if (cstr_length(content) > 0) {
+                            status = 200;
+                            content_type = "text/html; charset=utf-8";
+                            body = content;
+                        }
+                    }
+
+                    // Route: /*.html
+                    if (ends_with(path, ".html") == 1) {
+                        filepath = str_concat("docs/api", path);
+                        content = file_read(filepath);
+                        if (cstr_length(content) > 0) {
+                            status = 200;
+                            content_type = "text/html; charset=utf-8";
+                            body = content;
+                        }
+                    }
+
+                    // Route: /style.css
+                    if (strcmp(path, "/style.css") == 0) {
+                        content = file_read("docs/api/style.css");
+                        if (cstr_length(content) > 0) {
+                            status = 200;
+                            content_type = "text/css; charset=utf-8";
+                            body = content;
+                        }
+                    }
+
+                    // Route: /search.js
+                    if (strcmp(path, "/search.js") == 0) {
+                        content = file_read("docs/api/search.js");
+                        if (cstr_length(content) > 0) {
+                            status = 200;
+                            content_type = "application/javascript; charset=utf-8";
+                            body = content;
+                        }
+                    }
+
+                    // Log request
+                    print("[");
+                    print(status);
+                    print("] ");
+                    print(path);
+                    print("\n");
+
+                    // Send response
+                    response = build_response(status, content_type, body);
+                    socket_write(client_fd, response, cstr_length(response));
+                }
+
+                socket_close(client_fd);
+            }
+        }
+
+        socket_close(server_fd);
+    }
+}

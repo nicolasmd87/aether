@@ -62,11 +62,6 @@ public class PingPong {
         }
     }
 
-    private static long rdtsc() {
-        // On ARM (Apple Silicon), use System.nanoTime()
-        return System.nanoTime();
-    }
-
     public static void main(String[] args) throws InterruptedException {
         System.out.println("=== Java Ping-Pong Benchmark ===");
         System.out.println("Messages: " + MESSAGES);
@@ -79,7 +74,7 @@ public class PingPong {
         PingThread ping = new PingThread(queueA, queueB);
         PongThread pong = new PongThread(queueB, queueA);
 
-        long start = rdtsc();
+        long start = System.nanoTime();
 
         ping.start();
         pong.start();
@@ -87,14 +82,13 @@ public class PingPong {
         ping.join();
         pong.join();
 
-        long end = rdtsc();
+        long end = System.nanoTime();
         long totalNs = end - start;
 
         double nsPerMsg = (double) totalNs / MESSAGES;
         double throughput = 1e9 / nsPerMsg;
-        double cyclesPerMsg = nsPerMsg * 3.0; // Approximate at 3GHz
 
-        System.out.printf("Cycles/msg:     %.2f\n", cyclesPerMsg);
+        System.out.printf("ns/msg:         %.2f\n", nsPerMsg);
         System.out.printf("Throughput:     %.2f M msg/sec\n", throughput / 1e6);
     }
 }

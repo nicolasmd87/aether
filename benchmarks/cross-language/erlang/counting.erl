@@ -34,9 +34,9 @@ start() ->
                 true -> ok
             end,
 
-            CyclesPerMsg = (ElapsedNs * 3.0) / Messages,
+            NsPerMsg = ElapsedNs / Messages,
             MsgPerSec = Messages / ElapsedSec,
-            io:format("Cycles/msg:     ~.2f~n", [CyclesPerMsg]),
+            io:format("ns/msg:         ~.2f~n", [NsPerMsg]),
             io:format("Throughput:     ~.2f M msg/sec~n", [MsgPerSec / 1000000])
     after 60000 ->
         io:format("Timeout!~n"),

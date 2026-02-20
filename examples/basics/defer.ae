@@ -1,0 +1,116 @@
+// Defer Statement - Deferred execution at end of scope
+// Executes deferred statements when leaving a function/block
+//
+// Useful for:
+//   - Cleanup operations
+//   - Resource management
+//   - Ensuring code runs on exit
+
+cleanup_resource(id) {
+    print("  Cleanup resource ");
+    print(id);
+    print("\n");
+}
+
+do_work(stage) {
+    print("  Working on stage ");
+    print(stage);
+    print("\n");
+}
+
+// Example: deferred cleanup
+process_with_cleanup() {
+    print("Starting process_with_cleanup...\n");
+
+    // This will execute at the end of the function
+    defer cleanup_resource(1);
+
+    do_work(1);
+    do_work(2);
+    do_work(3);
+
+    print("Function ending, defer will run now...\n");
+}
+
+// Example: multiple defers (LIFO order - last in, first out)
+multiple_defers() {
+    print("Starting multiple_defers...\n");
+
+    defer print("  Deferred 1 (runs third)\n");
+    defer print("  Deferred 2 (runs second)\n");
+    defer print("  Deferred 3 (runs first)\n");
+
+    print("Main work done, defers will run in LIFO order...\n");
+}
+
+// Example: defer in conditional (only if reached)
+conditional_defer(should_defer) {
+    print("Starting conditional_defer...\n");
+
+    if (should_defer == 1) {
+        defer print("  Conditional defer executed!\n");
+        print("  Defer was registered\n");
+    } else {
+        print("  Defer was NOT registered\n");
+    }
+
+    print("Function ending...\n");
+}
+
+// Example: simulate file-like resource
+open_resource() {
+    print("  -> Resource OPENED\n");
+    return 42;  // resource handle
+}
+
+close_resource(handle) {
+    print("  -> Resource CLOSED (handle ");
+    print(handle);
+    print(")\n");
+}
+
+use_resource(handle) {
+    print("  -> Using resource ");
+    print(handle);
+    print("\n");
+}
+
+// Real-world pattern: open, defer close, use
+safe_resource_usage() {
+    print("Starting safe_resource_usage...\n");
+
+    handle = open_resource();
+    defer close_resource(handle);
+
+    use_resource(handle);
+    use_resource(handle);
+    use_resource(handle);
+
+    print("Done with resource, defer will close it...\n");
+}
+
+main() {
+    print("=== Defer Statement Examples ===\n\n");
+
+    print("1. Basic defer for cleanup:\n");
+    process_with_cleanup();
+    print("\n");
+
+    print("2. Multiple defers (LIFO order):\n");
+    multiple_defers();
+    print("\n");
+
+    print("3. Conditional defer (with defer):\n");
+    conditional_defer(1);
+    print("\n");
+
+    print("4. Conditional defer (without defer):\n");
+    conditional_defer(0);
+    print("\n");
+
+    print("5. Resource management pattern:\n");
+    safe_resource_usage();
+    print("\n");
+
+    print("=== Defer Examples Complete ===\n");
+}

@@ -14,7 +14,9 @@
 
 #ifdef _WIN32
 #include <intrin.h>
-#pragma intrinsic(__rdtsc)
+#ifdef _MSC_VER
+#pragma intrinsic(__rdtsc)   /* MSVC-only: GCC/Clang have the intrinsic without this pragma */
+#endif
 #elif defined(__x86_64__) || defined(__i386__) || defined(_M_X64) || defined(_M_IX86)
 #include <x86intrin.h>
 #endif

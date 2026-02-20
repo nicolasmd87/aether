@@ -178,10 +178,9 @@ Uses libnuma when available:
 
 ## Verification
 
-All 148 tests pass with NUMA support:
+All tests pass with NUMA support:
 ```bash
-./build/test_runner.exe
-# Summary: 148 passed, 0 failed
+make test
 ```
 
 Multicore benchmark works with NUMA allocation:

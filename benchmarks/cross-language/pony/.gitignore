@@ -1,0 +1,6 @@
+# Compiled binaries (ponyc outputs binary with same name as directory)
+ping_pong/ping_pong
+counting/counting
+thread_ring/thread_ring
+fork_join/fork_join
+pony

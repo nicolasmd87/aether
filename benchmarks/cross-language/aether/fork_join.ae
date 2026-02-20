@@ -10,7 +10,6 @@ actor Worker {
 
     receive {
         Work(value) -> {
-            // Simulate minimal work
             sum = sum + value;
             processed = processed + 1;
         }
@@ -18,7 +17,6 @@ actor Worker {
 }
 
 main() {
-    // Read from BENCHMARK_MESSAGES env var, default 100K total
     num_workers = 8;
     messages_per_worker = 12500;
     env_val = getenv("BENCHMARK_MESSAGES");
@@ -36,29 +34,25 @@ main() {
     w6 = spawn(Worker());
     w7 = spawn(Worker());
 
-    // Get start time
     start_time = clock_ns();
 
     // Send messages round-robin to workers
     total = num_workers * messages_per_worker;
     i = 0;
     while (i < total) {
-        remainder = i - (i / num_workers) * num_workers;
-        if (remainder == 0) { w0 ! Work { value: i }; }
-        if (remainder == 1) { w1 ! Work { value: i }; }
-        if (remainder == 2) { w2 ! Work { value: i }; }
-        if (remainder == 3) { w3 ! Work { value: i }; }
-        if (remainder == 4) { w4 ! Work { value: i }; }
-        if (remainder == 5) { w5 ! Work { value: i }; }
-        if (remainder == 6) { w6 ! Work { value: i }; }
-        if (remainder == 7) { w7 ! Work { value: i }; }
+        worker_idx = i - (i / num_workers) * num_workers;
+        if (worker_idx == 0) { w0 ! Work { value: i }; }
+        if (worker_idx == 1) { w1 ! Work { value: i }; }
+        if (worker_idx == 2) { w2 ! Work { value: i }; }
+        if (worker_idx == 3) { w3 ! Work { value: i }; }
+        if (worker_idx == 4) { w4 ! Work { value: i }; }
+        if (worker_idx == 5) { w5 ! Work { value: i }; }
+        if (worker_idx == 6) { w6 ! Work { value: i }; }
+        if (worker_idx == 7) { w7 ! Work { value: i }; }
         i = i + 1;
     }
 
-    // Wait for completion
     wait_for_idle();
-
-    // Get end time
     end_time = clock_ns();
 
     // Verify
@@ -73,25 +67,21 @@ main() {
         print("\n");
     }
 
-    // Calculate metrics
+    // Calculate throughput: messages / elapsed_us = M msg/sec
     elapsed_ns = end_time - start_time;
-    elapsed_ms = elapsed_ns / 1000000;
+    elapsed_us = elapsed_ns / 1000;
     actual_messages = total_processed;
 
-    // Cycles/msg (assuming 3GHz clock)
-    if (actual_messages > 0) {
-        total_cycles = elapsed_ns * 3;
-        cycles_per_msg = total_cycles / actual_messages;
-        print("Cycles/msg:     ");
-        print(cycles_per_msg);
+    if (elapsed_us > 0) {
+        ns_per_msg = elapsed_ns / actual_messages;
+        print("ns/msg:         ");
+        print(ns_per_msg);
         print("\n");
-    }
 
-    // Throughput: messages / seconds = messages * 1000 / elapsed_ms
-    if (elapsed_ms > 0) {
-        msg_per_sec = (actual_messages * 1000) / elapsed_ms;
-        throughput_m = msg_per_sec / 1000000;
-        throughput_frac = (msg_per_sec / 10000) - (throughput_m * 100);
+        throughput_m = actual_messages / elapsed_us;
+        leftover = actual_messages - (throughput_m * elapsed_us);
+        throughput_frac = (leftover * 100) / elapsed_us;
+
         print("Throughput:     ");
         print(throughput_m);
         print(".");

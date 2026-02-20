@@ -5,6 +5,7 @@
 #include "../../runtime/actors/lockfree_mailbox.h"
 #include "../../runtime/actors/actor_state_machine.h"
 #include <pthread.h>
+#include <sched.h>
 #include <time.h>
 
 #define TEST_COUNT 10000
@@ -105,7 +106,7 @@ void* producer_thread(void* arg) {
     for (int i = 0; i < TEST_COUNT / THREAD_COUNT; i++) {
         msg.payload_int = i;
         while (!lockfree_mailbox_send(data->mbox, msg)) {
-            // Spin until space available
+            sched_yield();  // Allow consumer to drain under instrumentation
         }
     }
     
@@ -121,6 +122,8 @@ void* consumer_thread(void* arg) {
         if (lockfree_mailbox_receive(data->mbox, &msg)) {
             (*data->counter)++;
             count++;
+        } else {
+            sched_yield();  // Allow producer to fill under instrumentation
         }
     }
     

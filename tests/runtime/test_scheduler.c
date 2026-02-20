@@ -36,7 +36,9 @@ typedef struct {
     int auto_process;
     int assigned_core;
     int migrate_to;
+    int main_thread_only;
     SPSCQueue spsc_queue;
+    ActorReplySlot* reply_slot;
     // Test-specific fields below
     atomic_int count;
     atomic_int last_value;
@@ -52,7 +54,9 @@ typedef struct {
     int auto_process;
     int assigned_core;
     int migrate_to;
+    int main_thread_only;
     SPSCQueue spsc_queue;
+    ActorReplySlot* reply_slot;
     // Test-specific fields below
     atomic_int received[1000];
     atomic_int count;
@@ -372,10 +376,12 @@ void test_scheduler_exit_clean(void) {
 void test_scheduler_backpressure(void) {
     scheduler_init(2);
     
-    CounterActor* actor = malloc(sizeof(CounterActor));
+    CounterActor* actor = calloc(1, sizeof(CounterActor));
     actor->id = 1;
     actor->active = 0;
     actor->step = (void (*)(void*))counter_step;
+    actor->auto_process = 0;
+    actor->migrate_to = -1;
     atomic_store(&actor->count, 0);
     mailbox_init(&actor->mailbox);
     

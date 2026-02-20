@@ -10,11 +10,11 @@ typedef struct {
     AetherString* error;
 } HttpResponse;
 
-HttpResponse* aether_http_get(AetherString* url);
-HttpResponse* aether_http_post(AetherString* url, AetherString* body, AetherString* content_type);
-HttpResponse* aether_http_put(AetherString* url, AetherString* body, AetherString* content_type);
-HttpResponse* aether_http_delete(AetherString* url);
-void aether_http_response_free(HttpResponse* response);
+HttpResponse* http_get(AetherString* url);
+HttpResponse* http_post(AetherString* url, AetherString* body, AetherString* content_type);
+HttpResponse* http_put(AetherString* url, AetherString* body, AetherString* content_type);
+HttpResponse* http_delete(AetherString* url);
+void http_response_free(HttpResponse* response);
 
 #endif
 

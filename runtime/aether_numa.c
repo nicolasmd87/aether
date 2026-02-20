@@ -160,8 +160,13 @@ int aether_numa_node_of_cpu(int cpu_id) {
 
 void* aether_numa_alloc(size_t size, int node) {
 #ifdef HAVE_LIBNUMA
-    if (g_topology.available && node >= 0 && node < g_topology.num_nodes) {
-        return numa_alloc_onnode(size, node);
+    if (g_topology.available) {
+        // Always use NUMA allocator when available so aether_numa_free (which
+        // calls numa_free unconditionally) always receives a NUMA-allocated ptr.
+        if (node >= 0 && node < g_topology.num_nodes) {
+            return numa_alloc_onnode(size, node);
+        }
+        return numa_alloc_local(size);  // fallback: local node, not malloc()
     }
 #endif
     return malloc(size);

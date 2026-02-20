@@ -1,0 +1,44 @@
+// std.string - String Module
+// Import with: import std.string
+
+// String creation
+extern string_new(cstr: string) -> ptr
+extern string_from_cstr(cstr: string) -> ptr
+extern string_from_literal(cstr: string) -> ptr
+extern string_new_with_length(data: string, length: int) -> ptr
+extern string_empty() -> ptr
+
+// Reference counting
+extern string_retain(str: ptr)
+extern string_release(str: ptr)
+extern string_free(str: ptr)
+
+// String operations
+extern string_concat(a: ptr, b: ptr) -> ptr
+extern string_length(str: ptr) -> int
+extern string_char_at(str: ptr, index: int) -> int
+extern string_equals(a: ptr, b: ptr) -> int
+extern string_compare(a: ptr, b: ptr) -> int
+
+// String methods
+extern string_starts_with(str: ptr, prefix: ptr) -> int
+extern string_ends_with(str: ptr, suffix: ptr) -> int
+extern string_contains(str: ptr, substring: ptr) -> int
+extern string_index_of(str: ptr, substring: ptr) -> int
+extern string_substring(str: ptr, start: int, end: int) -> ptr
+extern string_to_upper(str: ptr) -> ptr
+extern string_to_lower(str: ptr) -> ptr
+extern string_trim(str: ptr) -> ptr
+
+// String array operations
+extern string_split(str: ptr, delimiter: ptr) -> ptr
+extern string_array_free(arr: ptr)
+
+// Conversion
+extern string_to_cstr(str: ptr) -> string
+extern string_from_int(value: int) -> ptr
+extern string_from_float(value: float) -> ptr
+
+// Parsing
+extern string_to_int(str: ptr, out_value: ptr) -> int
+extern string_to_float(str: ptr, out_value: ptr) -> int

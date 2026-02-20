@@ -1,0 +1,44 @@
+// Local Package Import Demo
+//
+// This demonstrates the structure for local package imports.
+// Full import resolution requires the module system to be wired up.
+//
+// Project structure:
+//   myapp/
+//     aether.toml
+//     src/main.ae         <- This file
+//     lib/utils/module.ae <- Local package definition
+//
+// Future syntax: import utils
+// Then use: utils.double_value(x)
+
+// For now, define local helper functions
+double_value(x) {
+    return x * 2;
+}
+
+triple_value(x) {
+    return x * 3;
+}
+
+main() {
+    print("=== Local Package Demo ===\n\n");
+
+    x = 5;
+
+    print("Original value: ");
+    print(x);
+    print("\n");
+
+    doubled = double_value(x);
+    print("Doubled: ");
+    print(doubled);
+    print("\n");
+
+    tripled = triple_value(x);
+    print("Tripled: ");
+    print(tripled);
+    print("\n");
+
+    print("\nPackage structure ready for module system!\n");
+}

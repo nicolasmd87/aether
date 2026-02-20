@@ -1,0 +1,26 @@
+// std.collections - Collections Module
+// Import with: import std.collections
+
+// ArrayList operations
+extern list_new() -> ptr
+extern list_add(list: ptr, item: ptr)
+extern list_get(list: ptr, index: int) -> ptr
+extern list_set(list: ptr, index: int, item: ptr)
+extern list_size(list: ptr) -> int
+extern list_remove(list: ptr, index: int)
+extern list_clear(list: ptr)
+extern list_free(list: ptr)
+
+// HashMap operations
+extern map_new() -> ptr
+extern map_put(map: ptr, key: ptr, value: ptr)
+extern map_get(map: ptr, key: ptr) -> ptr
+extern map_has(map: ptr, key: ptr) -> int
+extern map_remove(map: ptr, key: ptr)
+extern map_size(map: ptr) -> int
+extern map_clear(map: ptr)
+extern map_free(map: ptr)
+
+// HashMap key iteration
+extern map_keys(map: ptr) -> ptr
+extern map_keys_free(keys: ptr)

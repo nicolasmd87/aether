@@ -61,10 +61,24 @@ apk add build-base
 ```
 
 **Windows:**
-- Install [MinGW-w64](https://www.mingw-w64.org/) (GCC 11.0+)
-- Add MinGW `bin` directory to your PATH
-- MSVC is not supported — Aether requires GCC
-- Use `mingw32-make ae` instead of the install script
+
+The easiest way is to download the pre-built release binary — no MSYS2, no manual toolchain required:
+
+1. Download `aether-*-windows-x86_64.zip` from [GitHub Releases](https://github.com/nicolasmd87/aether/releases)
+2. Extract to any folder — e.g. `C:\aether`
+3. Add `C:\aether\bin` to your PATH (System Settings → Environment Variables → Path)
+4. Open any terminal (PowerShell or CMD):
+
+```powershell
+ae version
+ae run examples\basics\hello.ae
+```
+
+**GCC is downloaded automatically on the first `ae run`** (~80 MB, one-time). No MSYS2, no separate installer needed.
+
+> **Windows Defender tip:** The first build may trigger a scan. Adding `C:\aether` to Windows Security exclusions speeds things up.
+
+> **Building from source / contributors:** Install [MSYS2](https://www.msys2.org/), open "MSYS2 MinGW 64-bit", then `pacman -S mingw-w64-x86_64-gcc make git` and `make ae`.
 
 ### Development Build (without installing)
 
@@ -169,39 +183,85 @@ Use `wait_for_idle()` to block until all actors have finished processing their m
 Import modules using the `import` statement:
 
 ```aether
-import std.collections.HashMap
-import std.log as Log
+import std.map
+import std.log
 
 main() {
-    Log.info("Starting application")
+    log.info("Starting application");
 
-    map = HashMap.new()
-    map.insert("key", "value")
+    mymap = map.new();
+    key = "greeting";
+    map.put(mymap, key, "hello");
 
-    print(map.get("key"))
+    print("Map created\n");
 }
 ```
+
+Functions are called using **namespace-style syntax**: `namespace.function()`.
+
+| Import | Namespace | Example |
+|--------|-----------|---------|
+| `import std.string` | `string` | `string.new("hello")` |
+| `import std.file` | `file` | `file.exists("path")` |
+| `import std.map` | `map` | `map.new()`, `map.put()` |
+| `import std.list` | `list` | `list.new()`, `list.add()` |
+| `import std.json` | `json` | `json.parse(str)` |
+
+See [Module System Design](module-system-design.md) for creating your own packages.
 
 ## Standard Library
 
 Aether includes a standard library with the following modules:
 
-### Collections
-- **HashMap**: Hash map with Robin Hood hashing
-- **Set**: Set operations (union, intersection, difference)
-- **Vector**: Dynamic array with amortized O(1) append
-- **PriorityQueue**: Binary heap for priority-based scheduling
+| Module | Description |
+|--------|-------------|
+| `std.string` | String operations |
+| `std.file` | File operations |
+| `std.dir` | Directory operations |
+| `std.path` | Path utilities |
+| `std.list` | Dynamic array (ArrayList) |
+| `std.map` | Hash map (HashMap) |
+| `std.json` | JSON parsing and creation |
+| `std.http` | HTTP client and server |
+| `std.tcp` | TCP sockets |
+| `std.log` | Structured logging |
+| `std.math` | Math functions |
 
-### Utilities
-- **log**: Structured logging with levels
-- **fs**: File system operations
-- **net**: Networking utilities
-
-See [stdlib-reference.md](stdlib-reference.md) for the full API reference.
+See [stdlib-api.md](stdlib-api.md) for the full API reference.
 
 ## Pattern Matching
 
-Aether supports pattern matching in match statements:
+Aether features Erlang-inspired pattern matching, one of its most powerful features.
+
+### Function Pattern Matching
+
+Define functions with multiple clauses that match on argument values:
+
+```aether
+// Match on literal values
+factorial(0) -> 1;
+factorial(n) when n > 0 -> n * factorial(n - 1);
+
+// Fibonacci with multiple base cases
+fib(0) -> 0;
+fib(1) -> 1;
+fib(n) when n > 1 -> fib(n - 1) + fib(n - 2);
+
+// Guards for conditional matching
+classify(x) when x < 0 -> "negative";
+classify(x) when x == 0 -> "zero";
+classify(x) when x > 0 -> "positive";
+
+// Multi-parameter pattern matching
+gcd(a, 0) -> a;
+gcd(a, b) when b > 0 -> gcd(b, a - (a / b) * b);
+```
+
+This style replaces verbose if/else chains with declarative, readable code.
+
+### Match Statements
+
+Use `match` for value dispatch:
 
 ```aether
 match (value) {
@@ -211,7 +271,9 @@ match (value) {
 }
 ```
 
-List patterns work with arrays (requires corresponding `_len` variable):
+### List Patterns
+
+Match on arrays (requires corresponding `_len` variable):
 
 ```aether
 nums = [1, 2, 3]
@@ -298,18 +360,33 @@ main() {
 - Explore [Standard Library Documentation](stdlib-reference.md)
 - See [Architecture](architecture.md) for compiler and runtime internals
 - See [Runtime Optimizations](runtime-optimizations.md) for performance details
+- Use `ae version list` to see available releases and `ae version install <v>` to switch versions
+
+## Version Management
+
+Switch between Aether releases without reinstalling:
+
+```bash
+ae version              # Show current version
+ae version list         # List all available releases (marks installed/active)
+ae version install v0.6.0   # Download and install a specific version
+ae version use v0.6.0       # Switch to an installed version
+```
+
+Versions are stored in `~/.aether/versions/`. The active version is symlinked to `~/.aether/current` (Linux/macOS) or copied to `~/.aether/bin/` (Windows).
 
 ## Troubleshooting
 
 ### Build Failures
 
 **"gcc: command not found" (Windows)**
-- Ensure MinGW bin directory is in PATH
-- Verify: `gcc --version`
+- This should not happen with the pre-built binary — `ae` auto-downloads GCC (~80 MB) on first run
+- If you built from source via MSYS2, open the "MSYS2 MinGW 64-bit" shell, not plain PowerShell
+- Verify: `gcc --version` — should show MinGW-w64 GCC
 
 **"pthread.h: No such file or directory"**
 - Linux: `sudo apt-get install libpthread-stubs0-dev`
-- MinGW includes pthread by default
+- Windows: The Aether runtime uses Win32 threads natively — no pthread library needed
 
 **Test failures**
 - Run specific test category: `./build/test_runner --category=compiler`
@@ -318,9 +395,8 @@ main() {
 ### Common Pitfalls
 
 1. Forgetting to rebuild after changes: run `make clean && make`
-2. Using MSVC on Windows: Aether requires GCC (MinGW)
-3. Missing `-lpthread` flag when compiling manually
-4. Actor structs missing the `migrate_to` field (causes struct layout mismatch)
+2. Actor structs missing the `migrate_to` field (causes struct layout mismatch)
+3. On Windows, running `ae` from a directory without write permission (GCC download needs `~\.aether\`)
 
 ### Platform-Specific Notes
 
@@ -336,6 +412,9 @@ main() {
 - Full thread affinity support for deterministic performance
 
 **Windows:**
-- Use PowerShell, not CMD
-- Forward slashes in paths work: `./build/ae`
-- Full thread affinity support via SetThreadAffinityMask
+- Pre-built binaries work in any terminal (PowerShell, CMD, Windows Terminal)
+- GCC is auto-downloaded on first `ae run` — no MSYS2 or manual setup required
+- The runtime uses Win32 threads natively — no pthreads library required
+- Full thread affinity support via `SetThreadAffinityMask`
+- P-core detection via `GetSystemCpuSetInformation` (Windows 10 1903+)
+- **Building from source:** Use MSYS2 MinGW 64-bit shell with `make ae`

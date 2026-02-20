@@ -36,7 +36,7 @@ typedef struct {
 } MessagePool;
 
 // Thread-local message pool
-extern __thread MessagePool* g_msg_pool;
+extern AETHER_TLS MessagePool* g_msg_pool;
 
 // Initialize thread-local message pool
 static inline void message_pool_init_thread(void) {

@@ -1,0 +1,22 @@
+// std.log - Logging Module
+// Import with: import std.log
+
+// Log level constants
+// LOG_LEVEL_DEBUG = 0, LOG_LEVEL_INFO = 1, LOG_LEVEL_WARN = 2
+// LOG_LEVEL_ERROR = 3, LOG_LEVEL_FATAL = 4
+
+// Initialize and shutdown
+extern log_init(filename: string, min_level: int)
+extern log_shutdown()
+
+// Core logging (variadic not fully supported, use with format string)
+extern log_write(level: int, message: string)
+
+// Configuration
+extern log_set_level(level: int)
+extern log_set_colors(enabled: int)
+extern log_set_timestamps(enabled: int)
+
+// Statistics
+extern log_get_stats() -> ptr
+extern log_print_stats()

@@ -174,22 +174,22 @@ echo ""
 # Load benchmark configuration
 CONFIG_FILE="benchmark_config.json"
 if [ -f "$CONFIG_FILE" ]; then
-    BENCHMARK_MESSAGES=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['messages'])" 2>/dev/null || echo "10000000")
+    BENCHMARK_MESSAGES=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['messages'])" 2>/dev/null || echo "1000000")
     BENCHMARK_TIMEOUT=$(python3 -c "import json; print(json.load(open('$CONFIG_FILE'))['timeout_seconds'])" 2>/dev/null || echo "60")
 else
-    BENCHMARK_MESSAGES=10000000
+    BENCHMARK_MESSAGES=1000000
     BENCHMARK_TIMEOUT=60
 fi
 
 export BENCHMARK_MESSAGES
 
-# Get pattern description
+# Get pattern description (no hardcoded counts -- message count comes from config)
 get_pattern_desc() {
     case "$1" in
         ping_pong) echo "Two actors exchange messages back and forth" ;;
         counting) echo "Single actor counts incoming messages sequentially" ;;
-        thread_ring) echo "Token passing through ring of 20 actors" ;;
-        fork_join) echo "Parallel worker pool with 8 workers processing messages" ;;
+        thread_ring) echo "Token passed through a ring of actors with sequential dependencies" ;;
+        fork_join) echo "Messages distributed round-robin across a pool of worker actors" ;;
         *) echo "Unknown pattern" ;;
     esac
 }
@@ -197,10 +197,10 @@ get_pattern_desc() {
 # Parse output from benchmark run
 parse_output() {
     local output="$1"
-    local cycles throughput msg_per_sec memory_kb memory_mb
+    local ns_per_msg throughput msg_per_sec memory_kb memory_mb
 
-    # Use "Cycles/msg:" and "Throughput:" with colon to avoid matching "Throughput Benchmark" in titles
-    cycles=$(echo "$output" | grep "Cycles/msg:" | awk '{print $2}' | head -1)
+    # Use "ns/msg:" and "Throughput:" with colon to avoid matching "Throughput Benchmark" in titles
+    ns_per_msg=$(echo "$output" | grep "ns/msg:" | awk '{print $2}' | head -1)
     throughput=$(echo "$output" | grep "Throughput:" | awk '{print $2}' | head -1)
 
     # Calculate msg/sec from throughput (M msg/sec)
@@ -210,15 +210,19 @@ parse_output() {
         msg_per_sec=0
     fi
 
-    # Memory (macOS vs Linux format)
-    memory_kb=$(echo "$output" | grep -E "maximum resident set size|Maximum resident" | awk '{print $1}' | head -1)
-    if [ -n "$memory_kb" ]; then
-        memory_mb=$(echo "scale=2; $memory_kb / 1024 / 1024" | bc 2>/dev/null | awk '{printf "%.2f", ($0 == "" ? 0 : $0)}')
+    # Memory: macOS reports bytes, Linux reports kilobytes
+    local memory_raw=$(echo "$output" | grep -E "maximum resident set size|Maximum resident" | awk '{print $1}' | head -1)
+    if [ -n "$memory_raw" ]; then
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            memory_mb=$(echo "scale=2; $memory_raw / 1024 / 1024" | bc 2>/dev/null | awk '{printf "%.2f", ($0 == "" ? 0 : $0)}')
+        else
+            memory_mb=$(echo "scale=2; $memory_raw / 1024" | bc 2>/dev/null | awk '{printf "%.2f", ($0 == "" ? 0 : $0)}')
+        fi
     else
         memory_mb=0
     fi
 
-    echo "${cycles:-0}|${msg_per_sec:-0}|${memory_mb:-0}"
+    echo "${ns_per_msg:-0}|${msg_per_sec:-0}|${memory_mb:-0}"
 }
 
 # Run all benchmarks for a single pattern
@@ -238,6 +242,7 @@ run_pattern() {
 {
   "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
   "pattern": "$pattern",
+  "messages": $BENCHMARK_MESSAGES,
   "description": "$desc",
   "hardware": {
     "cpu": "$(sysctl -n machdep.cpu.brand_string 2>/dev/null || lscpu | grep 'Model name' | cut -d: -f2 | xargs || echo 'Unknown')",
@@ -260,7 +265,7 @@ EOF
         if (cd aether && make clean &>/dev/null && make $pattern &>/dev/null); then
             output=$(cd aether && BENCHMARK_MESSAGES=$BENCHMARK_MESSAGES /usr/bin/time -l ./$pattern 2>&1 || true)
             parsed=$(parse_output "$output")
-            cycles=$(echo "$parsed" | cut -d'|' -f1)
+            ns_per_msg=$(echo "$parsed" | cut -d'|' -f1)
             msg_per_sec=$(echo "$parsed" | cut -d'|' -f2)
             memory_mb=$(echo "$parsed" | cut -d'|' -f3)
 
@@ -272,7 +277,7 @@ EOF
     "Aether": {
       "runtime": "Native (Aether runtime)",
       "msg_per_sec": $msg_per_sec,
-      "cycles_per_msg": $cycles,
+      "ns_per_msg": $ns_per_msg,
       "memory_mb": $memory_mb,
       "notes": "SPSC queues, work inlining, direct send"
     }
@@ -291,7 +296,7 @@ EOF
         if (cd c && make clean &>/dev/null && make $pattern &>/dev/null); then
             output=$(cd c && BENCHMARK_MESSAGES=$BENCHMARK_MESSAGES /usr/bin/time -l ./$pattern 2>&1 || true)
             parsed=$(parse_output "$output")
-            cycles=$(echo "$parsed" | cut -d'|' -f1)
+            ns_per_msg=$(echo "$parsed" | cut -d'|' -f1)
             msg_per_sec=$(echo "$parsed" | cut -d'|' -f2)
             memory_mb=$(echo "$parsed" | cut -d'|' -f3)
 
@@ -303,7 +308,7 @@ EOF
     "C (pthread)": {
       "runtime": "Native (pthread)",
       "msg_per_sec": $msg_per_sec,
-      "cycles_per_msg": $cycles,
+      "ns_per_msg": $ns_per_msg,
       "memory_mb": $memory_mb,
       "notes": "pthread mutex + condvar (baseline)"
     }
@@ -322,7 +327,7 @@ EOF
         if (cd cpp && g++ -O3 -std=c++17 -march=native ${pattern}.cpp -o $pattern -pthread &>/dev/null); then
             output=$(cd cpp && BENCHMARK_MESSAGES=$BENCHMARK_MESSAGES /usr/bin/time -l ./$pattern 2>&1 || true)
             parsed=$(parse_output "$output")
-            cycles=$(echo "$parsed" | cut -d'|' -f1)
+            ns_per_msg=$(echo "$parsed" | cut -d'|' -f1)
             msg_per_sec=$(echo "$parsed" | cut -d'|' -f2)
             memory_mb=$(echo "$parsed" | cut -d'|' -f3)
 
@@ -334,7 +339,7 @@ EOF
     "C++": {
       "runtime": "Native (std::thread)",
       "msg_per_sec": $msg_per_sec,
-      "cycles_per_msg": $cycles,
+      "ns_per_msg": $ns_per_msg,
       "memory_mb": $memory_mb,
       "notes": "std::mutex + std::condition_variable"
     }
@@ -353,7 +358,7 @@ EOF
         if (cd go && go build -o $pattern ${pattern}.go &>/dev/null); then
             output=$(cd go && BENCHMARK_MESSAGES=$BENCHMARK_MESSAGES /usr/bin/time -l ./$pattern 2>&1 || true)
             parsed=$(parse_output "$output")
-            cycles=$(echo "$parsed" | cut -d'|' -f1)
+            ns_per_msg=$(echo "$parsed" | cut -d'|' -f1)
             msg_per_sec=$(echo "$parsed" | cut -d'|' -f2)
             memory_mb=$(echo "$parsed" | cut -d'|' -f3)
 
@@ -365,7 +370,7 @@ EOF
     "Go": {
       "runtime": "Go runtime",
       "msg_per_sec": $msg_per_sec,
-      "cycles_per_msg": $cycles,
+      "ns_per_msg": $ns_per_msg,
       "memory_mb": $memory_mb,
       "notes": "Goroutines with channels"
     }
@@ -384,7 +389,7 @@ EOF
         if (cd rust && cargo build --release --bin $pattern &>/dev/null); then
             output=$(cd rust && BENCHMARK_MESSAGES=$BENCHMARK_MESSAGES /usr/bin/time -l ./target/release/$pattern 2>&1 || true)
             parsed=$(parse_output "$output")
-            cycles=$(echo "$parsed" | cut -d'|' -f1)
+            ns_per_msg=$(echo "$parsed" | cut -d'|' -f1)
             msg_per_sec=$(echo "$parsed" | cut -d'|' -f2)
             memory_mb=$(echo "$parsed" | cut -d'|' -f3)
 
@@ -396,7 +401,7 @@ EOF
     "Rust": {
       "runtime": "Native (std::sync)",
       "msg_per_sec": $msg_per_sec,
-      "cycles_per_msg": $cycles,
+      "ns_per_msg": $ns_per_msg,
       "memory_mb": $memory_mb,
       "notes": "sync_channel (bounded MPSC)"
     }
@@ -416,7 +421,7 @@ EOF
         if (cd java && javac ${java_class}.java &>/dev/null); then
             output=$(cd java && BENCHMARK_MESSAGES=$BENCHMARK_MESSAGES /usr/bin/time -l java $java_class 2>&1 || true)
             parsed=$(parse_output "$output")
-            cycles=$(echo "$parsed" | cut -d'|' -f1)
+            ns_per_msg=$(echo "$parsed" | cut -d'|' -f1)
             msg_per_sec=$(echo "$parsed" | cut -d'|' -f2)
             memory_mb=$(echo "$parsed" | cut -d'|' -f3)
 
@@ -428,7 +433,7 @@ EOF
     "Java": {
       "runtime": "JVM",
       "msg_per_sec": $msg_per_sec,
-      "cycles_per_msg": $cycles,
+      "ns_per_msg": $ns_per_msg,
       "memory_mb": $memory_mb,
       "notes": "BlockingQueue (bounded)"
     }
@@ -447,7 +452,7 @@ EOF
         if (cd zig && make $pattern &>/dev/null); then
             output=$(cd zig && BENCHMARK_MESSAGES=$BENCHMARK_MESSAGES /usr/bin/time -l ./$pattern 2>&1 || true)
             parsed=$(parse_output "$output")
-            cycles=$(echo "$parsed" | cut -d'|' -f1)
+            ns_per_msg=$(echo "$parsed" | cut -d'|' -f1)
             msg_per_sec=$(echo "$parsed" | cut -d'|' -f2)
             memory_mb=$(echo "$parsed" | cut -d'|' -f3)
 
@@ -459,7 +464,7 @@ EOF
     "Zig": {
       "runtime": "Native",
       "msg_per_sec": $msg_per_sec,
-      "cycles_per_msg": $cycles,
+      "ns_per_msg": $ns_per_msg,
       "memory_mb": $memory_mb,
       "notes": "Mutex + Condition variable"
     }
@@ -477,7 +482,7 @@ EOF
         echo -n "  Elixir... "
         output=$(cd elixir && BENCHMARK_MESSAGES=$BENCHMARK_MESSAGES /usr/bin/time -l elixir ${pattern}.exs 2>&1 || true)
         parsed=$(parse_output "$output")
-        cycles=$(echo "$parsed" | cut -d'|' -f1)
+        ns_per_msg=$(echo "$parsed" | cut -d'|' -f1)
         msg_per_sec=$(echo "$parsed" | cut -d'|' -f2)
         memory_mb=$(echo "$parsed" | cut -d'|' -f3)
 
@@ -489,7 +494,7 @@ EOF
     "Elixir": {
       "runtime": "BEAM VM",
       "msg_per_sec": $msg_per_sec,
-      "cycles_per_msg": $cycles,
+      "ns_per_msg": $ns_per_msg,
       "memory_mb": $memory_mb,
       "notes": "BEAM lightweight processes"
     }
@@ -505,7 +510,7 @@ EOF
         if (cd erlang && erlc ${pattern}.erl &>/dev/null); then
             output=$(cd erlang && BENCHMARK_MESSAGES=$BENCHMARK_MESSAGES /usr/bin/time -l erl -noshell -s ${pattern} start 2>&1 || true)
             parsed=$(parse_output "$output")
-            cycles=$(echo "$parsed" | cut -d'|' -f1)
+            ns_per_msg=$(echo "$parsed" | cut -d'|' -f1)
             msg_per_sec=$(echo "$parsed" | cut -d'|' -f2)
             memory_mb=$(echo "$parsed" | cut -d'|' -f3)
 
@@ -517,7 +522,7 @@ EOF
     "Erlang": {
       "runtime": "BEAM VM",
       "msg_per_sec": $msg_per_sec,
-      "cycles_per_msg": $cycles,
+      "ns_per_msg": $ns_per_msg,
       "memory_mb": $memory_mb,
       "notes": "BEAM lightweight processes"
     }
@@ -536,7 +541,7 @@ EOF
         if (cd pony/${pattern} && ponyc . -o . &>/dev/null); then
             output=$(cd pony/${pattern} && BENCHMARK_MESSAGES=$BENCHMARK_MESSAGES /usr/bin/time -l ./${pattern} 2>&1 || true)
             parsed=$(parse_output "$output")
-            cycles=$(echo "$parsed" | cut -d'|' -f1)
+            ns_per_msg=$(echo "$parsed" | cut -d'|' -f1)
             msg_per_sec=$(echo "$parsed" | cut -d'|' -f2)
             memory_mb=$(echo "$parsed" | cut -d'|' -f3)
 
@@ -548,7 +553,7 @@ EOF
     "Pony": {
       "runtime": "Native (Pony runtime)",
       "msg_per_sec": $msg_per_sec,
-      "cycles_per_msg": $cycles,
+      "ns_per_msg": $ns_per_msg,
       "memory_mb": $memory_mb,
       "notes": "GC-free actors, ref capabilities"
     }

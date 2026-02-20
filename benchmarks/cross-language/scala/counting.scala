@@ -27,7 +27,7 @@ class CollectorActor(promise: Promise[Long]) extends Actor {
 }
 
 object CountingBenchmark extends App {
-  val messages = 10000000L
+  val messages = sys.env.get("BENCHMARK_MESSAGES").flatMap(s => scala.util.Try(s.toLong).toOption).getOrElse(100000L)
   println("=== Scala Akka Counting Actor Benchmark ===")
   println(s"Messages: $messages\n")
 
@@ -57,9 +57,9 @@ object CountingBenchmark extends App {
   }
 
   val throughput = messages / elapsed / 1e6
-  val cyclesPerMsg = elapsed * 3e9 / messages
+  val nsPerMsg = elapsed * 1e9 / messages
 
-  println(f"Cycles/msg:     $cyclesPerMsg%.2f")
+  println(f"ns/msg:         $nsPerMsg%.2f")
   println(f"Throughput:     $throughput%.2f M msg/sec")
 
   Await.result(system.whenTerminated, 10.seconds)

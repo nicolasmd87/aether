@@ -88,8 +88,8 @@ Use profiled builds in CI to detect performance regressions:
 # Export to CSV
 # Result: profile_results.csv
 
-# Compare against baseline
-python tools/compare_profiles.py baseline.csv profile_results.csv
+# Compare the CSV output against a saved baseline manually,
+# or integrate with your preferred benchmarking toolchain.
 ```
 
 ## CSV Export Format

@@ -26,6 +26,9 @@ else
     RM_DIR := rm -rf
 endif
 
+# Parallel job count (override with: make test-ae NPROC=8)
+NPROC ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
+
 # Version from VERSION file (single source of truth)
 VERSION := $(shell cat VERSION 2>/dev/null || echo "0.0.0")
 
@@ -49,10 +52,10 @@ else ifneq ($(findstring CYGWIN,$(DETECTED_OS)),)
     LDFLAGS += -lws2_32
 endif
 
-COMPILER_SRC = compiler/aetherc.c compiler/frontend/lexer.c compiler/frontend/parser.c compiler/ast.c compiler/analysis/typechecker.c compiler/backend/codegen.c compiler/aether_error.c compiler/aether_module.c compiler/analysis/type_inference.c compiler/backend/optimizer.c compiler/aether_diagnostics.c runtime/actors/aether_message_registry.c
-COMPILER_LIB_SRC = compiler/frontend/lexer.c compiler/frontend/parser.c compiler/ast.c compiler/analysis/typechecker.c compiler/backend/codegen.c compiler/aether_error.c compiler/aether_module.c compiler/analysis/type_inference.c compiler/backend/optimizer.c compiler/aether_diagnostics.c runtime/actors/aether_message_registry.c
+COMPILER_SRC = compiler/aetherc.c compiler/parser/lexer.c compiler/parser/parser.c compiler/ast.c compiler/analysis/typechecker.c compiler/codegen/codegen.c compiler/codegen/codegen_expr.c compiler/codegen/codegen_stmt.c compiler/codegen/codegen_actor.c compiler/codegen/codegen_func.c compiler/aether_error.c compiler/aether_module.c compiler/analysis/type_inference.c compiler/codegen/optimizer.c compiler/aether_diagnostics.c runtime/actors/aether_message_registry.c
+COMPILER_LIB_SRC = compiler/parser/lexer.c compiler/parser/parser.c compiler/ast.c compiler/analysis/typechecker.c compiler/codegen/codegen.c compiler/codegen/codegen_expr.c compiler/codegen/codegen_stmt.c compiler/codegen/codegen_actor.c compiler/codegen/codegen_func.c compiler/aether_error.c compiler/aether_module.c compiler/analysis/type_inference.c compiler/codegen/optimizer.c compiler/aether_diagnostics.c runtime/actors/aether_message_registry.c
 RUNTIME_SRC = runtime/scheduler/multicore_scheduler.c runtime/scheduler/scheduler_optimizations.c runtime/config/aether_optimization_config.c runtime/memory/memory.c runtime/memory/aether_arena.c runtime/memory/aether_pool.c runtime/memory/aether_memory_stats.c runtime/utils/aether_tracing.c runtime/utils/aether_bounds_check.c runtime/utils/aether_test.c runtime/memory/aether_arena_optimized.c runtime/aether_runtime_types.c runtime/utils/aether_cpu_detect.c runtime/memory/aether_batch.c runtime/utils/aether_simd_vectorized.c runtime/aether_runtime.c runtime/aether_numa.c runtime/actors/aether_send_buffer.c runtime/actors/aether_send_message.c runtime/actors/aether_actor_thread.c
-STD_SRC = std/string/aether_string.c std/math/aether_math.c std/net/aether_http.c std/net/aether_http_server.c std/net/aether_net.c std/collections/aether_collections.c std/json/aether_json.c std/fs/aether_fs.c std/log/aether_log.c
+STD_SRC = std/string/aether_string.c std/math/aether_math.c std/net/aether_http.c std/net/aether_http_server.c std/net/aether_net.c std/collections/aether_collections.c std/json/aether_json.c std/fs/aether_fs.c std/log/aether_log.c std/io/aether_io.c
 COLLECTIONS_SRC = std/collections/aether_hashmap.c std/collections/aether_set.c std/collections/aether_vector.c std/collections/aether_pqueue.c
 
 # Object files
@@ -86,6 +89,7 @@ TEST_SRC = tests/runtime/test_harness.c \
            tests/runtime/test_lockfree_mailbox.c \
            tests/runtime/test_scheduler_optimizations.c \
            tests/runtime/test_spsc_queue.c \
+           tests/runtime/test_http_server.c \
            tests/memory/test_memory_arena.c \
            tests/memory/test_memory_pool.c \
            tests/compiler/test_lexer.c
@@ -95,14 +99,14 @@ TEST_SRC = tests/runtime/test_harness.c \
 STANDALONE_TESTS = tests/runtime/test_runtime_manual.c \
                    tests/compiler/test_arrays.c
 
-all: compiler
+all: compiler ae stdlib
 
 # Create object directories
-$(OBJ_DIR)/compiler $(OBJ_DIR)/compiler/frontend $(OBJ_DIR)/compiler/backend $(OBJ_DIR)/compiler/analysis $(OBJ_DIR)/runtime $(OBJ_DIR)/runtime/actors $(OBJ_DIR)/runtime/scheduler $(OBJ_DIR)/runtime/memory $(OBJ_DIR)/runtime/config $(OBJ_DIR)/runtime/simd $(OBJ_DIR)/runtime/utils $(OBJ_DIR)/std $(OBJ_DIR)/std/string $(OBJ_DIR)/std/io $(OBJ_DIR)/std/math $(OBJ_DIR)/std/net $(OBJ_DIR)/std/fs $(OBJ_DIR)/std/log $(OBJ_DIR)/std/collections $(OBJ_DIR)/std/json $(OBJ_DIR)/tests $(OBJ_DIR)/tests/compiler $(OBJ_DIR)/tests/memory $(OBJ_DIR)/tests/runtime:
+$(OBJ_DIR)/compiler $(OBJ_DIR)/compiler/parser $(OBJ_DIR)/compiler/codegen $(OBJ_DIR)/compiler/analysis $(OBJ_DIR)/runtime $(OBJ_DIR)/runtime/actors $(OBJ_DIR)/runtime/scheduler $(OBJ_DIR)/runtime/memory $(OBJ_DIR)/runtime/config $(OBJ_DIR)/runtime/simd $(OBJ_DIR)/runtime/utils $(OBJ_DIR)/std $(OBJ_DIR)/std/string $(OBJ_DIR)/std/io $(OBJ_DIR)/std/math $(OBJ_DIR)/std/net $(OBJ_DIR)/std/fs $(OBJ_DIR)/std/log $(OBJ_DIR)/std/collections $(OBJ_DIR)/std/json $(OBJ_DIR)/tests $(OBJ_DIR)/tests/compiler $(OBJ_DIR)/tests/memory $(OBJ_DIR)/tests/runtime:
 	@mkdir -p $@
 
 # Pattern rule for object files
-$(OBJ_DIR)/%.o: %.c | $(OBJ_DIR)/compiler $(OBJ_DIR)/compiler/frontend $(OBJ_DIR)/compiler/backend $(OBJ_DIR)/compiler/analysis $(OBJ_DIR)/runtime $(OBJ_DIR)/runtime/actors $(OBJ_DIR)/runtime/scheduler $(OBJ_DIR)/runtime/memory $(OBJ_DIR)/runtime/config $(OBJ_DIR)/runtime/simd $(OBJ_DIR)/runtime/utils $(OBJ_DIR)/std $(OBJ_DIR)/std/string $(OBJ_DIR)/std/io $(OBJ_DIR)/std/math $(OBJ_DIR)/std/net $(OBJ_DIR)/std/fs $(OBJ_DIR)/std/log $(OBJ_DIR)/std/collections $(OBJ_DIR)/std/json $(OBJ_DIR)/tests $(OBJ_DIR)/tests/compiler $(OBJ_DIR)/tests/memory $(OBJ_DIR)/tests/runtime
+$(OBJ_DIR)/%.o: %.c | $(OBJ_DIR)/compiler $(OBJ_DIR)/compiler/parser $(OBJ_DIR)/compiler/codegen $(OBJ_DIR)/compiler/analysis $(OBJ_DIR)/runtime $(OBJ_DIR)/runtime/actors $(OBJ_DIR)/runtime/scheduler $(OBJ_DIR)/runtime/memory $(OBJ_DIR)/runtime/config $(OBJ_DIR)/runtime/simd $(OBJ_DIR)/runtime/utils $(OBJ_DIR)/std $(OBJ_DIR)/std/string $(OBJ_DIR)/std/io $(OBJ_DIR)/std/math $(OBJ_DIR)/std/net $(OBJ_DIR)/std/fs $(OBJ_DIR)/std/log $(OBJ_DIR)/std/collections $(OBJ_DIR)/std/json $(OBJ_DIR)/tests $(OBJ_DIR)/tests/compiler $(OBJ_DIR)/tests/memory $(OBJ_DIR)/tests/runtime
 	@echo "Compiling $<..."
 	@$(CC) $(CFLAGS) -c $< -o $@
 
@@ -178,6 +182,43 @@ test-manual-runtime: compiler
 	@echo "Running manual runtime test..."
 	./build/test_runtime_manual$(EXE_EXT)
 
+# Test .ae source files - compiles and runs each test file
+test-ae: compiler ae stdlib
+	@echo "==================================="
+	@echo "  Running Aether Source Tests (.ae)"
+	@echo "  Parallel: $(NPROC) jobs"
+	@echo "==================================="
+	@tmpdir=$$(mktemp -d); \
+	script="$$tmpdir/run_test.sh"; \
+	printf '#!/bin/sh\n'                                                                        > "$$script"; \
+	printf 'f="$$1"; tmpdir="$$2"\n'                                                           >> "$$script"; \
+	printf 'name=$$(echo "$$f" | sed "s|tests/||;s|/|_|g;s|\\.ae$$||")\n'                    >> "$$script"; \
+	printf 'if ./build/ae build "$$f" -o "build/test_$$name" 2>/dev/null; then\n'              >> "$$script"; \
+	printf '  if "./build/test_$$name" >/dev/null 2>&1; then\n'                                >> "$$script"; \
+	printf '    echo "  [PASS] $$name"; touch "$$tmpdir/PASS_$$name"\n'                        >> "$$script"; \
+	printf '  else\n'                                                                          >> "$$script"; \
+	printf '    echo "  [FAIL] $$name (runtime error)"; touch "$$tmpdir/FAIL_$$name"\n'        >> "$$script"; \
+	printf '  fi\n'                                                                            >> "$$script"; \
+	printf 'else\n'                                                                            >> "$$script"; \
+	printf '  echo "  [FAIL] $$name (compile error)"; touch "$$tmpdir/FAIL_$$name"\n'          >> "$$script"; \
+	printf 'fi\n'                                                                              >> "$$script"; \
+	chmod +x "$$script"; \
+	find tests/syntax tests/compiler tests/integration -name '*.ae' 2>/dev/null | sort | \
+	xargs -P $(NPROC) -I{} "$$script" "{}" "$$tmpdir"; \
+	passed=$$(ls "$$tmpdir"/PASS_* 2>/dev/null | wc -l | tr -d ' '); \
+	failed=$$(ls "$$tmpdir"/FAIL_* 2>/dev/null | wc -l | tr -d ' '); \
+	total=$$((passed + failed)); \
+	rm -rf "$$tmpdir"; \
+	echo ""; \
+	echo "Aether Tests: $$passed passed, $$failed failed, $$total total"
+
+# Run both C unit tests and .ae integration tests
+test-all: test test-ae
+	@echo ""
+	@echo "==================================="
+	@echo "  All Tests Complete"
+	@echo "==================================="
+
 # Benchmark presets: full (10M), medium (1M), low (100K), stress (100M)
 BENCHMARK_PRESET ?= low
 
@@ -193,7 +234,7 @@ examples: compiler
 	@echo "==================================="
 	@echo "  Building Aether Examples"
 	@echo "==================================="
-	@$(MKDIR) $(BUILD_DIR)/examples $(BUILD_DIR)/examples/basics $(BUILD_DIR)/examples/actors $(BUILD_DIR)/examples/applications $(BUILD_DIR)/examples/c-interop
+	@$(MKDIR) $(BUILD_DIR)/examples $(BUILD_DIR)/examples/basics $(BUILD_DIR)/examples/actors $(BUILD_DIR)/examples/applications $(BUILD_DIR)/examples/c-interop $(BUILD_DIR)/examples/stdlib $(BUILD_DIR)/examples/packages/myapp/lib/utils $(BUILD_DIR)/examples/packages/myapp/src
 	@pass=0; fail=0; \
 	for src in $$(find examples -name '*.ae' | sort); do \
 		name=$$(echo $$src | sed 's|examples/||;s|\.ae$$||'); \
@@ -263,7 +304,41 @@ profiler:
 	$(CC) $(CFLAGS) -DAETHER_PROFILING tools/profiler/profiler_server.c tools/profiler/profiler_demo.c $(RUNTIME_SRC) $(LDFLAGS) -o build/profiler_demo$(EXE_EXT)
 	@echo "✓ Profiler built successfully: build/profiler_demo$(EXE_EXT)"
 	@echo ""
-	@echo "Run the demo and open http://localhost:8080"
+	@echo "Run the demo and open http://localhost:8081"
+
+docgen:
+	@echo "==================================="
+	@echo "Building Documentation Generator ($(DETECTED_OS))"
+	@echo "==================================="
+	@$(MKDIR) build
+	$(CC) -O2 -Wall tools/docgen/docgen.c -o build/docgen$(EXE_EXT)
+	@echo "✓ Documentation generator built: build/docgen$(EXE_EXT)"
+	@echo ""
+	@echo "Usage: ./build/docgen std docs/api"
+
+docs-server: compiler
+	@echo "==================================="
+	@echo "Building Documentation Server ($(DETECTED_OS))"
+	@echo "==================================="
+	@./build/aetherc$(EXE_EXT) tools/docgen/server.ae build/docs_server_gen.c
+	@$(CC) -O2 -o build/docs-server$(EXE_EXT) build/docs_server_gen.c tools/docgen/server_ffi.c \
+		$(RUNTIME_SRC) $(STD_SRC) $(COLLECTIONS_SRC) $(LDFLAGS)
+	@rm -f build/docs_server_gen.c
+	@echo "✓ Documentation server built: build/docs-server$(EXE_EXT)"
+
+docs: docgen
+	@echo "==================================="
+	@echo "Generating API Documentation"
+	@echo "==================================="
+	@$(MKDIR) docs/api
+	./build/docgen$(EXE_EXT) std docs/api
+	@echo ""
+	@echo "✓ Documentation generated in docs/api/"
+	@echo "  Run 'make docs-serve' to view at http://localhost:3000"
+
+docs-serve: docs docs-server
+	@echo ""
+	./build/docs-server$(EXE_EXT)
 
 # Precompiled stdlib archive
 stdlib: $(STD_OBJS) $(COLLECTIONS_OBJS) $(RUNTIME_OBJS)
@@ -527,12 +602,24 @@ help:
 	@echo "  make lsp            - Build LSP server"
 	@echo "  make apkg           - Build package manager"
 	@echo "  make profiler       - Build profiler dashboard"
+	@echo "  make docgen         - Build documentation generator"
+	@echo "  make docs           - Generate API documentation (in docs/api/)"
+	@echo "  make docs-serve     - Serve docs at http://localhost:3000"
+	@echo ""
+	@echo "Web Servers (localhost):"
+	@echo "  make docs-serve     - API Documentation    :3000"
+	@echo "  make benchmark      - Benchmark Dashboard  :8080"
+	@echo "  make profiler       - Profiler Dashboard   :8081"
 	@echo ""
 	@echo "Other Targets:"
-	@echo "  make benchmark      - Run performance benchmarks"
 	@echo "  make examples       - Compile example programs"
 	@echo "  make install        - Install to $(PREFIX)"
 	@echo "  make stats          - Show build statistics"
+	@echo ""
+	@echo "Version Management:"
+	@echo "  make bump-patch     - $(VERSION) → patch+1  (bug fixes)"
+	@echo "  make bump-minor     - $(VERSION) → minor+1  (new features)"
+	@echo "  make bump-major     - $(VERSION) → major+1  (breaking changes)"
 	@echo "  make clean          - Remove build artifacts"
 	@echo "  make help           - Show this help message"
 	@echo ""
@@ -583,9 +670,9 @@ ci: clean
 			--track-origins=yes \
 			--error-exitcode=1 \
 			--suppressions=.valgrind-suppressions \
-			./build/test_runner || (echo 'Memory leaks detected!' && exit 1)"
+			./build/test_runner || (echo 'Valgrind errors detected!' && exit 1)"
 	@echo ""
-	@echo "✓ CI passed with no memory leaks"
+	@echo "✓ CI passed — Valgrind clean"
 
 valgrind-check: clean
 	@echo "==================================="
@@ -598,10 +685,62 @@ valgrind-check: clean
 		--track-origins=yes \
 		--error-exitcode=1 \
 		--suppressions=.valgrind-suppressions \
-		./build/test_runner$(EXE_EXT) || (echo "Memory leaks detected!" && exit 1)
-	@echo "✓ No memory leaks detected"
+		./build/test_runner$(EXE_EXT) || (echo "Valgrind errors detected!" && exit 1)
+	@echo "✓ Valgrind clean — no leaks or uninitialised reads"
 
-.PHONY: all compiler lsp apkg ae profiler test test-build test-valgrind test-asan test-memory test-manual-runtime benchmark benchmark-ui examples run compile repl clean help self-test release install stats stdlib ci docker-ci docker-build-ci valgrind-check
+.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime benchmark benchmark-ui examples run compile repl clean help self-test release install stats stdlib ci docker-ci docker-build-ci valgrind-check bump-patch bump-minor bump-major
+
+# --------------------------------------------------------------------------
+# Version management
+# Usage:
+#   make bump-patch   0.5.0 → 0.5.1   (bug fixes, small improvements)
+#   make bump-minor   0.5.1 → 0.6.0   (new features, backwards-compatible)
+#   make bump-major   0.6.0 → 1.0.0   (breaking changes)
+#
+# After bumping, the Makefile prints the exact git commands to tag and push.
+# --------------------------------------------------------------------------
+
+bump-patch:
+	@old=$$(cat VERSION | tr -d '[:space:]'); \
+	major=$$(echo $$old | cut -d. -f1); \
+	minor=$$(echo $$old | cut -d. -f2); \
+	patch=$$(echo $$old | cut -d. -f3); \
+	new="$$major.$$minor.$$((patch+1))"; \
+	echo "$$new" > VERSION; \
+	echo "Version bumped: $$old → $$new"; \
+	echo ""; \
+	echo "Next steps:"; \
+	echo "  git add VERSION"; \
+	echo "  git commit -m \"chore: bump version to $$new\""; \
+	echo "  git tag v$$new"; \
+	echo "  git push && git push --tags"
+
+bump-minor:
+	@old=$$(cat VERSION | tr -d '[:space:]'); \
+	major=$$(echo $$old | cut -d. -f1); \
+	minor=$$(echo $$old | cut -d. -f2); \
+	new="$$major.$$((minor+1)).0"; \
+	echo "$$new" > VERSION; \
+	echo "Version bumped: $$old → $$new"; \
+	echo ""; \
+	echo "Next steps:"; \
+	echo "  git add VERSION"; \
+	echo "  git commit -m \"chore: bump version to $$new\""; \
+	echo "  git tag v$$new"; \
+	echo "  git push && git push --tags"
+
+bump-major:
+	@old=$$(cat VERSION | tr -d '[:space:]'); \
+	major=$$(echo $$old | cut -d. -f1); \
+	new="$$((major+1)).0.0"; \
+	echo "$$new" > VERSION; \
+	echo "Version bumped: $$old → $$new"; \
+	echo ""; \
+	echo "Next steps:"; \
+	echo "  git add VERSION"; \
+	echo "  git commit -m \"chore: bump version to $$new\""; \
+	echo "  git tag v$$new"; \
+	echo "  git push && git push --tags"
 
 # Cross-language benchmark UI
 benchmark-ui:

@@ -1,171 +1,267 @@
 name: Release
 
+# Every merge to main creates a versioned release automatically.
+#
+# Version bump rules (applied to the current VERSION file):
+#   - Commit message starts with "major"  →  bump MAJOR, reset minor + patch to 0
+#   - Anything else                       →  bump MINOR, reset patch to 0  (default)
+#
+# Manual tag push (v*.*.*) also triggers a build + publish, without bumping.
+
 on:
   push:
-    tags:
-      - 'v*.*.*'
+    branches: [main]
+    tags: ['v*.*.*']
   workflow_dispatch:
-    inputs:
-      version:
-        description: 'Version to release (e.g., 0.1.0)'
-        required: true
 
 jobs:
-  validate-version:
-    name: Validate Version
+  # ================================================================== #
+  # AUTO-BUMP (main branch merges only)                                #
+  #                                                                    #
+  # Reads the commit message, increments VERSION, commits back to main #
+  # and pushes a version tag — all using GITHUB_TOKEN so no workflow  #
+  # loop is possible (GitHub blocks self-triggered runs by design).   #
+  # ================================================================== #
+  bump:
+    name: Auto-bump version
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    # Only on real human merges to main — skip bot commits (the VERSION
+    # commit we push back) and manual tag pushes (handled by build alone).
+    if: |
+      github.ref == 'refs/heads/main' &&
+      !startsWith(github.event.head_commit.message, 'chore: release ')
+
+    permissions:
+      contents: write
+
+    outputs:
+      tag:     ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Check version matches tag
+    - name: Compute new version
+      id: v
       run: |
-        TAG_VERSION=${GITHUB_REF#refs/tags/v}
-        FILE_VERSION=$(cat VERSION | tr -d '[:space:]')
-        echo "Tag version: $TAG_VERSION"
-        echo "File version: $FILE_VERSION"
-        if [ "$TAG_VERSION" != "$FILE_VERSION" ]; then
-          echo "::error::Tag v$TAG_VERSION doesn't match VERSION file ($FILE_VERSION)"
-          exit 1
-        fi
-        echo "✓ Version validated: $FILE_VERSION"
+        MSG="${{ github.event.head_commit.message }}"
+        OLD=$(cat VERSION | tr -d '[:space:]')
+        MAJOR=$(echo "$OLD" | cut -d. -f1)
+        MINOR=$(echo "$OLD" | cut -d. -f2)
 
-  build-release:
-    name: Build Release Binaries
-    needs: validate-version
-    if: always() && (needs.validate-version.result == 'success' || needs.validate-version.result == 'skipped')
+        # Case-sensitive: message must start with the literal word "major"
+        if echo "$MSG" | grep -q "^major"; then
+          NEW="$((MAJOR + 1)).0.0"
+          KIND="major"
+        else
+          NEW="${MAJOR}.$((MINOR + 1)).0"
+          KIND="minor"
+        fi
+
+        echo "$NEW" > VERSION
+        echo "tag=v$NEW"          >> "$GITHUB_OUTPUT"
+        echo "version=$NEW"       >> "$GITHUB_OUTPUT"
+        echo "Bumped $KIND: $OLD → $NEW (trigger: $MSG)"
+
+    - name: Commit VERSION + push tag
+      run: |
+        git config user.name  "github-actions[bot]"
+        git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+        git add VERSION
+        git commit -m "chore: release ${{ steps.v.outputs.version }}"
+        git tag "${{ steps.v.outputs.tag }}"
+        git push
+        git push --tags
+
+  # ================================================================== #
+  # BUILD — all four platforms                                         #
+  #                                                                    #
+  # Waits for bump (main-branch runs) or runs directly (tag pushes).  #
+  # Checks out the exact release tag so binaries match VERSION.        #
+  # ================================================================== #
+  build:
+    name: Build — ${{ matrix.target }}
+    needs: bump
+    if: |
+      always() && (
+        needs.bump.result == 'success' ||
+        needs.bump.result == 'skipped'
+      )
     runs-on: ${{ matrix.os }}
 
     strategy:
+      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             target: linux-x86_64
-            exe_ext: ""
+            ext: ""
           - os: macos-latest
             target: macos-x86_64
-            exe_ext: ""
+            ext: ""
           - os: macos-14
             target: macos-arm64
-            exe_ext: ""
+            ext: ""
           - os: windows-latest
             target: windows-x86_64
-            exe_ext: ".exe"
+            ext: ".exe"
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    # On main-branch runs: check out the tag we just pushed.
+    # On manual tag pushes: check out the tag from the push event.
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ needs.bump.outputs.tag || github.ref }}
 
-    - name: Setup GCC (Ubuntu)
+    # ── Linux ─────────────────────────────────────────────────────────
+    - name: Setup (Linux)
       if: matrix.os == 'ubuntu-latest'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc make
+      run: sudo apt-get update && sudo apt-get install -y gcc make
 
-    - name: Setup GCC (macOS)
-      if: startsWith(matrix.os, 'macos')
-      run: |
-        # Use system clang on macOS, which is always available
-        echo "Using system compiler"
-
-    - name: Setup GCC (Windows)
+    # ── Windows — MinGW-w64 via MSYS2 ─────────────────────────────────
+    - name: Setup (Windows)
       if: matrix.os == 'windows-latest'
       uses: msys2/setup-msys2@v2
       with:
         msystem: MINGW64
+        update: true
         install: >-
           mingw-w64-x86_64-gcc
           make
+          zip
 
-    - name: Build Release (Unix)
+    # ── Build: Linux / macOS ──────────────────────────────────────────
+    - name: Build (Unix)
       if: matrix.os != 'windows-latest'
       run: |
-        make release
+        make compiler
         make ae
-        strip build/aetherc${{ matrix.exe_ext }} build/ae${{ matrix.exe_ext }} || true
+        strip build/aetherc build/ae 2>/dev/null || true
 
-    - name: Build Release (Windows)
+    # ── Build: Windows (MSYS2 shell for all steps) ────────────────────
+    - name: Build (Windows)
       if: matrix.os == 'windows-latest'
       shell: msys2 {0}
       run: |
-        make release
+        make compiler
         make ae
-        strip build/aetherc${{ matrix.exe_ext }} build/ae${{ matrix.exe_ext }} || true
+        strip build/aetherc.exe build/ae.exe 2>/dev/null || true
 
-    - name: Package Release
-      run: |
-        VERSION=$(cat VERSION | tr -d '[:space:]')
-        mkdir -p release/bin
-        mkdir -p release/lib
-        mkdir -p release/include/aether
-        mkdir -p release/share/aether
-
-        # Binaries
-        cp build/aetherc${{ matrix.exe_ext }} release/bin/
-        cp build/ae${{ matrix.exe_ext }} release/bin/
-
-        # Runtime sources (for linking)
-        cp -r runtime release/share/aether/
-        cp -r std release/share/aether/
-
-        # Headers
-        cp -r runtime/*.h release/include/aether/ 2>/dev/null || true
-        cp -r runtime/actors release/include/aether/ 2>/dev/null || true
-        cp -r runtime/scheduler release/include/aether/ 2>/dev/null || true
-
-        # Docs
-        cp LICENSE release/
-        cp README.md release/
-        cp VERSION release/
-
-    - name: Create Archive (Unix)
+    # ── Package + archive: Unix ───────────────────────────────────────
+    - name: Package (Unix)
       if: matrix.os != 'windows-latest'
       run: |
         VERSION=$(cat VERSION | tr -d '[:space:]')
-        cd release
-        tar -czf ../aether-$VERSION-${{ matrix.target }}.tar.gz *
+        mkdir -p release/bin release/share/aether
+        cp build/aetherc release/bin/
+        cp build/ae      release/bin/
+        cp -r runtime    release/share/aether/
+        cp -r std        release/share/aether/
+        cp LICENSE README.md VERSION release/
+        cd release && tar -czf ../aether-${VERSION}-${{ matrix.target }}.tar.gz *
 
-    - name: Create Archive (Windows)
+    # ── Package + archive: Windows (all in MSYS2 shell) ───────────────
+    - name: Package (Windows)
       if: matrix.os == 'windows-latest'
       shell: msys2 {0}
       run: |
         VERSION=$(cat VERSION | tr -d '[:space:]')
-        cd release
-        zip -r ../aether-$VERSION-${{ matrix.target }}.zip *
+        mkdir -p release/bin release/share/aether
+        cp build/aetherc.exe release/bin/
+        cp build/ae.exe      release/bin/
+        cp -r runtime        release/share/aether/
+        cp -r std            release/share/aether/
+        cp LICENSE README.md VERSION release/
+        cd release && zip -r ../aether-${VERSION}-${{ matrix.target }}.zip *
 
-    - name: Upload Release Asset
+    - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
         name: aether-${{ matrix.target }}
         path: |
           aether-*-${{ matrix.target }}.tar.gz
           aether-*-${{ matrix.target }}.zip
+        retention-days: 7
 
-  create-release:
-    name: Create GitHub Release
-    needs: build-release
+  # ================================================================== #
+  # PUBLISH — create or update the GitHub Release                      #
+  # ================================================================== #
+  publish:
+    name: Publish release
+    needs: [bump, build]
     runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/')
+    if: always() && needs.build.result == 'success'
+
+    permissions:
+      contents: write
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ needs.bump.outputs.tag || github.ref }}
 
     - name: Download all artifacts
       uses: actions/download-artifact@v4
-
-    - name: List artifacts
-      run: find . -name "aether-*" -type f
-
-    - name: Create Release
-      uses: softprops/action-gh-release@v1
       with:
-        files: |
-          **/aether-*.tar.gz
-          **/aether-*.zip
+        merge-multiple: true
+
+    - name: Resolve release tag
+      id: tag
+      run: |
+        # Prefer the tag produced by the bump job; fall back to the push tag.
+        TAG="${{ needs.bump.outputs.tag }}"
+        if [ -z "$TAG" ]; then
+          TAG="${{ github.ref_name }}"
+        fi
+        VERSION=$(cat VERSION | tr -d '[:space:]')
+        echo "tag=$TAG"         >> "$GITHUB_OUTPUT"
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        tag_name:   ${{ steps.tag.outputs.tag }}
+        name:       Aether ${{ steps.tag.outputs.version }}
+        make_latest: true
         draft: false
-        prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+        prerelease: ${{ contains(steps.tag.outputs.tag, 'alpha') || contains(steps.tag.outputs.tag, 'beta') || contains(steps.tag.outputs.tag, 'rc') }}
         generate_release_notes: true
+        body: |
+          ## Download
+
+          | Platform | File |
+          |----------|------|
+          | **Windows 64-bit** | `aether-${{ steps.tag.outputs.version }}-windows-x86_64.zip` |
+          | Linux x86-64 | `aether-${{ steps.tag.outputs.version }}-linux-x86_64.tar.gz` |
+          | macOS Intel | `aether-${{ steps.tag.outputs.version }}-macos-x86_64.tar.gz` |
+          | macOS Apple Silicon | `aether-${{ steps.tag.outputs.version }}-macos-arm64.tar.gz` |
+
+          ## Windows — quick start (zero manual setup)
+
+          1. Download `aether-${{ steps.tag.outputs.version }}-windows-x86_64.zip`
+          2. Extract to any folder (e.g. `C:\aether`)
+          3. Add `C:\aether\bin` to your PATH
+          4. Open a terminal (PowerShell or CMD) and run:
+
+          ```
+          ae version
+          ae run myprogram.ae
+          ```
+
+          **GCC is downloaded automatically on first `ae run`** — no MSYS2, no manual toolchain setup required.
+
+          ## Linux / macOS — quick start
+
+          ```bash
+          tar -xzf aether-${{ steps.tag.outputs.version }}-<platform>.tar.gz
+          export PATH="$PWD/bin:$PATH"
+          ae run myprogram.ae
+          ```
+        files: |
+          aether-*.tar.gz
+          aether-*.zip
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

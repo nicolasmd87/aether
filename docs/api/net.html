@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>net - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search net..." onkeyup="searchModule()">
+  <h2>Functions</h2>
+  <ul class="function-nav">
+    <li><a href="#http_server_bind">http_server_bind</a></li>
+    <li><a href="#http_server_start">http_server_start</a></li>
+    <li><a href="#http_server_stop">http_server_stop</a></li>
+    <li><a href="#http_server_free">http_server_free</a></li>
+    <li><a href="#http_server_add_route">http_server_add_route</a></li>
+    <li><a href="#http_server_get">http_server_get</a></li>
+    <li><a href="#http_server_post">http_server_post</a></li>
+    <li><a href="#http_server_put">http_server_put</a></li>
+    <li><a href="#http_server_delete">http_server_delete</a></li>
+    <li><a href="#http_server_use_middleware">http_server_use_middleware</a></li>
+    <li><a href="#http_get_header">http_get_header</a></li>
+    <li><a href="#http_get_query_param">http_get_query_param</a></li>
+    <li><a href="#http_get_path_param">http_get_path_param</a></li>
+    <li><a href="#http_request_free">http_request_free</a></li>
+    <li><a href="#http_response_set_status">http_response_set_status</a></li>
+    <li><a href="#http_response_set_header">http_response_set_header</a></li>
+    <li><a href="#http_response_set_body">http_response_set_body</a></li>
+    <li><a href="#http_response_json">http_response_json</a></li>
+    <li><a href="#http_response_serialize">http_response_serialize</a></li>
+    <li><a href="#http_server_response_free">http_server_response_free</a></li>
+    <li><a href="#http_route_matches">http_route_matches</a></li>
+    <li><a href="#http_status_text">http_status_text</a></li>
+    <li><a href="#http_mime_type">http_mime_type</a></li>
+    <li><a href="#http_serve_file">http_serve_file</a></li>
+    <li><a href="#http_serve_static">http_serve_static</a></li>
+    <li><a href="#http_get">http_get</a></li>
+    <li><a href="#http_post">http_post</a></li>
+    <li><a href="#http_put">http_put</a></li>
+    <li><a href="#http_delete">http_delete</a></li>
+    <li><a href="#http_response_free">http_response_free</a></li>
+    <li><a href="#tcp_connect">tcp_connect</a></li>
+    <li><a href="#tcp_send">tcp_send</a></li>
+    <li><a href="#tcp_receive">tcp_receive</a></li>
+    <li><a href="#tcp_close">tcp_close</a></li>
+    <li><a href="#tcp_server_close">tcp_server_close</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li class="active"><a href="net.html">net</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="log.html">log</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="fs.html">fs</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>net</h1>
+    <p class="module-desc">HTTP client, server, and networking</p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="http_server_bind" data-name="http_server_bind">
+      <h3 class="function-name">http_server_bind</h3>
+      <pre class="usage"><code>http_server_bind(server, host, port)</code></pre>
+    </div>
+    <div class="function" id="http_server_start" data-name="http_server_start">
+      <h3 class="function-name">http_server_start</h3>
+      <pre class="usage"><code>http_server_start(server)</code></pre>
+    </div>
+    <div class="function" id="http_server_stop" data-name="http_server_stop">
+      <h3 class="function-name">http_server_stop</h3>
+      <pre class="usage"><code>http_server_stop(server)</code></pre>
+    </div>
+    <div class="function" id="http_server_free" data-name="http_server_free">
+      <h3 class="function-name">http_server_free</h3>
+      <pre class="usage"><code>http_server_free(server)</code></pre>
+    </div>
+    <div class="function" id="http_server_add_route" data-name="http_server_add_route">
+      <h3 class="function-name">http_server_add_route</h3>
+      <pre class="usage"><code>http_server_add_route(server, method, path, handler, user_data)</code></pre>
+      <p class="doc">Routing</p>
+    </div>
+    <div class="function" id="http_server_get" data-name="http_server_get">
+      <h3 class="function-name">http_server_get</h3>
+      <pre class="usage"><code>http_server_get(server, path, handler, user_data)</code></pre>
+    </div>
+    <div class="function" id="http_server_post" data-name="http_server_post">
+      <h3 class="function-name">http_server_post</h3>
+      <pre class="usage"><code>http_server_post(server, path, handler, user_data)</code></pre>
+    </div>
+    <div class="function" id="http_server_put" data-name="http_server_put">
+      <h3 class="function-name">http_server_put</h3>
+      <pre class="usage"><code>http_server_put(server, path, handler, user_data)</code></pre>
+    </div>
+    <div class="function" id="http_server_delete" data-name="http_server_delete">
+      <h3 class="function-name">http_server_delete</h3>
+      <pre class="usage"><code>http_server_delete(server, path, handler, user_data)</code></pre>
+    </div>
+    <div class="function" id="http_server_use_middleware" data-name="http_server_use_middleware">
+      <h3 class="function-name">http_server_use_middleware</h3>
+      <pre class="usage"><code>http_server_use_middleware(server, middleware, user_data)</code></pre>
+      <p class="doc">Middleware</p>
+    </div>
+    <div class="function" id="http_get_header" data-name="http_get_header">
+      <h3 class="function-name">http_get_header</h3>
+      <pre class="usage"><code>http_get_header(req, key)</code></pre>
+    </div>
+    <div class="function" id="http_get_query_param" data-name="http_get_query_param">
+      <h3 class="function-name">http_get_query_param</h3>
+      <pre class="usage"><code>http_get_query_param(req, key)</code></pre>
+    </div>
+    <div class="function" id="http_get_path_param" data-name="http_get_path_param">
+      <h3 class="function-name">http_get_path_param</h3>
+      <pre class="usage"><code>http_get_path_param(req, key)</code></pre>
+    </div>
+    <div class="function" id="http_request_free" data-name="http_request_free">
+      <h3 class="function-name">http_request_free</h3>
+      <pre class="usage"><code>http_request_free(req)</code></pre>
+    </div>
+    <div class="function" id="http_response_set_status" data-name="http_response_set_status">
+      <h3 class="function-name">http_response_set_status</h3>
+      <pre class="usage"><code>http_response_set_status(res, code)</code></pre>
+    </div>
+    <div class="function" id="http_response_set_header" data-name="http_response_set_header">
+      <h3 class="function-name">http_response_set_header</h3>
+      <pre class="usage"><code>http_response_set_header(res, key, value)</code></pre>
+    </div>
+    <div class="function" id="http_response_set_body" data-name="http_response_set_body">
+      <h3 class="function-name">http_response_set_body</h3>
+      <pre class="usage"><code>http_response_set_body(res, body)</code></pre>
+    </div>
+    <div class="function" id="http_response_json" data-name="http_response_json">
+      <h3 class="function-name">http_response_json</h3>
+      <pre class="usage"><code>http_response_json(res, json)</code></pre>
+    </div>
+    <div class="function" id="http_response_serialize" data-name="http_response_serialize">
+      <h3 class="function-name">http_response_serialize</h3>
+      <pre class="usage"><code>http_response_serialize(res)</code></pre>
+    </div>
+    <div class="function" id="http_server_response_free" data-name="http_server_response_free">
+      <h3 class="function-name">http_server_response_free</h3>
+      <pre class="usage"><code>http_server_response_free(res)</code></pre>
+    </div>
+    <div class="function" id="http_route_matches" data-name="http_route_matches">
+      <h3 class="function-name">http_route_matches</h3>
+      <pre class="usage"><code>http_route_matches(pattern, path, req)</code></pre>
+      <p class="doc">Helpers</p>
+    </div>
+    <div class="function" id="http_status_text" data-name="http_status_text">
+      <h3 class="function-name">http_status_text</h3>
+      <pre class="usage"><code>http_status_text(code)</code></pre>
+    </div>
+    <div class="function" id="http_mime_type" data-name="http_mime_type">
+      <h3 class="function-name">http_mime_type</h3>
+      <pre class="usage"><code>http_mime_type(path)</code></pre>
+      <p class="doc">MIME type detection</p>
+    </div>
+    <div class="function" id="http_serve_file" data-name="http_serve_file">
+      <h3 class="function-name">http_serve_file</h3>
+      <pre class="usage"><code>http_serve_file(res, filepath)</code></pre>
+      <p class="doc">Static file serving</p>
+    </div>
+    <div class="function" id="http_serve_static" data-name="http_serve_static">
+      <h3 class="function-name">http_serve_static</h3>
+      <pre class="usage"><code>http_serve_static(req, res, base_dir)</code></pre>
+    </div>
+    <div class="function" id="http_get" data-name="http_get">
+      <h3 class="function-name">http_get</h3>
+      <pre class="usage"><code>http_get(url)</code></pre>
+    </div>
+    <div class="function" id="http_post" data-name="http_post">
+      <h3 class="function-name">http_post</h3>
+      <pre class="usage"><code>http_post(url, body, content_type)</code></pre>
+    </div>
+    <div class="function" id="http_put" data-name="http_put">
+      <h3 class="function-name">http_put</h3>
+      <pre class="usage"><code>http_put(url, body, content_type)</code></pre>
+    </div>
+    <div class="function" id="http_delete" data-name="http_delete">
+      <h3 class="function-name">http_delete</h3>
+      <pre class="usage"><code>http_delete(url)</code></pre>
+    </div>
+    <div class="function" id="http_response_free" data-name="http_response_free">
+      <h3 class="function-name">http_response_free</h3>
+      <pre class="usage"><code>http_response_free(response)</code></pre>
+    </div>
+    <div class="function" id="tcp_connect" data-name="tcp_connect">
+      <h3 class="function-name">tcp_connect</h3>
+      <pre class="usage"><code>tcp_connect(host, port)</code></pre>
+      <p class="doc">TCP Client</p>
+    </div>
+    <div class="function" id="tcp_send" data-name="tcp_send">
+      <h3 class="function-name">tcp_send</h3>
+      <pre class="usage"><code>tcp_send(sock, data)</code></pre>
+    </div>
+    <div class="function" id="tcp_receive" data-name="tcp_receive">
+      <h3 class="function-name">tcp_receive</h3>
+      <pre class="usage"><code>tcp_receive(sock, max_bytes)</code></pre>
+    </div>
+    <div class="function" id="tcp_close" data-name="tcp_close">
+      <h3 class="function-name">tcp_close</h3>
+      <pre class="usage"><code>tcp_close(sock)</code></pre>
+    </div>
+    <div class="function" id="tcp_server_close" data-name="tcp_server_close">
+      <h3 class="function-name">tcp_server_close</h3>
+      <pre class="usage"><code>tcp_server_close(server)</code></pre>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

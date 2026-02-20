@@ -1,0 +1,29 @@
+// Memory Manual Mode — Explicit free
+//
+// Enable manual mode for the whole project in aether.toml:
+//   [memory]
+//   mode = "manual"
+//
+// Or for a single run:
+//   ae run --no-auto-free examples/basics/memory_manual.ae
+//
+// In manual mode the compiler does NOT inject any free calls.
+// You are fully responsible for every allocation.
+//
+// Run: ae run --no-auto-free examples/basics/memory_manual.ae
+
+import std.list
+
+main() {
+    items = list_new();
+    list_add(items, "hello");
+    list_add(items, "world");
+
+    n = list_size(items);
+    print("List has ");
+    print(n);
+    print(" items\n");
+
+    // In manual mode: required. Without this, the memory leaks.
+    list_free(items);
+}

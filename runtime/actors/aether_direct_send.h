@@ -8,7 +8,7 @@
 #include "actor_state_machine.h"
 
 // Thread-local scheduler info (defined in multicore_scheduler.c)
-extern __thread int current_core_id;
+extern AETHER_TLS int current_core_id;
 
 // Actor metadata for direct send optimization
 typedef struct {

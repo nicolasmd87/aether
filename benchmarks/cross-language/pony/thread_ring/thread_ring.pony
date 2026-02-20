@@ -29,7 +29,7 @@ actor Main
   let _env: Env
   var _start: U64 = 0
   let _ring_size: USize = 100
-  var _num_hops: U64 = 1_000_000
+  var _num_hops: U64 = 100_000
 
   new create(env: Env) =>
     _env = env
@@ -81,7 +81,6 @@ actor Main
     let elapsed_ns = finish - _start
     let ns_per_msg = elapsed_ns.f64() / total_messages.f64()
     let throughput = 1_000_000_000.0 / ns_per_msg
-    let cycles_per_msg = ns_per_msg * 3.0
 
-    _env.out.print("Cycles/msg:     " + cycles_per_msg.string())
+    _env.out.print("ns/msg:         " + ns_per_msg.string())
     _env.out.print("Throughput:     " + (throughput / 1_000_000.0).string() + " M msg/sec")

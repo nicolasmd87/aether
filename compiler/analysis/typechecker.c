@@ -3,9 +3,153 @@
 #include <string.h>
 #include "typechecker.h"
 #include "type_inference.h"
+#include "../parser/lexer.h"
+#include "../parser/parser.h"
+
+#ifdef _WIN32
+    #include <io.h>
+    #define access _access
+    #define F_OK 0
+#else
+    #include <unistd.h>
+#endif
 
 static int error_count = 0;
 static int warning_count = 0;
+
+// Maximum tokens for parsing module files
+#define MAX_MODULE_TOKENS 2000
+
+// Helper to load and parse a module.ae file, returns AST or NULL
+static ASTNode* load_module_file(const char* module_path) {
+    FILE* f = fopen(module_path, "r");
+    if (!f) return NULL;
+
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    char* source = malloc(size + 1);
+    if (!source) {
+        fclose(f);
+        return NULL;
+    }
+
+    size_t bytes_read = fread(source, 1, size, f);
+    fclose(f);
+    source[bytes_read] = '\0';
+
+    // Tokenize
+    lexer_init(source);
+    Token* tokens[MAX_MODULE_TOKENS];
+    int token_count = 0;
+
+    while (token_count < MAX_MODULE_TOKENS - 1) {
+        Token* token = next_token();
+        tokens[token_count++] = token;
+        if (token->type == TOKEN_EOF || token->type == TOKEN_ERROR) break;
+    }
+
+    // Parse
+    Parser* parser = create_parser(tokens, token_count);
+    ASTNode* ast = parse_program(parser);
+
+    // Cleanup
+    for (int i = 0; i < token_count; i++) {
+        free_token(tokens[i]);
+    }
+    free_parser(parser);
+    free(source);
+
+    return ast;
+}
+
+// Try multiple paths to find a stdlib module file
+static ASTNode* resolve_and_load_module(const char* module_name) {
+    // module_name is like "fs", "string", "json", etc.
+    char path[512];
+
+    // Try 1: Local development path (relative to CWD)
+    snprintf(path, sizeof(path), "std/%s/module.ae", module_name);
+    ASTNode* ast = load_module_file(path);
+    if (ast) return ast;
+
+    // Try 2: Installed path via AETHER_HOME
+    const char* aether_home = getenv("AETHER_HOME");
+    if (aether_home) {
+        snprintf(path, sizeof(path), "%s/share/aether/std/%s/module.ae", aether_home, module_name);
+        ast = load_module_file(path);
+        if (ast) return ast;
+    }
+
+    // Try 3: Common install locations
+    snprintf(path, sizeof(path), "/usr/local/share/aether/std/%s/module.ae", module_name);
+    ast = load_module_file(path);
+    if (ast) return ast;
+
+    snprintf(path, sizeof(path), "%s/.aether/share/aether/std/%s/module.ae",
+             getenv("HOME") ? getenv("HOME") : "", module_name);
+    ast = load_module_file(path);
+    if (ast) return ast;
+
+    return NULL;
+}
+
+// Resolve local package modules (non-std imports)
+// Converts dots to slashes: "mypackage.utils" -> "mypackage/utils/module.ae"
+static ASTNode* resolve_local_module(const char* module_path) {
+    char converted[512];
+    char path[sizeof(converted) + 16];
+
+    // Convert dots to slashes
+    strncpy(converted, module_path, sizeof(converted) - 1);
+    converted[sizeof(converted) - 1] = '\0';
+    for (char* p = converted; *p; p++) {
+        if (*p == '.') *p = '/';
+    }
+
+    // Try 1: lib/module_path/module.ae (library directory)
+    snprintf(path, sizeof(path), "lib/%s/module.ae", converted);
+    ASTNode* ast = load_module_file(path);
+    if (ast) return ast;
+
+    // Try 2: lib/module_path.ae (single file module)
+    snprintf(path, sizeof(path), "lib/%s.ae", converted);
+    ast = load_module_file(path);
+    if (ast) return ast;
+
+    // Try 3: src/module_path/module.ae
+    snprintf(path, sizeof(path), "src/%s/module.ae", converted);
+    ast = load_module_file(path);
+    if (ast) return ast;
+
+    // Try 4: src/module_path.ae
+    snprintf(path, sizeof(path), "src/%s.ae", converted);
+    ast = load_module_file(path);
+    if (ast) return ast;
+
+    // Try 5: module_path/module.ae (project root)
+    snprintf(path, sizeof(path), "%s/module.ae", converted);
+    ast = load_module_file(path);
+    if (ast) return ast;
+
+    // Try 6: module_path.ae (single file in root)
+    snprintf(path, sizeof(path), "%s.ae", converted);
+    ast = load_module_file(path);
+    if (ast) return ast;
+
+    return NULL;
+}
+
+// Get the last component of a module path for namespace
+// "mypackage.utils" -> "utils"
+static const char* get_namespace_from_path(const char* module_path) {
+    const char* last_dot = strrchr(module_path, '.');
+    if (last_dot) {
+        return last_dot + 1;
+    }
+    return module_path;
+}
 
 // Symbol table functions
 SymbolTable* create_symbol_table(SymbolTable* parent) {
@@ -90,6 +234,27 @@ Symbol* resolve_module_alias(SymbolTable* table, const char* name) {
     return NULL;
 }
 
+// Track imported namespaces for qualified function calls
+static char* imported_namespaces[64];
+static int namespace_count = 0;
+
+void register_namespace(const char* ns) {
+    if (namespace_count < 64) {
+        // Check if already registered
+        for (int i = 0; i < namespace_count; i++) {
+            if (strcmp(imported_namespaces[i], ns) == 0) return;
+        }
+        imported_namespaces[namespace_count++] = strdup(ns);
+    }
+}
+
+int is_imported_namespace(const char* name) {
+    for (int i = 0; i < namespace_count; i++) {
+        if (strcmp(imported_namespaces[i], name) == 0) return 1;
+    }
+    return 0;
+}
+
 Symbol* lookup_qualified_symbol(SymbolTable* table, const char* qualified_name) {
     // Split qualified name on '.'
     char* name_copy = strdup(qualified_name);
@@ -110,6 +275,16 @@ Symbol* lookup_qualified_symbol(SymbolTable* table, const char* qualified_name) 
             free(name_copy);
             return lookup_symbol(table, resolved_name);
         }
+
+        // Check if prefix is an imported namespace (e.g., "string" from import std.string)
+        // Convert string.new -> string_new
+        if (is_imported_namespace(prefix)) {
+            char c_func_name[512];
+            snprintf(c_func_name, sizeof(c_func_name), "%s_%s", prefix, suffix);
+            Symbol* sym = lookup_symbol(table, c_func_name);
+            free(name_copy);
+            return sym;
+        }
     }
 
     free(name_copy);
@@ -125,6 +300,42 @@ void type_error(const char* message, int line, int column) {
 void type_warning(const char* message, int line, int column) {
     fprintf(stderr, "Type warning at line %d, column %d: %s\n", line, column, message);
     warning_count++;
+}
+
+// Return a human-readable type name (static buffer — for error messages only)
+static const char* type_name(Type* t) {
+    if (!t) return "unknown";
+    switch (t->kind) {
+        case TYPE_INT:      return "int";
+        case TYPE_FLOAT:    return "float";
+        case TYPE_BOOL:     return "bool";
+        case TYPE_STRING:   return "string";
+        case TYPE_VOID:     return "void";
+        case TYPE_PTR:      return "ptr";
+        case TYPE_ACTOR_REF: return "actor_ref";
+        case TYPE_MESSAGE:  return "message";
+        case TYPE_ARRAY:    return "array";
+        case TYPE_STRUCT:   return t->struct_name ? t->struct_name : "struct";
+        case TYPE_UNKNOWN:  return "unknown";
+        default:            return "unknown";
+    }
+}
+
+// Count the number of formal parameters of a function definition node
+static int count_function_params(ASTNode* func) {
+    if (!func || func->child_count == 0) return 0;
+    int count = 0;
+    // Last child is the function body; everything before it may be params or a guard
+    for (int i = 0; i < func->child_count - 1; i++) {
+        ASTNode* child = func->children[i];
+        if (child->type == AST_VARIABLE_DECLARATION ||
+            child->type == AST_PATTERN_VARIABLE ||
+            child->type == AST_PATTERN_LITERAL) {
+            count++;
+        }
+        // AST_GUARD_CLAUSE is skipped (not a parameter)
+    }
+    return count;
 }
 
 // Type compatibility functions
@@ -184,7 +395,10 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
     switch (expr->type) {
         case AST_LITERAL:
             return clone_type(expr->node_type);
-            
+
+        case AST_STRING_INTERP:
+            return create_type(TYPE_STRING);
+
         case AST_ARRAY_LITERAL:
             // Return the inferred array type
             return expr->node_type ? clone_type(expr->node_type) : create_type(TYPE_UNKNOWN);
@@ -349,10 +563,11 @@ AeTokenType get_token_type_from_string(const char* str) {
 // Type checking functions
 int typecheck_program(ASTNode* program) {
     if (!program || program->type != AST_PROGRAM) return 0;
-    
+
     error_count = 0;
     warning_count = 0;
-    
+    namespace_count = 0;  // Reset imported namespaces
+
     SymbolTable* global_table = create_symbol_table(NULL);
     
     // Add builtin functions
@@ -383,6 +598,10 @@ int typecheck_program(ASTNode* program) {
     // Timing builtin
     Type* clock_ns_type = create_type(TYPE_INT);  // Returns nanoseconds as int
     add_symbol(global_table, "clock_ns", clock_ns_type, 0, 1, 0);
+
+    // Output builtins
+    Type* println_type = create_type(TYPE_VOID);
+    add_symbol(global_table, "println", println_type, 0, 1, 0);
 
     // First pass: collect all declarations
     for (int i = 0; i < program->child_count; i++) {
@@ -418,6 +637,9 @@ int typecheck_program(ASTNode* program) {
             }
             case AST_FUNCTION_DEFINITION: {
                 add_symbol(global_table, child->value, clone_type(child->node_type), 0, 1, 0);
+                // Store AST node so arity can be verified at call sites
+                Symbol* func_sym = lookup_symbol(global_table, child->value);
+                if (func_sym) func_sym->node = child;
                 break;
             }
             case AST_EXTERN_FUNCTION: {
@@ -451,7 +673,7 @@ int typecheck_program(ASTNode* program) {
                 break;
             case AST_IMPORT_STATEMENT: {
                 // Process import and register alias if present
-                const char* module_name = child->value;
+                const char* module_path = child->value;
 
                 // Check if this import has an alias (last child is identifier)
                 if (child->child_count > 0) {
@@ -460,8 +682,85 @@ int typecheck_program(ASTNode* program) {
                     if (last_child && last_child->type == AST_IDENTIFIER) {
                         const char* alias = last_child->value;
                         // Register the alias in symbol table
-                        add_module_alias(global_table, alias, module_name);
+                        add_module_alias(global_table, alias, module_path);
                     }
+                }
+
+                // Handle stdlib imports: import std.X
+                if (strncmp(module_path, "std.", 4) == 0) {
+                    const char* module_name = module_path + 4;  // "fs", "string", etc.
+
+                    // Register namespace for qualified calls (e.g., string.new)
+                    register_namespace(module_name);
+
+                    // Load the module definition file
+                    ASTNode* mod_ast = resolve_and_load_module(module_name);
+                    if (mod_ast) {
+                        // Extract extern declarations from the module
+                        for (int j = 0; j < mod_ast->child_count; j++) {
+                            ASTNode* decl = mod_ast->children[j];
+                            if (decl->type == AST_EXTERN_FUNCTION && decl->value) {
+                                // Check if selective import - only import specified functions
+                                int should_import = 1;
+                                if (child->child_count > 0) {
+                                    // Check if we have selective imports (not just alias)
+                                    ASTNode* first = child->children[0];
+                                    if (first && first->type == AST_IDENTIFIER) {
+                                        // Last child might be alias, check if there are more
+                                        // For selective: import std.fs (file_exists, dir_create)
+                                        // children are the identifiers to import
+                                        should_import = 0;
+                                        for (int k = 0; k < child->child_count; k++) {
+                                            ASTNode* sel = child->children[k];
+                                            if (sel && sel->type == AST_IDENTIFIER &&
+                                                strcmp(sel->value, decl->value) == 0) {
+                                                should_import = 1;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (should_import) {
+                                    // Register in symbol table (same as AST_EXTERN_FUNCTION)
+                                    if (!lookup_symbol_local(global_table, decl->value)) {
+                                        add_symbol(global_table, decl->value,
+                                                   clone_type(decl->node_type), 0, 1, 0);
+                                    }
+                                }
+                            }
+                        }
+                        free_ast_node(mod_ast);
+                    }
+                    // Note: silently continue if module not found (for backwards compat)
+                } else {
+                    // Handle local package imports: import mypackage.utils
+                    const char* namespace = get_namespace_from_path(module_path);
+                    register_namespace(namespace);
+
+                    // Try to resolve and load the local module
+                    ASTNode* mod_ast = resolve_local_module(module_path);
+                    if (mod_ast) {
+                        // Extract extern declarations and function definitions from the module
+                        for (int j = 0; j < mod_ast->child_count; j++) {
+                            ASTNode* decl = mod_ast->children[j];
+                            if (decl->type == AST_EXTERN_FUNCTION && decl->value) {
+                                // Register extern function in symbol table
+                                if (!lookup_symbol_local(global_table, decl->value)) {
+                                    add_symbol(global_table, decl->value,
+                                               clone_type(decl->node_type), 0, 1, 0);
+                                }
+                            } else if (decl->type == AST_FUNCTION_DEFINITION && decl->value) {
+                                // Register user-defined function in symbol table
+                                if (!lookup_symbol_local(global_table, decl->value)) {
+                                    add_symbol(global_table, decl->value,
+                                               clone_type(decl->node_type), 0, 1, 0);
+                                }
+                            }
+                        }
+                        free_ast_node(mod_ast);
+                    }
+                    // Note: silently continue if module not found
                 }
                 break;
             }
@@ -711,13 +1010,20 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                 
                 Symbol* symbol = lookup_symbol(table, left->value);
                 if (!symbol) {
-                    type_error("Undefined variable", left->line, left->column);
+                    char error_msg[256];
+                    snprintf(error_msg, sizeof(error_msg), "Undefined variable '%s'", left->value ? left->value : "?");
+                    type_error(error_msg, left->line, left->column);
                     return 0;
                 }
-                
+
                 Type* right_type = infer_type(right, table);
                 if (!is_assignable(right_type, symbol->type)) {
-                    type_error("Type mismatch in assignment", stmt->line, stmt->column);
+                    char error_msg[256];
+                    snprintf(error_msg, sizeof(error_msg),
+                             "Type mismatch in assignment to '%s': expected %s, got %s",
+                             left->value ? left->value : "?",
+                             type_name(symbol->type), type_name(right_type));
+                    type_error(error_msg, stmt->line, stmt->column);
                     return 0;
                 }
             }
@@ -812,7 +1118,11 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
             }
             return 1;
         }
-        
+
+        case AST_FUNCTION_CALL:
+            // Function call used as a statement (e.g. println(...), user_fn(...))
+            return typecheck_function_call(stmt, table);
+
         case AST_PRINT_STATEMENT: {
             for (int i = 0; i < stmt->child_count; i++) {
                 typecheck_expression(stmt->children[i], table);
@@ -824,14 +1134,47 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
             if (stmt->child_count >= 2) {
                 ASTNode* actor_ref = stmt->children[0];
                 ASTNode* message = stmt->children[1];
-                
+
                 Type* actor_type = infer_type(actor_ref, table);
                 if (actor_type->kind != TYPE_ACTOR_REF) {
                     type_error("First argument to send must be an actor reference", actor_ref->line, actor_ref->column);
                     return 0;
                 }
-                
+
                 typecheck_expression(message, table);
+            }
+            return 1;
+        }
+
+        case AST_SEND_FIRE_FORGET: {
+            // actor ! MessageType { fields... }
+            if (stmt->child_count >= 2) {
+                ASTNode* actor_ref = stmt->children[0];
+                ASTNode* message = stmt->children[1];
+
+                // Validate actor reference type
+                typecheck_expression(actor_ref, table);
+                Type* actor_type = infer_type(actor_ref, table);
+                if (actor_type && actor_type->kind != TYPE_ACTOR_REF && actor_type->kind != TYPE_UNKNOWN) {
+                    char error_msg[256];
+                    snprintf(error_msg, sizeof(error_msg),
+                             "Cannot send to '%s': expected an actor reference",
+                             actor_ref->value ? actor_ref->value : "expression");
+                    type_error(error_msg, actor_ref->line, actor_ref->column);
+                    return 0;
+                }
+
+                // Validate that the message type is a registered message definition
+                if (message->type == AST_MESSAGE_CONSTRUCTOR && message->value) {
+                    Symbol* msg_sym = lookup_symbol(table, message->value);
+                    if (!msg_sym || msg_sym->type->kind != TYPE_MESSAGE) {
+                        char error_msg[256];
+                        snprintf(error_msg, sizeof(error_msg),
+                                 "Undefined message type '%s'", message->value);
+                        type_error(error_msg, message->line, message->column);
+                        return 0;
+                    }
+                }
             }
             return 1;
         }
@@ -936,7 +1279,9 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
         case AST_IDENTIFIER: {
             Symbol* symbol = lookup_symbol(table, expr->value);
             if (!symbol) {
-                type_error("Undefined variable", expr->line, expr->column);
+                char error_msg[256];
+                snprintf(error_msg, sizeof(error_msg), "Undefined variable '%s'", expr->value ? expr->value : "?");
+                type_error(error_msg, expr->line, expr->column);
                 return 0;
             }
             expr->node_type = clone_type(symbol->type);
@@ -954,6 +1299,14 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
             }
             return 1;
             
+        case AST_STRING_INTERP:
+            // Type check all sub-expressions inside the interpolation
+            for (int i = 0; i < expr->child_count; i++) {
+                typecheck_expression(expr->children[i], table);
+            }
+            expr->node_type = create_type(TYPE_STRING);
+            return 1;
+
         case AST_STRUCT_LITERAL:
             // Type check struct literal field initializers
             for (int i = 0; i < expr->child_count; i++) {
@@ -970,13 +1323,24 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
             if (expr->child_count > 0) {
                 ASTNode* base = expr->children[0];
                 typecheck_expression(base, table);
-                
+
                 Type* base_type = infer_type(base, table);
-                
+
+                // Reject member access on primitive types — catch the error in Aether, not C
+                if (base_type && (base_type->kind == TYPE_INT || base_type->kind == TYPE_FLOAT ||
+                                  base_type->kind == TYPE_BOOL || base_type->kind == TYPE_STRING)) {
+                    char error_msg[256];
+                    snprintf(error_msg, sizeof(error_msg),
+                             "Type '%s' has no field '%s'",
+                             type_name(base_type), expr->value ? expr->value : "?");
+                    type_error(error_msg, expr->line, expr->column);
+                    return 0;
+                }
+
                 // Handle Message type member access
                 if (base_type && base_type->kind == TYPE_MESSAGE) {
-                    if (strcmp(expr->value, "type") == 0 || 
-                        strcmp(expr->value, "sender_id") == 0 || 
+                    if (strcmp(expr->value, "type") == 0 ||
+                        strcmp(expr->value, "sender_id") == 0 ||
                         strcmp(expr->value, "payload_int") == 0) {
                         expr->node_type = create_type(TYPE_INT);
                     } else if (strcmp(expr->value, "payload_ptr") == 0) {
@@ -988,14 +1352,24 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
                     Symbol* struct_sym = lookup_symbol(table, base_type->struct_name);
                     if (struct_sym && struct_sym->node) {
                         ASTNode* struct_def = struct_sym->node;
+                        int found = 0;
                         for (int fi = 0; fi < struct_def->child_count; fi++) {
                             ASTNode* field = struct_def->children[fi];
                             if (field && field->value && strcmp(field->value, expr->value) == 0) {
                                 if (field->node_type && field->node_type->kind != TYPE_UNKNOWN) {
                                     expr->node_type = clone_type(field->node_type);
                                 }
+                                found = 1;
                                 break;
                             }
+                        }
+                        if (!found) {
+                            char error_msg[256];
+                            snprintf(error_msg, sizeof(error_msg),
+                                     "Struct '%s' has no field '%s'",
+                                     base_type->struct_name, expr->value ? expr->value : "?");
+                            type_error(error_msg, expr->line, expr->column);
+                            return 0;
                         }
                     }
                     // Fallback to general inference
@@ -1007,6 +1381,30 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
             return 1;
         }
             
+        case AST_SEND_FIRE_FORGET: {
+            // actor ! MessageType { fields... }  — validate both operands
+            if (expr->child_count >= 2) {
+                ASTNode* actor_ref = expr->children[0];
+                ASTNode* message   = expr->children[1];
+
+                typecheck_expression(actor_ref, table);
+
+                // Validate that the message type is a registered message definition
+                if (message->type == AST_MESSAGE_CONSTRUCTOR && message->value) {
+                    Symbol* msg_sym = lookup_symbol(table, message->value);
+                    if (!msg_sym || msg_sym->type->kind != TYPE_MESSAGE) {
+                        char error_msg[256];
+                        snprintf(error_msg, sizeof(error_msg),
+                                 "Undefined message type '%s'", message->value);
+                        type_error(error_msg, message->line, message->column);
+                        return 0;
+                    }
+                }
+            }
+            expr->node_type = create_type(TYPE_VOID);
+            return 1;
+        }
+
         default:
             // Type check all children
             for (int i = 0; i < expr->child_count; i++) {
@@ -1054,17 +1452,34 @@ int typecheck_binary_expression(ASTNode* expr, SymbolTable* table) {
 int typecheck_function_call(ASTNode* call, SymbolTable* table) {
     if (!call || call->type != AST_FUNCTION_CALL) return 0;
 
-    Symbol* symbol = lookup_symbol(table, call->value);
+    // Use qualified lookup to handle namespaced calls like string.new -> string_new
+    Symbol* symbol = lookup_qualified_symbol(table, call->value);
     if (!symbol || !symbol->is_function) {
-        type_error("Undefined function", call->line, call->column);
+        char error_msg[256];
+        snprintf(error_msg, sizeof(error_msg), "Undefined function '%s'", call->value ? call->value : "?");
+        type_error(error_msg, call->line, call->column);
         return 0;
     }
-    
+
+    // Arity check: user-defined functions have their AST node stored
+    if (symbol->node && symbol->node->type == AST_FUNCTION_DEFINITION) {
+        int expected = count_function_params(symbol->node);
+        int got = call->child_count;
+        if (got != expected) {
+            char error_msg[256];
+            snprintf(error_msg, sizeof(error_msg),
+                     "Function '%s' expects %d argument(s), got %d",
+                     call->value, expected, got);
+            type_error(error_msg, call->line, call->column);
+            return 0;
+        }
+    }
+
     // Type check arguments
     for (int i = 0; i < call->child_count; i++) {
         typecheck_expression(call->children[i], table);
     }
-    
+
     call->node_type = clone_type(symbol->type);
     return 1;
 }

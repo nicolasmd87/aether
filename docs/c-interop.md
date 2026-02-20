@@ -176,6 +176,27 @@ main() {
 }
 ```
 
+### Passing Integers to `ptr` Parameters
+
+When an extern function expects a `ptr` parameter and you pass an `int`, the compiler automatically emits the correct `(void*)(intptr_t)` cast — no explicit casting required:
+
+```aether
+import std.list
+
+main() {
+    items = list_new()
+    i = 0
+    while i < 5 {
+        list_add(items, i)   // int passed to void* — cast emitted automatically
+        i = i + 1
+    }
+    print(list_size(items))
+    print("\n")
+}
+```
+
+The generated C is `list_add(items, (void*)(intptr_t)(i))`, which is the well-defined idiom for storing integer values in `void*` containers.
+
 ## Embedding Aether in C Applications
 
 If you want to embed Aether actors in your existing C application (the reverse direction), see the [C Embedding Guide](c-embedding.md). This covers:
