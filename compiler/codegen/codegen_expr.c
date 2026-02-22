@@ -460,6 +460,32 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 if (message && message->type == AST_MESSAGE_CONSTRUCTOR) {
                     MessageDef* msg_def = lookup_message(gen->message_registry, message->value);
                     if (msg_def) {
+                        // Look up the reply message type from the pre-built map
+                        const char* reply_msg_name = NULL;
+                        for (int r = 0; r < gen->reply_type_count; r++) {
+                            if (strcmp(gen->reply_type_map[r].request_msg, message->value) == 0) {
+                                reply_msg_name = gen->reply_type_map[r].reply_msg;
+                                break;
+                            }
+                        }
+
+                        // Find the first non-_message_id field of the reply message
+                        const char* reply_field = NULL;
+                        int reply_field_type = TYPE_INT;
+                        if (reply_msg_name) {
+                            MessageDef* reply_def = lookup_message(gen->message_registry, reply_msg_name);
+                            if (reply_def && reply_def->fields) {
+                                reply_field = reply_def->fields->name;
+                                reply_field_type = reply_def->fields->type_kind;
+                            }
+                        }
+
+                        int timeout_ms = 5000;
+                        if (expr->child_count >= 3 && expr->children[2] &&
+                            expr->children[2]->value) {
+                            timeout_ms = atoi(expr->children[2]->value);
+                        }
+
                         fprintf(gen->output, "({ %s _msg = { ._message_id = %d", 
                                 message->value, msg_def->message_id);
                         
@@ -475,8 +501,27 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         
                         fprintf(gen->output, " }; void* _ask_r = scheduler_ask_message((ActorBase*)(");
                         generate_expression(gen, target);
-                        // Cast void* → intptr_t to avoid pointer-to-integer error; NULL check still works.
-                        fprintf(gen->output, "), &_msg, sizeof(%s), 5000); (intptr_t)(uintptr_t)_ask_r; })", message->value);
+                        fprintf(gen->output, "), &_msg, sizeof(%s), %d); ", message->value, timeout_ms);
+
+                        if (reply_msg_name && reply_field) {
+                            const char* c_type = "int";
+                            const char* c_zero = "0";
+                            switch (reply_field_type) {
+                                case TYPE_FLOAT:   c_type = "double"; c_zero = "0.0"; break;
+                                case TYPE_BOOL:    c_type = "int";    c_zero = "0";   break;
+                                case TYPE_STRING:  c_type = "const char*"; c_zero = "NULL"; break;
+                                case TYPE_INT64:   c_type = "int64_t"; c_zero = "0";  break;
+                                case TYPE_UINT64:  c_type = "uint64_t"; c_zero = "0"; break;
+                                case TYPE_PTR:     c_type = "void*";  c_zero = "NULL"; break;
+                                default:           c_type = "int";    c_zero = "0";   break;
+                            }
+                            fprintf(gen->output, "%s _ask_val = _ask_r ? ((%s*)_ask_r)->%s : %s; ",
+                                    c_type, reply_msg_name, reply_field, c_zero);
+                            fprintf(gen->output, "free(_ask_r); _ask_val; })");
+                        } else {
+                            // Fallback: return raw pointer as intptr_t
+                            fprintf(gen->output, "intptr_t _ask_val = (intptr_t)(uintptr_t)_ask_r; _ask_val; })");
+                        }
                     } else {
                         fprintf(gen->output, "/* ERROR: unknown message type %s */", message->value);
                     }

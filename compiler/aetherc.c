@@ -17,6 +17,7 @@
 #include "analysis/typechecker.h"
 #include "codegen/optimizer.h"
 #include "codegen/codegen.h"
+#include "aether_error.h"
 
 // Compiler limits
 #define MAX_TOKENS 10000
@@ -100,6 +101,8 @@ int compile_source(const char* input_path, const char* output_path) {
     
     if (verbose_mode) printf("Compiling %s...\n", input_path);
 
+    aether_error_init(input_path, source);
+
     // Step 1: Lexical Analysis
     if (verbose_mode) {
         printf("[Phase 1/5] Lexical Analysis...\n");
@@ -120,8 +123,8 @@ int compile_source(const char* input_path, const char* output_path) {
         }
         
         if (token->type == TOKEN_ERROR) {
-            fprintf(stderr, "Lexical error at line %d, column %d: %s\n", 
-                    token->line, token->column, token->value);
+            aether_error_with_code(token->value, token->line, token->column,
+                                   AETHER_ERR_SYNTAX);
             // Cleanup tokens
             for (int i = 0; i < token_count; i++) {
                 free_token(tokens[i]);

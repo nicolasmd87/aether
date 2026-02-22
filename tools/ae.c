@@ -287,9 +287,22 @@ static void discover_toolchain(void) {
     char exe_dir[1024] = {0};
     bool found_exe_dir = get_exe_dir(exe_dir, sizeof(exe_dir));
 
-    // Strategy 1: $AETHER_HOME
+    // Strategy 1: Dev mode — ae sitting next to aetherc in build/
+    // Checked first so that ./build/ae always uses ./build/aetherc,
+    // even when $AETHER_HOME points to an older installed version.
+    if (found_exe_dir) {
+        char candidate[1024];
+        snprintf(candidate, sizeof(candidate), "%s/aetherc" EXE_EXT, exe_dir);
+        if (path_exists(candidate)) {
+            snprintf(tc.root, sizeof(tc.root), "%s/..", exe_dir);
+            strncpy(tc.compiler, candidate, sizeof(tc.compiler) - 1);
+            tc.dev_mode = true;
+            goto found_root;
+        }
+    }
+
+    // Strategy 2: $AETHER_HOME
     const char* home = getenv("AETHER_HOME");
-    // Strip trailing \r or whitespace (shell config with CRLF line endings)
     static char home_clean[1024];
     if (home) {
         strncpy(home_clean, home, sizeof(home_clean) - 1);
@@ -300,15 +313,23 @@ static void discover_toolchain(void) {
         home = home_clean;
     }
     if (home && dir_exists(home)) {
+        // Prefer ~/.aether/current/bin/ if a version symlink exists (ae version use)
+        char current_compiler[1024];
+        snprintf(current_compiler, sizeof(current_compiler), "%s/current/bin/aetherc" EXE_EXT, home);
+        if (path_exists(current_compiler)) {
+            snprintf(tc.root, sizeof(tc.root), "%s/current", home);
+            strncpy(tc.compiler, current_compiler, sizeof(tc.compiler) - 1);
+            if (tc.verbose) fprintf(stderr, "[toolchain] compiler=%s (via current symlink)\n", tc.compiler);
+            goto found_root;
+        }
         strncpy(tc.root, home, sizeof(tc.root) - 1);
         snprintf(tc.compiler, sizeof(tc.compiler), "%s/bin/aetherc" EXE_EXT, tc.root);
         if (tc.verbose) fprintf(stderr, "[toolchain] compiler=%s exists=%d\n", tc.compiler, path_exists(tc.compiler));
         if (path_exists(tc.compiler)) goto found_root;
     }
 
-    // Strategy 2: Relative to ae binary
+    // Strategy 3: Relative to ae binary — installed layout ($PREFIX/bin/ae, $PREFIX/lib/aether/)
     if (found_exe_dir) {
-        // Case A: installed — ae in $PREFIX/bin/, lib in $PREFIX/lib/aether/
         char candidate[1024];
         snprintf(candidate, sizeof(candidate), "%s/../lib/aether", exe_dir);
         if (dir_exists(candidate)) {
@@ -316,18 +337,9 @@ static void discover_toolchain(void) {
             snprintf(tc.compiler, sizeof(tc.compiler), "%s/aetherc" EXE_EXT, exe_dir);
             if (path_exists(tc.compiler)) goto found_root;
         }
-
-        // Case B: dev mode — ae in build/, aetherc in build/
-        snprintf(candidate, sizeof(candidate), "%s/aetherc" EXE_EXT, exe_dir);
-        if (path_exists(candidate)) {
-            snprintf(tc.root, sizeof(tc.root), "%s/..", exe_dir);
-            strncpy(tc.compiler, candidate, sizeof(tc.compiler) - 1);
-            tc.dev_mode = true;
-            goto found_root;
-        }
     }
 
-    // Strategy 3: CWD dev mode — ./build/aetherc
+    // Strategy 4: CWD dev mode — ./build/aetherc
     if (path_exists("build/aetherc" EXE_EXT)) {
         char cwd[1024];
         if (getcwd(cwd, sizeof(cwd))) {
@@ -340,7 +352,7 @@ static void discover_toolchain(void) {
         goto found_root;
     }
 
-    // Strategy 4: Standard install paths
+    // Strategy 5: Standard install paths
     const char* standard_paths[] = {
         "/usr/local/bin/aetherc",
         "/usr/bin/aetherc",
@@ -1491,7 +1503,7 @@ static int cmd_version_use(const char* version) {
     // POSIX: update ~/.aether/current symlink
     char current[512];
     snprintf(current, sizeof(current), "%s/.aether/current", home);
-    remove(current);   // remove old symlink (ignore if not present)
+    remove(current);
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "ln -sf \"%s\" \"%s\"", ver_dir, current);
     if (system(cmd) != 0) {
@@ -1499,12 +1511,13 @@ static int cmd_version_use(const char* version) {
         fprintf(stderr, "  ln -sf %s %s\n", ver_dir, current);
         return 1;
     }
-    // Helpful PATH reminder
-    char current_bin[512];
-    snprintf(current_bin, sizeof(current_bin), "%s/bin", current);
+    // Also copy binaries to ~/.aether/bin/ so older ae binaries still resolve
+    char dest_bin[512], src_bin[512];
+    snprintf(dest_bin, sizeof(dest_bin), "%s/.aether/bin", home);
+    snprintf(src_bin,  sizeof(src_bin),  "%s/bin",         ver_dir);
+    snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\" && cp -f \"%s\"/aetherc* \"%s/\" 2>/dev/null", dest_bin, src_bin, dest_bin);
+    system(cmd);
     printf("Switched to Aether %s.\n", vtag);
-    printf("Make sure %s/bin is first in your PATH:\n", current);
-    printf("  export PATH=\"%s/bin:$PATH\"\n", current);
     return 0;
 #endif
     printf("Switched to Aether %s.\n", vtag);

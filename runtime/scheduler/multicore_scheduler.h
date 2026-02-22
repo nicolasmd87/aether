@@ -128,12 +128,18 @@ void scheduler_release_pooled(ActorBase* actor);
 // Legacy API - now controls only TIER 3 opt-in features
 void scheduler_enable_features(int use_pool, int use_lockfree, int use_adaptive, int use_direct);
 
-// Ask/reply (experimental): send a message and block until a reply arrives or timeout.
+// Ask/reply: send a message and block until a reply arrives or timeout.
 // Returns malloc'd reply payload on success (caller must free), NULL on timeout.
 void* scheduler_ask_message(ActorBase* target, void* msg_data, size_t msg_size, int timeout_ms);
 
-// Reply to the pending ask on self (called from inside an actor's receive handler).
+// Reply to the pending ask (called from inside an actor's receive handler).
 // data/data_size describe the reply payload; it is copied internally.
 void scheduler_reply(ActorBase* self, void* data, size_t data_size);
+
+// Thread-local reply slot set by the send path (sender) and step function (receiver).
+// g_pending_reply_slot: set before aether_send_message so the slot rides inside the Message.
+// g_current_reply_slot: set by the generated step function after mailbox_receive.
+extern __thread void* g_pending_reply_slot;
+extern __thread void* g_current_reply_slot;
 
 #endif

@@ -1,0 +1,112 @@
+// Error Handling - idiomatic patterns for handling failure
+//
+// Aether uses return values and pattern matching for error handling,
+// similar to Go and C. Functions return sentinel values (0, -1, "")
+// to signal errors, and callers use match or if/else to handle them.
+
+// Return 0 on failure, result on success
+safe_divide(x, y) {
+    if (y == 0) {
+        return 0;
+    }
+    return x / y;
+}
+
+// Validate input and return status code: 1 = ok, 0 = error
+validate_age(age) {
+    if (age < 0) {
+        println("  error: age cannot be negative (got ${age})");
+        return 0;
+    }
+    if (age > 150) {
+        println("  error: age unreasonably large (got ${age})");
+        return 0;
+    }
+    return 1;
+}
+
+// Chain validations: early return on first failure
+validate_user(name_len, age) {
+    if (name_len == 0) {
+        println("  error: name cannot be empty");
+        return 0;
+    }
+    if (validate_age(age) == 0) {
+        return 0;
+    }
+    return 1;
+}
+
+// Guard clause pattern: check preconditions up front
+process_order(quantity, price) {
+    if (quantity <= 0) {
+        println("  rejected: quantity must be positive");
+        return -1;
+    }
+    if (price <= 0) {
+        println("  rejected: price must be positive");
+        return -1;
+    }
+    total = quantity * price;
+    println("  order total: ${total}");
+    return total;
+}
+
+main() {
+    println("=== Error Handling Patterns ===\n");
+
+    // 1. Check return value with if/else
+    println("1. Return value checking:");
+    result = safe_divide(10, 3);
+    println("  10 / 3 = ${result}");
+
+    result = safe_divide(10, 0);
+    if (result == 0) {
+        println("  10 / 0 = division by zero");
+    }
+
+    // 2. Match on sentinel values
+    println("\n2. Match on results:");
+    status = safe_divide(100, 5);
+    match (status) {
+        0 -> { println("  100 / 5 = failed"); }
+        _ -> { println("  100 / 5 = ${status}"); }
+    }
+
+    status = safe_divide(42, 0);
+    match (status) {
+        0 -> { println("  42 / 0 = division error"); }
+        _ -> { println("  42 / 0 = ${status}"); }
+    }
+
+    // 3. Validation with early return
+    println("\n3. Validation chains:");
+    print("  validate_user(3, 25): ");
+    if (validate_user(3, 25) == 1) {
+        println("valid");
+    }
+
+    print("  validate_user(0, 25): ");
+    if (validate_user(0, 25) == 0) {
+        println("invalid");
+    }
+
+    print("  validate_user(3, -5): ");
+    if (validate_user(3, -5) == 0) {
+        println("invalid");
+    }
+
+    // 4. Guard clauses
+    println("\n4. Guard clauses:");
+    process_order(5, 20);
+    process_order(0, 20);
+    process_order(3, -10);
+
+    // 5. Defer for cleanup on any exit path
+    println("\n5. Defer for cleanup:");
+    defer println("  [cleanup] resources released");
+    println("  doing work...");
+    println("  work complete");
+
+    println("\n=== Error Handling Complete ===");
+}

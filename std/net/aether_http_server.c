@@ -17,6 +17,7 @@
     #include <arpa/inet.h>
     #include <unistd.h>
     #include <fcntl.h>
+    #include <pthread.h>
 #endif
 
 // Portable case-insensitive substring search (strcasestr is a GNU extension)
@@ -611,7 +612,21 @@ static void handle_client_connection(HttpServer* server, int client_fd) {
     http_server_response_free(res);
 }
 
-// Server main loop with proper connection handling
+// Thread-per-connection: context passed to each worker thread
+typedef struct {
+    HttpServer* server;
+    int client_fd;
+} ConnectionCtx;
+
+#ifndef _WIN32
+static void* connection_thread(void* arg) {
+    ConnectionCtx* ctx = (ConnectionCtx*)arg;
+    handle_client_connection(ctx->server, ctx->client_fd);
+    free(ctx);
+    return NULL;
+}
+#endif
+
 int http_server_start(HttpServer* server) {
     if (http_server_bind(server, server->host, server->port) < 0) {
         return -1;
@@ -619,12 +634,10 @@ int http_server_start(HttpServer* server) {
 
     server->is_running = 1;
 
-    // Print success message now that bind succeeded
     printf("Server running at http://%s:%d\n", server->host, server->port);
     printf("Press Ctrl+C to stop\n\n");
     fflush(stdout);
 
-    // Main accept loop
     while (server->is_running) {
         struct sockaddr_in client_addr;
         socklen_t client_len = sizeof(client_addr);
@@ -636,8 +649,24 @@ int http_server_start(HttpServer* server) {
             continue;
         }
 
-        // Handle connection
+#ifdef _WIN32
         handle_client_connection(server, client_fd);
+#else
+        ConnectionCtx* ctx = malloc(sizeof(ConnectionCtx));
+        if (!ctx) { close(client_fd); continue; }
+        ctx->server = server;
+        ctx->client_fd = client_fd;
+
+        pthread_t tid;
+        pthread_attr_t attr;
+        pthread_attr_init(&attr);
+        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+        if (pthread_create(&tid, &attr, connection_thread, ctx) != 0) {
+            free(ctx);
+            handle_client_connection(server, client_fd);
+        }
+        pthread_attr_destroy(&attr);
+#endif
     }
 
     return 0;

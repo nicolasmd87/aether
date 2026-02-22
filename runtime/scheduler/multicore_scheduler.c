@@ -1,5 +1,4 @@
 // Partitioned State Machine Scheduler - Zero-Sharing Multi-core
-// Based on Experiment 04: 291M msg/sec on 8 cores (2.3× scaling)
 // Strategy: Static actor-to-core assignment, no atomics, perfect cache locality
 
 // Platform defines must come first
@@ -911,11 +910,16 @@ void scheduler_enable_features(int use_pool, int use_lockfree, int use_adaptive,
 }
 
 // ============================================================================
-// Ask/Reply support (experimental)
+// Ask/Reply support
 // ============================================================================
 
-// Decrement the slot refcount; free when it reaches zero.
-// NOTE: reply_data is NOT freed here — it is transferred to the ask caller.
+// Thread-locals: the sender stashes a reply slot here before calling
+// aether_send_message so the slot rides inside the Message._reply_slot field.
+// The receiver's step function copies Message._reply_slot into
+// g_current_reply_slot after mailbox_receive, so scheduler_reply can find it.
+__thread void* g_pending_reply_slot = NULL;
+__thread void* g_current_reply_slot = NULL;
+
 static void reply_slot_decref(ActorReplySlot* slot) {
     if (atomic_fetch_sub_explicit(&slot->refcount, 1, memory_order_acq_rel) == 1) {
         pthread_cond_destroy(&slot->cond);
@@ -924,26 +928,23 @@ static void reply_slot_decref(ActorReplySlot* slot) {
     }
 }
 
-// Send a message to target and block until a reply is received or timeout_ms expires.
-// Returns a malloc'd pointer to the reply payload (caller must free), or NULL on timeout.
 void* scheduler_ask_message(ActorBase* target, void* msg_data, size_t msg_size, int timeout_ms) {
     if (!target || !msg_data) return NULL;
 
-    // Allocate and initialize the reply slot (refcount starts at 2: asker + actor).
     ActorReplySlot* slot = (ActorReplySlot*)calloc(1, sizeof(ActorReplySlot));
     if (!slot) return NULL;
 
     pthread_mutex_init(&slot->mutex, NULL);
     pthread_cond_init(&slot->cond, NULL);
-    atomic_init(&slot->refcount, 2);
+    atomic_init(&slot->refcount, 2);  // asker + actor handler
 
-    // Publish the slot before sending so the actor can reply immediately.
-    atomic_store_explicit(&target->reply_slot, slot, memory_order_seq_cst);
-
-    // Deliver the ask message using the same path as fire-and-forget.
+    // Stash the slot in the thread-local so aether_send_message propagates it
+    // into Message._reply_slot.  This supports concurrent asks to the same actor
+    // because each Message carries its own slot instead of a single per-actor field.
+    g_pending_reply_slot = slot;
     aether_send_message((void*)target, msg_data, msg_size);
+    g_pending_reply_slot = NULL;
 
-    // Build absolute timeout deadline.
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     ts.tv_sec  += timeout_ms / 1000;
@@ -953,7 +954,6 @@ void* scheduler_ask_message(ActorBase* target, void* msg_data, size_t msg_size, 
         ts.tv_nsec -= 1000000000L;
     }
 
-    // Wait for the reply (or timeout).
     pthread_mutex_lock(&slot->mutex);
     while (!slot->reply_ready) {
         if (pthread_cond_timedwait(&slot->cond, &slot->mutex, &ts) == ETIMEDOUT) break;
@@ -961,33 +961,22 @@ void* scheduler_ask_message(ActorBase* target, void* msg_data, size_t msg_size, 
     void* result = slot->reply_ready ? slot->reply_data : NULL;
 
     if (!slot->reply_ready) {
-        // Timed out: mark slot so the actor won't try to signal it.
         slot->timed_out = 1;
-        // Try to detach the slot from the actor atomically.
-        // If the CAS succeeds:  actor hasn't exchanged yet; we take the actor's ref.
-        // If the CAS fails:     actor already owns the slot and will decref its own ref.
-        ActorReplySlot* expected = slot;
-        if (atomic_compare_exchange_strong_explicit(&target->reply_slot, &expected, NULL,
-                                                    memory_order_seq_cst, memory_order_seq_cst)) {
-            reply_slot_decref(slot);  // release the actor's ref (actor won't use the slot)
-        }
     }
     pthread_mutex_unlock(&slot->mutex);
 
-    reply_slot_decref(slot);  // release the asker's ref
+    reply_slot_decref(slot);
     return result;
 }
 
-// Called from within an actor's receive handler to reply to a pending ask.
-// data/data_size are copied internally; the asker is responsible for freeing the result.
 void scheduler_reply(ActorBase* self, void* data, size_t data_size) {
-    // Atomically take the slot so concurrent timeout cannot race with us.
-    ActorReplySlot* slot = atomic_exchange_explicit(&self->reply_slot, NULL, memory_order_seq_cst);
-    if (!slot) return;  // no pending ask, or asker already timed out and cleared it
+    (void)self;
+    ActorReplySlot* slot = (ActorReplySlot*)g_current_reply_slot;
+    g_current_reply_slot = NULL;
+    if (!slot) return;
 
     pthread_mutex_lock(&slot->mutex);
     if (!slot->timed_out) {
-        // Copy the reply payload for the waiting caller.
         if (data && data_size > 0) {
             slot->reply_data = malloc(data_size);
             if (slot->reply_data) {
@@ -1000,5 +989,5 @@ void scheduler_reply(ActorBase* self, void* data, size_t data_size) {
     }
     pthread_mutex_unlock(&slot->mutex);
 
-    reply_slot_decref(slot);  // release the actor's ref
+    reply_slot_decref(slot);
 }

@@ -3,6 +3,7 @@
 #include <string.h>
 #include "parser.h"
 #include "lexer.h"
+#include "../aether_error.h"
 
 #define INTERP_MAX_TOKENS 512
 
@@ -73,23 +74,22 @@ int match_token(Parser* parser, AeTokenType type) {
 
 void parser_error(Parser* parser, const char* message) {
     if (parser->suppress_errors) {
-        return;  // Silently return if error suppression is enabled
+        return;
     }
     
     Token* token = peek_token(parser);
     if (token) {
-        fprintf(stderr, "Parse error at line %d, column %d: %s", 
-                token->line, token->column, message);
+        aether_error_with_code(message, token->line, token->column,
+                               AETHER_ERR_SYNTAX);
     } else {
-        fprintf(stderr, "Parse error at end of file: %s", message);
+        aether_error_simple(message, 0, 0);
     }
 }
 
 // Helper to print warnings and errors (respects suppress_errors flag)
 static void parser_message(Parser* parser, const char* message) {
-    if (!parser->suppress_errors) {
-        fprintf(stderr, "%s", message);
-    }
+    (void)parser;
+    (void)message;
 }
 
 Type* parse_type(Parser* parser) {
@@ -999,7 +999,7 @@ ASTNode* parse_switch_statement(Parser* parser) {
         if (case_stmt) {
             add_child(switch_stmt, case_stmt);
         } else {
-            fprintf(stderr, "Parse error: Expected 'case' or 'default' in switch statement");
+            parser_error(parser, "Expected 'case' or 'default' in switch statement");
             advance_token(parser);
         }
     }
@@ -1677,8 +1677,12 @@ ASTNode* parse_actor_definition(Parser* parser) {
             } else {
                 // If we can't parse a statement, advance to avoid infinite loop
                 Token* tok = peek_token(parser);
-                fprintf(stderr, "Warning: Skipping unexpected token in actor body: %s (type=%d)\n",
-                        tok ? tok->value : "NULL", tok ? (int)tok->type : -1);
+                if (tok) {
+                    char msg[128];
+                    snprintf(msg, sizeof(msg), "Unexpected token in actor body: '%s'",
+                             tok->value ? tok->value : "?");
+                    aether_error_simple(msg, tok->line, tok->column);
+                }
                 advance_token(parser);
             }
         }

@@ -953,10 +953,6 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             print_line(gen, "}");
             break;
         
-        // Actor V2 - Reply statement
-        // NOTE: Reply constructs the message but scheduler-based actors don't have
-        // the request-tracking infrastructure yet. The reply message is logged but
-        // not actually sent back to caller. Full ask/reply needs ActorBase changes.
         case AST_REPLY_STATEMENT:
             if (stmt->child_count > 0) {
                 ASTNode* reply_expr = stmt->children[0];

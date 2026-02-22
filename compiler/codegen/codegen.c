@@ -193,6 +193,10 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->extern_registry = NULL;
     gen->extern_registry_count = 0;
     gen->extern_registry_capacity = 0;
+    // Ask/reply type map
+    gen->reply_type_map = NULL;
+    gen->reply_type_count = 0;
+    gen->reply_type_capacity = 0;
     return gen;
 }
 
@@ -240,6 +244,13 @@ void free_code_generator(CodeGenerator* gen) {
                 free(gen->extern_registry[i].params);
             }
             free(gen->extern_registry);
+        }
+        if (gen->reply_type_map) {
+            for (int i = 0; i < gen->reply_type_count; i++) {
+                free(gen->reply_type_map[i].request_msg);
+                free(gen->reply_type_map[i].reply_msg);
+            }
+            free(gen->reply_type_map);
         }
         free(gen);
     }
@@ -907,6 +918,43 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         fprintf(gen->output, ");\n");
     }
     print_line(gen, "");
+
+    // Pre-pass: build request->reply type map from actor receive handlers.
+    // This lets the ? operator know the reply message type at codegen time.
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* actor = program->children[i];
+        if (!actor || actor->type != AST_ACTOR_DEFINITION) continue;
+        for (int j = 0; j < actor->child_count; j++) {
+            ASTNode* recv = actor->children[j];
+            if (!recv || recv->type != AST_RECEIVE_STATEMENT) continue;
+            for (int k = 0; k < recv->child_count; k++) {
+                ASTNode* arm = recv->children[k];
+                if (!arm || arm->type != AST_RECEIVE_ARM || arm->child_count < 2) continue;
+                ASTNode* pattern = arm->children[0];
+                ASTNode* body = arm->children[1];
+                if (!pattern || !pattern->value || !body) continue;
+                const char* req_msg = pattern->value;
+                for (int s = 0; s < body->child_count; s++) {
+                    ASTNode* stmt = body->children[s];
+                    if (!stmt || stmt->type != AST_REPLY_STATEMENT) continue;
+                    if (stmt->child_count > 0 && stmt->children[0] &&
+                        stmt->children[0]->type == AST_MESSAGE_CONSTRUCTOR &&
+                        stmt->children[0]->value) {
+                        const char* reply_msg = stmt->children[0]->value;
+                        if (gen->reply_type_count >= gen->reply_type_capacity) {
+                            gen->reply_type_capacity = gen->reply_type_capacity ? gen->reply_type_capacity * 2 : 16;
+                            gen->reply_type_map = realloc(gen->reply_type_map,
+                                gen->reply_type_capacity * sizeof(*gen->reply_type_map));
+                        }
+                        gen->reply_type_map[gen->reply_type_count].request_msg = strdup(req_msg);
+                        gen->reply_type_map[gen->reply_type_count].reply_msg = strdup(reply_msg);
+                        gen->reply_type_count++;
+                        break;
+                    }
+                }
+            }
+        }
+    }
 
     for (int i = 0; i < program->child_count; i++) {
         ASTNode* child = program->children[i];

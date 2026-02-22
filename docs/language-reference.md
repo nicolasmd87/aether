@@ -533,25 +533,25 @@ counter ! Increment { amount: 10 };
 counter ! Reset {};
 ```
 
-### Ask Pattern (Request-Reply) — *Experimental*
+### Ask Pattern (Request-Reply)
 
-> **Status: Experimental.** The `?` operator is functional end-to-end — the reply is
-> delivered back to the caller via `scheduler_ask_message` in the multicore scheduler.
-> Current limitations: the result type is `void*` (caller must cast and free), concurrent
-> asks to the same actor are not supported, and timeout is fixed at 5 seconds.
-
-The `?` operator sends a message and waits for a reply:
+The `?` operator sends a message and blocks until the actor replies. The compiler
+infers the reply type from the actor's receive handler and extracts the first field
+of the reply message automatically. Multiple concurrent asks to the same actor are
+supported — each message carries its own reply slot.
 
 ```aether
-// In main
+// Synchronous request-reply — result is an int (from Result.value)
 result = calculator ? Add { a: 5, b: 3 };
 ```
 
-### Reply Statement — *Experimental*
+If the handler does not call `reply` within the timeout (default 5 seconds), `?`
+returns 0.
 
-> **Status: Experimental.** The `reply` statement sends the response back to the waiting
-> `?` caller via `scheduler_reply` in the multicore scheduler. Omitting `reply` in a
-> handler will cause the caller to time out after 5 seconds.
+### Reply Statement
+
+The `reply` statement sends a response back to the waiting `?` caller. Omitting
+`reply` in a handler that was invoked via `?` causes the caller to time out.
 
 Actors respond using the `reply` statement:
 

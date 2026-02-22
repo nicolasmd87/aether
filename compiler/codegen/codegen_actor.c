@@ -200,13 +200,13 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
     indent(gen);
     print_line(gen, "Message msg;");
     print_line(gen, "");
-    print_line(gen, "// Likely path: mailbox has message");
     print_line(gen, "if (unlikely(!mailbox_receive(&self->mailbox, &msg))) {");
     indent(gen);
     print_line(gen, "self->active = 0;");
     print_line(gen, "return;");
     unindent(gen);
     print_line(gen, "}");
+    print_line(gen, "g_current_reply_slot = msg._reply_slot;");
     print_line(gen, "");
     
     if (pattern_count > 0) {

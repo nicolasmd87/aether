@@ -1,26 +1,35 @@
-// Ping-Pong - two actors exchanging messages
+// Ping-Pong - two actors exchanging messages back and forth
+//
+// PongActor receives Ping, sends Pong back to PingActor.
+// PingActor receives Pong, sends the next Ping back to PongActor.
+// The rally continues for a configurable number of rounds.
 
 message Ping { seq: int }
 message Pong { seq: int }
 
 actor PingActor {
+    state pong_ref = 0;
+    state rounds = 5;
     state received = 0;
 
     receive {
         Pong(seq) -> {
             received = received + 1;
-            println("Got pong #${seq}");
+            println("Ping got pong #${seq}");
+            if (received < rounds) {
+                pong_ref ! Ping { seq: received };
+            }
         }
     }
 }
 
 actor PongActor {
-    state received = 0;
+    state ping_ref = 0;
 
     receive {
         Ping(seq) -> {
-            received = received + 1;
-            println("Got ping #${seq}, replying...");
+            println("Pong got ping #${seq}, replying...");
+            ping_ref ! Pong { seq: seq };
         }
     }
 }
@@ -29,13 +38,13 @@ main() {
     ping = spawn(PingActor());
     pong = spawn(PongActor());
 
-    pong ! Ping { seq: 1 };
-    ping ! Pong { seq: 1 };
-    pong ! Ping { seq: 2 };
-    ping ! Pong { seq: 2 };
-    pong ! Ping { seq: 3 };
-    ping ! Pong { seq: 3 };
+    // Wire actors to each other
+    ping.pong_ref = pong;
+    pong.ping_ref = ping;
 
-    // Wait for all messages to be processed
+    // Kick off the rally
+    pong ! Ping { seq: 0 };
+
     wait_for_idle();
+    println("Rally complete!");
 }

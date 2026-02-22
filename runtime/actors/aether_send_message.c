@@ -163,17 +163,16 @@ static inline void AETHER_HOT aether_send_message_sync(ActorBase* actor, void* m
     // Since processing is synchronous, caller's stack memory is still valid
     // We mark g_skip_free so step() doesn't try to free the caller's stack
 
-    // Create mailbox message pointing to original data
     Message msg;
-    msg.type = *(int*)message_data;  // First field is _message_id
+    msg.type = *(int*)message_data;
     msg.sender_id = 0;
     msg.payload_int = 0;
-    msg.payload_ptr = message_data;  // Direct pointer - no copy!
+    msg.payload_ptr = message_data;
     msg.zerocopy.data = NULL;
     msg.zerocopy.size = 0;
     msg.zerocopy.owned = 0;
+    msg._reply_slot = g_pending_reply_slot;
 
-    // Direct mailbox insert + synchronous step (no scheduler involvement)
     mailbox_send(&actor->mailbox, msg);
 
     // Tell aether_free_message to skip freeing during this step()
@@ -212,15 +211,15 @@ void aether_send_message(void* actor_ptr, void* message_data, size_t message_siz
 
     memcpy(msg_copy, message_data, message_size);
 
-    // Create mailbox message with the data pointer
     Message msg;
-    msg.type = *(int*)message_data;  // First field is _message_id
+    msg.type = *(int*)message_data;
     msg.sender_id = 0;
     msg.payload_int = 0;
-    msg.payload_ptr = msg_copy;  // Use payload_ptr for the message data
+    msg.payload_ptr = msg_copy;
     msg.zerocopy.data = NULL;
     msg.zerocopy.size = 0;
     msg.zerocopy.owned = 0;
+    msg._reply_slot = g_pending_reply_slot;
 
     // Use optimized scheduler send paths:
     // - Same-core: direct mailbox send (no queue overhead)

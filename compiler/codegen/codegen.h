@@ -58,6 +58,15 @@ typedef struct {
     }* extern_registry;
     int extern_registry_count;
     int extern_registry_capacity;
+
+    // Ask/reply type map: request message name -> reply message name.
+    // Built by scanning actor receive handlers for reply statements.
+    struct ReplyTypeEntry {
+        char* request_msg;   // e.g. "Add"
+        char* reply_msg;     // e.g. "Result"
+    }* reply_type_map;
+    int reply_type_count;
+    int reply_type_capacity;
 } CodeGenerator;
 
 // Code generation functions

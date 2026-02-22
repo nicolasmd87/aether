@@ -233,6 +233,7 @@ void aether_send_message(Actor* target, void* message, int message_size) {
     msg.type = ((int*)message)[0];  // _message_id
     msg.sender_id = 0;
     msg.payload_int = 0;
+    msg._reply_slot = NULL;
     
     // Use message pool for small messages (zero-copy optimization)
     if (likely(message_size <= 256 && tls_message_pool)) {

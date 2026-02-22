@@ -64,7 +64,7 @@ cd aether
 ./install.sh
 ```
 
-Installs to `~/.aether` and adds `ae` to your PATH. Restart your terminal or run `source ~/.zshrc` (or `~/.bash_profile`).
+Installs to `~/.aether` and adds `ae` to your PATH. Restart your terminal or run `source ~/.bashrc`, `~/.zshrc`, or `~/.bash_profile`.
 
 **Windows — download and run:**
 
@@ -132,7 +132,7 @@ ae init <name>           # Create a new project
 ae run [file.ae]         # Compile and run (file or project)
 ae build [file.ae]       # Compile to executable
 ae test [file|dir]       # Discover and run tests
-ae add <package>         # Add a dependency
+ae add <package>         # Add a dependency (GitHub repos)
 ae repl                  # Start interactive REPL
 ae version               # Show current version
 ae version list          # List all available releases
@@ -180,7 +180,7 @@ aether/
 │   └── fs/           # File system operations
 ├── tools/            # Developer tools
 │   ├── ae.c          # Unified CLI tool (ae command)
-│   └── apkg/         # Package manager, TOML parser
+│   └── apkg/         # Project tooling, TOML parser
 ├── tests/            # Test suite (runtime, syntax, integration)
 ├── examples/         # Example programs (.ae files)
 │   ├── basics/       # Hello world, variables, arrays, etc.
@@ -235,7 +235,7 @@ main() {
 
 ## Runtime Configuration
 
-Configure runtime optimizations at startup:
+When embedding the Aether runtime in a C application, configure optimizations at startup:
 
 ```c
 #include "runtime/aether_runtime.h"
@@ -341,10 +341,8 @@ Aether is under active development. The compiler, runtime, and standard library 
 - Cross-platform (macOS, Linux, Windows)
 
 **Known Limitations:**
-- HTTP server is single-threaded (one connection at a time)
 - No generics or parameterized types
 - Module system is nascent (imports resolve to C includes; no versioned packages yet)
-- Error messages are basic (line/column only, no suggestions)
 
 **Roadmap:**
 - Distribution (multi-node actor systems)

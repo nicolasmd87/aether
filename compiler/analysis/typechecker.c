@@ -5,6 +5,7 @@
 #include "type_inference.h"
 #include "../parser/lexer.h"
 #include "../parser/parser.h"
+#include "../aether_error.h"
 
 #ifdef _WIN32
     #include <io.h>
@@ -291,14 +292,27 @@ Symbol* lookup_qualified_symbol(SymbolTable* table, const char* qualified_name) 
     return lookup_symbol(table, qualified_name);
 }
 
-// Error reporting
 void type_error(const char* message, int line, int column) {
-    fprintf(stderr, "Type error at line %d, column %d: %s\n", line, column, message);
+    AetherErrorCode code = AETHER_ERR_TYPE_MISMATCH;
+    if (strstr(message, "Undefined variable")) code = AETHER_ERR_UNDEFINED_VAR;
+    else if (strstr(message, "Undefined function") || strstr(message, "Unknown function"))
+        code = AETHER_ERR_UNDEFINED_FUNC;
+    else if (strstr(message, "Undefined type") || strstr(message, "Unknown type"))
+        code = AETHER_ERR_UNDEFINED_TYPE;
+    else if (strstr(message, "Redefinition") || strstr(message, "redefinition"))
+        code = AETHER_ERR_REDEFINITION;
+    aether_error_with_code(message, line, column, code);
     error_count++;
 }
 
 void type_warning(const char* message, int line, int column) {
-    fprintf(stderr, "Type warning at line %d, column %d: %s\n", line, column, message);
+    AetherError w = {
+        .filename = NULL, .source_code = NULL,
+        .line = line, .column = column,
+        .message = message, .suggestion = NULL,
+        .context = NULL, .code = AETHER_ERR_NONE
+    };
+    aether_warning_report(&w);
     warning_count++;
 }
 

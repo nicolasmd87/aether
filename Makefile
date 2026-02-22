@@ -600,7 +600,7 @@ help:
 	@echo ""
 	@echo "Tool Targets:"
 	@echo "  make lsp            - Build LSP server"
-	@echo "  make apkg           - Build package manager"
+	@echo "  make apkg           - Build project tooling"
 	@echo "  make profiler       - Build profiler dashboard"
 	@echo "  make docgen         - Build documentation generator"
 	@echo "  make docs           - Generate API documentation (in docs/api/)"
@@ -616,10 +616,6 @@ help:
 	@echo "  make install        - Install to $(PREFIX)"
 	@echo "  make stats          - Show build statistics"
 	@echo ""
-	@echo "Version Management:"
-	@echo "  make bump-patch     - $(VERSION) → patch+1  (bug fixes)"
-	@echo "  make bump-minor     - $(VERSION) → minor+1  (new features)"
-	@echo "  make bump-major     - $(VERSION) → major+1  (breaking changes)"
 	@echo "  make clean          - Remove build artifacts"
 	@echo "  make help           - Show this help message"
 	@echo ""
@@ -691,56 +687,25 @@ valgrind-check: clean
 .PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime benchmark benchmark-ui examples run compile repl clean help self-test release install stats stdlib ci docker-ci docker-build-ci valgrind-check bump-patch bump-minor bump-major
 
 # --------------------------------------------------------------------------
-# Version management
-# Usage:
-#   make bump-patch   0.5.0 → 0.5.1   (bug fixes, small improvements)
-#   make bump-minor   0.5.1 → 0.6.0   (new features, backwards-compatible)
-#   make bump-major   0.6.0 → 1.0.0   (breaking changes)
-#
-# After bumping, the Makefile prints the exact git commands to tag and push.
+# Version management (CI/CD only -- do not run manually)
 # --------------------------------------------------------------------------
 
-bump-patch:
-	@old=$$(cat VERSION | tr -d '[:space:]'); \
+bump-patch bump-minor bump-major:
+	@if [ -z "$$CI" ]; then \
+		echo "Error: version bumps are CI/CD only. Do not run manually." >&2; \
+		exit 1; \
+	fi; \
+	old=$$(cat VERSION | tr -d '[:space:]'); \
 	major=$$(echo $$old | cut -d. -f1); \
 	minor=$$(echo $$old | cut -d. -f2); \
 	patch=$$(echo $$old | cut -d. -f3); \
-	new="$$major.$$minor.$$((patch+1))"; \
+	case "$@" in \
+		bump-patch) new="$$major.$$minor.$$((patch+1))" ;; \
+		bump-minor) new="$$major.$$((minor+1)).0" ;; \
+		bump-major) new="$$((major+1)).0.0" ;; \
+	esac; \
 	echo "$$new" > VERSION; \
-	echo "Version bumped: $$old → $$new"; \
-	echo ""; \
-	echo "Next steps:"; \
-	echo "  git add VERSION"; \
-	echo "  git commit -m \"chore: bump version to $$new\""; \
-	echo "  git tag v$$new"; \
-	echo "  git push && git push --tags"
-
-bump-minor:
-	@old=$$(cat VERSION | tr -d '[:space:]'); \
-	major=$$(echo $$old | cut -d. -f1); \
-	minor=$$(echo $$old | cut -d. -f2); \
-	new="$$major.$$((minor+1)).0"; \
-	echo "$$new" > VERSION; \
-	echo "Version bumped: $$old → $$new"; \
-	echo ""; \
-	echo "Next steps:"; \
-	echo "  git add VERSION"; \
-	echo "  git commit -m \"chore: bump version to $$new\""; \
-	echo "  git tag v$$new"; \
-	echo "  git push && git push --tags"
-
-bump-major:
-	@old=$$(cat VERSION | tr -d '[:space:]'); \
-	major=$$(echo $$old | cut -d. -f1); \
-	new="$$((major+1)).0.0"; \
-	echo "$$new" > VERSION; \
-	echo "Version bumped: $$old → $$new"; \
-	echo ""; \
-	echo "Next steps:"; \
-	echo "  git add VERSION"; \
-	echo "  git commit -m \"chore: bump version to $$new\""; \
-	echo "  git tag v$$new"; \
-	echo "  git push && git push --tags"
+	echo "Version bumped: $$old → $$new"
 
 # Cross-language benchmark UI
 benchmark-ui:

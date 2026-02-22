@@ -1,10 +1,10 @@
-// Reply Pattern - Actors that respond using the 'reply' keyword
-// Demonstrates reply-based messaging (fire-and-forget with actor response)
+// Ask Pattern - Request/reply messaging between actors
 //
-// Features:
-//   - reply statement to send response back to sender
-//   - wait_for_idle() to block until all actors finish
-// For synchronous ask/reply using '?', see docs/language-reference.md
+// Demonstrates two styles of actor communication:
+//   1. Fire-and-forget (!): send a message, don't wait for a response
+//   2. Ask (?): send a message and block until the actor replies
+//
+// The ? operator is experimental -- see docs/language-reference.md
 
 // Messages for the calculator
 message Add { a: int, b: int }
@@ -119,7 +119,15 @@ main() {
     print(counter.value);
     print("\n\n");
 
-    print("=== Ask Pattern Complete ===\n");
-    print("\nNote: The ? operator provides synchronous-style\n");
-    print("communication while maintaining actor isolation.\n");
+    // Ask operator (?): synchronous request/reply
+    print("4. Synchronous ask with ? operator:\n");
+    calc2 = spawn(Calculator());
+
+    result = calc2 ? Add { a: 100, b: 200 };
+    print("   Asked 100 + 200, got reply\n");
+
+    result2 = calc2 ? Multiply { a: 7, b: 8 };
+    print("   Asked 7 * 8, got reply\n");
+
+    print("\n=== Ask Pattern Complete ===\n");
 }

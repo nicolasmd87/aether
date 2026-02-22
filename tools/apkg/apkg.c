@@ -272,17 +272,12 @@ int apkg_publish() {
     }
     
     // Step 5: Upload to registry
-    printf("[5/5] Uploading to registry...\n");
+    printf("[5/5] Package tarball created.\n");
     printf("\n");
-    printf("Package ready for publishing!\n");
+    printf("Package ready: package.tar.gz\n");
     printf("\n");
-    printf("To publish to registry:\n");
-    printf("  1. Create account at https://packages.aetherlang.org\n");
-    printf("  2. Get API token from account settings\n");
-    printf("  3. Run: apkg login\n");
-    printf("  4. Run: apkg publish --token YOUR_TOKEN\n");
-    printf("\n");
-    printf("For now, you can share package.tar.gz manually.\n");
+    printf("Share it manually, or host on GitHub and add with:\n");
+    printf("  ae add github.com/your-user/your-package\n");
     
     return 0;
 }
@@ -520,8 +515,8 @@ int apkg_search(const char* query) {
     }
     
     printf("\n");
-    printf("Online package search:\n");
-    printf("  Visit: https://packages.aetherlang.org/search?q=%s\n", query);
+    printf("Search GitHub for Aether packages:\n");
+    printf("  https://github.com/search?q=%s+language%%3Aaether\n", query);
     printf("\n");
     printf("To install a package:\n");
     printf("  apkg install github.com/user/package\n");

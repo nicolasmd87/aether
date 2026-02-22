@@ -97,7 +97,7 @@ void test_mailbox_basic(void) {
     
     // Send messages
     for (int i = 0; i < 10; i++) {
-        Message msg = {1, 0, i, NULL, {NULL, 0, 0}};
+        Message msg = {1, 0, i, NULL, {NULL, 0, 0}, NULL};
         ASSERT_TRUE(mailbox_send(&mbox, msg) == 1);
     }
     
@@ -162,7 +162,7 @@ void test_scheduler_basic_messaging(void) {
     
     // Send messages via remote queue (thread-safe)
     for (int i = 0; i < 100; i++) {
-        Message msg = {1, 0, i, NULL, {NULL, 0, 0}};
+        Message msg = {1, 0, i, NULL, {NULL, 0, 0}, NULL};
         scheduler_send_remote((ActorBase*)actor, msg, -1);
     }
     
@@ -208,7 +208,7 @@ void test_scheduler_high_throughput(void) {
     long start = get_time_ms();
     
     for (int i = 0; i < TOTAL; i++) {
-        Message msg = {1, 0, i, NULL, {NULL, 0, 0}};
+        Message msg = {1, 0, i, NULL, {NULL, 0, 0}, NULL};
         scheduler_send_remote((ActorBase*)actor, msg, -1);
     }
     
@@ -261,7 +261,7 @@ void test_scheduler_message_ordering(void) {
     
     // Send ordered messages
     for (int i = 0; i < 100; i++) {
-        Message msg = {1, 0, i, NULL, {NULL, 0, 0}};
+        Message msg = {1, 0, i, NULL, {NULL, 0, 0}, NULL};
         scheduler_send_remote((ActorBase*)actor, msg, -1);
     }
     

@@ -12,7 +12,7 @@ cd aether
 ./install.sh
 ```
 
-This builds the compiler, CLI tool, and standard library, then installs everything to `~/.aether`. After restarting your terminal (or running `source ~/.zshrc`), the `ae` command is available globally.
+This builds the compiler, CLI tool, and standard library, then installs everything to `~/.aether`. After restarting your terminal (or running `source ~/.bashrc`, `~/.zshrc`, or `~/.bash_profile`), the `ae` command is available globally.
 
 To install to a custom location:
 

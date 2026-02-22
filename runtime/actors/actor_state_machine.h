@@ -35,6 +35,7 @@ typedef struct {
         int size;       // Data size
         int owned;      // 1 if we own and must free, 0 if borrowed
     } zerocopy;
+    void* _reply_slot;  // ActorReplySlot* for ask messages, NULL for fire-and-forget
 } Message;
 
 // Ring buffer mailbox for actors (power-of-2 for fast masking)
