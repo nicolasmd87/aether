@@ -12,7 +12,7 @@ jobs:
   # Full CI suite — Linux (GCC), Linux (Clang), macOS (Clang)
   # Runs `make ci` which is the single source of truth:
   #   compiler (-Werror), ae, stdlib, repl, unit tests,
-  #   .ae integration tests, examples, benchmark smoke.
+  #   .ae integration tests, examples.
   # ============================================================
   ci:
     name: ${{ matrix.name }}

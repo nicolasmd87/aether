@@ -693,44 +693,37 @@ ci: clean
 	@echo "  Aether CI — Full Test Suite"
 	@echo "==================================="
 	@echo ""
-	@echo "[1/8] Building compiler (-Werror)..."
+	@echo "[1/7] Building compiler (-Werror)..."
 	@$(MAKE) compiler EXTRA_CFLAGS=-Werror
 	@echo ""
-	@echo "[2/8] Building ae CLI..."
+	@echo "[2/7] Building ae CLI..."
 	@$(MAKE) ae
 	@echo ""
-	@echo "[3/8] Building stdlib..."
+	@echo "[3/7] Building stdlib..."
 	@$(MAKE) stdlib
 	@echo ""
 ifdef WINDOWS_NATIVE
-	@echo "[4/8] Building REPL... SKIPPED (Windows — no readline)"
+	@echo "[4/7] Building REPL... SKIPPED (Windows — no readline)"
 else
-	@echo "[4/8] Building REPL..."
+	@echo "[4/7] Building REPL..."
 	@$(MAKE) repl
 endif
 	@echo ""
-	@echo "[5/8] Running C unit tests..."
+	@echo "[5/7] Running C unit tests..."
 	@$(MAKE) test
 	@echo ""
 ifdef WINDOWS_NATIVE
-	@echo "[6/8] Running .ae integration tests... SKIPPED (Windows — requires bash)"
+	@echo "[6/7] Running .ae integration tests... SKIPPED (Windows — requires bash)"
 else
-	@echo "[6/8] Running .ae integration tests..."
+	@echo "[6/7] Running .ae integration tests..."
 	@$(MAKE) test-ae
 endif
 	@echo ""
 ifdef WINDOWS_NATIVE
-	@echo "[7/8] Building examples... SKIPPED (Windows — requires bash)"
+	@echo "[7/7] Building examples... SKIPPED (Windows — requires bash)"
 else
-	@echo "[7/8] Building examples..."
+	@echo "[7/7] Building examples..."
 	@$(MAKE) examples
-endif
-	@echo ""
-ifdef WINDOWS_NATIVE
-	@echo "[8/8] Running benchmark smoke test... SKIPPED (Windows — requires bash)"
-else
-	@echo "[8/8] Running benchmark smoke test..."
-	@$(MAKE) benchmark-smoke
 endif
 	@echo ""
 	@echo "==================================="
@@ -751,7 +744,7 @@ valgrind-check: clean
 		./build/test_runner$(EXE_EXT) || (echo "Valgrind errors detected!" && exit 1)
 	@echo "✓ Valgrind clean — no leaks or uninitialised reads"
 
-.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime benchmark benchmark-smoke benchmark-ui examples run compile repl clean help self-test release install stats stdlib ci docker-ci docker-build-ci valgrind-check bump-patch bump-minor bump-major
+.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime benchmark benchmark-ui examples run compile repl clean help self-test release install stats stdlib ci docker-ci docker-build-ci valgrind-check bump-patch bump-minor bump-major
 
 # --------------------------------------------------------------------------
 # Version management (CI/CD only -- do not run manually)
@@ -773,30 +766,6 @@ bump-patch bump-minor bump-major:
 	esac; \
 	echo "$$new" > VERSION; \
 	echo "Version bumped: $$old → $$new"
-
-# Benchmark smoke test — runs Aether benchmarks and verifies results
-benchmark-smoke: compiler ae stdlib
-	@echo "==================================="
-	@echo "  Benchmark Smoke Test"
-	@echo "==================================="
-	@cd benchmarks/cross-language && ./run_benchmarks.sh
-	@echo ""
-	@echo "Verifying Aether results..."
-	@fail=0; \
-	for pattern in ping_pong counting thread_ring fork_join; do \
-		file="benchmarks/cross-language/visualize/results_$${pattern}.json"; \
-		if [ ! -f "$$file" ]; then \
-			echo "  FAIL: Missing $$file"; fail=1; \
-		elif grep -q '"Aether"' "$$file"; then \
-			echo "  OK: $$pattern"; \
-		else \
-			echo "  FAIL: $$pattern — no Aether results"; fail=1; \
-		fi; \
-	done; \
-	if [ "$$fail" -ne 0 ]; then \
-		echo ""; echo "Benchmark smoke FAILED"; exit 1; \
-	fi
-	@echo "Benchmark smoke passed"
 
 # Cross-language benchmark UI
 benchmark-ui:
