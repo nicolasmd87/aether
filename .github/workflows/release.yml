@@ -70,11 +70,17 @@ jobs:
       run: |
         VERSION="${{ steps.v.outputs.version }}"
         TAG="${{ steps.v.outputs.tag }}"
+        BRANCH="release/${TAG}"
 
         git config user.name  "github-actions[bot]"
         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-        BRANCH="release/${TAG}"
+        # Clean up stale tag/branch from any previous failed run
+        git push origin ":refs/tags/${TAG}" 2>/dev/null || true
+        git push origin --delete "$BRANCH" 2>/dev/null || true
+        git tag -d "$TAG" 2>/dev/null || true
+        git branch -D "$BRANCH" 2>/dev/null || true
+
         git checkout -b "$BRANCH"
         git add VERSION
         git commit -m "chore: release ${VERSION}"
@@ -91,6 +97,9 @@ jobs:
         VERSION="${{ steps.v.outputs.version }}"
         TAG="${{ steps.v.outputs.tag }}"
         BRANCH="release/${TAG}"
+
+        # Close any stale PR from a previous failed run
+        gh pr close "$BRANCH" 2>/dev/null || true
 
         gh pr create \
           --base main \
