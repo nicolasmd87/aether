@@ -350,34 +350,37 @@ example() {
 
 ## Memory Management
 
-Aether uses **deterministic scope-exit cleanup** — no garbage collector, no GC pauses.
+Aether uses **deterministic scope-exit cleanup** -- no garbage collector, no GC pauses. The primary mechanism is `defer`.
 
-### Auto Mode (default)
+### `defer` for Cleanup (default)
 
-Variables assigned from stdlib `*_new()` calls are automatically freed at scope exit:
+Allocate, immediately defer the free, then use the resource. Cleanup runs at scope exit in LIFO order:
 
 ```aether
 import std.list
 
 main() {
-    items = list_new()          // allocated
+    items = list_new()
+    defer list_free(items)
+
     list_add(items, "hello")
     print(list_size(items))
     print("\n")
-    // list_free(items) injected automatically here
+    // list_free(items) runs here (scope exit)
 }
 ```
 
-### `@manual` Annotation
+This works with any function, not just stdlib types.
 
-Use `@manual` when a value **escapes its scope** — returned from a function, passed to an actor, or stored somewhere that outlives the current block:
+### Returning Allocated Values
+
+The caller receives ownership and is responsible for cleanup:
 
 ```aether
 import std.list
 
-// Returns ownership to caller — must NOT free here
 build_list(n) : ptr {
-    @manual result = list_new()
+    result = list_new()
     i = 0
     while i < n {
         list_add(result, i)
@@ -387,34 +390,31 @@ build_list(n) : ptr {
 }
 
 main() {
-    items = build_list(10)   // auto-free fires here instead
+    items = build_list(10)
+    defer list_free(items)
+
     print(list_size(items))
     print("\n")
 }
 ```
 
-Without `@manual`, auto mode would free `result` at the end of `build_list` — before the caller can use it.
+### Auto-Free Mode (opt-in)
 
-**Use `@manual` when:**
-- Returning a `*_new()` value from a function
-- Passing it to an actor via `!` (actor owns it)
-- Storing it in actor `state` (lives for actor's lifetime)
-
-### Manual Mode
-
-Disable all auto-free for an entire project:
+For convenience in scripts, auto-free mode can be enabled. The compiler injects `_free()` calls at scope exit for variables initialized from recognized constructors.
 
 ```toml
 # aether.toml
 [memory]
-mode = "manual"
+mode = "auto"
 ```
 
 Or for a single run:
 
 ```bash
-ae run --no-auto-free file.ae
+ae run --auto-free file.ae
 ```
+
+In auto mode, use `@manual` when a value must outlive its scope (returned from a function, passed to an actor, stored in actor state).
 
 See [Memory Management Guide](memory-management.md) for the full reference.
 

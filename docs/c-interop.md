@@ -185,6 +185,8 @@ import std.list
 
 main() {
     items = list_new()
+    defer list_free(items)
+
     i = 0
     while i < 5 {
         list_add(items, i)   // int passed to void* — cast emitted automatically

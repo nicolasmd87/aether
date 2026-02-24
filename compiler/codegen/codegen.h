@@ -41,8 +41,8 @@ typedef struct {
     int scope_defer_start[MAX_SCOPE_DEPTH];  // defer_count at scope entry
     int scope_depth;
 
-    // Memory management: auto-free mode
-    int no_auto_free;   // 0 = auto (default), 1 = manual (--no-auto-free flag)
+    // Memory management: manual by default, auto-free opt-in
+    int no_auto_free;   // 1 = manual (default), 0 = auto (--auto-free flag)
 
     // Synthetic AST nodes created for auto-defer calls (freed at generator destruction)
     ASTNode** synthetic_nodes;
@@ -58,6 +58,15 @@ typedef struct {
     }* extern_registry;
     int extern_registry_count;
     int extern_registry_capacity;
+
+    // Dynamic destructor registry: constructor -> destructor pairs
+    // Built from imported module.ae extern declarations (_new/_free, _create/_free)
+    struct DestructorEntry {
+        char* constructor;   // e.g. "map_new", "vector_create"
+        char* destructor;    // e.g. "map_free", "vector_free"
+    }* destructor_registry;
+    int destructor_count;
+    int destructor_capacity;
 
     // Ask/reply type map: request message name -> reply message name.
     // Built by scanning actor receive handlers for reply statements.

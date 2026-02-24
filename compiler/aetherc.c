@@ -34,7 +34,8 @@
 // Global flags
 static bool verbose_mode = false;
 static const char* emit_header_path = NULL;
-static bool no_auto_free = false;  // --no-auto-free: manual memory mode
+static bool no_auto_free = true;   // default: manual memory (defer-based)
+static bool auto_free = false;     // --auto-free: opt-in auto-free mode
 
 #ifdef _WIN32
     #include <windows.h>
@@ -211,7 +212,7 @@ int compile_source(const char* input_path, const char* output_path) {
     } else {
         codegen = create_code_generator(output);
     }
-    codegen->no_auto_free = no_auto_free ? 1 : 0;
+    codegen->no_auto_free = auto_free ? 0 : 1;
     generate_program(codegen, program);
     fclose(output);
     if (header_output) {
@@ -280,6 +281,8 @@ void print_help(const char* program_name) {
     printf("Options:\n");
     printf("  --version, -v                    Show version information\n");
     printf("  --verbose                        Show detailed compilation phases and timing\n");
+    printf("  --auto-free                      Enable auto-free mode (default: manual/defer)\n");
+    printf("  --no-auto-free                   Explicit manual mode (already the default)\n");
     printf("  --emit-header [path]             Generate C header for embedding (default: auto)\n");
     printf("  --help, -h                       Show this help message\n");
     printf("\n");
@@ -305,6 +308,11 @@ int main(int argc, char *argv[]) {
             arg_offset++;
         } else if (strcmp(argv[arg_offset], "--no-auto-free") == 0) {
             no_auto_free = true;
+            auto_free = false;
+            arg_offset++;
+        } else if (strcmp(argv[arg_offset], "--auto-free") == 0) {
+            auto_free = true;
+            no_auto_free = false;
             arg_offset++;
         } else if (strcmp(argv[arg_offset], "--emit-header") == 0) {
             // Check for optional explicit path argument (must end in .h)

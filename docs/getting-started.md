@@ -190,6 +190,8 @@ main() {
     log.info("Starting application");
 
     mymap = map.new();
+    defer map.free(mymap);
+
     key = "greeting";
     map.put(mymap, key, "hello");
 

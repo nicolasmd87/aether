@@ -1,0 +1,32 @@
+// Memory with defer — the recommended pattern
+//
+// Allocate, defer the free, then use. Cleanup runs at scope exit
+// in LIFO order. Works with any function, not just stdlib types.
+//
+// Run: ae run examples/basics/memory_defer.ae
+
+import std.list
+import std.map
+
+main() {
+    m = map_new();
+    defer map_free(m);
+
+    items = list_new();
+    defer list_free(items);
+
+    map_put(m, "language", "Aether");
+    map_put(m, "model", "actors");
+
+    list_add(items, "one");
+    list_add(items, "two");
+    list_add(items, "three");
+
+    print("Map key 'language': ");
+    print(map_get(m, "language"));
+    print("\n");
+
+    print("List size: ");
+    print(list_size(items));
+    print("\n");
+}

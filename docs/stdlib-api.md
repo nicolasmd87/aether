@@ -120,7 +120,7 @@ typedef struct AetherString {
 - `string_new(const char* cstr)` - Allocate a new string (use `string_free` when done)
 - `string_free(AetherString* str)` - Free the string
 
-In **auto mode** (default), `string_free` is injected automatically at scope exit for any variable assigned from `string_new()`. In manual mode, call it explicitly.
+Use `defer string_free(s)` right after `string_new()` to ensure cleanup at scope exit. In opt-in auto mode (`--auto-free`), `string_free` is injected automatically.
 
 The underlying C implementation also exposes `string_retain` / `string_release` for advanced use cases (e.g., sharing ownership across C callbacks), but Aether programs should use `string_free` directly.
 
@@ -381,10 +381,11 @@ import std.list
 
 main() {
     mylist = list.new()
+    defer list.free(mylist)
+
     list.add(mylist, some_ptr)
     item = list.get(mylist, 0)
     size = list.size(mylist)
-    list.free(mylist)
 }
 ```
 
@@ -407,10 +408,13 @@ import std.string
 
 main() {
     mymap = map.new()
+    defer map.free(mymap)
+
     key = string.new("name")
+    defer string.free(key)
+
     map.put(mymap, key, value_ptr)
     result = map.get(mymap, key)
-    map.free(mymap)
 }
 ```
 
