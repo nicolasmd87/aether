@@ -146,7 +146,7 @@ Both migration and work stealing use ascending core-id lock ordering to prevent 
 - Avoid blocking operations in actor step functions
 
 ### Crashes
-- Verify all actor structs include `migrate_to` field between `assigned_core` and `spsc_queue`
+- Verify all actor structs include `migrate_to` field between `assigned_core` (atomic_int) and `spsc_queue`
 - Initialize `migrate_to = -1` after actor creation
 - Use `scheduler_send_remote` instead of direct mailbox writes for cross-core messages
 - Call `scheduler_stop` and `scheduler_wait` before process exit

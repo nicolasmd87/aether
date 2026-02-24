@@ -63,6 +63,10 @@ char* allocate_string(int size) {
     return s;
 }
 
+void free_string(char* s) {
+    if (s) free(s);
+}
+
 // Read entire file into string
 const char* file_read(const char* path) {
     static char content[2 * 1024 * 1024]; // 2MB max
@@ -90,12 +94,6 @@ const char* file_read(const char* path) {
 int cstr_length(const char* s) {
     if (!s) return 0;
     return (int)strlen(s);
-}
-
-// String compare
-int strcmp_wrapper(const char* a, const char* b) {
-    if (!a || !b) return 1;
-    return strcmp(a, b);
 }
 
 // Check if string ends with suffix
@@ -134,12 +132,15 @@ const char* parse_http_path(const char* request) {
     return path;
 }
 
-// String concatenation
+// String concatenation (alternating static buffers to allow chaining)
 const char* str_concat(const char* a, const char* b) {
-    static char result[1024];
+    static char buf[2][1024];
+    static int which = 0;
+    char* result = buf[which];
+    which = !which;
     result[0] = '\0';
-    if (a) strncat(result, a, sizeof(result) - 1);
-    if (b) strncat(result, b, sizeof(result) - strlen(result) - 1);
+    if (a) strncat(result, a, 1023);
+    if (b) strncat(result, b, 1023 - strlen(result));
     return result;
 }
 

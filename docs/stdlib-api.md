@@ -117,12 +117,12 @@ typedef struct AetherString {
 
 #### Memory Management
 
-- `string_new(const char* cstr)` - Allocate a new string (use `string_free` when done)
-- `string_free(AetherString* str)` - Free the string
+- `string.new(cstr)` - Allocate a new string (use `string.free` when done)
+- `string.free(str)` - Free the string
 
-In **auto mode** (default), `string_free` is injected automatically at scope exit for any variable assigned from `string_new()`. In manual mode, call it explicitly.
+Use `defer string.free(s)` right after `string.new()` to ensure cleanup at scope exit. In opt-in auto mode (`--auto-free`), the free is injected automatically.
 
-The underlying C implementation also exposes `string_retain` / `string_release` for advanced use cases (e.g., sharing ownership across C callbacks), but Aether programs should use `string_free` directly.
+The underlying C implementation also exposes `string.retain()` / `string.release()` for advanced use cases (e.g., sharing ownership across C callbacks), but Aether programs should use `string.free()` directly.
 
 ---
 
@@ -151,29 +151,29 @@ main() {
 
 ### File Operations
 
-- `file_open(path, mode)` - Open a file (returns File*)
-- `file_close(file)` - Close a file
-- `file_read_all(file)` - Read entire file contents
-- `file_write(file, data, length)` - Write data to file
-- `file_exists(path)` - Check if file exists (returns 1 or 0)
-- `file_size(path)` - Get file size in bytes
-- `file_delete(path)` - Delete a file
+- `file.open(path, mode)` - Open a file (returns File*)
+- `file.close(file)` - Close a file
+- `file.read_all(file)` - Read entire file contents
+- `file.write(file, data, length)` - Write data to file
+- `file.exists(path)` - Check if file exists (returns 1 or 0)
+- `file.size(path)` - Get file size in bytes
+- `file.delete(path)` - Delete a file
 
 ### Directory Operations
 
-- `dir_exists(path)` - Check if directory exists
-- `dir_create(path)` - Create a directory
-- `dir_delete(path)` - Delete an empty directory
-- `dir_list(path)` - List directory contents (returns DirList*)
-- `dir_list_free(list)` - Free directory listing
+- `dir.exists(path)` - Check if directory exists
+- `dir.create(path)` - Create a directory
+- `dir.delete(path)` - Delete an empty directory
+- `dir.list(path)` - List directory contents (returns DirList*)
+- `dir.list_free(list)` - Free directory listing
 
 ### Path Utilities
 
-- `path_join(path1, path2)` - Join two path components
-- `path_dirname(path)` - Get directory name
-- `path_basename(path)` - Get file name
-- `path_extension(path)` - Get file extension
-- `path_is_absolute(path)` - Check if path is absolute
+- `path.join(path1, path2)` - Join two path components
+- `path.dirname(path)` - Get directory name
+- `path.basename(path)` - Get file name
+- `path.extension(path)` - Get file extension
+- `path.is_absolute(path)` - Check if path is absolute
 
 ---
 
@@ -191,13 +191,13 @@ print("Float: %f\n", pi)
 
 ### Additional I/O
 
-- `io_print(str)` - Print AetherString
-- `io_read_line()` - Read line from stdin
-- `io_read_file(path)` - Read entire file
-- `io_write_file(path, content)` - Write to file
-- `io_file_info(path)` - Get file metadata
-- `io_getenv(name)` - Get environment variable
-- `io_setenv(name, value)` - Set environment variable
+- `io.print(str)` - Print AetherString
+- `io.read_line()` - Read line from stdin
+- `io.read_file(path)` - Read entire file
+- `io.write_file(path, content)` - Write to file
+- `io.file_info(path)` - Get file metadata
+- `io.getenv(name)` - Get environment variable
+- `io.setenv(name, value)` - Set environment variable
 
 ---
 
@@ -216,21 +216,21 @@ print("Float: %f\n", pi)
 
 ### Advanced Math
 
-- `sqrt(x)` - Square root
-- `pow(base, exp)` - Power
-- `sin(x)` - Sine
-- `cos(x)` - Cosine
-- `tan(x)` - Tangent
-- `asin(x)` - Arc sine
-- `acos(x)` - Arc cosine
-- `atan(x)` - Arc tangent
-- `atan2(y, x)` - Two-argument arc tangent
-- `floor(x)` - Floor
-- `ceil(x)` - Ceiling
-- `round(x)` - Round to nearest
-- `log(x)` - Natural logarithm
-- `log10(x)` - Base-10 logarithm
-- `exp(x)` - Exponential
+- `math.sqrt(x)` - Square root
+- `math.pow(base, exp)` - Power
+- `math.sin(x)` - Sine
+- `math.cos(x)` - Cosine
+- `math.tan(x)` - Tangent
+- `math.asin(x)` - Arc sine
+- `math.acos(x)` - Arc cosine
+- `math.atan(x)` - Arc tangent
+- `math.atan2(y, x)` - Two-argument arc tangent
+- `math.floor(x)` - Floor
+- `math.ceil(x)` - Ceiling
+- `math.round(x)` - Round to nearest
+- `math.log(x)` - Natural logarithm
+- `math.log10(x)` - Base-10 logarithm
+- `math.exp(x)` - Exponential
 
 ### Random Numbers
 
@@ -253,49 +253,44 @@ print("Float: %f\n", pi)
 import std.json
 
 main() {
-    // Create JSON values
-    obj = json_create_object()
-    arr = json_create_array()
-    num = json_create_number(42.5)
-    bool_val = json_create_bool(1)
-    null_val = json_create_null()
+    obj = json.create_object()
+    arr = json.create_array()
+    num = json.create_number(42.5)
+    bool_val = json.create_bool(1)
+    null_val = json.create_null()
 
-    // Add to array
-    json_array_add(arr, num)
+    json.array_add(arr, num)
 
-    // Check types
-    type = json_type(num)  // Returns JSON_NUMBER (2)
+    type = json.type(num)  // Returns JSON_NUMBER (2)
 
-    // Get values
-    value = json_get_number(num)
-    is_true = json_get_bool(bool_val)
+    value = json.get_number(num)
+    is_true = json.get_bool(bool_val)
 
-    // Cleanup
-    json_free(obj)
+    json.free(obj)
 }
 ```
 
 ### JSON Functions
 
-- `json_parse(str)` - Parse JSON string
-- `json_stringify(value)` - Convert to JSON string
-- `json_free(value)` - Free JSON value
-- `json_create_object()` - Create empty object
-- `json_create_array()` - Create empty array
-- `json_create_string(str)` - Create string value
-- `json_create_number(num)` - Create number value
-- `json_create_bool(val)` - Create boolean value
-- `json_create_null()` - Create null value
-- `json_type(value)` - Get value type
-- `json_is_null(value)` - Check if null
-- `json_get_number(value)` - Get number
-- `json_get_bool(value)` - Get boolean
-- `json_get_string(value)` - Get string
-- `json_array_add(arr, value)` - Add to array
-- `json_array_size(arr)` - Get array size
-- `json_array_get(arr, index)` - Get array element
-- `json_object_set(obj, key, value)` - Set object property
-- `json_object_get(obj, key)` - Get object property
+- `json.parse(str)` - Parse JSON string
+- `json.stringify(value)` - Convert to JSON string
+- `json.free(value)` - Free JSON value
+- `json.create_object()` - Create empty object
+- `json.create_array()` - Create empty array
+- `json.create_string(str)` - Create string value
+- `json.create_number(num)` - Create number value
+- `json.create_bool(val)` - Create boolean value
+- `json.create_null()` - Create null value
+- `json.type(value)` - Get value type
+- `json.is_null(value)` - Check if null
+- `json.get_number(value)` - Get number
+- `json.get_bool(value)` - Get boolean
+- `json.get_string(value)` - Get string
+- `json.array_add(arr, value)` - Add to array
+- `json.array_size(arr)` - Get array size
+- `json.array_get(arr, index)` - Get array element
+- `json.object_set(obj, key, value)` - Set object property
+- `json.object_get(obj, key)` - Get object property
 
 ### JSON Type Constants
 
@@ -313,62 +308,62 @@ main() {
 ### HTTP Client
 
 ```aether
-import std.net
+import std.http
 
 main() {
-    response = http_get("http://example.com")
+    response = http.get("http://example.com")
     if (response != 0) {
         print("Status: ")
         print(response.status)
         print("\n")
-        http_response_free(response)
+        http.response_free(response)
     }
 }
 ```
 
 ### HTTP Functions
 
-- `http_get(url)` - HTTP GET request
-- `http_post(url, body, content_type)` - HTTP POST request
-- `http_put(url, body, content_type)` - HTTP PUT request
-- `http_delete(url)` - HTTP DELETE request
-- `http_response_free(response)` - Free response
+- `http.get(url)` - HTTP GET request
+- `http.post(url, body, content_type)` - HTTP POST request
+- `http.put(url, body, content_type)` - HTTP PUT request
+- `http.delete(url)` - HTTP DELETE request
+- `http.response_free(response)` - Free response
 
 ### HTTP Server
 
 ```aether
-import std.net
+import std.http
 
 main() {
-    server = http_server_create(8080)
-    http_server_bind(server, "127.0.0.1", 8080)
-    http_server_start(server)  // Blocks
-    http_server_free(server)
+    server = http.server_create(8080)
+    http.server_bind(server, "127.0.0.1", 8080)
+    http.server_start(server)  // Blocks
+    http.server_free(server)
 }
 ```
 
 ### Server Functions
 
-- `http_server_create(port)` - Create server
-- `http_server_bind(server, host, port)` - Bind to address
-- `http_server_start(server)` - Start serving (blocking)
-- `http_server_stop(server)` - Stop server
-- `http_server_free(server)` - Free server
-- `http_server_get(server, path, handler, data)` - Register GET handler
-- `http_server_post(server, path, handler, data)` - Register POST handler
-- `http_response_json(res, json)` - Send JSON response
-- `http_response_set_status(res, code)` - Set status code
-- `http_response_set_header(res, name, value)` - Set header
+- `http.server_create(port)` - Create server
+- `http.server_bind(server, host, port)` - Bind to address
+- `http.server_start(server)` - Start serving (blocking)
+- `http.server_stop(server)` - Stop server
+- `http.server_free(server)` - Free server
+- `http.server_get(server, path, handler, data)` - Register GET handler
+- `http.server_post(server, path, handler, data)` - Register POST handler
+- `http.response_json(res, json)` - Send JSON response
+- `http.response_set_status(res, code)` - Set status code
+- `http.response_set_header(res, name, value)` - Set header
 
 ### TCP Sockets
 
-- `tcp_connect(host, port)` - Connect to server
-- `tcp_send(sock, data)` - Send data
-- `tcp_receive(sock, max_bytes)` - Receive data
-- `tcp_close(sock)` - Close socket
-- `tcp_listen(port)` - Create listening server socket
-- `tcp_accept(server)` - Accept connection
-- `tcp_server_close(server)` - Close server socket
+- `tcp.connect(host, port)` - Connect to server
+- `tcp.send(sock, data)` - Send data
+- `tcp.receive(sock, max_bytes)` - Receive data
+- `tcp.close(sock)` - Close socket
+- `tcp.listen(port)` - Create listening server socket
+- `tcp.accept(server)` - Accept connection
+- `tcp.server_close(server)` - Close server socket
 
 ---
 
@@ -381,10 +376,11 @@ import std.list
 
 main() {
     mylist = list.new()
+    defer list.free(mylist)
+
     list.add(mylist, some_ptr)
     item = list.get(mylist, 0)
     size = list.size(mylist)
-    list.free(mylist)
 }
 ```
 
@@ -407,10 +403,13 @@ import std.string
 
 main() {
     mymap = map.new()
+    defer map.free(mymap)
+
     key = string.new("name")
+    defer string.free(key)
+
     map.put(mymap, key, value_ptr)
     result = map.get(mymap, key)
-    map.free(mymap)
 }
 ```
 
@@ -444,14 +443,14 @@ main() {
 
 ### Logging Functions
 
-- `log_init(filename, level)` - Initialize logging
-- `log_shutdown()` - Shutdown logging
-- `log_set_level(level)` - Set minimum level
-- `log_debug(msg)` - Debug message
-- `log_info(msg)` - Info message
-- `log_warn(msg)` - Warning message
-- `log_error(msg)` - Error message
-- `log_get_stats()` - Get logging statistics
+- `log.init(filename, level)` - Initialize logging
+- `log.shutdown()` - Shutdown logging
+- `log.set_level(level)` - Set minimum level
+- `log.debug(msg)` - Debug message
+- `log.info(msg)` - Info message
+- `log.warn(msg)` - Warning message
+- `log.error(msg)` - Error message
+- `log.get_stats()` - Get logging statistics
 
 ### Log Levels
 
@@ -516,7 +515,7 @@ main() {
 
 For C interop or custom allocations:
 - Use `malloc()` and `free()` from standard C library
-- Manage string references with `string_retain`/`string_release`
+- Manage string references with `string.retain()`/`string.release()`
 - Actors are freed when no longer referenced
 
 ---
@@ -525,7 +524,7 @@ For C interop or custom allocations:
 
 1. **Use `import` for stdlib** - Cleaner than `extern`
 2. **Use `print()` for output** - Simple and reliable
-3. **Free resources** - Use `*_free()` functions when done
+3. **Free resources** - Use `defer type.free(x)` after allocation, or explicit `.free()` calls
 4. **Enable bounds checking in debug** - Catches array errors
 5. **Use actors for concurrency** - Safer than manual threading
 
@@ -534,7 +533,7 @@ For C interop or custom allocations:
 ## Example: Complete Program
 
 ```aether
-import std.fs
+import std.file
 
 message Increment { amount: int }
 
@@ -551,12 +550,10 @@ actor Counter {
 main() {
     print("Aether Runtime Example\n")
 
-    // Check if a file exists
-    if (file_exists("README.md") == 1) {
+    if (file.exists("README.md") == 1) {
         print("README.md found!\n")
     }
 
-    // Use actors
     counter = spawn(Counter())
     counter ! Increment { amount: 1 }
     counter ! Increment { amount: 1 }

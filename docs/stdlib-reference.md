@@ -38,6 +38,7 @@ import std.list
 
 main() {
     mylist = list.new();
+    defer list.free(mylist);
 
     list.add(mylist, item1);
     list.add(mylist, item2);
@@ -47,7 +48,6 @@ main() {
 
     list.remove(mylist, 0);
     list.clear(mylist);
-    list.free(mylist);
 }
 ```
 
@@ -71,9 +71,12 @@ import std.string
 
 main() {
     mymap = map.new();
+    defer map.free(mymap);
 
     key = string.new("name");
+    defer string.release(key);
     val = string.new("Aether");
+    defer string.release(val);
 
     map.put(mymap, key, val);
     result = map.get(mymap, key);
@@ -83,10 +86,6 @@ main() {
     size = map.size(mymap);
 
     map.clear(mymap);
-    map.free(mymap);
-
-    string.release(key);
-    string.release(val);
 }
 ```
 

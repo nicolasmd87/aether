@@ -31,7 +31,7 @@ typedef struct __attribute__((aligned(64))) Counter {
     void (*step)(void*);     // Hot: message handler
     pthread_t thread;        // Warm: thread handle
     int auto_process;        // Warm: auto-processing flag
-    int assigned_core;       // Cold: core assignment
+    atomic_int assigned_core; // Cold: core assignment (atomic for work-stealing)
     
 } Counter;
 

@@ -27,7 +27,7 @@ typedef struct Increment {
 typedef struct Counter {
     int id;
     int active;
-    int assigned_core;
+    atomic_int assigned_core;
     Mailbox mailbox;
     void (*step)(void*);
     pthread_t thread;

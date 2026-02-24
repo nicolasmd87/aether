@@ -184,13 +184,15 @@ When an extern function expects a `ptr` parameter and you pass an `int`, the com
 import std.list
 
 main() {
-    items = list_new()
+    items = list.new()
+    defer list.free(items)
+
     i = 0
     while i < 5 {
-        list_add(items, i)   // int passed to void* — cast emitted automatically
+        list.add(items, i)   // int passed to void* — cast emitted automatically
         i = i + 1
     }
-    print(list_size(items))
+    print(list.size(items))
     print("\n")
 }
 ```

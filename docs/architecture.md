@@ -165,7 +165,7 @@ IDENTIFIER("x") EQUALS NUMBER(42) PLUS IDENTIFIER("y")
        void (*step)(void*);
        pthread_t thread;
        int auto_process;
-       int assigned_core;
+       atomic_int assigned_core;
        int migrate_to;        // Affinity hint: core to migrate to (-1 = none)
        int main_thread_only;  // If set, scheduler threads skip this actor
        SPSCQueue spsc_queue;  // Lock-free same-core messaging

@@ -28,6 +28,7 @@ The Aether runtime implements a native actor system with optimized message passi
 - **Cross-core messaging** with lock-free mailboxes
 
 ### Memory Management
+- **Manual by default** — use `defer` for cleanup; opt-in auto-free via `--auto-free` or `aether.toml` [memory] mode = "auto"
 - **Arena allocators** for actor lifetimes
 - **Memory pools** with thread-local allocation
 - **Actor pooling** reducing allocation overhead
@@ -132,6 +133,7 @@ ae init <name>           # Create a new project
 ae run [file.ae]         # Compile and run (file or project)
 ae build [file.ae]       # Compile to executable
 ae test [file|dir]       # Discover and run tests
+ae examples [dir]        # Build all example programs
 ae add <package>         # Add a dependency (GitHub repos)
 ae repl                  # Start interactive REPL
 ae version               # Show current version
@@ -156,7 +158,7 @@ make -j8                         # Parallel build
 make help                        # Show all targets
 ```
 
-**Windows:** Use the [release binary](https://github.com/nicolasmd87/aether/releases) — no MSYS2 needed. To build from source, use MSYS2 MinGW 64-bit shell with `make ae`.
+**Windows:** Use the [release binary](https://github.com/nicolasmd87/aether/releases) — no MSYS2 needed. To build from source, use MSYS2 MinGW 64-bit shell; `make ci` runs the full suite (compiler, ae, stdlib, REPL, C tests, .ae tests, examples) with no skips.
 
 ## Project Structure
 
@@ -291,7 +293,7 @@ The runtime employs a tiered optimization strategy:
 - [Language Reference](docs/language-reference.md) - Complete language specification
 - [C Interoperability](docs/c-interop.md) - Using C libraries and the `extern` keyword
 - [Architecture Overview](docs/architecture.md) - Runtime and compiler design
-- [Memory Management](docs/memory-management.md) - Arena allocators and pooling strategies
+- [Memory Management](docs/memory-management.md) - defer-first manual model, opt-in auto-free, arena allocators
 - [Runtime Optimizations](docs/runtime-optimizations.md) - Performance techniques
 - [Cross-Language Benchmarks](benchmarks/cross-language/README.md) - Comparative performance analysis
 - [Docker Setup](docker/README.md) - Container development environment

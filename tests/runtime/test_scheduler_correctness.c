@@ -43,7 +43,7 @@ int tests_failed = 0;
 typedef struct {
     int id;
     int active;
-    int assigned_core;
+    atomic_int assigned_core;
     Mailbox mailbox;
     SPSCQueue spsc_queue;  // REQUIRED - must match ActorBase layout
     void (*step)(void*);
@@ -54,7 +54,7 @@ typedef struct {
 typedef struct {
     int id;
     int active;
-    int assigned_core;
+    atomic_int assigned_core;
     Mailbox mailbox;
     SPSCQueue spsc_queue;  // REQUIRED - must match ActorBase layout
     void (*step)(void*);
@@ -65,7 +65,7 @@ typedef struct {
 typedef struct {
     int id;
     int active;
-    int assigned_core;
+    atomic_int assigned_core;
     Mailbox mailbox;
     SPSCQueue spsc_queue;  // REQUIRED - must match ActorBase layout
     void (*step)(void*);

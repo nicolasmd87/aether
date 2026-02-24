@@ -350,71 +350,71 @@ example() {
 
 ## Memory Management
 
-Aether uses **deterministic scope-exit cleanup** — no garbage collector, no GC pauses.
+Aether uses **deterministic scope-exit cleanup** -- no garbage collector, no GC pauses. The primary mechanism is `defer`.
 
-### Auto Mode (default)
+### `defer` for Cleanup (default)
 
-Variables assigned from stdlib `*_new()` calls are automatically freed at scope exit:
+Allocate, immediately defer the free, then use the resource. Cleanup runs at scope exit in LIFO order:
 
 ```aether
 import std.list
 
 main() {
-    items = list_new()          // allocated
-    list_add(items, "hello")
-    print(list_size(items))
+    items = list.new()
+    defer list.free(items)
+
+    list.add(items, "hello")
+    print(list.size(items))
     print("\n")
-    // list_free(items) injected automatically here
+    // list.free(items) runs here (scope exit)
 }
 ```
 
-### `@manual` Annotation
+This works with any function, not just stdlib types.
 
-Use `@manual` when a value **escapes its scope** — returned from a function, passed to an actor, or stored somewhere that outlives the current block:
+### Returning Allocated Values
+
+The caller receives ownership and is responsible for cleanup:
 
 ```aether
 import std.list
 
-// Returns ownership to caller — must NOT free here
 build_list(n) : ptr {
-    @manual result = list_new()
+    result = list.new()
     i = 0
     while i < n {
-        list_add(result, i)
+        list.add(result, i)
         i = i + 1
     }
     return result
 }
 
 main() {
-    items = build_list(10)   // auto-free fires here instead
-    print(list_size(items))
+    items = build_list(10)
+    defer list.free(items)
+
+    print(list.size(items))
     print("\n")
 }
 ```
 
-Without `@manual`, auto mode would free `result` at the end of `build_list` — before the caller can use it.
+### Auto-Free Mode (opt-in)
 
-**Use `@manual` when:**
-- Returning a `*_new()` value from a function
-- Passing it to an actor via `!` (actor owns it)
-- Storing it in actor `state` (lives for actor's lifetime)
-
-### Manual Mode
-
-Disable all auto-free for an entire project:
+For convenience in scripts, auto-free mode can be enabled. The compiler injects the matching `.free()` call at scope exit for variables initialized from recognized constructors (e.g. `list.new()` gets a `list.free()`).
 
 ```toml
 # aether.toml
 [memory]
-mode = "manual"
+mode = "auto"
 ```
 
 Or for a single run:
 
 ```bash
-ae run --no-auto-free file.ae
+ae run --auto-free file.ae
 ```
+
+In auto mode, use `@manual` when a value must outlive its scope (returned from a function, passed to an actor, stored in actor state).
 
 See [Memory Management Guide](memory-management.md) for the full reference.
 
@@ -661,15 +661,15 @@ receive {
 ### Standard Library Imports
 
 ```aether
-import std.fs;           // File system
+import std.file;         // File operations
 import std.string;       // String utilities
-import std.collections;  // Lists, maps
-import std.net;          // Networking
+import std.list;         // ArrayList
+import std.http;         // HTTP client & server
 import std.json;         // JSON parsing
 
 // Use with namespace syntax
 result = string.new("hello");
-if (fs.file_exists("config.txt") == 1) { }
+if (file.exists("config.txt") == 1) { }
 ```
 
 ### Import with Alias
@@ -678,7 +678,7 @@ if (fs.file_exists("config.txt") == 1) { }
 import std.collections as col;
 import std.string as str;
 
-list = col.list_new();
+list = col.list.new();
 s = str.new("hello");
 ```
 
@@ -693,16 +693,20 @@ result = utils.double_value(21);
 
 ### Available Standard Library Modules
 
-| Module | Description |
-|--------|-------------|
-| `std.fs` | File operations |
-| `std.string` | String manipulation |
-| `std.collections` | Lists, maps, sets |
-| `std.net` | TCP/UDP networking |
-| `std.json` | JSON encoding/decoding |
-| `std.io` | Input/output |
-| `std.math` | Math functions |
-| `std.log` | Logging utilities |
+| Module | Namespace | Description |
+|--------|-----------|-------------|
+| `std.file` | `file` | File operations (`file.open()`, `file.exists()`) |
+| `std.dir` | `dir` | Directory operations (`dir.list()`, `dir.create()`) |
+| `std.path` | `path` | Path utilities (`path.join()`, `path.basename()`) |
+| `std.string` | `string` | String manipulation (`string.new()`, `string.length()`) |
+| `std.list` | `list` | Dynamic array (`list.new()`, `list.add()`) |
+| `std.map` | `map` | Hash map (`map.new()`, `map.put()`) |
+| `std.json` | `json` | JSON encoding/decoding (`json.parse()`, `json.free()`) |
+| `std.http` | `http` | HTTP client & server (`http.get()`, `http.server_create()`) |
+| `std.tcp` | `tcp` | TCP sockets (`tcp.connect()`, `tcp.send()`) |
+| `std.math` | `math` | Math functions (`math.sqrt()`, `math.sin()`) |
+| `std.log` | `log` | Logging utilities (`log.init()`, `log.info()`) |
+| `std.io` | `io` | Input/output (`io.read_line()`, `io.getenv()`) |
 
 ---
 

@@ -868,7 +868,16 @@ int typecheck_actor_definition(ASTNode* actor, SymbolTable* table) {
         ASTNode* child = actor->children[i];
         
         if (child->type == AST_STATE_DECLARATION) {
-            // Add state variables to actor's symbol table
+            if ((!child->node_type || child->node_type->kind == TYPE_UNKNOWN)
+                && child->child_count > 0 && child->children[0]) {
+                ASTNode* init = child->children[0];
+                if (init->type == AST_FUNCTION_CALL && init->value) {
+                    Symbol* fn = lookup_qualified_symbol(actor_table, init->value);
+                    if (fn && fn->type) {
+                        child->node_type = clone_type(fn->type);
+                    }
+                }
+            }
             add_symbol(actor_table, child->value, clone_type(child->node_type), 0, 0, 1);
         } else if (child->type == AST_RECEIVE_STATEMENT) {
             // Handle receive statement

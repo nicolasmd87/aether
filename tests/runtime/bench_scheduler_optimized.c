@@ -32,7 +32,7 @@ static long get_time_ms(void) {
 typedef struct {
     int id;
     int active;
-    int assigned_core;
+    atomic_int assigned_core;
     Mailbox mailbox;
     void (*step)(void*);
     // OPTIMIZATION: Use plain int in hot path, atomic for cross-thread reads

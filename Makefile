@@ -126,6 +126,7 @@ TEST_SRC = tests/runtime/test_harness.c \
            tests/runtime/test_lockfree_mailbox.c \
            tests/runtime/test_scheduler_optimizations.c \
            tests/runtime/test_spsc_queue.c \
+           tests/runtime/test_worksteal_race.c \
            tests/runtime/test_http_server.c \
            tests/memory/test_memory_arena.c \
            tests/memory/test_memory_pool.c \
@@ -224,6 +225,13 @@ test-manual-runtime: compiler
 	./build/test_runtime_manual$(EXE_EXT)
 
 # Test .ae source files - compiles and runs each test file
+ifdef WINDOWS_NATIVE
+test-ae: compiler ae stdlib
+	@echo ===================================
+	@echo   Running Aether Source Tests (.ae)
+	@echo ===================================
+	@.\build\ae.exe test
+else
 test-ae: compiler ae stdlib
 	@echo "==================================="
 	@echo "  Running Aether Source Tests (.ae)"
@@ -253,6 +261,7 @@ test-ae: compiler ae stdlib
 	echo ""; \
 	echo "Aether Tests: $$passed passed, $$failed failed, $$total total"; \
 	if [ "$$failed" -gt 0 ]; then exit 1; fi
+endif
 
 # Run both C unit tests and .ae integration tests
 test-all: test test-ae
@@ -272,6 +281,13 @@ benchmark:
 	@echo ""
 	@cd benchmarks/cross-language && BENCHMARK_PRESET=$(BENCHMARK_PRESET) $(MAKE) benchmark-ui
 
+ifdef WINDOWS_NATIVE
+examples: compiler ae
+	@echo ===================================
+	@echo   Building Aether Examples
+	@echo ===================================
+	@.\build\ae.exe examples
+else
 examples: compiler
 	@echo "==================================="
 	@echo "  Building Aether Examples"
@@ -300,6 +316,7 @@ examples: compiler
 	echo "  $$pass passed, $$fail failed"; \
 	echo "  Binaries in $(BUILD_DIR)/examples/"; \
 	if [ "$$fail" -gt 0 ]; then exit 1; fi
+endif
 
 examples-run: examples
 	@echo "==================================="
@@ -555,6 +572,8 @@ else ifneq ($(findstring MINGW,$(DETECTED_OS)),)
 else ifneq ($(findstring MSYS,$(DETECTED_OS)),)
 	@$(CC) $(CFLAGS) tools/aether_repl.c -o build/aether_repl$(EXE_EXT) -lreadline 2>/dev/null || \
 	(echo "readline not found. Install with: pacman -S readline" && exit 1)
+else ifeq ($(DETECTED_OS),Windows)
+	@$(CC) $(CFLAGS) tools/aether_repl.c -o build/aether_repl$(EXE_EXT)
 else
 	@echo "Error: REPL not supported on $(DETECTED_OS)"
 	@exit 1
@@ -707,29 +726,17 @@ ci: clean
 	@echo "[3/7] Building stdlib..."
 	@$(MAKE) stdlib
 	@echo ""
-ifdef WINDOWS_NATIVE
-	@echo "[4/7] Building REPL... SKIPPED (Windows — no readline)"
-else
 	@echo "[4/7] Building REPL..."
 	@$(MAKE) repl
-endif
 	@echo ""
 	@echo "[5/7] Running C unit tests..."
 	@$(MAKE) test
 	@echo ""
-ifdef IS_WINDOWS
-	@echo "[6/7] Running .ae integration tests... SKIPPED (Windows)"
-else
 	@echo "[6/7] Running .ae integration tests..."
 	@$(MAKE) test-ae
-endif
 	@echo ""
-ifdef IS_WINDOWS
-	@echo "[7/7] Building examples... SKIPPED (Windows)"
-else
 	@echo "[7/7] Building examples..."
 	@$(MAKE) examples
-endif
 	@echo ""
 	@echo "==================================="
 	@echo "  CI PASSED — all checks green"

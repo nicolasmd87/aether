@@ -281,7 +281,7 @@ The `ActorBase` contains:
 - `mailbox`: Message queue
 - `active`: Processing flag
 - `id`: Unique actor ID
-- `assigned_core`: Current core assignment
+- `assigned_core`: Current core assignment (atomic_int, safe for cross-core reads)
 - `step`: Your message handler
 
 ## Message Handler Pattern

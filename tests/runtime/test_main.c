@@ -11,6 +11,7 @@ void register_memory_arena_tests(void);
 void register_memory_pool_tests(void);
 void register_lexer_tests(void);
 void register_scheduler_optimization_tests(void);
+void register_worksteal_race_tests(void);
 
 void print_test_help(const char* program) {
     printf("Aether Test Runner\n\n");
@@ -86,6 +87,7 @@ int main(int argc, char** argv) {
     register_memory_pool_tests();
     register_lexer_tests();
     register_scheduler_optimization_tests();
+    register_worksteal_race_tests();
     
     run_all_tests();
 

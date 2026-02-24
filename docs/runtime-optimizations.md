@@ -404,7 +404,7 @@ The inline accessor previously carried `__builtin_expect(..., 0)`, marking the m
 
 Generated code for `actor ! Msg` from the main thread previously emitted:
 ```c
-if (current_core_id >= 0 && current_core_id == actor->assigned_core) {
+if (current_core_id >= 0 && current_core_id == atomic_load_explicit(&actor->assigned_core, memory_order_relaxed)) {
     scheduler_send_local(...);   // never taken: main thread has core_id = -1
 } else {
     scheduler_send_remote(...);  // always taken

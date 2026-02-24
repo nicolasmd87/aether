@@ -61,6 +61,20 @@ extern char** environ;
 #define AE_VERSION AETHER_VERSION
 
 // --------------------------------------------------------------------------
+// Cross-platform temp directory
+// --------------------------------------------------------------------------
+static const char* get_temp_dir(void) {
+#ifdef _WIN32
+    const char* t = getenv("TEMP");
+    if (!t) t = getenv("TMP");
+    if (!t) t = ".";
+    return t;
+#else
+    return "/tmp";
+#endif
+}
+
+// --------------------------------------------------------------------------
 // Toolchain state
 // --------------------------------------------------------------------------
 
@@ -461,8 +475,8 @@ found_root:
     }
 }
 
-// Check if aether.toml has [memory] mode = "manual"
-// Returns "--no-auto-free" if set, empty string otherwise
+// Check aether.toml [memory] mode.
+// Default is manual (no flag needed). Returns "--auto-free" if mode = "auto".
 static const char* get_memory_flag(void) {
     static char flag[32] = "";
     static bool checked = false;
@@ -476,8 +490,8 @@ static const char* get_memory_flag(void) {
     if (!doc) return flag;
 
     const char* val = toml_get_value(doc, "memory", "mode");
-    if (val && strcmp(val, "manual") == 0) {
-        strncpy(flag, "--no-auto-free", sizeof(flag) - 1);
+    if (val && strcmp(val, "auto") == 0) {
+        strncpy(flag, "--auto-free", sizeof(flag) - 1);
     }
 
     toml_free_document(doc);
@@ -626,8 +640,9 @@ static void build_gcc_cmd(char* cmd, size_t size,
     if (tc.has_lib) {
         strncpy(lib_dir, tc.lib, sizeof(lib_dir) - 1);
         lib_dir[sizeof(lib_dir) - 1] = '\0';
-        char* slash = strrchr(lib_dir, '\\');
-        if (!slash) slash = strrchr(lib_dir, '/');
+        char* bs = strrchr(lib_dir, '\\');
+        char* fs = strrchr(lib_dir, '/');
+        char* slash = (!bs) ? fs : (!fs) ? bs : (bs > fs ? bs : fs);
         if (slash) *slash = '\0';
         snprintf(cmd, size,
             "\"%s\" %s %s %s %s -L%s -laether -o %s -lws2_32 %s",
@@ -665,9 +680,11 @@ static void build_gcc_cmd(char* cmd, size_t size,
 static int cmd_run(int argc, char** argv) {
     const char* file = NULL;
     bool run_no_auto_free = false;
+    bool run_auto_free = false;
 
     for (int i = 0; i < argc; i++) {
         if (strcmp(argv[i], "--no-auto-free") == 0) { run_no_auto_free = true; }
+        else if (strcmp(argv[i], "--auto-free") == 0) { run_auto_free = true; }
         else if (argv[i][0] != '-') { file = argv[i]; break; }
     }
 
@@ -706,7 +723,8 @@ static int cmd_run(int argc, char** argv) {
     }
 
     char c_file[1024], exe_file[1024], cmd[8192];
-    const char* mem_flag = run_no_auto_free ? "--no-auto-free" : get_memory_flag();
+    const char* mem_flag = run_auto_free ? "--auto-free" :
+                           run_no_auto_free ? "--no-auto-free" : get_memory_flag();
 
     // --- Cache check ---
     // ae run uses -O0 (fast dev builds). Check if we have a cached exe for
@@ -731,14 +749,14 @@ static int cmd_run(int argc, char** argv) {
     if (tc.dev_mode) {
         snprintf(c_file, sizeof(c_file), "%s/build/_ae_tmp.c", tc.root);
     } else {
-        snprintf(c_file, sizeof(c_file), "/tmp/_ae_tmp.c");
+        snprintf(c_file, sizeof(c_file), "%s/_ae_tmp.c", get_temp_dir());
     }
     if (using_cache) {
         strncpy(exe_file, cached_exe, sizeof(exe_file) - 1);
     } else if (tc.dev_mode) {
         snprintf(exe_file, sizeof(exe_file), "%s/build/_ae_tmp" EXE_EXT, tc.root);
     } else {
-        snprintf(exe_file, sizeof(exe_file), "/tmp/_ae_tmp" EXE_EXT);
+        snprintf(exe_file, sizeof(exe_file), "%s/_ae_tmp" EXE_EXT, get_temp_dir());
     }
 
     // Step 1: Compile .ae to .c
@@ -788,15 +806,17 @@ static int cmd_build(int argc, char** argv) {
     char extra_files[2048] = "";
 
     bool build_no_auto_free = false;
+    bool build_auto_free = false;
     for (int i = 0; i < argc; i++) {
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             output_name = argv[++i];
         } else if (strcmp(argv[i], "--extra") == 0 && i + 1 < argc) {
-            // Append extra C files (space-separated)
             if (extra_files[0]) strncat(extra_files, " ", sizeof(extra_files) - strlen(extra_files) - 1);
             strncat(extra_files, argv[++i], sizeof(extra_files) - strlen(extra_files) - 1);
         } else if (strcmp(argv[i], "--no-auto-free") == 0) {
             build_no_auto_free = true;
+        } else if (strcmp(argv[i], "--auto-free") == 0) {
+            build_auto_free = true;
         } else if (argv[i][0] != '-') {
             file = argv[i];
         }
@@ -858,7 +878,8 @@ static int cmd_build(int argc, char** argv) {
     printf("Building %s...\n", file);
 
     // Step 1: .ae to .c
-    const char* build_mem_flag = build_no_auto_free ? "--no-auto-free" : get_memory_flag();
+    const char* build_mem_flag = build_auto_free ? "--auto-free" :
+                                 build_no_auto_free ? "--no-auto-free" : get_memory_flag();
     if (build_mem_flag[0])
         snprintf(cmd, sizeof(cmd), "%s %s %s %s", tc.compiler, build_mem_flag, file, c_file);
     else
@@ -1040,8 +1061,8 @@ static int cmd_test(int argc, char** argv) {
             snprintf(c_file, sizeof(c_file), "%s/build/_test_%d.c", tc.root, i);
             snprintf(exe_file, sizeof(exe_file), "%s/build/_test_%d" EXE_EXT, tc.root, i);
         } else {
-            snprintf(c_file, sizeof(c_file), "/tmp/_ae_test_%d.c", i);
-            snprintf(exe_file, sizeof(exe_file), "/tmp/_ae_test_%d" EXE_EXT, i);
+            snprintf(c_file, sizeof(c_file), "%s/_ae_test_%d.c", get_temp_dir(), i);
+            snprintf(exe_file, sizeof(exe_file), "%s/_ae_test_%d" EXE_EXT, get_temp_dir(), i);
         }
 
         // Compile .ae to .c
@@ -1168,6 +1189,127 @@ static int cmd_add(int argc, char** argv) {
     return 0;
 }
 
+static int cmd_examples(int argc, char** argv) {
+    const char* examples_dir = "examples";
+    if (argc > 0 && argv[0][0] != '-') examples_dir = argv[0];
+
+    char files[512][512];
+    int file_count = 0;
+
+    char find_cmd[1024];
+#ifdef _WIN32
+    snprintf(find_cmd, sizeof(find_cmd), "dir /b /s \"%s\\*.ae\" 2>nul", examples_dir);
+#else
+    snprintf(find_cmd, sizeof(find_cmd), "find %s -name '*.ae' -type f 2>/dev/null | sort", examples_dir);
+#endif
+    FILE* pipe = popen(find_cmd, "r");
+    if (pipe) {
+        char line[512];
+        while (fgets(line, sizeof(line), pipe) && file_count < 512) {
+            line[strcspn(line, "\n\r")] = '\0';
+            if (strlen(line) > 0) {
+                strncpy(files[file_count], line, sizeof(files[0]) - 1);
+                file_count++;
+            }
+        }
+        pclose(pipe);
+    }
+
+    if (file_count == 0) {
+        printf("No .ae files found in %s/\n", examples_dir);
+        return 0;
+    }
+
+    printf("Building %d example(s)...\n\n", file_count);
+
+    mkdir_p("build");
+    mkdir_p("build/examples");
+
+    int pass = 0, fail = 0;
+
+    for (int i = 0; i < file_count; i++) {
+        const char* src = files[i];
+
+        const char* slash = strrchr(src, '/');
+        if (!slash) slash = strrchr(src, '\\');
+        const char* name = slash ? slash + 1 : src;
+        char base[256];
+        strncpy(base, name, sizeof(base) - 1);
+        base[sizeof(base) - 1] = '\0';
+        char* dot = strrchr(base, '.');
+        if (dot) *dot = '\0';
+
+        printf("  %-30s ", base);
+        fflush(stdout);
+
+        char c_file[1024], exe_file[1024], cmd[8192];
+        snprintf(c_file, sizeof(c_file), "build/examples/%s.c", base);
+        snprintf(exe_file, sizeof(exe_file), "build/examples/%s" EXE_EXT, base);
+
+        // Find extra .c files in the same directory as the .ae source
+        char src_dir[512];
+        strncpy(src_dir, src, sizeof(src_dir) - 1);
+        src_dir[sizeof(src_dir) - 1] = '\0';
+        char* last_sep = strrchr(src_dir, '/');
+        if (!last_sep) last_sep = strrchr(src_dir, '\\');
+        if (last_sep) *last_sep = '\0';
+        else strcpy(src_dir, ".");
+
+        char extra_c[2048] = "";
+        char find_c[1024];
+#ifdef _WIN32
+        snprintf(find_c, sizeof(find_c), "dir /b \"%s\\*.c\" 2>nul", src_dir);
+#else
+        snprintf(find_c, sizeof(find_c), "find \"%s\" -maxdepth 1 -name '*.c' 2>/dev/null", src_dir);
+#endif
+        FILE* c_pipe = popen(find_c, "r");
+        if (c_pipe) {
+            char c_line[512];
+            while (fgets(c_line, sizeof(c_line), c_pipe)) {
+                c_line[strcspn(c_line, "\n\r")] = '\0';
+                if (strlen(c_line) == 0) continue;
+                char c_path[512];
+#ifdef _WIN32
+                snprintf(c_path, sizeof(c_path), "%s\\%s", src_dir, c_line);
+#else
+                snprintf(c_path, sizeof(c_path), "%s", c_line);
+#endif
+                if (strlen(extra_c) + strlen(c_path) + 2 < sizeof(extra_c)) {
+                    strcat(extra_c, " ");
+                    strcat(extra_c, c_path);
+                }
+            }
+            pclose(c_pipe);
+        }
+
+        // Step 1: compile .ae -> .c
+        snprintf(cmd, sizeof(cmd), "%s %s %s", tc.compiler, src, c_file);
+        if (run_cmd_quiet(cmd) != 0) {
+            printf("FAIL (compile)\n");
+            fail++;
+            continue;
+        }
+
+        // Step 2: link .c + extra -> exe
+        const char* extra = extra_c[0] ? extra_c : NULL;
+        build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, true, extra);
+        if (run_cmd_quiet(cmd) != 0) {
+            printf("FAIL (build)\n");
+            fail++;
+            remove(c_file);
+            continue;
+        }
+
+        printf("OK\n");
+        pass++;
+        remove(c_file);
+    }
+
+    printf("\n%d passed, %d failed, %d total\n", pass, fail, file_count);
+    printf("Binaries in build/examples/\n");
+    return (fail > 0) ? 1 : 0;
+}
+
 static int cmd_repl(void) {
     printf("Aether %s REPL\n", AE_VERSION);
     printf("Press Enter twice (or close a block) to run. 'exit' to quit.\n\n");
@@ -1177,9 +1319,9 @@ static int cmd_repl(void) {
     int brace_depth = 0;
 
     char ae_file[256], c_file[256], exe_file[256];
-    snprintf(ae_file,  sizeof(ae_file),  "/tmp/_aether_repl_%d.ae",  (int)getpid());
-    snprintf(c_file,   sizeof(c_file),   "/tmp/_aether_repl_%d.c",   (int)getpid());
-    snprintf(exe_file, sizeof(exe_file), "/tmp/_aether_repl_%d" EXE_EXT, (int)getpid());
+    snprintf(ae_file,  sizeof(ae_file),  "%s/_aether_repl_%d.ae",  get_temp_dir(), (int)getpid());
+    snprintf(c_file,   sizeof(c_file),   "%s/_aether_repl_%d.c",   get_temp_dir(), (int)getpid());
+    snprintf(exe_file, sizeof(exe_file), "%s/_aether_repl_%d" EXE_EXT, get_temp_dir(), (int)getpid());
 
     while (1) {
         printf(brace_depth > 0 ? "...  " : "ae> ");
@@ -1327,7 +1469,7 @@ static int cmd_version_list(void) {
 #ifdef _WIN32
     snprintf(json_path, sizeof(json_path), "%s\\.aether\\releases.json", home);
 #else
-    snprintf(json_path, sizeof(json_path), "/tmp/ae_releases_%d.json", (int)getpid());
+    snprintf(json_path, sizeof(json_path), "%s/ae_releases_%d.json", get_temp_dir(), (int)getpid());
 #endif
     char url[256];
     snprintf(url, sizeof(url),
@@ -1873,12 +2015,13 @@ int main(int argc, char** argv) {
     // All other commands need the toolchain
     discover_toolchain();
 
-    if (strcmp(cmd, "run") == 0)     return cmd_run(sub_argc, sub_argv);
-    if (strcmp(cmd, "build") == 0)   return cmd_build(sub_argc, sub_argv);
-    if (strcmp(cmd, "test") == 0)    return cmd_test(sub_argc, sub_argv);
-    if (strcmp(cmd, "add") == 0)     return cmd_add(sub_argc, sub_argv);
-    if (strcmp(cmd, "cache") == 0)   return cmd_cache(sub_argc, sub_argv);
-    if (strcmp(cmd, "repl") == 0)    return cmd_repl();
+    if (strcmp(cmd, "run") == 0)      return cmd_run(sub_argc, sub_argv);
+    if (strcmp(cmd, "build") == 0)    return cmd_build(sub_argc, sub_argv);
+    if (strcmp(cmd, "test") == 0)     return cmd_test(sub_argc, sub_argv);
+    if (strcmp(cmd, "examples") == 0) return cmd_examples(sub_argc, sub_argv);
+    if (strcmp(cmd, "add") == 0)      return cmd_add(sub_argc, sub_argv);
+    if (strcmp(cmd, "cache") == 0)    return cmd_cache(sub_argc, sub_argv);
+    if (strcmp(cmd, "repl") == 0)     return cmd_repl();
 
     fprintf(stderr, "Unknown command '%s'. Run 'ae help' for usage.\n", cmd);
     return 1;

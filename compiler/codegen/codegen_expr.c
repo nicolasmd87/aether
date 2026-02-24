@@ -246,9 +246,15 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     fprintf(gen->output, "scheduler_wait()");
                 }
                 else if (strcmp(func_name, "sleep") == 0 && expr->child_count == 1) {
+#ifdef _WIN32
+                    fprintf(gen->output, "Sleep(");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, ")");
+#else
                     fprintf(gen->output, "usleep(1000 * (");
                     generate_expression(gen, expr->children[0]);
                     fprintf(gen->output, "))");
+#endif
                 }
                 else if (strcmp(func_name, "getenv") == 0 && expr->child_count == 1) {
                     fprintf(gen->output, "getenv(");

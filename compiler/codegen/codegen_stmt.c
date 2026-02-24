@@ -350,23 +350,22 @@ static int has_list_patterns(ASTNode* match_stmt) {
     return 0;
 }
 
-// Destructor registry: maps constructor function names to their free functions.
-// Used by auto-free mode to inject scope-exit cleanup for stdlib allocations.
-static const char* lookup_destructor(ASTNode* init_expr) {
+// Look up destructor for a constructor call using the dynamic registry
+// (populated from imported module.ae extern declarations).
+// Handles both underscore calls (list_new) and dot calls (list.new).
+static const char* lookup_destructor(CodeGenerator* gen, ASTNode* init_expr) {
     if (!init_expr || init_expr->type != AST_FUNCTION_CALL || !init_expr->value) return NULL;
 
-    static const struct { const char* fn; const char* free_fn; } REGISTRY[] = {
-        { "map_new",    "map_free"      },
-        { "list_new",   "list_free"     },
-        { "map_keys",   "map_keys_free" },
-        { "dir_list",   "dir_list_free" },
-        { "string_new", "string_free"   },
-        { NULL,         NULL            }
-    };
+    char normalized[256];
+    strncpy(normalized, init_expr->value, sizeof(normalized) - 1);
+    normalized[sizeof(normalized) - 1] = '\0';
+    for (char* p = normalized; *p; p++) {
+        if (*p == '.') *p = '_';
+    }
 
-    for (int i = 0; REGISTRY[i].fn; i++) {
-        if (strcmp(init_expr->value, REGISTRY[i].fn) == 0) {
-            return REGISTRY[i].free_fn;
+    for (int i = 0; i < gen->destructor_count; i++) {
+        if (strcmp(normalized, gen->destructor_registry[i].constructor) == 0) {
+            return gen->destructor_registry[i].destructor;
         }
     }
     return NULL;
@@ -494,7 +493,7 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     // scope-exit defer to call the corresponding *_free() function.
                     if (!gen->no_auto_free && !stmt->is_manual &&
                         stmt->child_count > 0 && stmt->value) {
-                        const char* free_fn = lookup_destructor(stmt->children[0]);
+                        const char* free_fn = lookup_destructor(gen, stmt->children[0]);
                         if (free_fn) {
                             push_auto_defer(gen, free_fn, stmt->value);
                         }

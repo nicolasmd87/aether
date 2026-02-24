@@ -185,7 +185,7 @@ CodeGenerator* create_code_generator(FILE* output) {
     memset(gen->defer_stack, 0, sizeof(gen->defer_stack));
     memset(gen->scope_defer_start, 0, sizeof(gen->scope_defer_start));
     // Memory management
-    gen->no_auto_free = 0;
+    gen->no_auto_free = 1;
     gen->synthetic_nodes = NULL;
     gen->synthetic_node_count = 0;
     gen->synthetic_node_capacity = 0;
@@ -193,6 +193,10 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->extern_registry = NULL;
     gen->extern_registry_count = 0;
     gen->extern_registry_capacity = 0;
+    // Dynamic destructor registry
+    gen->destructor_registry = NULL;
+    gen->destructor_count = 0;
+    gen->destructor_capacity = 0;
     // Ask/reply type map
     gen->reply_type_map = NULL;
     gen->reply_type_count = 0;
@@ -245,6 +249,13 @@ void free_code_generator(CodeGenerator* gen) {
             }
             free(gen->extern_registry);
         }
+        if (gen->destructor_registry) {
+            for (int i = 0; i < gen->destructor_count; i++) {
+                free(gen->destructor_registry[i].constructor);
+                free(gen->destructor_registry[i].destructor);
+            }
+            free(gen->destructor_registry);
+        }
         if (gen->reply_type_map) {
             for (int i = 0; i < gen->reply_type_count; i++) {
                 free(gen->reply_type_map[i].request_msg);
@@ -253,6 +264,85 @@ void free_code_generator(CodeGenerator* gen) {
             free(gen->reply_type_map);
         }
         free(gen);
+    }
+}
+
+// --- Destructor registry ---
+
+void register_destructor_pair(CodeGenerator* gen, const char* constructor, const char* destructor) {
+    for (int i = 0; i < gen->destructor_count; i++) {
+        if (strcmp(gen->destructor_registry[i].constructor, constructor) == 0) return;
+    }
+    if (gen->destructor_count >= gen->destructor_capacity) {
+        int new_cap = gen->destructor_capacity ? gen->destructor_capacity * 2 : 16;
+        void* tmp = realloc(gen->destructor_registry,
+            new_cap * sizeof(gen->destructor_registry[0]));
+        if (!tmp) return;
+        gen->destructor_registry = tmp;
+        gen->destructor_capacity = new_cap;
+    }
+    gen->destructor_registry[gen->destructor_count].constructor = strdup(constructor);
+    gen->destructor_registry[gen->destructor_count].destructor = strdup(destructor);
+    gen->destructor_count++;
+}
+
+// Scan a module AST for matching constructor/destructor pairs.
+// Matches: foo_new/foo_free, foo_create/foo_free, and special cases like
+// dir_list/dir_list_free and map_keys/map_keys_free.
+void scan_module_for_destructors(CodeGenerator* gen, ASTNode* mod_ast) {
+    if (!mod_ast) return;
+
+    const char* suffixes[][2] = {
+        { "_new",    "_free" },
+        { "_create", "_free" },
+        { NULL, NULL }
+    };
+
+    for (int i = 0; i < mod_ast->child_count; i++) {
+        ASTNode* decl = mod_ast->children[i];
+        if (decl->type != AST_EXTERN_FUNCTION || !decl->value) continue;
+        const char* name = decl->value;
+        size_t len = strlen(name);
+
+        for (int s = 0; suffixes[s][0]; s++) {
+            const char* ctor_suf = suffixes[s][0];
+            const char* dtor_suf = suffixes[s][1];
+            size_t suf_len = strlen(ctor_suf);
+            if (len <= suf_len) continue;
+            if (strcmp(name + len - suf_len, ctor_suf) != 0) continue;
+
+            char prefix[256];
+            size_t prefix_len = len - suf_len;
+            if (prefix_len >= sizeof(prefix)) continue;
+            memcpy(prefix, name, prefix_len);
+            prefix[prefix_len] = '\0';
+
+            char expected_dtor[sizeof(prefix) + 16];
+            snprintf(expected_dtor, sizeof(expected_dtor), "%s%s", prefix, dtor_suf);
+
+            for (int j = 0; j < mod_ast->child_count; j++) {
+                ASTNode* other = mod_ast->children[j];
+                if (other->type != AST_EXTERN_FUNCTION || !other->value) continue;
+                if (strcmp(other->value, expected_dtor) == 0) {
+                    register_destructor_pair(gen, name, expected_dtor);
+                    break;
+                }
+            }
+            break;
+        }
+
+        // Special case: functions that return allocated data but don't follow
+        // _new/_create convention (e.g., dir_list -> dir_list_free)
+        char special_dtor[512];
+        snprintf(special_dtor, sizeof(special_dtor), "%s_free", name);
+        for (int j = 0; j < mod_ast->child_count; j++) {
+            ASTNode* other = mod_ast->children[j];
+            if (other->type != AST_EXTERN_FUNCTION || !other->value) continue;
+            if (strcmp(other->value, special_dtor) == 0) {
+                register_destructor_pair(gen, name, special_dtor);
+                break;
+            }
+        }
     }
 }
 
@@ -801,7 +891,10 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "#include <stdbool.h>");
     print_line(gen, "#include <stdatomic.h>");
     print_line(gen, "#include <stdint.h>");
-    print_line(gen, "#ifndef _WIN32");
+    print_line(gen, "#ifdef _WIN32");
+    print_line(gen, "#define NOMINMAX");
+    print_line(gen, "#include <windows.h>");
+    print_line(gen, "#else");
     print_line(gen, "#include <unistd.h>");
     print_line(gen, "#endif");
     /* aligned_alloc: C11 POSIX; Windows uses _aligned_malloc with swapped args */
@@ -1019,6 +1112,7 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                                     }
                                 }
                             }
+                            scan_module_for_destructors(gen, mod_ast);
                             free_ast_node(mod_ast);
                         }
                     } else {
@@ -1031,10 +1125,10 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                                 if (decl->type == AST_EXTERN_FUNCTION && decl->value) {
                                     generate_extern_declaration(gen, decl);
                                 } else if (decl->type == AST_FUNCTION_DEFINITION && decl->value) {
-                                    // For user-defined functions, generate a forward declaration
                                     generate_extern_declaration(gen, decl);
                                 }
                             }
+                            scan_module_for_destructors(gen, mod_ast);
                             free_ast_node(mod_ast);
                         }
                     }

@@ -19,7 +19,7 @@
 typedef struct {
     int id;
     int active;
-    int assigned_core;
+    atomic_int assigned_core;
     Mailbox mailbox;
     void (*step)(void*);
     atomic_int count;

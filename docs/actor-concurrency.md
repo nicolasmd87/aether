@@ -81,7 +81,7 @@ typedef struct {
     void (*step)(void*);
     pthread_t thread;
     int auto_process;
-    int assigned_core;
+    atomic_int assigned_core;
     int migrate_to;
     int main_thread_only;  // If set, scheduler threads skip this actor
     SPSCQueue spsc_queue;
@@ -133,7 +133,7 @@ Messages are sent asynchronously. The generated code routes messages through the
 
 ```c
 // Same-core: direct delivery
-if (current_core_id >= 0 && current_core_id == actor->assigned_core) {
+if (current_core_id >= 0 && current_core_id == atomic_load_explicit(&actor->assigned_core, memory_order_relaxed)) {
     scheduler_send_local(actor, msg);
 } else {
     scheduler_send_remote(actor, msg, current_core_id);

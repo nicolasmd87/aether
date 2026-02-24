@@ -21,7 +21,7 @@ typedef struct Node {
     void (*step)(void*);
     pthread_t thread;
     int auto_process;
-    int assigned_core;
+    atomic_int assigned_core;
     int next_id;
     int count;
 } Node;

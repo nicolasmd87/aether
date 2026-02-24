@@ -9,6 +9,7 @@ extern socket_write(fd: int, data: string, len: int) -> int
 extern socket_close(fd: int)
 extern file_read(path: string) -> string
 extern allocate_string(size: int) -> string
+extern free_string(s: string)
 extern cstr_length(s: string) -> int
 extern strcmp(a: string, b: string) -> int
 extern ends_with(s: string, suffix: string) -> int
@@ -106,6 +107,7 @@ main() {
                     socket_write(client_fd, response, cstr_length(response));
                 }
 
+                free_string(buf);
                 socket_close(client_fd);
             }
         }

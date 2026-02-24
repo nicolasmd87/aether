@@ -50,6 +50,10 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func);
 void generate_struct_definition(CodeGenerator* gen, ASTNode* struct_def);
 void generate_combined_function(CodeGenerator* gen, ASTNode** clauses, int clause_count);
 
+/* Destructor registry (codegen.c) */
+void register_destructor_pair(CodeGenerator* gen, const char* constructor, const char* destructor);
+void scan_module_for_destructors(CodeGenerator* gen, ASTNode* mod_ast);
+
 /* Main/program (codegen.c) */
 void generate_main_function(CodeGenerator* gen, ASTNode* main);
 

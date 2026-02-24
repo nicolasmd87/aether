@@ -25,7 +25,7 @@ static long get_time_us(void) {
 typedef struct {
     int id;
     int active;
-    int assigned_core;
+    atomic_int assigned_core;
     Mailbox mailbox;
     void (*step)(void*);
     int received_count;

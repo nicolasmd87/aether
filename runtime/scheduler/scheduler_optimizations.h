@@ -47,7 +47,7 @@ typedef struct OptimizedActor {
     // Base actor fields (inline to avoid pointer indirection)
     int id;
     int active;
-    int assigned_core;
+    atomic_int assigned_core;
     Mailbox mailbox;
     void (*step)(void*);
     
@@ -67,7 +67,7 @@ static inline void optimized_actor_init(
     mailbox_init(&actor->mailbox);
     actor->step = NULL;  // Use optimized_step instead
     actor->active = 1;
-    actor->assigned_core = scheduler_id;
+    atomic_init(&actor->assigned_core, scheduler_id);
     
     actor->metadata.mailbox = &actor->mailbox;
     actor->metadata.scheduler_id = scheduler_id;

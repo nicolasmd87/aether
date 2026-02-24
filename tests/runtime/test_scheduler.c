@@ -34,11 +34,11 @@ typedef struct {
     void (*step)(void*);
     pthread_t thread;
     int auto_process;
-    int assigned_core;
+    atomic_int assigned_core;
     int migrate_to;
-    int main_thread_only;
+    atomic_int main_thread_only;
     SPSCQueue spsc_queue;
-    ActorReplySlot* reply_slot;
+    _Atomic(ActorReplySlot*) reply_slot;
     // Test-specific fields below
     atomic_int count;
     atomic_int last_value;
@@ -52,11 +52,11 @@ typedef struct {
     void (*step)(void*);
     pthread_t thread;
     int auto_process;
-    int assigned_core;
+    atomic_int assigned_core;
     int migrate_to;
-    int main_thread_only;
+    atomic_int main_thread_only;
     SPSCQueue spsc_queue;
-    ActorReplySlot* reply_slot;
+    _Atomic(ActorReplySlot*) reply_slot;
     // Test-specific fields below
     atomic_int received[1000];
     atomic_int count;

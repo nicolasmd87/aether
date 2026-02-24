@@ -34,7 +34,7 @@ main() {
 
 1. `import std.X` registers `X` as a namespace
 2. `X.func()` is resolved to the C function `X_func()`
-3. Both styles work: `string.new()` and `string_new()` (backwards compatible)
+3. Dot-style calls: `string.new()`, `list.free()`, etc. (compiler translates to C-level `string_new`, `list_free`)
 
 ### Available Modules
 

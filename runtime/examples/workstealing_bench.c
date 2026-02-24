@@ -21,7 +21,7 @@
 typedef struct Node {
     int id;
     int active;
-    int assigned_core;
+    atomic_int assigned_core;
     Mailbox mailbox;
     void (*step)(void*);
     int next_id;

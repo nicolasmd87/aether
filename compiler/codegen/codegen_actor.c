@@ -32,7 +32,7 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
     // Warm fields (accessed occasionally)
     print_line(gen, "pthread_t thread;        // Warm: thread handle");
     print_line(gen, "int auto_process;        // Warm: auto-processing flag");
-    print_line(gen, "int assigned_core;       // Cold: core assignment");
+    print_line(gen, "atomic_int assigned_core; // Cold: core assignment (atomic for work-stealing)");
     print_line(gen, "int migrate_to;          // Cold: affinity hint (-1 = none)");
     print_line(gen, "int main_thread_only;    // Cold: scheduler skip flag");
     print_line(gen, "SPSCQueue spsc_queue;    // Lock-free same-core messaging");
@@ -335,7 +335,7 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
     print_line(gen, "actor = aether_aligned_alloc(64, sizeof(%s));", actor->value);
     print_line(gen, "if (!actor) return NULL;");
     print_line(gen, "actor->id = atomic_fetch_add(&next_actor_id, 1);");
-    print_line(gen, "actor->assigned_core = -1;");
+    print_line(gen, "atomic_init(&actor->assigned_core, -1);");
     print_line(gen, "actor->step = (void (*)(void*))%s_step;", actor->value);
     print_line(gen, "mailbox_init(&actor->mailbox);");
     print_line(gen, "scheduler_register_actor((ActorBase*)actor, -1);");
@@ -374,7 +374,7 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
     print_line(gen, "void send_%s(%s* actor, int type, int payload) {", actor->value, actor->value);
     indent(gen);
     print_line(gen, "Message msg = {type, 0, payload, NULL};");
-    print_line(gen, "if (actor->assigned_core == current_core_id) {");
+    print_line(gen, "if (atomic_load_explicit(&actor->assigned_core, memory_order_relaxed) == current_core_id) {");
     indent(gen);
     print_line(gen, "scheduler_send_local((ActorBase*)actor, msg);");
     unindent(gen);

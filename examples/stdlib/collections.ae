@@ -13,6 +13,7 @@ main() {
     // ArrayList example - storing strings
     print("ArrayList (storing strings):\n")
     mylist = list.new()
+    defer list.free(mylist)
     print("  Created new ArrayList\n")
 
     // Create some strings to store
@@ -53,15 +54,14 @@ main() {
     print(list.size(mylist))
     print("\n")
 
-    // Clear and free
+    // Clear (defer list.free runs at scope exit)
     list.clear(mylist)
-    print("  Cleared list\n")
-    list.free(mylist)
-    print("  ArrayList freed\n\n")
+    print("  Cleared list\n\n")
 
     // HashMap example
     print("HashMap (string keys and values):\n")
     mymap = map.new()
+    defer map.free(mymap)
     print("  Created new HashMap\n")
 
     // Create string keys
@@ -105,9 +105,6 @@ main() {
     string.release(val_aether)
     string.release(val_lang)
     string.release(val_ver)
-
-    map.free(mymap)
-    print("  HashMap freed\n")
 
     print("\nCollections demo complete!\n")
 }

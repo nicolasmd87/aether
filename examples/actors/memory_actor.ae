@@ -1,12 +1,8 @@
 // Actor with Stdlib State — @manual on state variables
 //
-// Actor state variables must use @manual because they outlive any single
-// message handler — they persist for the entire lifetime of the actor.
-// The actor arena handles final cleanup when the actor is destroyed.
-//
-// Rule: all `state` variables initialized with *_new() should be @manual.
-// (@manual makes the ownership intent explicit and protects against future
-//  auto-free passes that might incorrectly free actor state mid-lifetime.)
+// Actor state variables initialized with .new() must use @manual
+// because they outlive any single message handler. The actor arena
+// handles final cleanup when the actor is destroyed.
 //
 // Run: ae run examples/actors/memory_actor.ae
 
@@ -16,15 +12,14 @@ message Add { value: int }
 message Size {}
 
 actor Accumulator {
-    // @manual: this list lives for the actor's entire lifetime
-    @manual state items = list_new();
+    @manual state items = list.new();
 
     receive {
         Add(value) -> {
-            list_add(items, value);
+            list.add(items, value);
         }
         Size() -> {
-            n = list_size(items);
+            n = list.size(items);
             print("Accumulated ");
             print(n);
             print(" items\n");
