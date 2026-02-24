@@ -1,14 +1,4 @@
 
-[DONE] 1. Memory model: flip default to manual, promote defer
-------------------------------------------------------------------------
-Issue: Auto-free is hardcoded to 5 stdlib calls, doc claimed it works on
-       user functions (it doesn't), confusing hidden behavior.
-Fix:   Default is now manual. defer is the primary mechanism.
-       Auto-free available via [memory] mode = "auto" or --auto-free.
-       Destructor registry made dynamic (scans module.ae imports).
-Files: compiler/aetherc.c, compiler/codegen/codegen.c, codegen.h,
-       codegen_stmt.c, tools/ae.c
-
 
 [TODO] 2. Extract module loading from typechecker into orchestrator
 ------------------------------------------------------------------------
@@ -45,12 +35,18 @@ Fix:   Add lock-free C++ benchmark variants alongside mutex ones.
 Files: benchmarks/cross-language/cpp/*.cpp, benchmarks/cross-language/README.md
 
 
-[TODO] 5. Harden work-stealing / SPSC race
+[DONE] 5. Harden work-stealing / SPSC race
 ------------------------------------------------------------------------
 Issue: Work-stealing can race with same-core mailbox write. Window is
-       ~nanoseconds but violates C memory model.
-Fix:   One-cycle cooldown on stolen actors. Thief skips actor for one
-       cycle after steal, letting in-flight write complete.
-       Longer term: TLA+ model of migration and steal paths.
-Files: runtime/scheduler/multicore_scheduler.c
+       ~nanoseconds but violates C memory model. The re-route check at
+       the top of the incoming_queue drain reads assigned_core as a
+       plain int (data race), and the aggressive drain (up to 128 step
+       calls) creates a TOCTOU window large enough for the thief to lap
+       the victim and process the actor concurrently.
+Fix:   Made assigned_core atomic_int. Added assigned_core guard inside
+       aggressive drain loop (break on steal) and re-check + re-route
+       before mailbox_send. Zero perf impact: atomic_load(relaxed) ==
+       plain load on x86/ARM. Processing loop untouched.
+Files: runtime/scheduler/multicore_scheduler.h,
+       runtime/scheduler/multicore_scheduler.c
 

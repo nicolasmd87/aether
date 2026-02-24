@@ -126,6 +126,7 @@ TEST_SRC = tests/runtime/test_harness.c \
            tests/runtime/test_lockfree_mailbox.c \
            tests/runtime/test_scheduler_optimizations.c \
            tests/runtime/test_spsc_queue.c \
+           tests/runtime/test_worksteal_race.c \
            tests/runtime/test_http_server.c \
            tests/memory/test_memory_arena.c \
            tests/memory/test_memory_pool.c \

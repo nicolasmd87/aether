@@ -128,14 +128,14 @@ void* AETHER_HOT scheduler_thread(void* arg) {
             // Actor may have been migrated to another core after this message
             // was enqueued.  Forward to the actor's current core rather than
             // delivering here (which would race with the new core's processing).
-            if (unlikely(actor->assigned_core != sched->core_id)) {
-                int new_core = actor->assigned_core;
+            if (unlikely(atomic_load_explicit(&actor->assigned_core, memory_order_acquire) != sched->core_id)) {
+                int new_core = atomic_load_explicit(&actor->assigned_core, memory_order_relaxed);
                 if (new_core >= 0 && new_core < num_cores) {
                     // Spin-retry: must not drop messages during redirect
                     int retries = 0;
                     while (!queue_enqueue(&schedulers[new_core].incoming_queue, actor, msg)) {
                         // Actor may have migrated again — re-read destination
-                        int cur = actor->assigned_core;
+                        int cur = atomic_load_explicit(&actor->assigned_core, memory_order_relaxed);
                         if (cur >= 0 && cur < num_cores) new_core = cur;
                         if (++retries % 1000 == 0) sched_yield();
                     }
@@ -165,13 +165,28 @@ void* AETHER_HOT scheduler_thread(void* arg) {
 
             // Drain actor mailbox aggressively BEFORE trying to add new message
             if (actor->mailbox.count > MAILBOX_SIZE / 2) {
-                // Mailbox getting full - drain it NOW
                 int drained = 0;
                 while (actor->mailbox.count > 0 && drained < 128) {
+                    if (unlikely(atomic_load_explicit(&actor->assigned_core, memory_order_relaxed) != sched->core_id))
+                        break;
                     if (actor->step) actor->step(actor);
                     drained++;
                 }
-                sched->messages_processed += drained;  // Batch update!
+                sched->messages_processed += drained;
+            }
+
+            // Re-check: actor may have been stolen during aggressive drain
+            if (unlikely(atomic_load_explicit(&actor->assigned_core, memory_order_relaxed) != sched->core_id)) {
+                int new_core = atomic_load_explicit(&actor->assigned_core, memory_order_relaxed);
+                if (new_core >= 0 && new_core < num_cores) {
+                    while (!queue_enqueue(&schedulers[new_core].incoming_queue, actor, msg)) {
+                        int cur = atomic_load_explicit(&actor->assigned_core, memory_order_relaxed);
+                        if (cur >= 0 && cur < num_cores) new_core = cur;
+                        sched_yield();
+                    }
+                }
+                work_done = 1;
+                continue;
             }
 
             // Now try to deliver message
@@ -256,7 +271,7 @@ void* AETHER_HOT scheduler_thread(void* arg) {
                             &second_lock->lock, memory_order_acquire)) {
                         if (dst->actor_count < dst->capacity) {
                             sched->actors[i] = sched->actors[--sched->actor_count];
-                            actor->assigned_core = dst_core;
+                            atomic_store_explicit(&actor->assigned_core, dst_core, memory_order_relaxed);
                             actor->migrate_to = -1;
                             dst->actors[dst->actor_count++] = actor;
 
@@ -306,7 +321,7 @@ void* AETHER_HOT scheduler_thread(void* arg) {
                         if (!atomic_flag_test_and_set_explicit(&second_lock->lock, memory_order_acquire)) {
                             if (victim->actor_count > 4 && sched->actor_count < sched->capacity) {
                                 ActorBase* stolen = victim->actors[--victim->actor_count];
-                                stolen->assigned_core = sched->core_id;
+                                atomic_store_explicit(&stolen->assigned_core, sched->core_id, memory_order_relaxed);
                                 stolen->migrate_to = -1;
                                 sched->actors[sched->actor_count++] = stolen;
                                 work_done = 1;
@@ -578,7 +593,7 @@ int scheduler_register_actor(ActorBase* actor, int preferred_core) {
         sched->capacity *= 2;
     }
     
-    actor->assigned_core = preferred_core;
+    atomic_store_explicit(&actor->assigned_core, preferred_core, memory_order_relaxed);
 
     // Initialize SPSC queue for same-core messaging
     spsc_queue_init(&actor->spsc_queue);
@@ -620,7 +635,7 @@ void scheduler_send_local(ActorBase* actor, Message msg) {
     // This eliminates scheduler loop overhead for tight request-response patterns.
     if (likely(current_core_id >= 0) &&
         inline_depth < MAX_INLINE_DEPTH &&
-        actor->assigned_core == current_core_id &&
+        atomic_load_explicit(&actor->assigned_core, memory_order_relaxed) == current_core_id &&
         actor->mailbox.count == 1) {  // Just this message, actor was idle
         inline_depth++;
         actor->step(actor);
@@ -649,7 +664,7 @@ void scheduler_send_remote(ActorBase* actor, Message msg, int from_core) {
         // Main thread (rare) - use atomic
         atomic_fetch_add_explicit(&main_thread_sent, 1, memory_order_relaxed);
     }
-    int target_core = actor->assigned_core;
+    int target_core = atomic_load_explicit(&actor->assigned_core, memory_order_relaxed);
 
     // Guard against uninitialized or invalid assigned_core
     if (unlikely(target_core < 0 || target_core >= num_cores)) {
@@ -678,7 +693,7 @@ void scheduler_send_remote(ActorBase* actor, Message msg, int from_core) {
     if (from_core >= 0 && from_core == current_core_id && !actor->auto_process) {
         int target_migrate = (from_core < target_core) ? from_core : target_core;
         // Only set if it would move the actor to a lower core (stable direction)
-        if (target_migrate < actor->assigned_core &&
+        if (target_migrate < atomic_load_explicit(&actor->assigned_core, memory_order_relaxed) &&
             (actor->migrate_to < 0 || target_migrate < actor->migrate_to)) {
             actor->migrate_to = target_migrate;
         }
@@ -755,7 +770,7 @@ void scheduler_send_batch_add(ActorBase* actor, Message msg) {
     g_batch_buffer->messages[idx] = msg;
 
     // Track per-core counts for O(1) sorting later
-    int target_core = actor->assigned_core;
+    int target_core = atomic_load_explicit(&actor->assigned_core, memory_order_relaxed);
     if (target_core >= 0 && target_core < num_cores) {
         g_batch_buffer->by_core[target_core]++;
     }
@@ -780,7 +795,7 @@ void scheduler_send_batch_flush(void) {
 
     for (int i = 0; i < g_batch_buffer->count; i++) {
         ActorBase* actor = g_batch_buffer->actors[i];
-        int target_core = actor->assigned_core;
+        int target_core = atomic_load_explicit(&actor->assigned_core, memory_order_relaxed);
         if (target_core < 0 || target_core >= num_cores) {
             target_core = actor->id % num_cores;
         }
@@ -846,7 +861,7 @@ ActorBase* scheduler_spawn_pooled(int preferred_core, void (*step)(void*), size_
     actor->active = 1;
     actor->thread = 0;
     actor->auto_process = 0;
-    actor->assigned_core = preferred_core;
+    atomic_init(&actor->assigned_core, preferred_core);
     actor->migrate_to = -1;
     atomic_init(&actor->main_thread_only, 0);
     atomic_init(&actor->reply_slot, NULL);
@@ -881,7 +896,7 @@ void scheduler_release_pooled(ActorBase* actor) {
     // Track actor count for inline mode auto-detection
     aether_on_actor_terminate();
 
-    int core = actor->assigned_core;
+    int core = atomic_load_explicit(&actor->assigned_core, memory_order_relaxed);
     if (core >= 0 && core < num_cores && schedulers[core].actor_pool) {
         PooledActor* pooled = (PooledActor*)actor;
         if (pooled->pool_index >= 0 && pooled->pool_index < ACTOR_POOL_SIZE) {
