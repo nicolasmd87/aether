@@ -47,15 +47,15 @@ Use explicit type annotations when they improve code clarity or are required.
 **Function signatures** (highly recommended)
 ```aether
 // Function parameters and return types
-func add(int a, int b): int {
+add(int a, int b): int {
     return a + b
 }
 
-func greet(string name): void {
+greet(string name): void {
     print("Hello, " + name)
 }
 
-func find_user(int id): User {
+find_user(int id): User {
     // ... implementation
 }
 ```
@@ -65,7 +65,7 @@ func find_user(int id): User {
 **Public APIs and library functions**
 ```aether
 // Export functions should have explicit types
-export func calculate_distance(Point p1, Point p2): float {
+export calculate_distance(Point p1, Point p2): float {
     dx = p2.x - p1.x
     dy = p2.y - p1.y
     return sqrt(dx * dx + dy * dy)
@@ -160,17 +160,17 @@ active = true
 
 ```aether
 // Explicit parameter and return types
-func multiply(int a, int b): int {
+multiply(int a, int b): int {
     return a * b
 }
 
 // Mixed: explicit parameters, inferred return
-func add(int a, int b) {
+add(int a, int b) {
     return a + b  // Return type inferred
 }
 
 // Full inference (not recommended for public functions)
-func subtract(a, b) {
+subtract(a, b) {
     return a - b
 }
 ```
@@ -207,7 +207,7 @@ counter = spawn(Counter())
 
 ```aether
 // Quick prototype or script
-func fibonacci(n) {
+fibonacci(n) {
     if n <= 1 {
         return n
     }
@@ -229,13 +229,13 @@ export struct Point {
     float y
 }
 
-export func distance(Point p1, Point p2): float {
+export distance(Point p1, Point p2): float {
     float dx = p2.x - p1.x
     float dy = p2.y - p1.y
     return sqrt(dx * dx + dy * dy)
 }
 
-export func midpoint(Point p1, Point p2): Point {
+export midpoint(Point p1, Point p2): Point {
     return Point{
         x: (p1.x + p2.x) / 2.0,
         y: (p1.y + p2.y) / 2.0
@@ -249,7 +249,7 @@ export func midpoint(Point p1, Point p2): Point {
 // Explicit where it matters, inference elsewhere
 import std.collections.HashMap
 
-func process_data(string filename): int {
+process_data(string filename): int {
     // Explicit for complex types
     HashMap map = HashMap.new()
     int count = 0
@@ -293,7 +293,7 @@ fibonacci(n) {
 }
 
 // Explicit return type
-func fibonacci(int n): int {
+fibonacci(int n): int {
     if n <= 1 { return n }
     return fibonacci(n - 1) + fibonacci(n - 2)
 }
@@ -304,8 +304,8 @@ func fibonacci(int n): int {
 | Use Case | Recommendation | Example |
 |----------|---------------|---------|
 | Local variables | Inference | `x = 42` |
-| Function parameters | Explicit | `func add(int a, int b)` |
-| Function returns | Explicit | `func add(...): int` |
+| Function parameters | Explicit | `add(int a, int b)` |
+| Function returns | Explicit | `add(...): int` |
 | Struct fields | Explicit | `struct User { int id }` |
 | Actor state | Explicit | `state count: int` |
 | Loop variables | Inference | `for i in 0..10` |

@@ -6,141 +6,10 @@
 #include "../parser/lexer.h"
 #include "../parser/parser.h"
 #include "../aether_error.h"
-
-#ifdef _WIN32
-    #include <io.h>
-    #define access _access
-    #define F_OK 0
-#else
-    #include <unistd.h>
-#endif
+#include "../aether_module.h"
 
 static int error_count = 0;
 static int warning_count = 0;
-
-// Maximum tokens for parsing module files
-#define MAX_MODULE_TOKENS 2000
-
-// Helper to load and parse a module.ae file, returns AST or NULL
-static ASTNode* load_module_file(const char* module_path) {
-    FILE* f = fopen(module_path, "r");
-    if (!f) return NULL;
-
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-
-    char* source = malloc(size + 1);
-    if (!source) {
-        fclose(f);
-        return NULL;
-    }
-
-    size_t bytes_read = fread(source, 1, size, f);
-    fclose(f);
-    source[bytes_read] = '\0';
-
-    // Tokenize
-    lexer_init(source);
-    Token* tokens[MAX_MODULE_TOKENS];
-    int token_count = 0;
-
-    while (token_count < MAX_MODULE_TOKENS - 1) {
-        Token* token = next_token();
-        tokens[token_count++] = token;
-        if (token->type == TOKEN_EOF || token->type == TOKEN_ERROR) break;
-    }
-
-    // Parse
-    Parser* parser = create_parser(tokens, token_count);
-    ASTNode* ast = parse_program(parser);
-
-    // Cleanup
-    for (int i = 0; i < token_count; i++) {
-        free_token(tokens[i]);
-    }
-    free_parser(parser);
-    free(source);
-
-    return ast;
-}
-
-// Try multiple paths to find a stdlib module file
-static ASTNode* resolve_and_load_module(const char* module_name) {
-    // module_name is like "fs", "string", "json", etc.
-    char path[512];
-
-    // Try 1: Local development path (relative to CWD)
-    snprintf(path, sizeof(path), "std/%s/module.ae", module_name);
-    ASTNode* ast = load_module_file(path);
-    if (ast) return ast;
-
-    // Try 2: Installed path via AETHER_HOME
-    const char* aether_home = getenv("AETHER_HOME");
-    if (aether_home) {
-        snprintf(path, sizeof(path), "%s/share/aether/std/%s/module.ae", aether_home, module_name);
-        ast = load_module_file(path);
-        if (ast) return ast;
-    }
-
-    // Try 3: Common install locations
-    snprintf(path, sizeof(path), "/usr/local/share/aether/std/%s/module.ae", module_name);
-    ast = load_module_file(path);
-    if (ast) return ast;
-
-    snprintf(path, sizeof(path), "%s/.aether/share/aether/std/%s/module.ae",
-             getenv("HOME") ? getenv("HOME") : "", module_name);
-    ast = load_module_file(path);
-    if (ast) return ast;
-
-    return NULL;
-}
-
-// Resolve local package modules (non-std imports)
-// Converts dots to slashes: "mypackage.utils" -> "mypackage/utils/module.ae"
-static ASTNode* resolve_local_module(const char* module_path) {
-    char converted[512];
-    char path[sizeof(converted) + 16];
-
-    // Convert dots to slashes
-    strncpy(converted, module_path, sizeof(converted) - 1);
-    converted[sizeof(converted) - 1] = '\0';
-    for (char* p = converted; *p; p++) {
-        if (*p == '.') *p = '/';
-    }
-
-    // Try 1: lib/module_path/module.ae (library directory)
-    snprintf(path, sizeof(path), "lib/%s/module.ae", converted);
-    ASTNode* ast = load_module_file(path);
-    if (ast) return ast;
-
-    // Try 2: lib/module_path.ae (single file module)
-    snprintf(path, sizeof(path), "lib/%s.ae", converted);
-    ast = load_module_file(path);
-    if (ast) return ast;
-
-    // Try 3: src/module_path/module.ae
-    snprintf(path, sizeof(path), "src/%s/module.ae", converted);
-    ast = load_module_file(path);
-    if (ast) return ast;
-
-    // Try 4: src/module_path.ae
-    snprintf(path, sizeof(path), "src/%s.ae", converted);
-    ast = load_module_file(path);
-    if (ast) return ast;
-
-    // Try 5: module_path/module.ae (project root)
-    snprintf(path, sizeof(path), "%s/module.ae", converted);
-    ast = load_module_file(path);
-    if (ast) return ast;
-
-    // Try 6: module_path.ae (single file in root)
-    snprintf(path, sizeof(path), "%s.ae", converted);
-    ast = load_module_file(path);
-    if (ast) return ast;
-
-    return NULL;
-}
 
 // Get the last component of a module path for namespace
 // "mypackage.utils" -> "utils"
@@ -707,8 +576,9 @@ int typecheck_program(ASTNode* program) {
                     // Register namespace for qualified calls (e.g., string.new)
                     register_namespace(module_name);
 
-                    // Load the module definition file
-                    ASTNode* mod_ast = resolve_and_load_module(module_name);
+                    // Look up cached module from orchestrator
+                    AetherModule* mod = module_find(module_path);
+                    ASTNode* mod_ast = mod ? mod->ast : NULL;
                     if (mod_ast) {
                         // Extract extern declarations from the module
                         for (int j = 0; j < mod_ast->child_count; j++) {
@@ -717,12 +587,8 @@ int typecheck_program(ASTNode* program) {
                                 // Check if selective import - only import specified functions
                                 int should_import = 1;
                                 if (child->child_count > 0) {
-                                    // Check if we have selective imports (not just alias)
                                     ASTNode* first = child->children[0];
                                     if (first && first->type == AST_IDENTIFIER) {
-                                        // Last child might be alias, check if there are more
-                                        // For selective: import std.fs (file_exists, dir_create)
-                                        // children are the identifiers to import
                                         should_import = 0;
                                         for (int k = 0; k < child->child_count; k++) {
                                             ASTNode* sel = child->children[k];
@@ -736,7 +602,6 @@ int typecheck_program(ASTNode* program) {
                                 }
 
                                 if (should_import) {
-                                    // Register in symbol table (same as AST_EXTERN_FUNCTION)
                                     if (!lookup_symbol_local(global_table, decl->value)) {
                                         add_symbol(global_table, decl->value,
                                                    clone_type(decl->node_type), 0, 1, 0);
@@ -744,37 +609,33 @@ int typecheck_program(ASTNode* program) {
                                 }
                             }
                         }
-                        free_ast_node(mod_ast);
+                        // NOTE: do NOT free mod_ast — registry owns it
                     }
-                    // Note: silently continue if module not found (for backwards compat)
                 } else {
                     // Handle local package imports: import mypackage.utils
                     const char* namespace = get_namespace_from_path(module_path);
                     register_namespace(namespace);
 
-                    // Try to resolve and load the local module
-                    ASTNode* mod_ast = resolve_local_module(module_path);
+                    // Look up cached module from orchestrator
+                    AetherModule* mod = module_find(module_path);
+                    ASTNode* mod_ast = mod ? mod->ast : NULL;
                     if (mod_ast) {
-                        // Extract extern declarations and function definitions from the module
                         for (int j = 0; j < mod_ast->child_count; j++) {
                             ASTNode* decl = mod_ast->children[j];
                             if (decl->type == AST_EXTERN_FUNCTION && decl->value) {
-                                // Register extern function in symbol table
                                 if (!lookup_symbol_local(global_table, decl->value)) {
                                     add_symbol(global_table, decl->value,
                                                clone_type(decl->node_type), 0, 1, 0);
                                 }
                             } else if (decl->type == AST_FUNCTION_DEFINITION && decl->value) {
-                                // Register user-defined function in symbol table
                                 if (!lookup_symbol_local(global_table, decl->value)) {
                                     add_symbol(global_table, decl->value,
                                                clone_type(decl->node_type), 0, 1, 0);
                                 }
                             }
                         }
-                        free_ast_node(mod_ast);
+                        // NOTE: do NOT free mod_ast — registry owns it
                     }
-                    // Note: silently continue if module not found
                 }
                 break;
             }
@@ -785,7 +646,6 @@ int typecheck_program(ASTNode* program) {
     
     // NEW: Run type inference before type checking
     if (!infer_all_types(program, global_table)) {
-        fprintf(stderr, "Type inference failed\n");
         free_symbol_table(global_table);
         return 0;
     }

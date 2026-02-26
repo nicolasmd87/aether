@@ -120,7 +120,7 @@ typedef struct AetherString {
 - `string.new(cstr)` - Allocate a new string (use `string.free` when done)
 - `string.free(str)` - Free the string
 
-Use `defer string.free(s)` right after `string.new()` to ensure cleanup at scope exit. In opt-in auto mode (`--auto-free`), the free is injected automatically.
+Use `defer string.free(s)` right after `string.new()` to ensure cleanup at scope exit.
 
 The underlying C implementation also exposes `string.retain()` / `string.release()` for advanced use cases (e.g., sharing ownership across C callbacks), but Aether programs should use `string.free()` directly.
 

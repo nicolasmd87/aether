@@ -7,10 +7,7 @@ The guiding principle:
 
 No hidden allocations. No GC pauses. No magic.
 
-### Why `defer` and not auto-free?
-
-Auto-free (where the compiler silently injects cleanup) is available as an opt-in convenience,
-but the default is explicit `defer` because:
+### Why `defer`?
 
 1. **Visible** -- you can see every allocation and its cleanup in the source
 2. **Composable** -- works with any function, not just stdlib types
@@ -65,7 +62,7 @@ type.free(t)  -> frees the allocation
 
 ---
 
-## The `defer` Pattern (default)
+## The `defer` Pattern
 
 Aether's primary memory management pattern is `defer`: allocate, immediately defer the free, then use the resource. Cleanup runs at scope exit in LIFO order.
 
@@ -131,60 +128,19 @@ main() {
 
 ---
 
-## Auto-Free Mode (opt-in)
-
-For convenience in scripts and small programs, auto-free mode can be enabled. The compiler automatically injects the matching `.free()` call at scope exit for local variables initialized from recognized constructors (e.g. `list.new()` gets a `list.free()` at scope exit).
-
-Enable in `aether.toml`:
-
-```toml
-[package]
-name = "myapp"
-version = "0.1.0"
-
-[memory]
-mode = "auto"
-```
-
-Or for a single run:
-
-```bash
-ae run --auto-free file.ae
-ae build --auto-free file.ae
-```
-
-In auto mode, the compiler scans imported modules for constructor/destructor pairs (`.new()`/`.free()` or `.create()`/`.free()`) and injects the corresponding free at scope exit.
-
-**When using auto mode**, use `@manual` on variables that must outlive their declaration scope:
-
-```aether
-import std.list
-
-build_items(n) : ptr {
-    @manual result = list.new()
-    i = 0
-    while i < n {
-        list.add(result, i)
-        i = i + 1
-    }
-    return result
-}
-```
-
----
-
 ## Actor State
 
-Actor `state` variables initialized with `*.new()` **must always be `@manual`** (in auto mode) because they outlive any single message handler:
+Actor `state` variables initialized with `*.new()` outlive any single message handler. Free them in the actor's `Stop` handler (or wherever the actor is shut down):
 
 ```aether
 import std.map
 
 message Store { key: string, value: string }
 message Lookup { key: string }
+message Stop {}
 
 actor Cache {
-    @manual state data = map.new()
+    state data = map.new()
 
     receive {
         Store(key, value) -> {
@@ -193,6 +149,9 @@ actor Cache {
         Lookup(key) -> {
             print(map.get(data, key))
             print("\n")
+        }
+        Stop() -> {
+            map.free(data)
         }
     }
 }
@@ -246,8 +205,7 @@ while i < n {
 | Typical local allocation | `defer type.free(x)` right after allocation |
 | Value returned from function | Caller defers the free |
 | Value passed to an actor via `!` | Actor owns it; no defer in sender |
-| Actor `state` initialized with `*.new()` | `@manual state ...` (auto mode) |
-| Scripts / small programs | `[memory] mode = "auto"` for convenience |
+| Actor `state` initialized with `*.new()` | Free in `Stop` handler: `map.free(data)` |
 
 ---
 
@@ -256,15 +214,5 @@ while i < n {
 See the following runnable examples:
 
 - [examples/basics/memory_defer.ae](../examples/basics/memory_defer.ae) -- defer pattern (recommended)
-- [examples/basics/memory_manual.ae](../examples/basics/memory_manual.ae) -- default mode with defer
+- [examples/basics/memory_manual.ae](../examples/basics/memory_manual.ae) -- manual free pattern
 - [examples/basics/memory_escape.ae](../examples/basics/memory_escape.ae) -- returning allocated values
-- [examples/basics/memory_auto.ae](../examples/basics/memory_auto.ae) -- opt-in auto-free mode
-- [examples/actors/memory_actor.ae](../examples/actors/memory_actor.ae) -- `@manual state` in an actor
-
----
-
-## Future Work (post v0.5.0)
-
-**Arena-per-actor for stdlib types**: Actor state variables using `map.new()` / `list.new()` would automatically allocate from the actor's arena. Actor death -> total cleanup, zero explicit `*.free()` needed anywhere in actor code.
-
-Requires threading an allocator parameter through the stdlib C implementations.

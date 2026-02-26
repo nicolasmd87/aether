@@ -709,8 +709,8 @@ docker-build-ci:
 	docker build -f docker/Dockerfile.ci -t aether-ci:latest .
 
 docker-ci: docker-build-ci
-	@echo "Running CI tests in Docker..."
-	docker run --rm -v $(PWD):/aether -w /aether aether-ci make ci
+	@echo "Running full CI suite + Valgrind in Docker..."
+	docker run --rm -v $(PWD):/aether -w /aether aether-ci bash -c "make ci && make valgrind-check"
 
 ci: clean
 	@echo "==================================="

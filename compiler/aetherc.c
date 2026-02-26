@@ -18,6 +18,7 @@
 #include "codegen/optimizer.h"
 #include "codegen/codegen.h"
 #include "aether_error.h"
+#include "aether_module.h"
 
 // Compiler limits
 #define MAX_TOKENS 10000
@@ -34,8 +35,6 @@
 // Global flags
 static bool verbose_mode = false;
 static const char* emit_header_path = NULL;
-static bool no_auto_free = true;   // default: manual memory (defer-based)
-static bool auto_free = false;     // --auto-free: opt-in auto-free mode
 
 #ifdef _WIN32
     #include <windows.h>
@@ -67,6 +66,14 @@ static char* derive_header_path(const char* output_path) {
         strcat(header_path, ".h");
     }
     return header_path;
+}
+
+// Print a summary line if any errors were recorded
+static void report_compilation_failure(void) {
+    int n = aether_error_count();
+    if (n > 0) {
+        fprintf(stderr, "aborting: %d error(s) found\n", n);
+    }
 }
 
 // Compile aether source to C
@@ -143,7 +150,7 @@ int compile_source(const char* input_path, const char* output_path) {
     ASTNode* program = parse_program(parser);
     
     if (!program) {
-        fprintf(stderr, "Parse error\n");
+        report_compilation_failure();
         // Cleanup
         for (int i = 0; i < token_count; i++) {
             free_token(tokens[i]);
@@ -155,11 +162,26 @@ int compile_source(const char* input_path, const char* output_path) {
     
     if (verbose_mode) printf("Parse successful\n");
 
+    // Step 2.5: Module Orchestration
+    if (verbose_mode) printf("[Phase 2.5/5] Module resolution...\n");
+    if (!module_orchestrate(program)) {
+        report_compilation_failure();
+        free_ast_node(program);
+        for (int i = 0; i < token_count; i++) {
+            free_token(tokens[i]);
+        }
+        free_parser(parser);
+        free(source);
+        return 0;
+    }
+    if (verbose_mode) printf("Module resolution successful\n");
+
     // Step 3: Type Checking
     if (verbose_mode) printf("Step 3: Type checking...\n");
     if (!typecheck_program(program)) {
-        fprintf(stderr, "Type checking failed\n");
+        report_compilation_failure();
         // Cleanup
+        module_registry_shutdown();
         free_ast_node(program);
         for (int i = 0; i < token_count; i++) {
             free_token(tokens[i]);
@@ -181,6 +203,7 @@ int compile_source(const char* input_path, const char* output_path) {
     if (!output) {
         perror("Error opening output file");
         // Cleanup
+        module_registry_shutdown();
         free_ast_node(program);
         for (int i = 0; i < token_count; i++) {
             free_token(tokens[i]);
@@ -212,7 +235,6 @@ int compile_source(const char* input_path, const char* output_path) {
     } else {
         codegen = create_code_generator(output);
     }
-    codegen->no_auto_free = auto_free ? 0 : 1;
     generate_program(codegen, program);
     fclose(output);
     if (header_output) {
@@ -230,6 +252,7 @@ int compile_source(const char* input_path, const char* output_path) {
     }
 
     // Cleanup
+    module_registry_shutdown();
     free_ast_node(program);
     for (int i = 0; i < token_count; i++) {
         free_token(tokens[i]);
@@ -237,7 +260,7 @@ int compile_source(const char* input_path, const char* output_path) {
     free_parser(parser);
     free_code_generator(codegen);
     free(source);
-    
+
     return 1;
 }
 
@@ -281,8 +304,6 @@ void print_help(const char* program_name) {
     printf("Options:\n");
     printf("  --version, -v                    Show version information\n");
     printf("  --verbose                        Show detailed compilation phases and timing\n");
-    printf("  --auto-free                      Enable auto-free mode (default: manual/defer)\n");
-    printf("  --no-auto-free                   Explicit manual mode (already the default)\n");
     printf("  --emit-header [path]             Generate C header for embedding (default: auto)\n");
     printf("  --help, -h                       Show this help message\n");
     printf("\n");
@@ -305,14 +326,6 @@ int main(int argc, char *argv[]) {
             return 0;
         } else if (strcmp(argv[arg_offset], "--verbose") == 0) {
             verbose_mode = true;
-            arg_offset++;
-        } else if (strcmp(argv[arg_offset], "--no-auto-free") == 0) {
-            no_auto_free = true;
-            auto_free = false;
-            arg_offset++;
-        } else if (strcmp(argv[arg_offset], "--auto-free") == 0) {
-            auto_free = true;
-            no_auto_free = false;
             arg_offset++;
         } else if (strcmp(argv[arg_offset], "--emit-header") == 0) {
             // Check for optional explicit path argument (must end in .h)

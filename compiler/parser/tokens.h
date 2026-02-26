@@ -38,7 +38,6 @@ typedef enum {
     TOKEN_EXCLAIM,          // '!' operator for fire-and-forget
     TOKEN_QUESTION,         // '?' operator for ask pattern
     TOKEN_EXTERN,           // 'extern' keyword for C FFI
-    TOKEN_AT,               // '@' annotation prefix (@manual)
 
     // Types
     TOKEN_INT,

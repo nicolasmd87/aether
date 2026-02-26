@@ -5,59 +5,107 @@
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey)]()
 
-A compiled actor-based programming language with type inference, designed for concurrent systems. Aether compiles to C for native performance and seamless C interoperability.
+A compiled, actor-based language with type inference that targets C. Built for concurrent systems where predictability, performance, and C interoperability matter.
 
-## Overview
+## Why Aether
 
-Aether is a compiled language that brings actor-based concurrency to systems programming. The compiler generates readable C code, providing portability and interoperability with existing C libraries.
+Most languages make concurrency hard to get right or slow to run. Aether takes the actor model — proven in Erlang, used in production for decades — and compiles it to native C with no GC, no VM, no runtime surprises.
 
-**Core Features:**
-- Actor-based concurrency with automatic multi-core scheduling
-- Type inference with optional annotations
-- Compiles to readable C for portability and C library interop
-- Lock-free message passing with adaptive optimizations
+Every actor is isolated state with a message queue. No shared memory, no mutexes, no data races by construction. The scheduler pins actors to cores, uses lock-free SPSC queues for same-core messaging, and automatically batches cross-core sends. A single-actor program bypasses the scheduler entirely and runs synchronously on the main thread with zero allocation overhead.
 
-## Runtime Features
+```aether
+message Increment {}
+message GetCount {}
 
-The Aether runtime implements a native actor system with optimized message passing:
+actor Counter {
+    state count = 0
 
-### Concurrency Model
-- **Multi-core partitioned scheduler** with per-core actor queues
-- **Work-stealing fallback** for idle core balancing (primary strategy is partitioned assignment)
-- **Lock-free SPSC queues** for same-core messaging
-- **Cross-core messaging** with lock-free mailboxes
+    receive {
+        Increment() -> { count = count + 1 }
+        GetCount()  -> { println("Count: ${count}") }
+    }
+}
 
-### Memory Management
-- **Manual by default** — use `defer` for cleanup; opt-in auto-free via `--auto-free` or `aether.toml` [memory] mode = "auto"
-- **Arena allocators** for actor lifetimes
-- **Memory pools** with thread-local allocation
-- **Actor pooling** reducing allocation overhead
-- **Zero-copy message delivery** in single-actor main-thread mode (caller stack passed directly)
+main() {
+    counter = spawn(Counter())
+    counter ! Increment {}
+    counter ! Increment {}
+    counter ! GetCount {}
+}
+```
 
-### Message Optimization
-- **Sender-side batching** for reduced overhead
-- **Message coalescing** for higher throughput
-- **Adaptive batching** dynamically adjusts batch sizes
-- **Direct send** for same-core actors bypasses queues
+## For Game Engine Developers
 
-### Advanced Features
-- **SIMD batch processing** with AVX2 support
-- **NUMA-aware allocation** for multi-socket systems
-- **CPU feature detection** for runtime optimization selection
-- **Performance profiling** with per-core cycle counting
-- **Message tracing** for debugging
+Aether maps cleanly onto patterns game engines already use — but removes the friction that comes with shared mutable state, GC pauses, and FFI overhead.
 
-### Benchmarks
+### Actors as game entities
 
-Aether includes a comprehensive cross-language benchmark suite comparing actor implementations across 11 languages. Run `make benchmark` to evaluate performance on your system.
+Each game object — a player, an enemy, a physics body, a network session — is an actor. Its state is private. It receives messages. It cannot corrupt another entity's data. No mutex, no lock ordering, no "the physics thread read a half-written transform."
 
-See [benchmarks/cross-language/](benchmarks/cross-language/) for methodology and implementation details.
+```aether
+message Move { dx: int, dy: int }
+message TakeDamage { amount: int }
+message Tick {}
 
-## Quick Start
+actor Enemy {
+    state x = 0
+    state y = 0
+    state hp = 100
 
-### Install
+    receive {
+        Move(dx, dy) -> {
+            x = x + dx
+            y = y + dy
+        }
+        TakeDamage(amount) -> {
+            hp = hp - amount
+            if hp <= 0 { println("Enemy defeated") }
+        }
+        Tick() -> {
+            // AI update — isolated, safe to schedule on any core
+        }
+    }
+}
+```
 
-**Linux / macOS — one-line install:**
+The scheduler distributes actors across cores automatically. Thousands of enemies, each with their own AI loop, fan out with a single batch send from main — no thread pool boilerplate, no job queue to manage.
+
+### No GC, no pauses, no surprise allocations
+
+Aether has no garbage collector. Cleanup is explicit via `defer` — declared right after allocation, runs at scope exit in LIFO order. Actor internal state uses arena allocators: when an actor is destroyed, its entire arena is freed in one call. There is no background collection, no stop-the-world pause, no frame-time spike from the runtime deciding to clean up at the wrong moment.
+
+### Native C interop — plug into any engine or library
+
+Aether compiles to readable C and calls C functions directly via `extern`. SDL2, OpenGL, Vulkan, Box2D, PhysX, your in-house engine — all reachable with zero FFI overhead, no binding generator, no marshalling layer.
+
+```aether
+extern SDL_Init(flags: int): int
+extern SDL_CreateWindow(title: ptr, x: int, y: int, w: int, h: int, flags: int): ptr
+extern SDL_PollEvent(event: ptr): int
+
+main() {
+    SDL_Init(0x00000020)  // SDL_INIT_VIDEO
+    window = SDL_CreateWindow("Aether Game", 100, 100, 800, 600, 0)
+    // game loop, actor dispatch, rendering — all in the same process
+}
+```
+
+You can also go the other direction: compile Aether actors to a C header (`--emit-header`) and embed them in an existing C or C++ engine. Drop in an Aether simulation subsystem, a network layer, or an AI system without rewriting anything.
+
+### Benchmark: actor throughput vs Go
+
+| Pattern | vs Go |
+|---|---|
+| Ping-pong (actor ↔ actor) | **5x faster** |
+| Counting (single actor, main-thread mode) | **3.8x faster** |
+| Thread ring (N actors chained) | **2.5x faster** |
+| Fork-join (main → many actors) | **3.6x faster** |
+
+Single-actor programs — a game loop driving one simulation actor — use a zero-copy synchronous path that skips the scheduler entirely. No allocation, no queue, no wakeup latency.
+
+## Install
+
+**Linux / macOS:**
 
 ```bash
 git clone https://github.com/nicolasmd87/aether.git
@@ -65,311 +113,191 @@ cd aether
 ./install.sh
 ```
 
-Installs to `~/.aether` and adds `ae` to your PATH. Restart your terminal or run `source ~/.bashrc`, `~/.zshrc`, or `~/.bash_profile`.
+Installs to `~/.aether`, adds `ae` to PATH. Restart your terminal or source your shell rc file.
 
-**Windows — download and run:**
+**Windows:**
 
 1. Download `aether-*-windows-x86_64.zip` from [Releases](https://github.com/nicolasmd87/aether/releases)
-2. Extract to any folder (e.g. `C:\aether`)
-3. Add `C:\aether\bin` to your PATH
-4. Open any terminal (PowerShell or CMD) and run `ae run hello.ae`
+2. Extract and add `bin/` to your PATH
+3. Run `ae run hello.ae` — GCC is downloaded automatically on first use, no MSYS2 required
 
-GCC is downloaded automatically the first time you run a program — no MSYS2 or manual toolchain setup required.
-
-**All platforms — manage versions with `ae version`:**
+**Version management:**
 
 ```bash
-ae version list              # see all available releases
-ae version install v0.6.0    # download and install a specific version
-ae version use v0.6.0        # switch to that version
+ae version list              # available releases
+ae version install v0.10.0   # install specific version
+ae version use v0.10.0       # switch active version
 ```
 
-### Your First Program
+## Quick Start
 
 ```bash
-# Create a new project
-ae init hello
-cd hello
+ae init mygame
+cd mygame
 ae run
 ```
 
-Or run a single file directly:
+Or run any `.ae` file directly:
 
 ```bash
-ae run examples/basics/hello.ae
+ae run examples/actors/ping_pong.ae
 ```
 
-### Editor Setup (Optional)
-
-Install syntax highlighting for a better coding experience:
-
-**VS Code / Cursor:**
-```bash
-cd editor/vscode
-./install.sh
-```
-
-This provides:
-- Syntax highlighting with TextMate grammar
-- Custom "Aether Erlang" dark theme
-- `.ae` file icons
-
-### Development Build (without installing)
-
-If you prefer to build without installing:
+## The `ae` CLI
 
 ```bash
-make ae
-./build/ae version
-./build/ae run examples/basics/hello.ae
+ae init <name>       # new project with aether.toml, src/main.ae, tests/
+ae run [file.ae]     # compile and run (with build cache)
+ae build [file.ae]   # compile to binary
+ae test              # discover and run tests
+ae examples          # build all examples
+ae repl              # interactive REPL
+ae cache             # show/clear build cache
+ae help              # all commands
 ```
 
-### The `ae` Command
+`ae run` uses a content-hash build cache. Cache hits execute in ~8ms. Cache misses compile and store for next time.
 
-`ae` is the single entry point for everything — like `go` or `cargo`:
+## Language Features
+
+- **Actor-based concurrency** — isolated state, message queues, no shared mutable memory
+- **Type inference** — `x = 42` infers `int`; annotate where it adds clarity
+- **`defer` for cleanup** — explicit, LIFO, no GC, no surprises
+- **String interpolation** — `"Player ${name} has ${hp} HP"`
+- **Pattern matching** in receive blocks with destructuring
+- **Compiles to C** — portable, debuggable with gdb/lldb, links against any C library
+- **`--emit-header`** — generate C headers to embed Aether actors in existing C applications
+
+## Runtime
+
+### Scheduler
+- Partitioned multi-core scheduler — actors assigned to cores, minimal cross-core traffic by default
+- Work-stealing fallback for idle cores
+- Lock-free SPSC queues for same-core messaging
+- **Main-thread actor mode** — single-actor programs bypass the scheduler entirely (zero overhead synchronous path)
+- **Batch send** — fan-out from main reduces N atomic operations to one per core
+
+### Memory
+- Explicit `defer` for stdlib allocations (`list`, `map`, etc.)
+- Arena allocators for actor internal state — single free on actor death, no per-object tracking
+- Thread-local memory pools for message allocation
+- Actor pooling to amortize spawn cost
+
+### Optimization tiers
+
+**Always on:** actor pooling, direct same-core send, adaptive batching, message coalescing, thread-local pools
+
+**Auto-detected:** SIMD batch processing (AVX2/NEON), MWAIT idle (x86), CPU core pinning
+
+**Opt-in:** lock-free mailbox, message deduplication
+
+## C Embedding
+
+Embed Aether actors in any C/C++ application:
 
 ```bash
-ae init <name>           # Create a new project
-ae run [file.ae]         # Compile and run (file or project)
-ae build [file.ae]       # Compile to executable
-ae test [file|dir]       # Discover and run tests
-ae examples [dir]        # Build all example programs
-ae add <package>         # Add a dependency (GitHub repos)
-ae repl                  # Start interactive REPL
-ae version               # Show current version
-ae version list          # List all available releases
-ae version install <v>   # Install a specific version
-ae version use <v>       # Switch to an installed version
-ae help                  # Show all commands
+aetherc --emit-header simulation.ae simulation.h
 ```
 
-In a project directory (with `aether.toml`), `ae run` and `ae build` compile `src/main.ae` as the program entry point. You can also pass `.` as the directory: `ae run .` or `ae build .`.
+```c
+#include "runtime/aether_runtime.h"
+#include "simulation.h"
 
-**Using Make (alternative):**
+int main() {
+    aether_runtime_init(4, AETHER_FLAG_AUTO_DETECT);
 
-```bash
-make compiler                    # Build compiler only
-make ae                          # Build ae CLI tool
-make test                        # Run runtime C test suite (162 tests)
-make test-ae                     # Run .ae source tests (24 tests)
-make test-all                    # Run all tests
-make examples                    # Build all examples
-make -j8                         # Parallel build
-make help                        # Show all targets
+    ActorRef* sim = spawn_Simulation();
+    send_Step(sim, &(Step_msg){ .dt = 16 });
+
+    aether_runtime_shutdown();
+}
 ```
 
-**Windows:** Use the [release binary](https://github.com/nicolasmd87/aether/releases) — no MSYS2 needed. To build from source, use MSYS2 MinGW 64-bit shell; `make ci` runs the full suite (compiler, ae, stdlib, REPL, C tests, .ae tests, examples) with no skips.
+Available runtime flags:
+- `AETHER_FLAG_AUTO_DETECT` — detect CPU features, enable optimizations automatically
+- `AETHER_FLAG_LOCKFREE_MAILBOX` — lock-free SPSC mailboxes (better under contention)
+- `AETHER_FLAG_ENABLE_SIMD` — AVX2/NEON batch operations
+- `AETHER_FLAG_ENABLE_MWAIT` — MWAIT-based idle (x86 only)
+- `AETHER_FLAG_VERBOSE` — print runtime configuration at startup
 
 ## Project Structure
 
 ```
 aether/
-├── compiler/           # Aether compiler (lexer, parser, codegen)
-│   ├── parser/        # Lexer, parser, tokens
-│   ├── analysis/      # Type checker, type inference
-│   ├── codegen/       # C code generation, optimizer
-│   └── aetherc.c      # Compiler entry point
-├── runtime/           # Runtime system
-│   ├── actors/        # Actor implementation and lock-free mailboxes
-│   ├── memory/        # Arena allocators, memory pools, batch allocation
-│   ├── scheduler/     # Multi-core partitioned scheduler with work-stealing fallback
-│   └── utils/         # CPU detection, SIMD, tracing, profiling
-├── std/               # Standard library
-│   ├── collections/   # HashMap, Vector, Set, List
-│   ├── string/       # String operations
-│   ├── net/          # TCP/UDP networking, HTTP
-│   ├── json/         # JSON parser
-│   └── fs/           # File system operations
-├── tools/            # Developer tools
-│   ├── ae.c          # Unified CLI tool (ae command)
-│   └── apkg/         # Project tooling, TOML parser
-├── tests/            # Test suite (runtime, syntax, integration)
-├── examples/         # Example programs (.ae files)
-│   ├── basics/       # Hello world, variables, arrays, etc.
-│   ├── actors/       # Actor patterns (ping-pong, pipeline, etc.)
-│   └── applications/ # Complete applications
-├── docs/            # Documentation
-└── docker/          # Docker configuration
+├── compiler/       # Lexer, parser, type checker, type inference, C codegen
+├── runtime/
+│   ├── actors/     # Actor base, mailboxes, message registry
+│   ├── memory/     # Arena allocators, pools
+│   ├── scheduler/  # Multi-core partitioned scheduler, work-stealing
+│   └── utils/      # CPU detection, SIMD, profiling, tracing
+├── std/            # Collections, string, networking, JSON, file I/O
+├── tools/          # ae CLI, TOML parser, package tooling
+├── tests/          # Runtime C tests, .ae syntax and integration tests
+├── examples/       # Basics, actors, stdlib, applications, C-interop
+├── benchmarks/     # Cross-language actor benchmark suite (11 languages)
+├── docs/           # Full documentation
+└── docker/         # CI images with Valgrind for memory checking
 ```
-
-## Language Example
-
-```aether
-// Counter actor with message handling
-message Increment {}
-message Decrement {}
-message GetCount {}
-message Reset {}
-
-actor Counter {
-    state count = 0
-
-    receive {
-        Increment() -> {
-            count = count + 1
-        }
-        Decrement() -> {
-            count = count - 1
-        }
-        GetCount() -> {
-            println("Current count: ${count}")
-        }
-        Reset() -> {
-            count = 0
-        }
-    }
-}
-
-main() {
-    // Spawn counter actor
-    counter = spawn(Counter())
-
-    // Send messages
-    counter ! Increment {}
-    counter ! Increment {}
-    counter ! GetCount {}
-    counter ! Decrement {}
-    counter ! GetCount {}
-    counter ! Reset {}
-    counter ! GetCount {}
-}
-```
-
-## Runtime Configuration
-
-When embedding the Aether runtime in a C application, configure optimizations at startup:
-
-```c
-#include "runtime/aether_runtime.h"
-
-int main() {
-    // Auto-detect CPU features and enable optimizations
-    aether_runtime_init(4, AETHER_FLAG_AUTO_DETECT);
-
-    // Or manually configure
-    aether_runtime_init(4,
-        AETHER_FLAG_LOCKFREE_MAILBOX |
-        AETHER_FLAG_ENABLE_SIMD |
-        AETHER_FLAG_ENABLE_MWAIT
-    );
-
-    // Your actor system runs here
-
-    return 0;
-}
-```
-
-Available flags:
-- `AETHER_FLAG_AUTO_DETECT` - Detect CPU features and enable optimizations
-- `AETHER_FLAG_LOCKFREE_MAILBOX` - Use lock-free SPSC mailboxes
-- `AETHER_FLAG_ENABLE_SIMD` - AVX2 vectorization for batch operations
-- `AETHER_FLAG_ENABLE_MWAIT` - MWAIT-based idle (x86 only)
-- `AETHER_FLAG_VERBOSE` - Print runtime configuration
-
-## Optimization Tiers
-
-The runtime employs a tiered optimization strategy:
-
-**TIER 1 - Always Enabled:**
-- Actor pooling (reduces allocation overhead)
-- Direct send for same-core actors (bypasses queues)
-- Adaptive batching (adjusts batch size dynamically)
-- Message coalescing (combines small messages)
-- Thread-local message pools
-
-**TIER 2 - Auto-Detected:**
-- SIMD batch processing (requires AVX2/NEON)
-- MWAIT idle (requires x86 MONITOR/MWAIT)
-- CPU core pinning (OS-dependent)
-
-**TIER 3 - Opt-In:**
-- Lock-free mailbox (better under contention)
-- Message deduplication (prevents duplicate processing)
 
 ## Documentation
 
-- [Getting Started Guide](docs/getting-started.md) - Installation and first steps
-- [Language Tutorial](docs/tutorial.md) - Learn Aether syntax and concepts
-- [Language Reference](docs/language-reference.md) - Complete language specification
-- [C Interoperability](docs/c-interop.md) - Using C libraries and the `extern` keyword
-- [Architecture Overview](docs/architecture.md) - Runtime and compiler design
-- [Memory Management](docs/memory-management.md) - defer-first manual model, opt-in auto-free, arena allocators
-- [Runtime Optimizations](docs/runtime-optimizations.md) - Performance techniques
-- [Cross-Language Benchmarks](benchmarks/cross-language/README.md) - Comparative performance analysis
-- [Docker Setup](docker/README.md) - Container development environment
-
-## Development
-
-### Running Tests
-
-```bash
-# Runtime C test suite
-make test
-
-# Aether source tests
-make test-ae
-
-# All tests
-make test-all
-
-# Build all examples
-make examples
-```
-
-### Running Benchmarks
-
-```bash
-# Run cross-language benchmark suite with interactive UI
-make benchmark
-# Open http://localhost:8080 to view results
-
-# Or run directly
-cd benchmarks/cross-language
-./run_benchmarks.sh
-```
-
-The benchmark suite compares Aether against C, C++, Go, Rust, Java, Zig, Erlang, Elixir, Pony, and Scala using baseline actor implementations. Results are system-dependent.
+- [Getting Started](docs/getting-started.md)
+- [Language Reference](docs/language-reference.md)
+- [Language Tutorial](docs/tutorial.md)
+- [C Interoperability](docs/c-interop.md)
+- [C Embedding](docs/c-embedding.md)
+- [Memory Management](docs/memory-management.md)
+- [Runtime Optimizations](docs/runtime-optimizations.md)
+- [Architecture Overview](docs/architecture.md)
+- [Cross-Language Benchmarks](benchmarks/cross-language/README.md)
 
 ## Status
 
-Aether is under active development. The compiler, runtime, and standard library are functional and tested.
+Actively developed. Compiler, runtime, and standard library are functional and tested.
 
-**What works today:**
-- Full compiler pipeline (lexer, parser, type checker, code generator)
-- Multi-core actor runtime with partitioned scheduler and work-stealing fallback
-- Lock-free message passing with adaptive optimizations
-- Standard library (collections, networking, JSON, file I/O)
-- IDE support (VS Code, Cursor) with syntax highlighting
-- Cross-platform (macOS, Linux, Windows)
+**Working today:**
+- Full compiler pipeline with Rust-style diagnostics — file, line, column, source context, caret, fix hints
+- Multi-core actor runtime — partitioned scheduler, work-stealing, lock-free queues
+- Main-thread actor mode for single-actor programs (zero-overhead synchronous path)
+- Batch fan-out send for main-to-many patterns
+- Standard library — collections, networking, JSON, file I/O
+- C embedding via `--emit-header`
+- Cross-platform — macOS, Linux, Windows
+- VS Code / Cursor syntax highlighting
 
-**Known Limitations:**
+**Known limitations:**
 - No generics or parameterized types
-- Module system is nascent (imports resolve to C includes; no versioned packages yet)
+- Module system is early-stage — imports resolve at compile time, no versioned package registry yet
 
 **Roadmap:**
-- Distribution (multi-node actor systems)
+- Distribution — multi-node actor systems across machines
 - Hot code reloading
-- Improved error messages
 - Package registry
+
+## Development
+
+```bash
+make compiler        # build compiler
+make ae              # build ae CLI
+make test            # runtime C tests (162)
+make test-ae         # .ae integration tests (24)
+make test-all        # everything
+make ci              # full CI suite (build + test + examples, -Werror)
+make docker-ci       # CI + Valgrind memory check in Linux container
+make benchmark       # cross-language benchmark suite
+```
 
 ## Contributing
 
-Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
-
-**Areas of interest:**
-- Runtime optimizations
-- Standard library expansion
-- Error message improvements
-- Documentation and examples
+See [CONTRIBUTING.md](CONTRIBUTING.md). Open areas: runtime optimizations, standard library expansion, documentation, examples.
 
 ## Acknowledgments
 
-Aether draws inspiration from:
-- **Erlang/OTP** — Actor model, message passing semantics
-- **Go** — Pragmatic tooling, simple concurrency primitives
-- **Rust** — Systems programming practices, zero-cost abstractions
-- **Pony** — Actor-based type safety concepts
+- **Erlang/OTP** — actor model and message passing semantics
+- **Go** — pragmatic tooling philosophy
+- **Rust** — systems programming practices
+- **Pony** — actor-based type safety
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+MIT. See [LICENSE](LICENSE).

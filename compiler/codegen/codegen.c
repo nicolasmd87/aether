@@ -5,137 +5,8 @@
 #include <stdbool.h>
 #include <pthread.h>
 #include "codegen_internal.h"
-
-#ifdef _WIN32
-    #include <io.h>
-    #define access _access
-    #define F_OK 0
-#else
-    #include <unistd.h>
-#endif
-
-// Maximum tokens for parsing module files
-#define MAX_MODULE_TOKENS 2000
-
-// Helper to load and parse a module.ae file (same as typechecker)
-static ASTNode* codegen_load_module_file(const char* module_path) {
-    FILE* f = fopen(module_path, "r");
-    if (!f) return NULL;
-
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-
-    char* source = malloc(size + 1);
-    if (!source) {
-        fclose(f);
-        return NULL;
-    }
-
-    size_t bytes_read = fread(source, 1, size, f);
-    fclose(f);
-    source[bytes_read] = '\0';
-
-    // Tokenize
-    lexer_init(source);
-    Token* tokens[MAX_MODULE_TOKENS];
-    int token_count = 0;
-
-    while (token_count < MAX_MODULE_TOKENS - 1) {
-        Token* token = next_token();
-        tokens[token_count++] = token;
-        if (token->type == TOKEN_EOF || token->type == TOKEN_ERROR) break;
-    }
-
-    // Parse
-    Parser* parser = create_parser(tokens, token_count);
-    ASTNode* ast = parse_program(parser);
-
-    // Cleanup
-    for (int i = 0; i < token_count; i++) {
-        free_token(tokens[i]);
-    }
-    free_parser(parser);
-    free(source);
-
-    return ast;
-}
-
-// Try multiple paths to find a module file
-static ASTNode* codegen_resolve_and_load_module(const char* module_name) {
-    char path[512];
-
-    // Try 1: Local development path
-    snprintf(path, sizeof(path), "std/%s/module.ae", module_name);
-    ASTNode* ast = codegen_load_module_file(path);
-    if (ast) return ast;
-
-    // Try 2: Installed path via AETHER_HOME
-    const char* aether_home = getenv("AETHER_HOME");
-    if (aether_home) {
-        snprintf(path, sizeof(path), "%s/share/aether/std/%s/module.ae", aether_home, module_name);
-        ast = codegen_load_module_file(path);
-        if (ast) return ast;
-    }
-
-    // Try 3: Common install locations
-    snprintf(path, sizeof(path), "/usr/local/share/aether/std/%s/module.ae", module_name);
-    ast = codegen_load_module_file(path);
-    if (ast) return ast;
-
-    snprintf(path, sizeof(path), "%s/.aether/share/aether/std/%s/module.ae",
-             getenv("HOME") ? getenv("HOME") : "", module_name);
-    ast = codegen_load_module_file(path);
-    if (ast) return ast;
-
-    return NULL;
-}
-
-// Resolve local package modules (non-std imports)
-// Converts dots to slashes: "mypackage.utils" -> "mypackage/utils/module.ae"
-static ASTNode* codegen_resolve_local_module(const char* module_path) {
-    char converted[512];
-    char path[sizeof(converted) + 16];
-
-    // Convert dots to slashes
-    strncpy(converted, module_path, sizeof(converted) - 1);
-    converted[sizeof(converted) - 1] = '\0';
-    for (char* p = converted; *p; p++) {
-        if (*p == '.') *p = '/';
-    }
-
-    // Try 1: lib/module_path/module.ae (library directory)
-    snprintf(path, sizeof(path), "lib/%s/module.ae", converted);
-    ASTNode* ast = codegen_load_module_file(path);
-    if (ast) return ast;
-
-    // Try 2: lib/module_path.ae (single file module)
-    snprintf(path, sizeof(path), "lib/%s.ae", converted);
-    ast = codegen_load_module_file(path);
-    if (ast) return ast;
-
-    // Try 3: src/module_path/module.ae
-    snprintf(path, sizeof(path), "src/%s/module.ae", converted);
-    ast = codegen_load_module_file(path);
-    if (ast) return ast;
-
-    // Try 4: src/module_path.ae
-    snprintf(path, sizeof(path), "src/%s.ae", converted);
-    ast = codegen_load_module_file(path);
-    if (ast) return ast;
-
-    // Try 5: module_path/module.ae (project root)
-    snprintf(path, sizeof(path), "%s/module.ae", converted);
-    ast = codegen_load_module_file(path);
-    if (ast) return ast;
-
-    // Try 6: module_path.ae (single file in root)
-    snprintf(path, sizeof(path), "%s.ae", converted);
-    ast = codegen_load_module_file(path);
-    if (ast) return ast;
-
-    return NULL;
-}
+#include "../aether_module.h"
+#include "../aether_error.h"
 
 // Check if an AST node contains send expressions (for batch optimization)
 int contains_send_expression(ASTNode* node) {
@@ -184,19 +55,10 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->scope_depth = 0;
     memset(gen->defer_stack, 0, sizeof(gen->defer_stack));
     memset(gen->scope_defer_start, 0, sizeof(gen->scope_defer_start));
-    // Memory management
-    gen->no_auto_free = 1;
-    gen->synthetic_nodes = NULL;
-    gen->synthetic_node_count = 0;
-    gen->synthetic_node_capacity = 0;
     // Extern function parameter registry
     gen->extern_registry = NULL;
     gen->extern_registry_count = 0;
     gen->extern_registry_capacity = 0;
-    // Dynamic destructor registry
-    gen->destructor_registry = NULL;
-    gen->destructor_count = 0;
-    gen->destructor_capacity = 0;
     // Ask/reply type map
     gen->reply_type_map = NULL;
     gen->reply_type_count = 0;
@@ -236,25 +98,12 @@ void free_code_generator(CodeGenerator* gen) {
             }
             free(gen->generated_functions);
         }
-        if (gen->synthetic_nodes) {
-            for (int i = 0; i < gen->synthetic_node_count; i++) {
-                free_ast_node(gen->synthetic_nodes[i]);
-            }
-            free(gen->synthetic_nodes);
-        }
         if (gen->extern_registry) {
             for (int i = 0; i < gen->extern_registry_count; i++) {
                 free(gen->extern_registry[i].name);
                 free(gen->extern_registry[i].params);
             }
             free(gen->extern_registry);
-        }
-        if (gen->destructor_registry) {
-            for (int i = 0; i < gen->destructor_count; i++) {
-                free(gen->destructor_registry[i].constructor);
-                free(gen->destructor_registry[i].destructor);
-            }
-            free(gen->destructor_registry);
         }
         if (gen->reply_type_map) {
             for (int i = 0; i < gen->reply_type_count; i++) {
@@ -264,85 +113,6 @@ void free_code_generator(CodeGenerator* gen) {
             free(gen->reply_type_map);
         }
         free(gen);
-    }
-}
-
-// --- Destructor registry ---
-
-void register_destructor_pair(CodeGenerator* gen, const char* constructor, const char* destructor) {
-    for (int i = 0; i < gen->destructor_count; i++) {
-        if (strcmp(gen->destructor_registry[i].constructor, constructor) == 0) return;
-    }
-    if (gen->destructor_count >= gen->destructor_capacity) {
-        int new_cap = gen->destructor_capacity ? gen->destructor_capacity * 2 : 16;
-        void* tmp = realloc(gen->destructor_registry,
-            new_cap * sizeof(gen->destructor_registry[0]));
-        if (!tmp) return;
-        gen->destructor_registry = tmp;
-        gen->destructor_capacity = new_cap;
-    }
-    gen->destructor_registry[gen->destructor_count].constructor = strdup(constructor);
-    gen->destructor_registry[gen->destructor_count].destructor = strdup(destructor);
-    gen->destructor_count++;
-}
-
-// Scan a module AST for matching constructor/destructor pairs.
-// Matches: foo_new/foo_free, foo_create/foo_free, and special cases like
-// dir_list/dir_list_free and map_keys/map_keys_free.
-void scan_module_for_destructors(CodeGenerator* gen, ASTNode* mod_ast) {
-    if (!mod_ast) return;
-
-    const char* suffixes[][2] = {
-        { "_new",    "_free" },
-        { "_create", "_free" },
-        { NULL, NULL }
-    };
-
-    for (int i = 0; i < mod_ast->child_count; i++) {
-        ASTNode* decl = mod_ast->children[i];
-        if (decl->type != AST_EXTERN_FUNCTION || !decl->value) continue;
-        const char* name = decl->value;
-        size_t len = strlen(name);
-
-        for (int s = 0; suffixes[s][0]; s++) {
-            const char* ctor_suf = suffixes[s][0];
-            const char* dtor_suf = suffixes[s][1];
-            size_t suf_len = strlen(ctor_suf);
-            if (len <= suf_len) continue;
-            if (strcmp(name + len - suf_len, ctor_suf) != 0) continue;
-
-            char prefix[256];
-            size_t prefix_len = len - suf_len;
-            if (prefix_len >= sizeof(prefix)) continue;
-            memcpy(prefix, name, prefix_len);
-            prefix[prefix_len] = '\0';
-
-            char expected_dtor[sizeof(prefix) + 16];
-            snprintf(expected_dtor, sizeof(expected_dtor), "%s%s", prefix, dtor_suf);
-
-            for (int j = 0; j < mod_ast->child_count; j++) {
-                ASTNode* other = mod_ast->children[j];
-                if (other->type != AST_EXTERN_FUNCTION || !other->value) continue;
-                if (strcmp(other->value, expected_dtor) == 0) {
-                    register_destructor_pair(gen, name, expected_dtor);
-                    break;
-                }
-            }
-            break;
-        }
-
-        // Special case: functions that return allocated data but don't follow
-        // _new/_create convention (e.g., dir_list -> dir_list_free)
-        char special_dtor[512];
-        snprintf(special_dtor, sizeof(special_dtor), "%s_free", name);
-        for (int j = 0; j < mod_ast->child_count; j++) {
-            ASTNode* other = mod_ast->children[j];
-            if (other->type != AST_EXTERN_FUNCTION || !other->value) continue;
-            if (strcmp(other->value, special_dtor) == 0) {
-                register_destructor_pair(gen, name, special_dtor);
-                break;
-            }
-        }
     }
 }
 
@@ -456,31 +226,11 @@ void push_defer(CodeGenerator* gen, ASTNode* stmt) {
     if (gen->defer_count < MAX_DEFER_STACK) {
         gen->defer_stack[gen->defer_count++] = stmt;
     } else {
-        fprintf(stderr, "Warning: defer stack overflow (max %d)\n", MAX_DEFER_STACK);
+        AetherError w = {NULL, NULL, 0, 0, "defer stack overflow — too many nested defers",
+                         "simplify scope nesting or reduce number of deferred statements",
+                         NULL, AETHER_ERR_NONE};
+        aether_warning_report(&w);
     }
-}
-
-// Push an auto-generated free call as a deferred statement.
-// Creates a synthetic AST_EXPRESSION_STATEMENT { AST_FUNCTION_CALL(free_fn, var_name) }
-// and pushes it onto the defer stack. The synthetic node is tracked for cleanup.
-void push_auto_defer(CodeGenerator* gen, const char* free_fn, const char* var_name) {
-    // Build: free_fn(var_name)
-    ASTNode* call = create_ast_node(AST_FUNCTION_CALL, free_fn, 0, 0);
-    ASTNode* arg  = create_ast_node(AST_IDENTIFIER, var_name, 0, 0);
-    add_child(call, arg);
-    // Wrap in expression statement so generate_statement() handles it correctly
-    ASTNode* stmt = create_ast_node(AST_EXPRESSION_STATEMENT, NULL, 0, 0);
-    add_child(stmt, call);
-
-    push_defer(gen, stmt);
-
-    // Track for cleanup in free_code_generator
-    if (gen->synthetic_node_count >= gen->synthetic_node_capacity) {
-        gen->synthetic_node_capacity = gen->synthetic_node_capacity * 2 + 8;
-        gen->synthetic_nodes = realloc(gen->synthetic_nodes,
-            gen->synthetic_node_capacity * sizeof(ASTNode*));
-    }
-    gen->synthetic_nodes[gen->synthetic_node_count++] = stmt;
 }
 
 // Enter a new scope - remember where defers started for this scope
@@ -686,7 +436,9 @@ void print_line(CodeGenerator* gen, const char* format, ...) {
 
 const char* get_c_type(Type* type) {
     if (!type) {
-        fprintf(stderr, "Warning: NULL type encountered in codegen, defaulting to int\n");
+        AetherError w = {NULL, NULL, 0, 0, "internal: NULL type in codegen, defaulting to int",
+                         "this is a compiler bug — please report it", NULL, AETHER_ERR_NONE};
+        aether_warning_report(&w);
         return "int";
     }
 
@@ -728,9 +480,14 @@ const char* get_c_type(Type* type) {
         case TYPE_UNKNOWN:
             // TYPE_UNKNOWN is common for pattern variables - silently default to int
             return "int";
-        default:
-            fprintf(stderr, "Warning: Unknown type kind %d in codegen, defaulting to void\n", type->kind);
+        default: {
+            char wbuf[128];
+            snprintf(wbuf, sizeof(wbuf), "internal: unknown type kind %d in codegen, defaulting to void", type->kind);
+            AetherError w = {NULL, NULL, 0, 0, wbuf,
+                             "this is a compiler bug — please report it", NULL, AETHER_ERR_NONE};
+            aether_warning_report(&w);
             return "void";
+        }
     }
 }
 
@@ -1081,10 +838,9 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
 
                     // Handle stdlib imports: import std.X
                     if (strncmp(module_path, "std.", 4) == 0) {
-                        const char* module_name = module_path + 4;
-
-                        // Load the module definition file
-                        ASTNode* mod_ast = codegen_resolve_and_load_module(module_name);
+                        // Look up cached module from orchestrator
+                        AetherModule* mod_entry = module_find(module_path);
+                        ASTNode* mod_ast = mod_entry ? mod_entry->ast : NULL;
                         if (mod_ast) {
                             // Generate extern declarations for imported functions
                             for (int j = 0; j < mod_ast->child_count; j++) {
@@ -1112,14 +868,13 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                                     }
                                 }
                             }
-                            scan_module_for_destructors(gen, mod_ast);
-                            free_ast_node(mod_ast);
+                            // NOTE: do NOT free mod_ast — registry owns it
                         }
                     } else {
                         // Handle local package imports: import mypackage.utils
-                        ASTNode* mod_ast = codegen_resolve_local_module(module_path);
+                        AetherModule* mod_entry = module_find(module_path);
+                        ASTNode* mod_ast = mod_entry ? mod_entry->ast : NULL;
                         if (mod_ast) {
-                            // Generate extern declarations for imported functions
                             for (int j = 0; j < mod_ast->child_count; j++) {
                                 ASTNode* decl = mod_ast->children[j];
                                 if (decl->type == AST_EXTERN_FUNCTION && decl->value) {
@@ -1128,8 +883,7 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                                     generate_extern_declaration(gen, decl);
                                 }
                             }
-                            scan_module_for_destructors(gen, mod_ast);
-                            free_ast_node(mod_ast);
+                            // NOTE: do NOT free mod_ast — registry owns it
                         }
                     }
                 }

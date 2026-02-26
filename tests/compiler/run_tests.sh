@@ -23,6 +23,7 @@ TEST_FILES=(
     "tests/compiler/test_pattern_matching_comprehensive.c"
     "tests/compiler/test_codegen.c"
     "tests/compiler/test_structs.c"
+    "tests/compiler/test_module_orchestrator.c"
 )
 
 # Test harness and main

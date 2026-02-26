@@ -27,9 +27,14 @@ jobs:
     runs-on: ubuntu-latest
     # Only on real human merges to main — skip bot commits (the VERSION
     # commit we push back) and manual tag pushes (handled by build alone).
+    # Also skip regular-merge commits from release/* branches: when auto-merge
+    # fails and someone merges manually, GitHub creates a commit like
+    # "Merge pull request #N from user/release/v0.9.0" which doesn't start
+    # with "chore: release " but must still be ignored.
     if: |
       github.ref == 'refs/heads/main' &&
-      !startsWith(github.event.head_commit.message, 'chore: release ')
+      !startsWith(github.event.head_commit.message, 'chore: release ') &&
+      !contains(github.event.head_commit.message, '/release/v')
 
     permissions:
       contents: write

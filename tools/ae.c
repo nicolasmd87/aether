@@ -475,29 +475,6 @@ found_root:
     }
 }
 
-// Check aether.toml [memory] mode.
-// Default is manual (no flag needed). Returns "--auto-free" if mode = "auto".
-static const char* get_memory_flag(void) {
-    static char flag[32] = "";
-    static bool checked = false;
-
-    if (checked) return flag;
-    checked = true;
-
-    if (!path_exists("aether.toml")) return flag;
-
-    TomlDocument* doc = toml_parse_file("aether.toml");
-    if (!doc) return flag;
-
-    const char* val = toml_get_value(doc, "memory", "mode");
-    if (val && strcmp(val, "auto") == 0) {
-        strncpy(flag, "--auto-free", sizeof(flag) - 1);
-    }
-
-    toml_free_document(doc);
-    return flag;
-}
-
 // Get link_flags from aether.toml [build] section
 // Returns empty string if not found or no aether.toml
 static const char* get_link_flags(void) {
@@ -679,13 +656,9 @@ static void build_gcc_cmd(char* cmd, size_t size,
 
 static int cmd_run(int argc, char** argv) {
     const char* file = NULL;
-    bool run_no_auto_free = false;
-    bool run_auto_free = false;
 
     for (int i = 0; i < argc; i++) {
-        if (strcmp(argv[i], "--no-auto-free") == 0) { run_no_auto_free = true; }
-        else if (strcmp(argv[i], "--auto-free") == 0) { run_auto_free = true; }
-        else if (argv[i][0] != '-') { file = argv[i]; break; }
+        if (argv[i][0] != '-') { file = argv[i]; break; }
     }
 
     // Resolve directory argument (e.g. "." or "myproject/") to src/main.ae
@@ -723,15 +696,13 @@ static int cmd_run(int argc, char** argv) {
     }
 
     char c_file[1024], exe_file[1024], cmd[8192];
-    const char* mem_flag = run_auto_free ? "--auto-free" :
-                           run_no_auto_free ? "--no-auto-free" : get_memory_flag();
 
     // --- Cache check ---
     // ae run uses -O0 (fast dev builds). Check if we have a cached exe for
-    // this exact source + compiler + flags combination.
+    // this exact source + compiler combination.
     bool using_cache = false;
     char cached_exe[512] = "";
-    unsigned long long cache_key = compute_cache_key(file, mem_flag);
+    unsigned long long cache_key = compute_cache_key(file, "");
     if (cache_key != 0) {
         init_cache_dir();
         snprintf(cached_exe, sizeof(cached_exe), "%s/%016llx" EXE_EXT, s_cache_dir, cache_key);
@@ -761,10 +732,7 @@ static int cmd_run(int argc, char** argv) {
 
     // Step 1: Compile .ae to .c
     if (tc.verbose) printf("Compiling %s...\n", file);
-    if (mem_flag[0])
-        snprintf(cmd, sizeof(cmd), "%s %s %s %s", tc.compiler, mem_flag, file, c_file);
-    else
-        snprintf(cmd, sizeof(cmd), "%s %s %s", tc.compiler, file, c_file);
+    snprintf(cmd, sizeof(cmd), "%s %s %s", tc.compiler, file, c_file);
 
     int aetherc_ret = tc.verbose ? run_cmd(cmd) : run_cmd_quiet(cmd);
     if (aetherc_ret != 0) {
@@ -805,18 +773,12 @@ static int cmd_build(int argc, char** argv) {
     const char* output_name = NULL;
     char extra_files[2048] = "";
 
-    bool build_no_auto_free = false;
-    bool build_auto_free = false;
     for (int i = 0; i < argc; i++) {
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             output_name = argv[++i];
         } else if (strcmp(argv[i], "--extra") == 0 && i + 1 < argc) {
             if (extra_files[0]) strncat(extra_files, " ", sizeof(extra_files) - strlen(extra_files) - 1);
             strncat(extra_files, argv[++i], sizeof(extra_files) - strlen(extra_files) - 1);
-        } else if (strcmp(argv[i], "--no-auto-free") == 0) {
-            build_no_auto_free = true;
-        } else if (strcmp(argv[i], "--auto-free") == 0) {
-            build_auto_free = true;
         } else if (argv[i][0] != '-') {
             file = argv[i];
         }
@@ -878,12 +840,7 @@ static int cmd_build(int argc, char** argv) {
     printf("Building %s...\n", file);
 
     // Step 1: .ae to .c
-    const char* build_mem_flag = build_auto_free ? "--auto-free" :
-                                 build_no_auto_free ? "--no-auto-free" : get_memory_flag();
-    if (build_mem_flag[0])
-        snprintf(cmd, sizeof(cmd), "%s %s %s %s", tc.compiler, build_mem_flag, file, c_file);
-    else
-        snprintf(cmd, sizeof(cmd), "%s %s %s", tc.compiler, file, c_file);
+    snprintf(cmd, sizeof(cmd), "%s %s %s", tc.compiler, file, c_file);
 
     int aetherc_ret = tc.verbose ? run_cmd(cmd) : run_cmd_quiet(cmd);
     if (aetherc_ret != 0) {

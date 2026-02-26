@@ -341,7 +341,6 @@ Token* next_token() {
         case '.': advance(); return create_token(TOKEN_DOT, ".", current_line, current_column);
         case ':': advance(); return create_token(TOKEN_COLON, ":", current_line, current_column);
         case '?': advance(); return create_token(TOKEN_QUESTION, "?", current_line, current_column);
-        case '@': advance(); return create_token(TOKEN_AT, "@", current_line, current_column);
         default:
             advance();
             return create_token(TOKEN_ERROR, &c, current_line, current_column);
