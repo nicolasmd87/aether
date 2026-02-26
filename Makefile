@@ -709,8 +709,8 @@ docker-build-ci:
 	docker build -f docker/Dockerfile.ci -t aether-ci:latest .
 
 docker-ci: docker-build-ci
-	@echo "Running full CI suite + Valgrind in Docker..."
-	docker run --rm -v $(PWD):/aether -w /aether aether-ci bash -c "make ci && make valgrind-check"
+	@echo "Running full CI suite + Valgrind + ASan in Docker..."
+	docker run --rm -v $(PWD):/aether -w /aether aether-ci bash -c "make ci && make valgrind-check && make asan-check"
 
 ci: clean
 	@echo "==================================="
@@ -756,7 +756,23 @@ valgrind-check: clean
 		./build/test_runner$(EXE_EXT) || (echo "Valgrind errors detected!" && exit 1)
 	@echo "✓ Valgrind clean — no leaks or uninitialised reads"
 
-.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime benchmark benchmark-ui examples run compile repl clean help self-test release install stats stdlib ci docker-ci docker-build-ci valgrind-check bump-patch bump-minor bump-major
+asan-check: clean
+	@echo "==================================="
+	@echo "Running AddressSanitizer Check"
+	@echo "==================================="
+	@$(MAKE) compiler CFLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
+	                  LDFLAGS="-fsanitize=address -pthread -lm"
+	@$(MAKE) test-build CFLAGS="-fsanitize=address -fno-omit-frame-pointer -g" \
+	                    LDFLAGS="-fsanitize=address -pthread -lm"
+	@ASAN_OPTIONS=detect_leaks=1:check_initialization_order=1 \
+	  ./build/test_runner$(EXE_EXT) 2>&1 | tee asan.log; \
+	  if grep -q "ERROR: AddressSanitizer" asan.log; then \
+	    echo "ERROR: AddressSanitizer detected errors!"; \
+	    exit 1; \
+	  fi
+	@echo "✓ ASan clean — no memory errors detected"
+
+.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime benchmark benchmark-ui examples run compile repl clean help self-test release install stats stdlib ci docker-ci docker-build-ci valgrind-check asan-check bump-patch bump-minor bump-major
 
 # --------------------------------------------------------------------------
 # Version management (CI/CD only -- do not run manually)

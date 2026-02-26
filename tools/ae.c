@@ -80,7 +80,7 @@ static const char* get_temp_dir(void) {
 
 typedef struct {
     char root[1024];           // Aether root directory
-    char compiler[1024];       // Path to aetherc
+    char compiler[2048];       // Path to aetherc (root + /bin/aetherc = up to 1036 bytes)
     char lib[1024];            // Path to libaether.a (if exists)
     char include_flags[2048];  // -I flags for GCC
     char runtime_srcs[4096];   // Runtime .c files (source fallback)
@@ -695,13 +695,13 @@ static int cmd_run(int argc, char** argv) {
         return 1;
     }
 
-    char c_file[1024], exe_file[1024], cmd[8192];
+    char c_file[2048], exe_file[2048], cmd[8192];
 
     // --- Cache check ---
     // ae run uses -O0 (fast dev builds). Check if we have a cached exe for
     // this exact source + compiler combination.
     bool using_cache = false;
-    char cached_exe[512] = "";
+    char cached_exe[1024] = "";
     unsigned long long cache_key = compute_cache_key(file, "");
     if (cache_key != 0) {
         init_cache_dir();
@@ -818,7 +818,7 @@ static int cmd_build(int argc, char** argv) {
     }
 
     const char* base = get_basename(file);
-    char c_file[1024], exe_file[1024], cmd[8192];
+    char c_file[2048], exe_file[2048], cmd[8192];
 
     if (output_name) {
         // Explicit -o: use the path as-is
@@ -1012,7 +1012,7 @@ static int cmd_test(int argc, char** argv) {
         printf("  %-45s ", test);
         fflush(stdout);
 
-        char c_file[1024], exe_file[1024], cmd[8192];
+        char c_file[2048], exe_file[2048], cmd[8192];
 
         if (tc.dev_mode) {
             snprintf(c_file, sizeof(c_file), "%s/build/_test_%d.c", tc.root, i);
@@ -1023,7 +1023,16 @@ static int cmd_test(int argc, char** argv) {
         }
 
         // Compile .ae to .c
+        // GCC conservatively assumes argv paths may be PATH_MAX-sized; cmd[8192]
+        // is sufficient for real-world paths (compiler + test + c_file < 8KB).
+#if defined(__GNUC__) && !defined(__clang__)
+#  pragma GCC diagnostic push
+#  pragma GCC diagnostic ignored "-Wformat-truncation"
+#endif
         snprintf(cmd, sizeof(cmd), "%s %s %s", tc.compiler, test, c_file);
+#if defined(__GNUC__) && !defined(__clang__)
+#  pragma GCC diagnostic pop
+#endif
         if (run_cmd_quiet(cmd) != 0) {
             printf("FAIL (compile)\n");
             failed++;
@@ -1090,7 +1099,7 @@ static int cmd_add(int argc, char** argv) {
     snprintf(cache_dir, sizeof(cache_dir), "%s/.aether/packages", user_home ? user_home : ".");
 #endif
 
-    char pkg_dir[1024];
+    char pkg_dir[2048];
     snprintf(pkg_dir, sizeof(pkg_dir), "%s/%s", cache_dir, package);
 
     if (!dir_exists(pkg_dir)) {
@@ -1101,8 +1110,17 @@ static int cmd_add(int argc, char** argv) {
         char* slash = strrchr(parent, '/');
         if (slash) { *slash = '\0'; mkdirs(parent); }
 
+        // GCC conservatively assumes package (argv string) may be PATH_MAX-sized;
+        // package names are short in practice (< 256 bytes).
+#if defined(__GNUC__) && !defined(__clang__)
+#  pragma GCC diagnostic push
+#  pragma GCC diagnostic ignored "-Wformat-truncation"
+#endif
         char cmd[2048];
         snprintf(cmd, sizeof(cmd), "git clone --depth 1 https://%s \"%s\" 2>&1", package, pkg_dir);
+#if defined(__GNUC__) && !defined(__clang__)
+#  pragma GCC diagnostic pop
+#endif
         if (run_cmd(cmd) != 0) {
             fprintf(stderr, "Failed to download package.\n");
             return 1;
@@ -1199,7 +1217,7 @@ static int cmd_examples(int argc, char** argv) {
         printf("  %-30s ", base);
         fflush(stdout);
 
-        char c_file[1024], exe_file[1024], cmd[8192];
+        char c_file[2048], exe_file[2048], cmd[8192];
         snprintf(c_file, sizeof(c_file), "build/examples/%s.c", base);
         snprintf(exe_file, sizeof(exe_file), "build/examples/%s" EXE_EXT, base);
 
@@ -1240,7 +1258,16 @@ static int cmd_examples(int argc, char** argv) {
         }
 
         // Step 1: compile .ae -> .c
+        // GCC conservatively assumes src (char* from glob) may be PATH_MAX-sized;
+        // cmd[8192] is sufficient for real-world paths.
+#if defined(__GNUC__) && !defined(__clang__)
+#  pragma GCC diagnostic push
+#  pragma GCC diagnostic ignored "-Wformat-truncation"
+#endif
         snprintf(cmd, sizeof(cmd), "%s %s %s", tc.compiler, src, c_file);
+#if defined(__GNUC__) && !defined(__clang__)
+#  pragma GCC diagnostic pop
+#endif
         if (run_cmd_quiet(cmd) != 0) {
             printf("FAIL (compile)\n");
             fail++;
@@ -1411,7 +1438,7 @@ static int ae_extract(const char* archive, const char* dest_dir) {
     remove(ps_path);
     return r;
 #else
-    char cmd[1024];
+    char cmd[2048];
     snprintf(cmd, sizeof(cmd), "tar -xzf \"%s\" -C \"%s\"", archive, dest_dir);
     return system(cmd);
 #endif
@@ -1547,20 +1574,26 @@ static int cmd_version_install(const char* version) {
 #ifdef _WIN32
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "xcopy /E /Y /Q \"%s\\*\" \"%s\\\"", tmp_dir, ver_dir);
-    system(cmd);
+    if (system(cmd) != 0) {
+        fprintf(stderr, "Error: Failed to copy installation files.\n");
+        return 1;
+    }
     snprintf(cmd, sizeof(cmd), "rmdir /S /Q \"%s\"", tmp_dir);
-    system(cmd);
+    if (system(cmd) != 0) { /* non-fatal: temp dir cleanup */ }
 #else
     {
-        char cmd[1024];
+        char cmd[4096];
         // Find the single top-level directory inside tmp_dir
         snprintf(cmd, sizeof(cmd),
             "src=$(ls -d '%s'/*/ 2>/dev/null | head -1); "
             "[ -n \"$src\" ] && cp -r \"$src\"* '%s/' || cp -r '%s'/* '%s/'",
             tmp_dir, ver_dir, tmp_dir, ver_dir);
-        system(cmd);
+        if (system(cmd) != 0) {
+            fprintf(stderr, "Error: Failed to copy installation files.\n");
+            return 1;
+        }
         snprintf(cmd, sizeof(cmd), "rm -rf '%s'", tmp_dir);
-        system(cmd);
+        if (system(cmd) != 0) { /* non-fatal: temp dir cleanup */ }
     }
 #endif
 
@@ -1603,19 +1636,20 @@ static int cmd_version_use(const char* version) {
     char current[512];
     snprintf(current, sizeof(current), "%s/.aether/current", home);
     remove(current);
-    char cmd[1024];
+    char cmd[4096];
     snprintf(cmd, sizeof(cmd), "ln -sf \"%s\" \"%s\"", ver_dir, current);
     if (system(cmd) != 0) {
         fprintf(stderr, "Failed to create symlink. Try manually:\n");
         fprintf(stderr, "  ln -sf %s %s\n", ver_dir, current);
         return 1;
     }
-    // Also copy binaries to ~/.aether/bin/ so older ae binaries still resolve
-    char dest_bin[512], src_bin[512];
+    // Also copy binaries to ~/.aether/bin/ so older ae binaries still resolve.
+    // Best-effort: failure here does not affect the version switch itself.
+    char dest_bin[512], src_bin[1024];
     snprintf(dest_bin, sizeof(dest_bin), "%s/.aether/bin", home);
     snprintf(src_bin,  sizeof(src_bin),  "%s/bin",         ver_dir);
     snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\" && cp -f \"%s\"/aetherc* \"%s/\" 2>/dev/null", dest_bin, src_bin, dest_bin);
-    system(cmd);
+    if (system(cmd) != 0) { /* non-fatal: old ae binaries may not resolve new compiler */ }
     printf("Switched to Aether %s.\n", vtag);
     return 0;
 #endif
@@ -1687,7 +1721,7 @@ static int cmd_release(int argc, char** argv) {
     }
 
     // Find VERSION file - prefer current dir (dev mode), then tc.root
-    char version_path[1024];
+    char version_path[2048];
     if (path_exists("VERSION")) {
         strcpy(version_path, "VERSION");
     } else if (tc.root[0]) {

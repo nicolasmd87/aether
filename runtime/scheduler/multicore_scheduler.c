@@ -204,12 +204,17 @@ void* AETHER_HOT scheduler_thread(void* arg) {
         adaptive_batch_adjust(&sched->batch_state, sched->coalesce_buffer.count);
         
         // Process active actors (NO ATOMICS - actors are core-local)
-        // This is the performance-critical loop
-        for (int i = 0; i < sched->actor_count; i++) {
+        // Acquire fence: ensures actor pointer writes from work-steal/migration
+        // (released under spinlock) are visible before we read actor_count.
+        // Without this, on ARM64 the thread can see the incremented actor_count
+        // but still read a stale (garbage) actors[i] from the unordered store.
+        atomic_thread_fence(memory_order_acquire);
+        int local_actor_count = sched->actor_count;
+        for (int i = 0; i < local_actor_count; i++) {
             ActorBase* actor = sched->actors[i];
 
             // Prefetch next actor for better pipeline utilization
-            if (i + 1 < sched->actor_count) {
+            if (i + 1 < local_actor_count) {
                 AETHER_PREFETCH(sched->actors[i + 1], 0, 3);
             }
 
@@ -371,6 +376,18 @@ void scheduler_init(int cores) {
     // Initialize profile and inline mode from env vars
     aether_init_from_env();
 
+    // Reset main-thread-mode and actor count between scheduler lifecycles.
+    // Tests call scheduler_init/cleanup in sequence; a prior run may have left
+    // main_thread_mode=true (via scheduler_spawn_pooled), causing scheduler_start()
+    // and scheduler_wait() to skip creating/joining threads on the next run.
+    // Only reset if the user hasn't force-enabled inline mode via AETHER_INLINE.
+    if (!atomic_load_explicit(&g_aether_config.inline_mode_forced, memory_order_relaxed)) {
+        atomic_store_explicit(&g_aether_config.main_thread_mode, false, memory_order_relaxed);
+        atomic_store_explicit(&g_aether_config.inline_mode_active, false, memory_order_relaxed);
+        g_aether_config.main_actor = NULL;
+    }
+    atomic_store_explicit(&g_aether_config.actor_count, 0, memory_order_relaxed);
+
     // Initialize NUMA topology detection
     (void)aether_numa_init();  // NUMA topology initialized for future use
     
@@ -391,6 +408,11 @@ void scheduler_init(int cores) {
             fprintf(stderr, "ERROR: Failed to allocate memory for scheduler %d actors\n", i);
             exit(1);
         }
+        // Zero the slot array so uninitialized entries read as NULL.
+        // aether_numa_alloc() falls back to malloc() (not calloc) without libnuma,
+        // leaving slots with garbage.  The scheduler loop's null-check relies on
+        // this to guard against stale actor_count reads on ARM64.
+        memset(schedulers[i].actors, 0, MAX_ACTORS_PER_CORE * sizeof(ActorBase*));
         schedulers[i].actor_count = 0;
         schedulers[i].capacity = MAX_ACTORS_PER_CORE;
         queue_init(&schedulers[i].incoming_queue);

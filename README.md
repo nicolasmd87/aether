@@ -346,11 +346,9 @@ Aether is under active development. The compiler, runtime, and standard library 
 - Cross-platform (macOS, Linux, Windows)
 
 **Known Limitations:**
-- No generics or parameterized types
 - Module system is early-stage (imports resolve at compile time; no versioned package registry yet)
 
 **Roadmap:**
-- Distribution (multi-node actor systems)
 - Hot code reloading
 - Package registry
 
