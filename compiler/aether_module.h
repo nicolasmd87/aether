@@ -43,12 +43,6 @@ void module_add_export(AetherModule* module, const char* symbol);
 void module_add_import(AetherModule* module, const char* module_name);
 int module_is_exported(AetherModule* module, const char* symbol);
 
-// Module resolution
-AetherModule* module_resolve(const char* import_path);
-char* module_resolve_symbol(const char* module_name, const char* symbol);
-AetherModule* module_load_from_file(const char* import_path, const char* base_dir);
-char* module_resolve_file_path(const char* import_path, const char* base_dir);
-
 // Dependency graph
 typedef struct DependencyNode {
     char* module_name;
@@ -81,6 +75,20 @@ typedef struct {
 
 PackageManifest* package_manifest_load(const char* path);
 void package_manifest_free(PackageManifest* manifest);
+
+// Module orchestration — call between parsing and type checking
+#define MAX_MODULE_TOKENS 2000
+
+// Orchestrate all module loading: scan imports, resolve, parse, cache, detect cycles.
+// Returns 1 on success, 0 on circular dependency error.
+int module_orchestrate(ASTNode* program);
+
+// Parse a single module file into an AST. Saves/restores lexer state.
+ASTNode* module_parse_file(const char* file_path);
+
+// Resolve module name to file path. Returns malloc'd path or NULL. Caller frees.
+char* module_resolve_stdlib_path(const char* module_name);  // "fs" -> path
+char* module_resolve_local_path(const char* module_path);   // "mypackage.utils" -> path
 
 #endif // AETHER_MODULE_H
 

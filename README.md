@@ -28,7 +28,7 @@ The Aether runtime implements a native actor system with optimized message passi
 - **Cross-core messaging** with lock-free mailboxes
 
 ### Memory Management
-- **Manual by default** — use `defer` for cleanup; opt-in auto-free via `--auto-free` or `aether.toml` [memory] mode = "auto"
+- **Manual by default** — use `defer` for cleanup. All allocations cleaned up explicitly.
 - **Arena allocators** for actor lifetimes
 - **Memory pools** with thread-local allocation
 - **Actor pooling** reducing allocation overhead
@@ -80,8 +80,8 @@ GCC is downloaded automatically the first time you run a program — no MSYS2 or
 
 ```bash
 ae version list              # see all available releases
-ae version install v0.6.0    # download and install a specific version
-ae version use v0.6.0        # switch to that version
+ae version install v0.10.0   # download and install a specific version
+ae version use v0.10.0       # switch to that version
 ```
 
 ### Your First Program
@@ -293,7 +293,7 @@ The runtime employs a tiered optimization strategy:
 - [Language Reference](docs/language-reference.md) - Complete language specification
 - [C Interoperability](docs/c-interop.md) - Using C libraries and the `extern` keyword
 - [Architecture Overview](docs/architecture.md) - Runtime and compiler design
-- [Memory Management](docs/memory-management.md) - defer-first manual model, opt-in auto-free, arena allocators
+- [Memory Management](docs/memory-management.md) - defer-first manual model, arena allocators
 - [Runtime Optimizations](docs/runtime-optimizations.md) - Performance techniques
 - [Cross-Language Benchmarks](benchmarks/cross-language/README.md) - Comparative performance analysis
 - [Docker Setup](docker/README.md) - Container development environment
@@ -335,21 +335,23 @@ The benchmark suite compares Aether against C, C++, Go, Rust, Java, Zig, Erlang,
 Aether is under active development. The compiler, runtime, and standard library are functional and tested.
 
 **What works today:**
-- Full compiler pipeline (lexer, parser, type checker, code generator)
+- Full compiler pipeline with Rust-style diagnostics (file, line, column, source context, caret, hints)
 - Multi-core actor runtime with partitioned scheduler and work-stealing fallback
+- Main-thread actor mode — single-actor programs bypass the scheduler entirely (zero-overhead path)
+- Batch fan-out send for main-to-many patterns
 - Lock-free message passing with adaptive optimizations
 - Standard library (collections, networking, JSON, file I/O)
+- C embedding via `--emit-header`
 - IDE support (VS Code, Cursor) with syntax highlighting
 - Cross-platform (macOS, Linux, Windows)
 
 **Known Limitations:**
 - No generics or parameterized types
-- Module system is nascent (imports resolve to C includes; no versioned packages yet)
+- Module system is early-stage (imports resolve at compile time; no versioned package registry yet)
 
 **Roadmap:**
 - Distribution (multi-node actor systems)
 - Hot code reloading
-- Improved error messages
 - Package registry
 
 ## Contributing
@@ -359,7 +361,6 @@ Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines
 **Areas of interest:**
 - Runtime optimizations
 - Standard library expansion
-- Error message improvements
 - Documentation and examples
 
 ## Acknowledgments

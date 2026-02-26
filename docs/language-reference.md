@@ -398,24 +398,6 @@ main() {
 }
 ```
 
-### Auto-Free Mode (opt-in)
-
-For convenience in scripts, auto-free mode can be enabled. The compiler injects the matching `.free()` call at scope exit for variables initialized from recognized constructors (e.g. `list.new()` gets a `list.free()`).
-
-```toml
-# aether.toml
-[memory]
-mode = "auto"
-```
-
-Or for a single run:
-
-```bash
-ae run --auto-free file.ae
-```
-
-In auto mode, use `@manual` when a value must outlive its scope (returned from a function, passed to an actor, stored in actor state).
-
 See [Memory Management Guide](memory-management.md) for the full reference.
 
 ---
@@ -737,7 +719,17 @@ Externs are useful for:
 
 | Function | Description |
 |----------|-------------|
-| `print(value)` | Print to stdout |
+| `print(value)` | Print to stdout (no newline) |
+| `println(value)` | Print to stdout followed by a newline |
+
+String interpolation is supported inside double-quoted strings using `${expr}`:
+
+```aether
+name = "Alice"
+age = 30
+print("Hello, ${name}! You are ${age} years old.")
+// expands to: printf("Hello, %s! You are %d years old.", name, age)
+```
 
 ### Concurrency
 

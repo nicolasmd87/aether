@@ -5,21 +5,23 @@ This document provides an overview of Aether's compiler pipeline, runtime design
 ## System Overview
 
 ```
-+---------------------------------------------------------+
-|                     Aether Compiler                      |
-|  .ae source -> Lexer -> Parser -> TypeCheck -> Optimizer |
-|  -> CodeGen -> .c output                                 |
-+---------------------------------------------------------+
-                            |
-+---------------------------------------------------------+
-|                      GCC/Clang                           |
-|  .c source -> Native binary                              |
-+---------------------------------------------------------+
-                            |
-+---------------------------------------------------------+
-|                    Aether Runtime                        |
-|  Scheduler -> Actors -> Memory Pools -> Message Passing  |
-+---------------------------------------------------------+
++--------------------------------------------------------+
+|                    Aether Compiler                     |
+|                                                        |
+|  .ae -> Lexer -> Parser -> ModuleOrch -> TypeCheck -+  |
+|                                                    |   |
+|         .c  <- CodeGen <- Optimizer <--------------+   |
++--------------------------------------------------------+
+                          |
++--------------------------------------------------------+
+|                       GCC/Clang                        |
+|              .c source -> native binary                |
++--------------------------------------------------------+
+                          |
++--------------------------------------------------------+
+|                     Aether Runtime                     |
+|  Scheduler -> Actors -> Memory Pools -> Message Passing|
++--------------------------------------------------------+
 ```
 
 ## Compiler Pipeline
@@ -74,6 +76,26 @@ IDENTIFIER("x") EQUALS NUMBER(42) PLUS IDENTIFIER("y")
 **Key Files:**
 - `compiler/parser/parser.c` - Implementation
 - `compiler/ast.h` - AST node definitions
+
+### 2.5 Module Orchestrator (`compiler/aether_module.c`)
+
+**Purpose:** Resolve all imports, parse module files, cache ASTs, detect circular dependencies
+
+**Input:** AST from parser (scanned for `AST_IMPORT_STATEMENT` nodes)
+
+**Output:** Populated `global_module_registry` with cached module ASTs
+
+**Process:**
+1. Scan program AST for import statements
+2. Resolve each import to a file path (stdlib paths, lib/, src/)
+3. Parse each module file (lex → parse → AST) with lexer state save/restore
+4. Cache parsed ASTs in `global_module_registry`
+5. Recursively process each module's own imports
+6. Build dependency graph and detect circular imports via DFS
+
+**Key Files:**
+- `compiler/aether_module.c` - Orchestration, resolution, parsing, dependency graph
+- `compiler/aether_module.h` - Module registry, dependency graph types
 
 ### 3. Type Checker (`compiler/analysis/typechecker.c`)
 
@@ -203,12 +225,12 @@ IDENTIFIER("x") EQUALS NUMBER(42) PLUS IDENTIFIER("y")
 **Architecture:**
 ```
 +---------------------------------------------------------+
-|              Partitioned Scheduler                       |
+|              Partitioned Scheduler                      |
 |  +------------+------------+------------+------------+  |
 |  |  Core 0    |  Core 1    |  Core 2    |  Core 3    |  |
 |  |  [A1, A2]  |  [A3, A4]  |  [A5, A6]  |  [A7]      |  |
 |  |  (local)   |  (local)   |  (local)   |  (idle)    |  |
-|  |            |            |  <- steal --------+      |  |
+|  |            |            |  <- steal --------+     |  |
 |  +------------+------------+------------+------------+  |
 +---------------------------------------------------------+
 ```

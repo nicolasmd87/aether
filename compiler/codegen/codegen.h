@@ -41,14 +41,6 @@ typedef struct {
     int scope_defer_start[MAX_SCOPE_DEPTH];  // defer_count at scope entry
     int scope_depth;
 
-    // Memory management: manual by default, auto-free opt-in
-    int no_auto_free;   // 1 = manual (default), 0 = auto (--auto-free flag)
-
-    // Synthetic AST nodes created for auto-defer calls (freed at generator destruction)
-    ASTNode** synthetic_nodes;
-    int synthetic_node_count;
-    int synthetic_node_capacity;
-
     // Extern function parameter type registry — used at call sites for proper casts
     // e.g., list_add(void*, void*) called with int arg → cast to (void*)(intptr_t)
     struct ExternParamInfo {
@@ -58,15 +50,6 @@ typedef struct {
     }* extern_registry;
     int extern_registry_count;
     int extern_registry_capacity;
-
-    // Dynamic destructor registry: constructor -> destructor pairs
-    // Built from imported module.ae extern declarations (_new/_free, _create/_free)
-    struct DestructorEntry {
-        char* constructor;   // e.g. "map_new", "vector_create"
-        char* destructor;    // e.g. "map_free", "vector_free"
-    }* destructor_registry;
-    int destructor_count;
-    int destructor_capacity;
 
     // Ask/reply type map: request message name -> reply message name.
     // Built by scanning actor receive handlers for reply statements.
@@ -107,7 +90,6 @@ const char* get_c_operator(const char* aether_op);
 
 // Defer management
 void push_defer(CodeGenerator* gen, ASTNode* stmt);
-void push_auto_defer(CodeGenerator* gen, const char* free_fn, const char* var_name);
 void emit_defers_for_scope(CodeGenerator* gen);
 void emit_all_defers(CodeGenerator* gen);
 void enter_scope(CodeGenerator* gen);

@@ -350,27 +350,6 @@ static int has_list_patterns(ASTNode* match_stmt) {
     return 0;
 }
 
-// Look up destructor for a constructor call using the dynamic registry
-// (populated from imported module.ae extern declarations).
-// Handles both underscore calls (list_new) and dot calls (list.new).
-static const char* lookup_destructor(CodeGenerator* gen, ASTNode* init_expr) {
-    if (!init_expr || init_expr->type != AST_FUNCTION_CALL || !init_expr->value) return NULL;
-
-    char normalized[256];
-    strncpy(normalized, init_expr->value, sizeof(normalized) - 1);
-    normalized[sizeof(normalized) - 1] = '\0';
-    for (char* p = normalized; *p; p++) {
-        if (*p == '.') *p = '_';
-    }
-
-    for (int i = 0; i < gen->destructor_count; i++) {
-        if (strcmp(normalized, gen->destructor_registry[i].constructor) == 0) {
-            return gen->destructor_registry[i].destructor;
-        }
-    }
-    return NULL;
-}
-
 void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
     if (!stmt) return;
 
@@ -487,17 +466,6 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     }
 
                     fprintf(gen->output, ";\n");
-
-                    // Auto-free: if in auto mode, the variable is not @manual, and
-                    // the initializer calls a registered *_new() function, push a
-                    // scope-exit defer to call the corresponding *_free() function.
-                    if (!gen->no_auto_free && !stmt->is_manual &&
-                        stmt->child_count > 0 && stmt->value) {
-                        const char* free_fn = lookup_destructor(gen, stmt->children[0]);
-                        if (free_fn) {
-                            push_auto_defer(gen, free_fn, stmt->value);
-                        }
-                    }
                 }
             }
             break;
@@ -894,6 +862,11 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         fprintf(gen->output, "printf(\"%%s\", ");
                         generate_expression(gen, first_arg);
                         fprintf(gen->output, " ? \"true\" : \"false\");\n");
+                    } else if (arg_type->kind == TYPE_PTR) {
+                        // ptr type is typically char* (from stdlib string returns)
+                        fprintf(gen->output, "printf(\"%%s\", (char*)");
+                        generate_expression(gen, first_arg);
+                        fprintf(gen->output, ");\n");
                     } else {
                         // Unknown type - default to %d
                         fprintf(gen->output, "printf(\"%%d\", ");

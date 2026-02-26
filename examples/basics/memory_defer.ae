@@ -6,27 +6,29 @@
 // Run: ae run examples/basics/memory_defer.ae
 
 import std.list
-import std.map
 
 main() {
-    m = map.new();
-    defer map.free(m);
+    words = list.new()
+    defer list.free(words)
 
-    items = list.new();
-    defer list.free(items);
+    numbers = list.new()
+    defer list.free(numbers)
 
-    map.put(m, "language", "Aether");
-    map.put(m, "model", "actors");
+    list.add(words, "hello")
+    list.add(words, "world")
+    list.add(words, "aether")
 
-    list.add(items, "one");
-    list.add(items, "two");
-    list.add(items, "three");
+    list.add(numbers, 1)
+    list.add(numbers, 2)
+    list.add(numbers, 3)
 
-    print("Map key 'language': ");
-    print(map.get(m, "language"));
-    print("\n");
+    print("Word count: ")
+    print(list.size(words))
+    print("\n")
 
-    print("List size: ");
-    print(list.size(items));
-    print("\n");
+    print("Number count: ")
+    print(list.size(numbers))
+    print("\n")
+
+    // At scope exit: list.free(numbers) runs first (LIFO), then list.free(words)
 }

@@ -1,7 +1,18 @@
 #include "aether_module.h"
+#include "aether_error.h"
+#include "parser/lexer.h"
+#include "parser/parser.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
+
+#ifdef _WIN32
+    #include <io.h>
+    #define access _access
+    #define F_OK 0
+#else
+    #include <unistd.h>
+#endif
 
 ModuleRegistry* global_module_registry = NULL;
 
@@ -147,153 +158,6 @@ int module_is_exported(AetherModule* module, const char* symbol) {
     }
     
     return 0;
-}
-
-// Resolve module file path
-// Converts import path like "std.collections.HashMap" to "std/collections/HashMap.ae"
-// or "game.player" to "game/player.ae"
-char* module_resolve_file_path(const char* import_path, const char* base_dir) {
-    if (!import_path) return NULL;
-    
-    // Convert dots to slashes
-    char path_buffer[1024];
-    snprintf(path_buffer, sizeof(path_buffer), "%s", import_path);
-    for (int i = 0; path_buffer[i]; i++) {
-        if (path_buffer[i] == '.') {
-            path_buffer[i] = '/';
-        }
-    }
-    
-    // Try various paths
-    char* attempts[4];
-    int attempt_count = 0;
-    
-    // 1. Base directory (current file's directory)
-    if (base_dir) {
-        attempts[attempt_count] = malloc(2048);
-        snprintf(attempts[attempt_count], 2048, "%s/%s.ae", base_dir, path_buffer);
-        attempt_count++;
-    }
-    
-    // 2. Current working directory
-    attempts[attempt_count] = malloc(2048);
-    snprintf(attempts[attempt_count], 2048, "%s.ae", path_buffer);
-    attempt_count++;
-    
-    // 3. std/ directory (standard library)
-    attempts[attempt_count] = malloc(2048);
-    snprintf(attempts[attempt_count], 2048, "std/%s.ae", path_buffer);
-    attempt_count++;
-    
-    // 4. Direct path if already has .ae extension
-    if (strstr(import_path, ".ae")) {
-        attempts[attempt_count] = malloc(1024);
-        snprintf(attempts[attempt_count], 1024, "%s", import_path);
-        attempt_count++;
-    }
-    
-    // Try each path
-    for (int i = 0; i < attempt_count; i++) {
-        FILE* f = fopen(attempts[i], "r");
-        if (f) {
-            fclose(f);
-            // Return this path, free others
-            char* result = attempts[i];
-            for (int j = 0; j < attempt_count; j++) {
-                if (j != i) free(attempts[j]);
-            }
-            return result;
-        }
-    }
-    
-    // Not found, free all
-    for (int i = 0; i < attempt_count; i++) {
-        free(attempts[i]);
-    }
-    
-    return NULL;
-}
-
-// Load module from file
-AetherModule* module_load_from_file(const char* import_path, const char* base_dir) {
-    // Check if already loaded
-    AetherModule* existing = module_find(import_path);
-    if (existing) {
-        return existing;
-    }
-    
-    // Resolve file path
-    char* file_path = module_resolve_file_path(import_path, base_dir);
-    if (!file_path) {
-        fprintf(stderr, "Error: Could not resolve module '%s'\n", import_path);
-        return NULL;
-    }
-    
-    // Read file content
-    FILE* f = fopen(file_path, "r");
-    if (!f) {
-        fprintf(stderr, "Error: Could not open module file '%s'\n", file_path);
-        free(file_path);
-        return NULL;
-    }
-    
-    fseek(f, 0, SEEK_END);
-    long size = ftell(f);
-    fseek(f, 0, SEEK_SET);
-    
-    char* content = malloc(size + 1);
-    size_t bytes_read = fread(content, 1, size, f);
-    content[bytes_read] = '\0';
-    fclose(f);
-
-    if (bytes_read != (size_t)size) {
-        free(content);
-        free(file_path);
-        return NULL;
-    }
-    
-    // Create module entry
-    AetherModule* module = module_create(import_path, file_path);
-    
-    // Note: Full AST parsing happens later in the compilation pipeline
-    // The module system tracks dependencies and load order, actual parsing
-    // is done by the main compiler when it processes each module
-    
-    free(content);
-    free(file_path);
-    
-    // Register module
-    module_register(module);
-    
-    return module;
-}
-
-// Module resolution
-AetherModule* module_resolve(const char* import_path) {
-    // First check if already loaded
-    AetherModule* existing = module_find(import_path);
-    if (existing) {
-        return existing;
-    }
-    
-    // Try to load from file
-    return module_load_from_file(import_path, NULL);
-}
-
-char* module_resolve_symbol(const char* module_name, const char* symbol) {
-    AetherModule* module = module_find(module_name);
-    if (!module) return NULL;
-    
-    if (!module_is_exported(module, symbol)) {
-        fprintf(stderr, "Error: Symbol '%s' is not exported from module '%s'\n",
-                symbol, module_name);
-        return NULL;
-    }
-    
-    // Return fully qualified name
-    char* qualified = (char*)malloc(strlen(module_name) + strlen(symbol) + 2);
-    sprintf(qualified, "%s.%s", module_name, symbol);
-    return qualified;
 }
 
 // Package manifest (aether.toml)
@@ -484,13 +348,226 @@ int dependency_graph_has_cycle(DependencyGraph* graph) {
     for (int i = 0; i < graph->node_count; i++) {
         if (!graph->nodes[i]->visited) {
             if (dfs_has_cycle(graph->nodes[i])) {
-                fprintf(stderr, "Error: Circular dependency detected involving module '%s'\n",
-                       graph->nodes[i]->module_name);
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                    "circular import dependency involving module '%s'",
+                    graph->nodes[i]->module_name);
+                aether_error_simple(msg, 0, 0);
                 return 1;
             }
         }
     }
-    
+
     return 0;
+}
+
+// --- Module Orchestration ---
+
+// Resolve a stdlib module name (e.g., "fs") to a file path.
+char* module_resolve_stdlib_path(const char* module_name) {
+    char path[512];
+
+    // Try 1: Local development path (relative to CWD)
+    snprintf(path, sizeof(path), "std/%s/module.ae", module_name);
+    if (access(path, F_OK) == 0) return strdup(path);
+
+    // Try 2: Installed path via AETHER_HOME
+    const char* aether_home = getenv("AETHER_HOME");
+    if (aether_home) {
+        snprintf(path, sizeof(path), "%s/share/aether/std/%s/module.ae", aether_home, module_name);
+        if (access(path, F_OK) == 0) return strdup(path);
+    }
+
+    // Try 3: Common install locations
+    snprintf(path, sizeof(path), "/usr/local/share/aether/std/%s/module.ae", module_name);
+    if (access(path, F_OK) == 0) return strdup(path);
+
+    snprintf(path, sizeof(path), "%s/.aether/share/aether/std/%s/module.ae",
+             getenv("HOME") ? getenv("HOME") : "", module_name);
+    if (access(path, F_OK) == 0) return strdup(path);
+
+    return NULL;
+}
+
+// Resolve a local module path (e.g., "mypackage.utils") to a file path.
+char* module_resolve_local_path(const char* module_path) {
+    char converted[512];
+    char path[sizeof(converted) + 16];
+
+    // Convert dots to slashes
+    strncpy(converted, module_path, sizeof(converted) - 1);
+    converted[sizeof(converted) - 1] = '\0';
+    for (char* p = converted; *p; p++) {
+        if (*p == '.') *p = '/';
+    }
+
+    // Try 1: lib/module_path/module.ae
+    snprintf(path, sizeof(path), "lib/%s/module.ae", converted);
+    if (access(path, F_OK) == 0) return strdup(path);
+
+    // Try 2: lib/module_path.ae
+    snprintf(path, sizeof(path), "lib/%s.ae", converted);
+    if (access(path, F_OK) == 0) return strdup(path);
+
+    // Try 3: src/module_path/module.ae
+    snprintf(path, sizeof(path), "src/%s/module.ae", converted);
+    if (access(path, F_OK) == 0) return strdup(path);
+
+    // Try 4: src/module_path.ae
+    snprintf(path, sizeof(path), "src/%s.ae", converted);
+    if (access(path, F_OK) == 0) return strdup(path);
+
+    // Try 5: module_path/module.ae (project root)
+    snprintf(path, sizeof(path), "%s/module.ae", converted);
+    if (access(path, F_OK) == 0) return strdup(path);
+
+    // Try 6: module_path.ae (single file in root)
+    snprintf(path, sizeof(path), "%s.ae", converted);
+    if (access(path, F_OK) == 0) return strdup(path);
+
+    return NULL;
+}
+
+// Parse a module file into an AST. Saves/restores lexer state.
+ASTNode* module_parse_file(const char* file_path) {
+    FILE* f = fopen(file_path, "r");
+    if (!f) return NULL;
+
+    fseek(f, 0, SEEK_END);
+    long size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    char* source = malloc(size + 1);
+    if (!source) {
+        fclose(f);
+        return NULL;
+    }
+
+    size_t bytes_read = fread(source, 1, size, f);
+    fclose(f);
+    source[bytes_read] = '\0';
+
+    // Save lexer state (lexer is global)
+    LexerState saved;
+    lexer_save(&saved);
+
+    // Tokenize
+    lexer_init(source);
+    Token* tokens[MAX_MODULE_TOKENS];
+    int token_count = 0;
+
+    while (token_count < MAX_MODULE_TOKENS - 1) {
+        Token* token = next_token();
+        tokens[token_count++] = token;
+        if (token->type == TOKEN_EOF || token->type == TOKEN_ERROR) break;
+    }
+
+    // Parse
+    Parser* parser = create_parser(tokens, token_count);
+    ASTNode* ast = parse_program(parser);
+
+    // Cleanup
+    for (int i = 0; i < token_count; i++) {
+        free_token(tokens[i]);
+    }
+    free_parser(parser);
+    free(source);
+
+    // Restore lexer state
+    lexer_restore(&saved);
+
+    return ast;
+}
+
+// Recursive helper: load a single module and its transitive imports
+static int orchestrate_module(const char* module_name, const char* file_path,
+                              DependencyGraph* graph) {
+    // Already loaded? Skip.
+    if (module_find(module_name)) return 1;
+
+    // Parse the file
+    ASTNode* ast = module_parse_file(file_path);
+    if (!ast) return 1;  // Graceful: file may exist but be empty/invalid
+
+    // Create and register module
+    AetherModule* mod = module_create(module_name, file_path);
+    mod->ast = ast;
+    module_register(mod);
+
+    // Add node to dependency graph
+    dependency_graph_add_node(graph, module_name);
+
+    // Recursively process this module's imports
+    for (int i = 0; i < ast->child_count; i++) {
+        ASTNode* child = ast->children[i];
+        if (child->type != AST_IMPORT_STATEMENT || !child->value) continue;
+
+        const char* sub_path = child->value;
+        char* sub_file = NULL;
+
+        if (strncmp(sub_path, "std.", 4) == 0) {
+            sub_file = module_resolve_stdlib_path(sub_path + 4);
+        } else {
+            sub_file = module_resolve_local_path(sub_path);
+        }
+
+        dependency_graph_add_edge(graph, module_name, sub_path);
+        module_add_import(mod, sub_path);
+
+        if (sub_file) {
+            if (!orchestrate_module(sub_path, sub_file, graph)) {
+                free(sub_file);
+                return 0;
+            }
+            free(sub_file);
+        }
+    }
+
+    return 1;
+}
+
+// Top-level orchestration: scan program AST, resolve all imports,
+// parse modules, build dependency graph, detect cycles.
+int module_orchestrate(ASTNode* program) {
+    module_registry_init();
+
+    DependencyGraph* graph = dependency_graph_create();
+    dependency_graph_add_node(graph, "__main__");
+
+    // Scan top-level AST for imports
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* child = program->children[i];
+        if (child->type != AST_IMPORT_STATEMENT || !child->value) continue;
+
+        const char* module_path = child->value;
+        char* file_path = NULL;
+
+        if (strncmp(module_path, "std.", 4) == 0) {
+            file_path = module_resolve_stdlib_path(module_path + 4);
+        } else {
+            file_path = module_resolve_local_path(module_path);
+        }
+
+        dependency_graph_add_edge(graph, "__main__", module_path);
+
+        if (file_path) {
+            if (!orchestrate_module(module_path, file_path, graph)) {
+                free(file_path);
+                dependency_graph_free(graph);
+                return 0;
+            }
+            free(file_path);
+        }
+        // If file not found: silently continue (backwards compat)
+    }
+
+    // Check for cycles
+    if (dependency_graph_has_cycle(graph)) {
+        dependency_graph_free(graph);
+        return 0;
+    }
+
+    dependency_graph_free(graph);
+    return 1;
 }
 

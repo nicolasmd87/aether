@@ -36,6 +36,21 @@ main() {
 2. `X.func()` is resolved to the C function `X_func()`
 3. Dot-style calls: `string.new()`, `list.free()`, etc. (compiler translates to C-level `string_new`, `list_free`)
 
+### Module Orchestration Phase
+
+Before type checking, the compiler runs a module orchestration phase
+(added between parsing and type checking in the compilation pipeline):
+
+1. **Scan**: Walk the main program AST for `import` statements
+2. **Resolve**: Map each import to a file path (stdlib, lib/, src/ paths)
+3. **Parse**: Lex and parse each module file into an AST
+4. **Cache**: Store the parsed AST in `global_module_registry`
+5. **Recurse**: Process each module's own imports (transitive dependencies)
+6. **Cycle Check**: Build a dependency graph and detect circular imports via DFS
+
+Both the type checker and code generator then use `module_find()` to retrieve
+cached ASTs — each module file is read and parsed exactly once.
+
 ### Available Modules
 
 | Import | Namespace | Functions |

@@ -1,4 +1,5 @@
 #include "type_inference.h"
+#include "../aether_error.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -547,13 +548,13 @@ int solve_constraints(InferenceContext* ctx) {
 
 // Report ambiguous types
 void report_ambiguous_types(InferenceContext* ctx) {
-    fprintf(stderr, "Type inference failed after %d iterations\n", ctx->iteration_count);
-    fprintf(stderr, "The following types could not be inferred:\n");
-    
     for (int i = 0; i < ctx->constraint_count; i++) {
         if (!ctx->constraints[i].resolved) {
             TypeConstraint* c = &ctx->constraints[i];
-            fprintf(stderr, "  Line %d, column %d: %s\n", c->line, c->column, c->reason);
+            aether_error_with_suggestion(
+                c->reason ? c->reason : "cannot infer type",
+                c->line, c->column,
+                "add an explicit type annotation, e.g. x: int = ...");
         }
     }
 }

@@ -209,7 +209,7 @@ Type inference happens at **compile-time only**:
 
 ## Limitations
 
-Current limitations (v1.0):
+Current limitations:
 
 1. **No higher-rank types** - Functions must have monomorphic types
 2. **No type classes** - No Haskell-style constraints
