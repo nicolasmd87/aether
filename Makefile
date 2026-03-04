@@ -263,6 +263,29 @@ test-ae: compiler ae stdlib
 	if [ "$$failed" -gt 0 ]; then exit 1; fi
 endif
 
+# Install smoke test: installs to a temp dir, runs ae init + ae run, cleans up
+test-install: compiler ae stdlib
+	@echo "==================================="
+	@echo "  Install Smoke Test"
+	@echo "==================================="
+	@tmpdir=$$(mktemp -d) && \
+	echo "  Installing to $$tmpdir..." && \
+	./install.sh "$$tmpdir" < /dev/null > /dev/null 2>&1 && \
+	echo "  Testing ae version..." && \
+	AETHER_HOME="$$tmpdir" "$$tmpdir/bin/ae" version > /dev/null 2>&1 && \
+	echo "  Testing ae init + ae run..." && \
+	projdir=$$(mktemp -d) && \
+	cd "$$projdir" && \
+	AETHER_HOME="$$tmpdir" "$$tmpdir/bin/ae" init smoketest > /dev/null 2>&1 && \
+	cd smoketest && \
+	output=$$(AETHER_HOME="$$tmpdir" "$$tmpdir/bin/ae" run 2>&1) && \
+	echo "  Output: $$output" && \
+	echo "$$output" | grep -q "Hello from smoketest" && \
+	echo "  Cleaning up..." && \
+	rm -rf "$$tmpdir" "$$projdir" && \
+	echo "  [PASS] Install smoke test" || \
+	(echo "  [FAIL] Install smoke test"; rm -rf "$$tmpdir" "$$projdir" 2>/dev/null; exit 1)
+
 # Run both C unit tests and .ae integration tests
 test-all: test test-ae
 	@echo ""
@@ -464,6 +487,25 @@ install: release ae stdlib
 	done
 	@install -d $(PREFIX)/share/aether/runtime
 	@install -d $(PREFIX)/share/aether/std
+	@for subdir in actors scheduler memory config utils; do \
+		if [ -d "runtime/$$subdir" ]; then \
+			install -d $(PREFIX)/share/aether/runtime/$$subdir; \
+			for f in runtime/$$subdir/*.c runtime/$$subdir/*.h; do \
+				[ -f "$$f" ] && install -m 644 "$$f" $(PREFIX)/share/aether/runtime/$$subdir/ 2>/dev/null || true; \
+			done; \
+		fi; \
+	done
+	@for f in runtime/*.c runtime/*.h; do \
+		[ -f "$$f" ] && install -m 644 "$$f" $(PREFIX)/share/aether/runtime/ 2>/dev/null || true; \
+	done
+	@for subdir in string math net collections json fs log io; do \
+		if [ -d "std/$$subdir" ]; then \
+			install -d $(PREFIX)/share/aether/std/$$subdir; \
+			for f in std/$$subdir/*.c std/$$subdir/*.h; do \
+				[ -f "$$f" ] && install -m 644 "$$f" $(PREFIX)/share/aether/std/$$subdir/ 2>/dev/null || true; \
+			done; \
+		fi; \
+	done
 	@echo "✓ Installed successfully"
 	@echo ""
 	@echo "Run: ae version"
@@ -772,7 +814,7 @@ asan-check: clean
 	  fi
 	@echo "✓ ASan clean — no memory errors detected"
 
-.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime benchmark benchmark-ui examples run compile repl clean help self-test release install stats stdlib ci docker-ci docker-build-ci valgrind-check asan-check bump-patch bump-minor bump-major
+.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime test-install benchmark benchmark-ui examples run compile repl clean help self-test release install stats stdlib ci docker-ci docker-build-ci valgrind-check asan-check bump-patch bump-minor bump-major
 
 # --------------------------------------------------------------------------
 # Version management (CI/CD only -- do not run manually)

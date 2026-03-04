@@ -242,19 +242,35 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
 
         # Detect shell config file
         SHELL_RC=""
+        IS_FISH=0
         case "$SHELL_NAME" in
             zsh)  SHELL_RC="$HOME/.zshrc" ;;
             bash) SHELL_RC="$HOME/.bash_profile" ;;
-            fish) SHELL_RC="$HOME/.config/fish/config.fish" ;;
+            fish) SHELL_RC="$HOME/.config/fish/config.fish"; IS_FISH=1 ;;
         esac
 
         if [ -n "$SHELL_RC" ]; then
             # Check if already in rc file
             if ! grep -q "AETHER_HOME" "$SHELL_RC" 2>/dev/null; then
+                # Ensure the file ends with a newline before appending
+                # (prevents concatenation with the last existing line)
+                if [ -f "$SHELL_RC" ] && [ -s "$SHELL_RC" ]; then
+                    if [ "$(tail -c 1 "$SHELL_RC" | wc -l)" -eq 0 ]; then
+                        printf '\n' >> "$SHELL_RC"
+                    fi
+                fi
+                # Ensure parent directory exists (fish config may not exist yet)
+                mkdir -p "$(dirname "$SHELL_RC")"
                 echo "" >> "$SHELL_RC"
                 echo "# Aether Language" >> "$SHELL_RC"
-                echo "$AETHER_HOME_LINE" >> "$SHELL_RC"
-                echo "$EXPORT_LINE" >> "$SHELL_RC"
+                if [ "$IS_FISH" -eq 1 ]; then
+                    # Fish shell uses different syntax
+                    echo "set -gx AETHER_HOME \"$INSTALL_DIR\"" >> "$SHELL_RC"
+                    echo "fish_add_path \"$BIN_DIR\"" >> "$SHELL_RC"
+                else
+                    echo "$AETHER_HOME_LINE" >> "$SHELL_RC"
+                    echo "$EXPORT_LINE" >> "$SHELL_RC"
+                fi
                 ok "  Added to $SHELL_RC"
             else
                 ok "  Already configured in $SHELL_RC"
@@ -279,7 +295,7 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
     echo "========================================="
     echo ""
 
-    if [ "$IN_PATH" -eq 0 ]; then
+    if [ "$IN_PATH" -eq 0 ] && [ -n "$SHELL_RC" ]; then
         warn "Restart your terminal or run:"
         echo "  source $SHELL_RC"
         echo ""
@@ -332,6 +348,9 @@ prompt_install_extension() {
 
     if [ "$EDITOR_ONLY" -eq 1 ]; then
         # Direct install when using --editor-only flag
+        install_editor_extension "$editor_cmd" "$editor_name" "$ext_dir"
+    elif [ ! -t 0 ]; then
+        # Non-interactive (piped/CI) — skip prompt, auto-install
         install_editor_extension "$editor_cmd" "$editor_name" "$ext_dir"
     else
         # Interactive prompt during normal install

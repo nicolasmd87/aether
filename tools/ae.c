@@ -304,14 +304,21 @@ static void discover_toolchain(void) {
     // Strategy 1: Dev mode — ae sitting next to aetherc in build/
     // Checked first so that ./build/ae always uses ./build/aetherc,
     // even when $AETHER_HOME points to an older installed version.
+    // GUARD: The installed layout also has aetherc next to ae (in bin/),
+    // so we verify that the parent directory contains runtime/ (repo root)
+    // rather than lib/ or share/ (installed prefix).
     if (found_exe_dir) {
         char candidate[1024];
         snprintf(candidate, sizeof(candidate), "%s/aetherc" EXE_EXT, exe_dir);
         if (path_exists(candidate)) {
-            snprintf(tc.root, sizeof(tc.root), "%s/..", exe_dir);
-            strncpy(tc.compiler, candidate, sizeof(tc.compiler) - 1);
-            tc.dev_mode = true;
-            goto found_root;
+            char parent_runtime[1024];
+            snprintf(parent_runtime, sizeof(parent_runtime), "%s/../runtime", exe_dir);
+            if (dir_exists(parent_runtime)) {
+                snprintf(tc.root, sizeof(tc.root), "%s/..", exe_dir);
+                strncpy(tc.compiler, candidate, sizeof(tc.compiler) - 1);
+                tc.dev_mode = true;
+                goto found_root;
+            }
         }
     }
 
@@ -326,7 +333,7 @@ static void discover_toolchain(void) {
             home_clean[--len] = '\0';
         home = home_clean;
     }
-    if (home && dir_exists(home)) {
+    if (home && home[0] && dir_exists(home)) {
         // Prefer ~/.aether/current/bin/ if a version symlink exists (ae version use)
         char current_compiler[1024];
         snprintf(current_compiler, sizeof(current_compiler), "%s/current/bin/aetherc" EXE_EXT, home);
@@ -399,7 +406,12 @@ found_root:
     if (tc.dev_mode) {
         snprintf(tc.lib, sizeof(tc.lib), "%s/build/libaether.a", tc.root);
     } else {
+        // install.sh puts lib at $root/lib/libaether.a
+        // make install puts lib at $root/lib/aether/libaether.a
         snprintf(tc.lib, sizeof(tc.lib), "%s/lib/libaether.a", tc.root);
+        if (!path_exists(tc.lib)) {
+            snprintf(tc.lib, sizeof(tc.lib), "%s/lib/aether/libaether.a", tc.root);
+        }
     }
     tc.has_lib = path_exists(tc.lib);
 
@@ -462,6 +474,8 @@ found_root:
                 tc.root, tc.root, tc.root);
         }
     } else {
+        // Installed layout: headers in include/aether/, source in share/aether/
+        // Include both paths so source compilation can find headers via either route
         snprintf(tc.include_flags, sizeof(tc.include_flags),
             "-I%s/include/aether/runtime -I%s/include/aether/runtime/actors "
             "-I%s/include/aether/runtime/scheduler -I%s/include/aether/runtime/utils "
@@ -469,9 +483,61 @@ found_root:
             "-I%s/include/aether/std -I%s/include/aether/std/string "
             "-I%s/include/aether/std/io -I%s/include/aether/std/math "
             "-I%s/include/aether/std/net -I%s/include/aether/std/collections "
-            "-I%s/include/aether/std/json",
+            "-I%s/include/aether/std/json "
+            "-I%s/share/aether/runtime -I%s/share/aether/runtime/actors "
+            "-I%s/share/aether/runtime/scheduler -I%s/share/aether/runtime/utils "
+            "-I%s/share/aether/runtime/memory -I%s/share/aether/runtime/config "
+            "-I%s/share/aether/std -I%s/share/aether/std/string",
             tc.root, tc.root, tc.root, tc.root, tc.root, tc.root,
-            tc.root, tc.root, tc.root, tc.root, tc.root, tc.root, tc.root);
+            tc.root, tc.root, tc.root, tc.root, tc.root, tc.root, tc.root,
+            tc.root, tc.root, tc.root, tc.root, tc.root, tc.root, tc.root, tc.root);
+
+        // Source fallback: when libaether.a is not available, compile from share/aether/
+        if (!tc.has_lib) {
+            char src[1024];
+            snprintf(src, sizeof(src), "%s/share/aether", tc.root);
+            snprintf(tc.runtime_srcs, sizeof(tc.runtime_srcs),
+                "%s/runtime/scheduler/multicore_scheduler.c "
+                "%s/runtime/scheduler/scheduler_optimizations.c "
+                "%s/runtime/config/aether_optimization_config.c "
+                "%s/runtime/memory/memory.c "
+                "%s/runtime/memory/aether_arena.c "
+                "%s/runtime/memory/aether_pool.c "
+                "%s/runtime/memory/aether_memory_stats.c "
+                "%s/runtime/utils/aether_tracing.c "
+                "%s/runtime/utils/aether_bounds_check.c "
+                "%s/runtime/utils/aether_test.c "
+                "%s/runtime/memory/aether_arena_optimized.c "
+                "%s/runtime/aether_runtime_types.c "
+                "%s/runtime/utils/aether_cpu_detect.c "
+                "%s/runtime/memory/aether_batch.c "
+                "%s/runtime/utils/aether_simd_vectorized.c "
+                "%s/runtime/aether_runtime.c "
+                "%s/runtime/aether_numa.c "
+                "%s/runtime/actors/aether_send_buffer.c "
+                "%s/runtime/actors/aether_send_message.c "
+                "%s/runtime/actors/aether_actor_thread.c "
+                "%s/std/string/aether_string.c "
+                "%s/std/math/aether_math.c "
+                "%s/std/net/aether_http.c "
+                "%s/std/net/aether_http_server.c "
+                "%s/std/net/aether_net.c "
+                "%s/std/collections/aether_collections.c "
+                "%s/std/json/aether_json.c "
+                "%s/std/fs/aether_fs.c "
+                "%s/std/log/aether_log.c "
+                "%s/std/collections/aether_hashmap.c "
+                "%s/std/collections/aether_set.c "
+                "%s/std/collections/aether_vector.c "
+                "%s/std/collections/aether_pqueue.c",
+                src, src, src, src, src,
+                src, src, src, src, src,
+                src, src, src, src, src,
+                src, src, src, src, src,
+                src, src, src, src, src,
+                src, src, src, src, src,
+                src, src, src);
+        }
     }
 }
 
