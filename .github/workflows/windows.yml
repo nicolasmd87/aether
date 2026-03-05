@@ -12,9 +12,11 @@ on:
 jobs:
   # ============================================================
   # MinGW build — primary Windows target
+  # Full CI suite: compiler (-Werror), ae, stdlib, REPL,
+  # unit tests, .ae integration tests, examples.
   # ============================================================
   build-mingw:
-    name: Build (Windows / MinGW-w64)
+    name: Build + Test (Windows / MinGW-w64)
     runs-on: windows-latest
 
     defaults:
@@ -34,30 +36,11 @@ jobs:
           mingw-w64-x86_64-gcc
           mingw-w64-x86_64-make
           make
+          mingw-w64-x86_64-readline
+          bc
 
-    - name: Build compiler (aetherc)
-      run: make compiler
-
-    - name: Build ae CLI
-      run: make ae
-
-    - name: Verify binaries
-      run: |
-        ls -lh build/
-        ./build/aetherc --version || true
-        ./build/ae version
-
-    - name: Smoke test — hello world
-      run: ./build/ae run examples/basics/hello.ae
-
-    - name: Smoke test — actor counter
-      run: ./build/ae run examples/actors/counter.ae
-
-    - name: Smoke test — project init + run
-      run: |
-        ./build/ae init smoketest_win
-        cd smoketest_win && ../build/ae run
-        cd .. && rm -rf smoketest_win
+    - name: Run full CI suite
+      run: make ci
 
     - name: Upload Windows binaries
       uses: actions/upload-artifact@v4

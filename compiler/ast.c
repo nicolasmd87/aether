@@ -189,6 +189,7 @@ const char* ast_node_type_to_string(ASTNodeType type) {
         case AST_BLOCK: return "BLOCK";
         case AST_VARIABLE_DECLARATION: return "VARIABLE_DECLARATION";
         case AST_ASSIGNMENT: return "ASSIGNMENT";
+        case AST_COMPOUND_ASSIGNMENT: return "COMPOUND_ASSIGNMENT";
         case AST_IF_STATEMENT: return "IF_STATEMENT";
         case AST_FOR_LOOP: return "FOR_LOOP";
         case AST_WHILE_LOOP: return "WHILE_LOOP";
@@ -235,6 +236,12 @@ const char* ast_node_type_to_string(ASTNodeType type) {
         case AST_ACTOR_REF_TYPE: return "ACTOR_REF_TYPE";
         case AST_ARRAY_TYPE: return "ARRAY_TYPE";
         case AST_PRINT_STATEMENT: return "PRINT_STATEMENT";
+        case AST_NULL_LITERAL: return "NULL_LITERAL";
+        case AST_IF_EXPRESSION: return "IF_EXPRESSION";
+        case AST_CONST_DECLARATION: return "CONST_DECLARATION";
+        case AST_STRING_INTERP: return "STRING_INTERP";
+        case AST_EXTERN_FUNCTION: return "EXTERN_FUNCTION";
+        case AST_DEFER_STATEMENT: return "DEFER_STATEMENT";
         default: return "UNKNOWN";
     }
 }

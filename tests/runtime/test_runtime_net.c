@@ -23,10 +23,8 @@ TEST_CATEGORY(server_null_handling, TEST_CATEGORY_NETWORK) {
 
 TEST_CATEGORY(socket_connect_invalid_host, TEST_CATEGORY_NETWORK) {
 #ifndef _WIN32
-    AetherString* host = string_new("invalid.host.that.does.not.exist.12345");
-    TcpSocket* sock = tcp_connect(host, 80);
+    TcpSocket* sock = tcp_connect("invalid.host.that.does.not.exist.12345", 80);
     ASSERT_NULL(sock);
-    string_release(host);
 #else
     ASSERT_TRUE(1);  // DNS resolution can hang on Windows
 #endif

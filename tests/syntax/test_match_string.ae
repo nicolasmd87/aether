@@ -1,0 +1,63 @@
+// Test match statements with string patterns
+// Verifies: strcmp-based matching, not pointer comparison
+
+main() {
+    print("=== Match String Tests ===\n\n")
+
+    // Test 1: Basic string match
+    cmd = "start"
+    print("Test 1: Match string literal\n")
+    match (cmd) {
+        "stop" -> { print("  FAIL: should not match stop\n"); exit(1) }
+        "start" -> { print("  PASS: matched start\n") }
+        _ -> { print("  FAIL: should not hit wildcard\n"); exit(1) }
+    }
+
+    // Test 2: Wildcard on strings
+    unknown = "xyz"
+    print("\nTest 2: String wildcard match\n")
+    match (unknown) {
+        "start" -> { print("  FAIL\n"); exit(1) }
+        "stop" -> { print("  FAIL\n"); exit(1) }
+        _ -> { print("  PASS: wildcard caught unknown\n") }
+    }
+
+    // Test 3: Match empty string
+    empty = ""
+    print("\nTest 3: Match empty string\n")
+    match (empty) {
+        "" -> { print("  PASS: matched empty string\n") }
+        _ -> { print("  FAIL: should match empty\n"); exit(1) }
+    }
+
+    // Test 4: Multiple match statements on different string variables
+    a = "hello"
+    b = "world"
+    print("\nTest 4: Multiple string matches\n")
+    match (a) {
+        "hello" -> { print("  PASS: a=hello\n") }
+        _ -> { print("  FAIL\n"); exit(1) }
+    }
+    match (b) {
+        "world" -> { print("  PASS: b=world\n") }
+        _ -> { print("  FAIL\n"); exit(1) }
+    }
+
+    // Test 5: Match result used in control flow
+    print("\nTest 5: Match in loop\n")
+    colors = "red"
+    found = 0
+    match (colors) {
+        "red" -> { found = 1 }
+        "blue" -> { found = 2 }
+        _ -> { found = 0 }
+    }
+    if found == 1 {
+        print("  PASS: found red\n")
+    } else {
+        print("  FAIL: expected found=1\n")
+        exit(1)
+    }
+
+    print("\n=== All 5 Tests Complete ===\n")
+}

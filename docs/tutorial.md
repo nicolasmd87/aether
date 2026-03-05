@@ -15,6 +15,8 @@ ae run myfile.ae
 5. [Pattern Matching](#5-pattern-matching)
 6. [Multiple Actors](#6-multiple-actors)
 7. [String Interpolation](#7-string-interpolation)
+8. [Constants, Null, and Bitwise](#8-constants-null-and-bitwise)
+9. [Ergonomic Syntax](#9-ergonomic-syntax)
 
 ---
 
@@ -150,10 +152,10 @@ Aether has standard control structures:
 
 ```aether
 main() {
-    // For loops
+    // For loops (with compound assignment operators)
     sum = 0
-    for (i = 1; i <= 10; i = i + 1) {
-        sum = sum + i
+    for (i = 1; i <= 10; i++) {
+        sum += i
     }
     println("Sum 1..10 = ${sum}")
 
@@ -339,6 +341,120 @@ main() {
 
 String interpolation works with `println` and any function that accepts a string. Variables of any type (int, string) can be interpolated.
 
+Interpolated strings produce a real string value when assigned to a variable, so they can be passed to any function:
+
+```aether
+msg = "Hello, ${name}!"     // msg is a string pointer
+```
+
+---
+
+## 8. Constants, Null, and Bitwise
+
+### Constants
+
+Define named values at the top level with `const`:
+
+```aether
+const WIDTH = 80
+const HEIGHT = 24
+const TITLE = "My App"
+
+main() {
+    println(TITLE)
+    area = WIDTH * HEIGHT
+    println("Area: ${area}")
+}
+```
+
+### Null
+
+Use `null` for uninitialized pointers:
+
+```aether
+main() {
+    conn = null
+    if conn == null {
+        println("Not connected")
+    }
+}
+```
+
+### Bitwise Operators
+
+Aether supports `&`, `|`, `^`, `~`, `<<`, `>>` for bit manipulation:
+
+```aether
+main() {
+    flags = 5 & 3         // AND: 1
+    mask = 5 | 3          // OR: 7
+    flipped = 5 ^ 3       // XOR: 6
+    shifted = 1 << 4      // Left shift: 16
+    println("${flags} ${mask} ${flipped} ${shifted}")
+}
+```
+
+---
+
+## 9. Ergonomic Syntax
+
+Aether includes several features that reduce boilerplate.
+
+### Hex, Octal, and Binary Literals
+
+```aether
+main() {
+    flags = 0xFF
+    mask = 0x0F
+    bits = 0b1010_0101
+    perms = 0o755
+
+    println(flags & mask)    // 15
+    println(bits >> 4)       // 10
+}
+```
+
+### If-Expressions
+
+Use `if`/`else` as a value-producing expression:
+
+```aether
+main() {
+    x = 10
+    sign = if x > 0 { 1 } else { -1 }
+    println(sign)   // 1
+}
+```
+
+### Range-Based For Loops
+
+```aether
+main() {
+    // Instead of: for (i = 0; i < 10; i++) { ... }
+    for i in 0..10 {
+        print(i)
+        print(" ")
+    }
+    // prints: 0 1 2 3 4 5 6 7 8 9
+}
+```
+
+### Multi-Statement Arrow Bodies
+
+Arrow functions can contain multiple statements. The last expression is the implicit return:
+
+```aether
+distance(x1, y1, x2, y2) -> {
+    dx = x2 - x1
+    dy = y2 - y1
+    dx * dx + dy * dy
+}
+
+main() {
+    println(distance(0, 0, 3, 4))  // 25
+}
+```
+
 ---
 
 ## Next Steps
@@ -373,3 +489,11 @@ String interpolation works with `println` and any function that accepts a string
 | Guard | `fn(n) when n > 0 -> ...;` |
 | Match | `match (x) { 0 -> {...} _ -> {...} }` |
 | Interpolation | `"text ${variable}"` |
+| Constant | `const NAME = value` |
+| Null | `x = null` |
+| Bitwise | `&` `\|` `^` `~` `<<` `>>` |
+| Compound assign | `+=` `-=` `*=` `/=` `%=` `&=` `\|=` `^=` |
+| Hex/bin/oct | `0xFF`, `0b1010`, `0o755` |
+| If-expression | `if cond { a } else { b }` |
+| Range for | `for i in 0..10 { ... }` |
+| Arrow block | `f(x) -> { stmts; expr }` |

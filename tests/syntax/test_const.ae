@@ -1,0 +1,32 @@
+// Test: top-level constants
+// Tests const declarations at module scope
+
+const MAX_SIZE = 100
+const GREETING = "hello"
+const OFFSET = 10
+
+main() {
+    println(MAX_SIZE)    // expect: 100
+    println(GREETING)    // expect: hello
+
+    // Constants can be used in expressions
+    half = MAX_SIZE / 2
+    println(half)        // expect: 50
+
+    // Constants in arithmetic
+    result = MAX_SIZE + OFFSET
+    println(result)      // expect: 110
+
+    // Constants in conditionals
+    x = 50
+    if x < MAX_SIZE {
+        println("under_max: ok")
+    }
+
+    // Constant in loop bound
+    sum = 0
+    for (i = 0; i < OFFSET; i = i + 1) {
+        sum = sum + 1
+    }
+    println(sum)         // expect: 10
+}

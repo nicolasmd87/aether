@@ -3,16 +3,15 @@ name: Release
 # Every merge to main creates a versioned release automatically.
 #
 # Version bump rules:
-#   - Commit message starts with "major"  →  bump MAJOR, reset minor + patch to 0
-#   - Anything else                       →  bump MINOR, reset patch to 0  (default)
+#   - Commit message starts with "major"  ->  bump MAJOR, reset minor + patch to 0
+#   - Anything else                       ->  bump MINOR, reset patch to 0  (default)
 #
 # Manual tag push (v*.*.*) also triggers a build + publish, without bumping.
 #
 # Version source of truth: git tags (not the VERSION file).
-# The bump job creates a lightweight tag; the build checks out that tag so
-# VERSION in the archive is always correct.  No PR or branch is created,
-# which eliminates the feedback loop where merging the chore PR would
-# re-trigger the release pipeline.
+# The bump job creates a commit updating VERSION + a tag, pushes both to main.
+# Loop prevention: the bump job skips when the commit message starts with
+# "chore: release" (the message used by the bump commit itself).
 
 on:
   push:
@@ -26,15 +25,17 @@ jobs:
   #                                                                    #
   # Derives the CURRENT version from the latest v*.*.* tag (not the   #
   # VERSION file), computes the next version, writes VERSION into a   #
-  # detached commit, tags it, and pushes only the tag.                #
+  # commit, tags it, and pushes both to main.                         #
   #                                                                    #
-  # No branch or PR is created — GITHUB_TOKEN tag pushes do not       #
-  # trigger new workflow runs, so there is no feedback loop.           #
+  # Loop prevention: skips when commit message starts with             #
+  # "chore: release" (the message the bump commit itself uses).        #
   # ================================================================== #
   bump:
     name: Auto-bump version
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      !startsWith(github.event.head_commit.message, 'chore: release')
 
     permissions:
       contents: write
@@ -51,9 +52,9 @@ jobs:
 
     - name: Compute new version
       id: v
+      env:
+        COMMIT_MSG: ${{ github.event.head_commit.message }}
       run: |
-        MSG="${{ github.event.head_commit.message }}"
-
         # Derive current version from the latest tag (authoritative source).
         # Falls back to VERSION file if no tags exist yet.
         LATEST_TAG=$(git describe --tags --match 'v*.*.*' --abbrev=0 2>/dev/null || echo "")
@@ -66,7 +67,7 @@ jobs:
         MAJOR=$(echo "$OLD" | cut -d. -f1)
         MINOR=$(echo "$OLD" | cut -d. -f2)
 
-        if echo "$MSG" | grep -q "^major"; then
+        if echo "$COMMIT_MSG" | grep -q "^major"; then
           NEW="$((MAJOR + 1)).0.0"
           KIND="major"
         else
@@ -78,7 +79,7 @@ jobs:
 
         # Safety: if this tag already exists, skip (idempotent).
         if git rev-parse "$TAG" >/dev/null 2>&1; then
-          echo "Tag $TAG already exists — skipping bump"
+          echo "Tag $TAG already exists -- skipping bump"
           echo "tag="      >> "$GITHUB_OUTPUT"
           echo "version="  >> "$GITHUB_OUTPUT"
           exit 0
@@ -87,7 +88,7 @@ jobs:
         echo "$NEW" > VERSION
         echo "tag=$TAG"          >> "$GITHUB_OUTPUT"
         echo "version=$NEW"      >> "$GITHUB_OUTPUT"
-        echo "Bumped $KIND: $OLD → $NEW (trigger: $MSG)"
+        echo "Bumped $KIND: $OLD -> $NEW"
 
     - name: Tag release
       if: steps.v.outputs.tag != ''
@@ -102,24 +103,23 @@ jobs:
         git commit -m "chore: release ${VERSION}"
         git tag "$TAG"
 
-        # Push only the tag — no branch, no PR.
-        # GITHUB_TOKEN tag pushes do NOT trigger new workflow runs.
-        git push origin "$TAG"
+        # Push the VERSION commit to main AND the tag.
+        # The bump job has a "chore: release" guard to prevent re-triggering.
+        git push origin HEAD:main "$TAG"
 
   # ================================================================== #
-  # BUILD — all four platforms                                         #
+  # BUILD -- all four platforms                                         #
   #                                                                    #
   # Waits for bump (main-branch runs) or runs directly (tag pushes).  #
   # Checks out the exact release tag so binaries match VERSION.        #
   # ================================================================== #
   build:
-    name: Build — ${{ matrix.target }}
+    name: Build -- ${{ matrix.target }}
     needs: bump
     if: |
       always() && (
         (needs.bump.result == 'success' && needs.bump.outputs.tag != '') ||
-        startsWith(github.ref, 'refs/tags/') ||
-        github.event_name == 'workflow_dispatch'
+        startsWith(github.ref, 'refs/tags/')
       )
     runs-on: ${{ matrix.os }}
 
@@ -147,12 +147,12 @@ jobs:
       with:
         ref: ${{ needs.bump.outputs.tag || github.ref }}
 
-    # ── Linux ─────────────────────────────────────────────────────────
+    # -- Linux ---
     - name: Setup (Linux)
       if: matrix.os == 'ubuntu-latest'
       run: sudo apt-get update && sudo apt-get install -y gcc make libreadline-dev bc
 
-    # ── Windows — MinGW-w64 via MSYS2 ─────────────────────────────────
+    # -- Windows -- MinGW-w64 via MSYS2 ---
     - name: Setup (Windows)
       if: matrix.os == 'windows-latest'
       uses: msys2/setup-msys2@v2
@@ -166,7 +166,7 @@ jobs:
           zip
           bc
 
-    # ── Build + test: Linux / macOS ───────────────────────────────────
+    # -- Build + test: Linux / macOS ---
     - name: Build (Unix)
       if: matrix.os != 'windows-latest'
       run: |
@@ -185,7 +185,7 @@ jobs:
       if: matrix.os != 'windows-latest'
       run: strip build/aetherc build/ae 2>/dev/null || true
 
-    # ── Build + test: Windows (MSYS2 shell) ──────────────────────────
+    # -- Build + test: Windows (MSYS2 shell) ---
     - name: Build (Windows)
       if: matrix.os == 'windows-latest'
       shell: msys2 {0}
@@ -207,36 +207,57 @@ jobs:
       shell: msys2 {0}
       run: strip build/aetherc.exe build/ae.exe 2>/dev/null || true
 
-    # ── Package + archive: Unix ───────────────────────────────────────
+    # -- Package: Unix ---
     - name: Package (Unix)
       if: matrix.os != 'windows-latest'
       run: |
         VERSION=$(cat VERSION | tr -d '[:space:]')
-        mkdir -p release/bin release/lib release/share/aether
+        mkdir -p release/bin release/lib release/share/aether release/include/aether
         cp build/aetherc release/bin/
         cp build/ae      release/bin/
+        chmod 755 release/bin/*
         if [ -f build/libaether.a ]; then
           cp build/libaether.a release/lib/
         fi
-        cp -r runtime    release/share/aether/
-        cp -r std        release/share/aether/
+        # Headers (preserve directory structure)
+        for dir in runtime runtime/actors runtime/scheduler runtime/utils \
+                   runtime/memory runtime/config std std/string std/io std/math \
+                   std/net std/collections std/json std/fs std/log; do
+          if [ -d "$dir" ]; then
+            mkdir -p "release/include/aether/$dir"
+            cp "$dir"/*.h "release/include/aether/$dir/" 2>/dev/null || true
+          fi
+        done
+        # Runtime source (fallback for linking without libaether.a)
+        cp -r runtime release/share/aether/
+        cp -r std     release/share/aether/
         cp LICENSE README.md VERSION release/
         cd release && tar -czf ../aether-${VERSION}-${{ matrix.target }}.tar.gz *
 
-    # ── Package + archive: Windows (all in MSYS2 shell) ───────────────
+    # -- Package: Windows (MSYS2 shell) ---
     - name: Package (Windows)
       if: matrix.os == 'windows-latest'
       shell: msys2 {0}
       run: |
         VERSION=$(cat VERSION | tr -d '[:space:]')
-        mkdir -p release/bin release/lib release/share/aether
+        mkdir -p release/bin release/lib release/share/aether release/include/aether
         cp build/aetherc.exe release/bin/
         cp build/ae.exe      release/bin/
         if [ -f build/libaether.a ]; then
           cp build/libaether.a release/lib/
         fi
-        cp -r runtime        release/share/aether/
-        cp -r std            release/share/aether/
+        # Headers (preserve directory structure)
+        for dir in runtime runtime/actors runtime/scheduler runtime/utils \
+                   runtime/memory runtime/config std std/string std/io std/math \
+                   std/net std/collections std/json std/fs std/log; do
+          if [ -d "$dir" ]; then
+            mkdir -p "release/include/aether/$dir"
+            cp "$dir"/*.h "release/include/aether/$dir/" 2>/dev/null || true
+          fi
+        done
+        # Runtime source (fallback for linking without libaether.a)
+        cp -r runtime release/share/aether/
+        cp -r std     release/share/aether/
         cp LICENSE README.md VERSION release/
         cd release && zip -r ../aether-${VERSION}-${{ matrix.target }}.zip *
 
@@ -250,7 +271,7 @@ jobs:
         retention-days: 7
 
   # ================================================================== #
-  # PUBLISH — create or update the GitHub Release                      #
+  # PUBLISH -- create or update the GitHub Release                      #
   # ================================================================== #
   publish:
     name: Publish release
@@ -259,8 +280,7 @@ jobs:
     if: |
       always() && needs.build.result == 'success' && (
         (needs.bump.result == 'success' && needs.bump.outputs.tag != '') ||
-        startsWith(github.ref, 'refs/tags/') ||
-        github.event_name == 'workflow_dispatch'
+        startsWith(github.ref, 'refs/tags/')
       )
 
     permissions:

@@ -10,6 +10,35 @@
 #include <string.h>
 #include <ctype.h>
 
+#ifdef _WIN32
+#include <io.h>
+#define isatty _isatty
+#define fileno _fileno
+#else
+#include <unistd.h>
+#endif
+
+// Color support: respect NO_COLOR (https://no-color.org/) and non-tty stderr
+static int colors_enabled = -1;  // -1 = not yet checked
+
+static int should_use_colors(void) {
+    if (colors_enabled < 0) {
+        if (getenv("NO_COLOR") != NULL) {
+            colors_enabled = 0;
+        } else {
+            colors_enabled = isatty(fileno(stderr));
+        }
+    }
+    return colors_enabled;
+}
+
+const char* aether_color_reset(void)  { return should_use_colors() ? "\033[0m"  : ""; }
+const char* aether_color_red(void)    { return should_use_colors() ? "\033[31m" : ""; }
+const char* aether_color_yellow(void) { return should_use_colors() ? "\033[33m" : ""; }
+const char* aether_color_blue(void)   { return should_use_colors() ? "\033[34m" : ""; }
+const char* aether_color_cyan(void)   { return should_use_colors() ? "\033[36m" : ""; }
+const char* aether_color_bold(void)   { return should_use_colors() ? "\033[1m"  : ""; }
+
 static const char* current_filename = NULL;
 static const char* current_source = NULL;
 static int error_count_global = 0;
@@ -79,14 +108,14 @@ void aether_error_report(AetherError* error) {
     
     // Print error header with code
     if (error->code != AETHER_ERR_NONE) {
-        fprintf(stderr, "%serror[E%04d]%s: %s\n", 
-                AETHER_COLOR_RED AETHER_COLOR_BOLD,
+        fprintf(stderr, "%s%serror[E%04d]%s: %s\n",
+                AETHER_COLOR_RED, AETHER_COLOR_BOLD,
                 error->code,
                 AETHER_COLOR_RESET,
                 error->message);
     } else {
-        fprintf(stderr, "%serror%s: %s\n", 
-                AETHER_COLOR_RED AETHER_COLOR_BOLD,
+        fprintf(stderr, "%s%serror%s: %s\n",
+                AETHER_COLOR_RED, AETHER_COLOR_BOLD,
                 AETHER_COLOR_RESET,
                 error->message);
     }
@@ -123,7 +152,7 @@ void aether_error_report(AetherError* error) {
             for (int i = 0; i < error->column - 1; i++) {
                 fprintf(stderr, " ");
             }
-            fprintf(stderr, "%s^%s", AETHER_COLOR_RED AETHER_COLOR_BOLD, AETHER_COLOR_RESET);
+            fprintf(stderr, "%s%s^%s", AETHER_COLOR_RED, AETHER_COLOR_BOLD, AETHER_COLOR_RESET);
             
             // Print suggestion on same line if available
             const char* suggestion = error->suggestion;
@@ -158,8 +187,8 @@ void aether_warning_report(AetherError* warning) {
     warning_count_global++;
     
     // Print warning header (yellow instead of red)
-    fprintf(stderr, "%swarning%s: %s\n",
-            AETHER_COLOR_YELLOW AETHER_COLOR_BOLD,
+    fprintf(stderr, "%s%swarning%s: %s\n",
+            AETHER_COLOR_YELLOW, AETHER_COLOR_BOLD,
             AETHER_COLOR_RESET,
             warning->message);
     

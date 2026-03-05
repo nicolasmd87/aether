@@ -35,12 +35,13 @@ Aether is a statically-typed, compiled language combining Erlang-inspired actor 
 
 | Type | Description | Example |
 |------|-------------|---------|
-| `int` | 32-bit signed integer | `42`, `-17` |
+| `int` | 32-bit signed integer | `42`, `-17`, `0xFF`, `0b1010` |
 | `float` | 64-bit floating point | `3.14`, `-0.5` |
 | `string` | UTF-8 encoded strings | `"Hello"` |
 | `bool` | Boolean type | `true`, `false` |
 | `void` | No value (for functions) | - |
-| `ptr` | Raw pointer (for C interop) | - |
+| `long` | 64-bit signed integer | `long x = 0` |
+| `ptr` | Raw pointer (for C interop) | `null` |
 
 ### Composite Types
 
@@ -58,6 +59,26 @@ int[10] numbers;           // Array of 10 integers
 string[5] names;           // Array of 5 strings
 float[100] values;         // Array of 100 floats
 ```
+
+### Numeric Literal Formats
+
+Integer literals support hex, octal, and binary notation. Underscore separators are allowed anywhere in digits for readability.
+
+| Format | Prefix | Example | Value |
+|--------|--------|---------|-------|
+| Decimal | (none) | `255` | 255 |
+| Hexadecimal | `0x` / `0X` | `0xFF` | 255 |
+| Octal | `0o` / `0O` | `0o377` | 255 |
+| Binary | `0b` / `0B` | `0b1111_1111` | 255 |
+
+```aether
+mask = 0xFF
+flags = 0b1010_0101
+perms = 0o755
+big = 1_000_000
+```
+
+All numeric literal formats work with bitwise operators and in any expression context.
 
 ---
 
@@ -79,6 +100,34 @@ float temperature = 98.6;
 ```
 
 Variables are inferred from their initialization or usage context.
+
+### Null
+
+The `null` keyword represents a null pointer, typed as `ptr`:
+
+```aether
+x = null             // inferred: ptr
+if x == null {
+    println("no value")
+}
+```
+
+### Constants
+
+Top-level constants are declared with `const`:
+
+```aether
+const MAX_SIZE = 100
+const GREETING = "hello"
+const PI = 3
+
+main() {
+    println(MAX_SIZE)           // 100
+    half = MAX_SIZE / 2         // constants work in expressions
+}
+```
+
+Constants are emitted as `#define` in generated C — zero runtime cost.
 
 ---
 
@@ -151,6 +200,35 @@ grade(score) when score >= 60 -> "D";
 grade(score) when score < 60 -> "F";
 ```
 
+### Multi-Statement Arrow Bodies
+
+Arrow functions can have block bodies with `-> { ... }`. The last expression is the implicit return value:
+
+```aether
+// Single expression (existing)
+twice(x) -> x * 2
+
+// Multi-statement with implicit return
+sum_squares(a, b) -> {
+    sq_a = a * a
+    sq_b = b * b
+    sq_a + sq_b
+}
+
+// Multi-statement with early return
+clamp(x, lo, hi) -> {
+    if x < lo {
+        return lo
+    }
+    if x > hi {
+        return hi
+    }
+    x
+}
+```
+
+This allows complex logic in arrow-style functions without switching to block syntax.
+
 ### Multi-parameter Guards
 
 ```aether
@@ -189,6 +267,23 @@ if (x > 0) {
 }
 ```
 
+### If-Expressions
+
+`if`/`else` can be used as an expression that produces a value (like a ternary operator):
+
+```aether
+// Assign based on condition
+max = if a > b { a } else { b }
+
+// Use inline in function calls
+println(if x > 0 { x } else { 0 - x })
+
+// Nested if-expressions
+grade = if score >= 90 { 4 } else { if score >= 80 { 3 } else { 2 } }
+```
+
+Both branches must produce a value of the same type. The `else` branch is required.
+
 ### While Loops
 
 ```aether
@@ -208,6 +303,26 @@ for (i = 0; i < 10; i = i + 1) {
     print("\n");
 }
 ```
+
+### Range-Based For Loops
+
+Iterate over a range with `for VAR in START..END`:
+
+```aether
+// Prints 0 1 2 3 4
+for i in 0..5 {
+    print(i)
+    print(" ")
+}
+
+// Sum with variable bound
+sum = 0
+for i in 1..n {
+    sum += i
+}
+```
+
+The range `start..end` is exclusive of `end` (like Python's `range(start, end)`). It desugars to a C-style for loop internally.
 
 ### Loop Control
 
@@ -242,6 +357,19 @@ match (value) {
     1 -> { print("one\n"); }
     2 -> { print("two\n"); }
     _ -> { print("other\n"); }
+}
+```
+
+### String Matching
+
+Strings are compared by content (via `strcmp`), so string literal arms work correctly:
+
+```aether
+match (command) {
+    "start" -> { println("starting...") }
+    "stop" -> { println("stopping...") }
+    "help" -> { println("available: start, stop, help") }
+    _ -> { println("unknown command") }
 }
 ```
 
@@ -584,6 +712,29 @@ receive {
 | `<=` | Less or equal | `a <= b` |
 | `>=` | Greater or equal | `a >= b` |
 
+> **String comparison:** When both operands are strings, `==` and `!=` compare by content (using `strcmp` in the generated C), not by pointer identity. Two strings with the same content are always equal regardless of how they were allocated.
+
+### Bitwise Operators
+
+| Operator | Description | Example |
+|----------|-------------|---------|
+| `&` | Bitwise AND | `flags & mask` |
+| `\|` | Bitwise OR | `flags \| bit` |
+| `^` | Bitwise XOR | `a ^ b` |
+| `~` | Bitwise NOT | `~mask` |
+| `<<` | Left shift | `1 << 4` |
+| `>>` | Right shift | `n >> 2` |
+
+Bitwise operators work on `int` and `long` values and map directly to C operators (zero runtime cost).
+
+```aether
+flags = 255
+mask = flags & 15       // 15
+set = flags | 256       // 511
+flipped = flags ^ 255   // 0
+shifted = 1 << 4        // 16
+```
+
 ### Logical Operators
 
 | Operator | Description | Example |
@@ -601,6 +752,12 @@ receive {
 | `-=` | Subtract and assign | `x -= 5` |
 | `*=` | Multiply and assign | `x *= 5` |
 | `/=` | Divide and assign | `x /= 5` |
+| `%=` | Modulo and assign | `x %= 5` |
+| `&=` | Bitwise AND assign | `x &= mask` |
+| `\|=` | Bitwise OR assign | `x \|= bit` |
+| `^=` | Bitwise XOR assign | `x ^= mask` |
+| `<<=` | Left shift assign | `x <<= 4` |
+| `>>=` | Right shift assign | `x >>= 2` |
 
 ### Postfix Operators
 
@@ -626,15 +783,19 @@ receive {
 ### Operator Precedence (High to Low)
 
 1. `()` `[]` `.` - Grouping, indexing, member access
-2. `!` `-` (unary) `++` `--` - Unary operators
+2. `!` `-` `~` (unary) `++` `--` - Unary operators
 3. `*` `/` `%` - Multiplicative
 4. `+` `-` - Additive
-5. `<` `>` `<=` `>=` - Relational
-6. `==` `!=` - Equality
-7. `&&` - Logical AND
-8. `||` - Logical OR
-9. `=` `+=` `-=` `*=` `/=` - Assignment
-10. `!` `?` - Actor send/ask
+5. `<<` `>>` - Bitwise shift
+6. `<` `>` `<=` `>=` - Relational
+7. `==` `!=` - Equality
+8. `&` - Bitwise AND
+9. `^` - Bitwise XOR
+10. `|` - Bitwise OR
+11. `&&` - Logical AND
+12. `||` - Logical OR
+13. `=` `+=` `-=` `*=` `/=` `%=` `&=` `|=` `^=` `<<=` `>>=` - Assignment
+14. `!` `?` - Actor send/ask
 
 ---
 
@@ -727,9 +888,24 @@ String interpolation is supported inside double-quoted strings using `${expr}`:
 ```aether
 name = "Alice"
 age = 30
-print("Hello, ${name}! You are ${age} years old.")
-// expands to: printf("Hello, %s! You are %d years old.", name, age)
+println("Hello, ${name}! You are ${age} years old.")
 ```
+
+Interpolated strings produce a `ptr` (heap-allocated C string) when used as values:
+
+```aether
+msg = "Hello, ${name}!"     // msg is a ptr (char*), not an int
+tcp_send(conn, msg)          // can be passed to any function expecting ptr
+```
+
+When used directly inside `print`/`println`, the compiler optimizes to a `printf` call (no allocation).
+
+### Timing
+
+| Function | Description |
+|----------|-------------|
+| `clock_ns()` | Returns current time in nanoseconds (`long`) |
+| `sleep(ms)` | Pause execution (milliseconds) |
 
 ### Concurrency
 
@@ -737,7 +913,38 @@ print("Hello, ${name}! You are ${age} years old.")
 |----------|-------------|
 | `spawn(ActorName())` | Create actor instance |
 | `wait_for_idle()` | Wait for all actors to finish |
-| `sleep(ms)` | Pause execution (milliseconds) |
+
+### Environment & Process
+
+| Function | Description |
+|----------|-------------|
+| `getenv(name)` | Get environment variable (returns string) |
+| `atoi(s)` | Convert string to int |
+| `exit(code)` | Terminate program with exit code (defaults to 0) |
+
+---
+
+## Keywords
+
+The following identifiers are reserved:
+
+| Keyword | Purpose |
+|---------|---------|
+| `if`, `else` | Conditionals |
+| `while`, `for`, `in`, `break`, `continue` | Loops |
+| `return` | Function return |
+| `match`, `switch`, `case`, `default` | Pattern matching / dispatch |
+| `actor`, `receive`, `spawn`, `reply` | Actor system |
+| `message`, `struct` | Type definitions |
+| `state` | Actor state (only reserved inside actor bodies) |
+| `import`, `extern` | Modules and C interop |
+| `const` | Top-level constants |
+| `defer` | Scope-exit cleanup |
+| `null`, `true`, `false` | Literals |
+| `when` | Guard clauses |
+| `int`, `float`, `string`, `bool`, `void`, `ptr`, `long` | Type names |
+
+Note: `state` is context-sensitive — it is a keyword only inside actor bodies. In all other code, `state` can be used as a regular variable name.
 
 ---
 
@@ -783,6 +990,9 @@ aetherc program.ae output.c
 # Emit a C header for embedding Aether actors in a C application
 # Generates message structs, MSG_* constants, and spawn function prototypes
 aetherc program.ae output.c --emit-header
+
+# Print parsed AST (for debugging, no code generation)
+aetherc --dump-ast program.ae
 ```
 
 ---

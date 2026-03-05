@@ -266,6 +266,36 @@ ASTNode* parse_primary_expression(Parser* parser) {
         case TOKEN_FALSE:
             return create_literal_node(advance_token(parser));
 
+        case TOKEN_NULL: {
+            Token* t = advance_token(parser);
+            ASTNode* null_node = create_ast_node(AST_NULL_LITERAL, "null", t->line, t->column);
+            null_node->node_type = create_type(TYPE_PTR);
+            return null_node;
+        }
+
+        case TOKEN_IF: {
+            // If-expression: if COND { EXPR } else { EXPR }
+            Token* t = advance_token(parser); // consume 'if'
+            ASTNode* cond = parse_expression(parser);
+            if (!cond) return NULL;
+            if (!expect_token(parser, TOKEN_LEFT_BRACE)) return NULL;
+            ASTNode* then_expr = parse_expression(parser);
+            if (!then_expr) return NULL;
+            if (!expect_token(parser, TOKEN_RIGHT_BRACE)) return NULL;
+            if (!expect_token(parser, TOKEN_ELSE)) return NULL;
+            if (!expect_token(parser, TOKEN_LEFT_BRACE)) return NULL;
+            ASTNode* else_expr = parse_expression(parser);
+            if (!else_expr) return NULL;
+            if (!expect_token(parser, TOKEN_RIGHT_BRACE)) return NULL;
+
+            ASTNode* if_expr = create_ast_node(AST_IF_EXPRESSION, NULL, t->line, t->column);
+            if_expr->node_type = create_type(TYPE_UNKNOWN);
+            add_child(if_expr, cond);
+            add_child(if_expr, then_expr);
+            add_child(if_expr, else_expr);
+            return if_expr;
+        }
+
         case TOKEN_INTERP_STRING: {
             Token* t = advance_token(parser);
             return parse_interp_string_expr(t->value);
@@ -505,6 +535,10 @@ ASTNode* parse_primary_expression(Parser* parser) {
             return print_call;
         }
 
+        case TOKEN_STATE:
+            // Outside actor bodies, 'state' is treated as a regular identifier
+            return create_identifier_node(advance_token(parser));
+
         default:
             return NULL;
     }
@@ -697,6 +731,7 @@ ASTNode* parse_unary_expression(Parser* parser) {
     if (!operator) return NULL;
     
     if (operator->type == TOKEN_EXCLAIM || operator->type == TOKEN_MINUS ||
+        operator->type == TOKEN_TILDE ||
         operator->type == TOKEN_INCREMENT || operator->type == TOKEN_DECREMENT) {
         advance_token(parser);
         ASTNode* operand = parse_unary_expression(parser);
@@ -710,21 +745,26 @@ ASTNode* parse_unary_expression(Parser* parser) {
 int get_operator_precedence(AeTokenType type) {
     switch (type) {
         case TOKEN_ASSIGN: return 0;  // Lowest precedence (right-associative)
-        case TOKEN_OR: return 1;
-        case TOKEN_AND: return 2;
+        case TOKEN_OR: return 1;      // logical OR
+        case TOKEN_AND: return 2;     // logical AND
+        case TOKEN_PIPE: return 3;    // bitwise OR
+        case TOKEN_CARET: return 4;   // bitwise XOR
+        case TOKEN_AMPERSAND: return 5; // bitwise AND
         case TOKEN_EQUALS:
-        case TOKEN_NOT_EQUALS: return 3;
+        case TOKEN_NOT_EQUALS: return 6;
         case TOKEN_LESS:
         case TOKEN_LESS_EQUAL:
         case TOKEN_GREATER:
-        case TOKEN_GREATER_EQUAL: return 4;
+        case TOKEN_GREATER_EQUAL: return 7;
+        case TOKEN_LSHIFT:
+        case TOKEN_RSHIFT: return 8;  // shift operators
         case TOKEN_PLUS:
-        case TOKEN_MINUS: return 5;
+        case TOKEN_MINUS: return 9;
         case TOKEN_MULTIPLY:
         case TOKEN_DIVIDE:
-        case TOKEN_MODULO: return 6;
+        case TOKEN_MODULO: return 10;
         case TOKEN_INCREMENT:
-        case TOKEN_DECREMENT: return 7;
+        case TOKEN_DECREMENT: return 11;
         default: return -1;  // Not an operator
     }
 }
@@ -751,7 +791,7 @@ ASTNode* parse_statement(Parser* parser) {
                 // Namespace call like string.release(s) - parse as expression statement
                 ASTNode* expr = parse_expression(parser);
                 if (expr) {
-                    expect_token(parser, TOKEN_SEMICOLON);
+                    match_token(parser, TOKEN_SEMICOLON);
                     ASTNode* stmt = create_ast_node(AST_EXPRESSION_STATEMENT, NULL, token->line, token->column);
                     add_child(stmt, expr);
                     return stmt;
@@ -785,12 +825,12 @@ ASTNode* parse_statement(Parser* parser) {
             
         case TOKEN_BREAK:
             advance_token(parser);
-            expect_token(parser, TOKEN_SEMICOLON);
+            match_token(parser, TOKEN_SEMICOLON);
             return create_ast_node(AST_BREAK_STATEMENT, NULL, token->line, token->column);
             
         case TOKEN_CONTINUE:
             advance_token(parser);
-            expect_token(parser, TOKEN_SEMICOLON);
+            match_token(parser, TOKEN_SEMICOLON);
             return create_ast_node(AST_CONTINUE_STATEMENT, NULL, token->line, token->column);
             
         case TOKEN_DEFER:
@@ -808,6 +848,9 @@ ASTNode* parse_statement(Parser* parser) {
         case TOKEN_LEFT_BRACE:
             return parse_block(parser);
             
+        case TOKEN_STATE:
+            // Outside actor bodies, 'state' is a regular identifier
+            // fall through
         case TOKEN_IDENTIFIER: {
             // Check if this is: identifier = expression (Python-style)
             Token* next = peek_ahead(parser, 1);
@@ -815,10 +858,38 @@ ASTNode* parse_statement(Parser* parser) {
                 // This is: x = value (could be declaration or assignment)
                 return parse_python_style_declaration(parser);
             }
+            // Check for compound assignment: identifier op= expression
+            if (next && (next->type == TOKEN_PLUS_ASSIGN || next->type == TOKEN_MINUS_ASSIGN ||
+                         next->type == TOKEN_MULTIPLY_ASSIGN || next->type == TOKEN_DIVIDE_ASSIGN ||
+                         next->type == TOKEN_MODULO_ASSIGN || next->type == TOKEN_AND_ASSIGN ||
+                         next->type == TOKEN_OR_ASSIGN || next->type == TOKEN_XOR_ASSIGN ||
+                         next->type == TOKEN_LSHIFT_ASSIGN || next->type == TOKEN_RSHIFT_ASSIGN)) {
+                // Consume identifier
+                Token* name = peek_token(parser);
+                if (!name || (name->type != TOKEN_IDENTIFIER && name->type != TOKEN_STATE)) {
+                    parser_error(parser, "Expected identifier");
+                    return NULL;
+                }
+                advance_token(parser);
+                // Consume the compound assignment operator
+                Token* op = advance_token(parser);
+                // Parse RHS expression
+                ASTNode* rhs = parse_expression(parser);
+                if (!rhs) return NULL;
+                // Create AST_COMPOUND_ASSIGNMENT: value = operator string, child[0] = RHS
+                ASTNode* node = create_ast_node(AST_COMPOUND_ASSIGNMENT, name->value, name->line, name->column);
+                node->node_type = create_type(TYPE_UNKNOWN);
+                // Store operator in a child node so codegen knows which op
+                ASTNode* op_node = create_ast_node(AST_LITERAL, op->value, op->line, op->column);
+                add_child(node, op_node);
+                add_child(node, rhs);
+                match_token(parser, TOKEN_SEMICOLON);
+                return node;
+            }
             // Otherwise fall through to expression statement
             ASTNode* expr = parse_expression(parser);
             if (expr) {
-                expect_token(parser, TOKEN_SEMICOLON);
+                match_token(parser, TOKEN_SEMICOLON);
                 ASTNode* stmt = create_ast_node(AST_EXPRESSION_STATEMENT, NULL, token->line, token->column);
                 add_child(stmt, expr);
                 return stmt;
@@ -829,7 +900,7 @@ ASTNode* parse_statement(Parser* parser) {
         default: {
             ASTNode* expr = parse_expression(parser);
             if (expr) {
-                expect_token(parser, TOKEN_SEMICOLON);
+                match_token(parser, TOKEN_SEMICOLON);
                 ASTNode* stmt = create_ast_node(AST_EXPRESSION_STATEMENT, NULL, token->line, token->column);
                 add_child(stmt, expr);
                 return stmt;
@@ -860,15 +931,20 @@ ASTNode* parse_variable_declaration_with_semicolon(Parser* parser, bool expect_s
     }
     
     if (expect_semicolon) {
-        expect_token(parser, TOKEN_SEMICOLON);
+        match_token(parser, TOKEN_SEMICOLON);
     }
     return decl;
 }
 
 // Python-style variable declaration: x = 42 (no 'let', type inferred)
 ASTNode* parse_python_style_declaration(Parser* parser) {
-    Token* name = expect_token(parser, TOKEN_IDENTIFIER);
-    if (!name) return NULL;
+    // Accept TOKEN_IDENTIFIER or TOKEN_STATE (state is a regular identifier outside actors)
+    Token* name = peek_token(parser);
+    if (!name || (name->type != TOKEN_IDENTIFIER && name->type != TOKEN_STATE)) {
+        parser_error(parser, "Expected identifier");
+        return NULL;
+    }
+    advance_token(parser);
     
     // Create declaration node with TYPE_UNKNOWN (will be inferred)
     ASTNode* decl = create_ast_node(AST_VARIABLE_DECLARATION, name->value, name->line, name->column);
@@ -881,7 +957,7 @@ ASTNode* parse_python_style_declaration(Parser* parser) {
         }
     }
     
-    expect_token(parser, TOKEN_SEMICOLON);
+    match_token(parser, TOKEN_SEMICOLON);
     return decl;
 }
 
@@ -909,16 +985,60 @@ ASTNode* parse_if_statement(Parser* parser) {
 
 ASTNode* parse_for_loop(Parser* parser) {
     advance_token(parser); // for
+
+    // Check for range-based for: for IDENT in EXPR..EXPR { body }
+    Token* first = peek_token(parser);
+    Token* second = peek_ahead(parser, 1);
+    if (first && (first->type == TOKEN_IDENTIFIER || first->type == TOKEN_STATE) &&
+        second && second->type == TOKEN_IN) {
+        // Range-based for loop
+        Token* var_name = advance_token(parser); // consume identifier
+        advance_token(parser); // consume 'in'
+        ASTNode* start_expr = parse_expression(parser);
+        if (!start_expr) return NULL;
+        if (!expect_token(parser, TOKEN_DOTDOT)) return NULL;
+        ASTNode* end_expr = parse_expression(parser);
+        if (!end_expr) return NULL;
+
+        ASTNode* body = parse_statement(parser);
+        if (!body) return NULL;
+
+        // Desugar: for i in start..end { body }
+        //       → for (i = start; i < end; i++) { body }
+        ASTNode* init = create_ast_node(AST_VARIABLE_DECLARATION, var_name->value, var_name->line, var_name->column);
+        init->node_type = create_type(TYPE_UNKNOWN);
+        add_child(init, start_expr);
+
+        // Condition: i < end
+        Token cond_op = { .type = TOKEN_LESS, .value = "<", .line = var_name->line, .column = var_name->column };
+        ASTNode* cond_left = create_ast_node(AST_IDENTIFIER, var_name->value, var_name->line, var_name->column);
+        ASTNode* condition = create_binary_expression(cond_left, end_expr, &cond_op);
+
+        // Increment: i++
+        Token inc_op = { .type = TOKEN_INCREMENT, .value = "++", .line = var_name->line, .column = var_name->column };
+        ASTNode* inc_target = create_ast_node(AST_IDENTIFIER, var_name->value, var_name->line, var_name->column);
+        ASTNode* increment = create_unary_expression(inc_target, &inc_op);
+
+        ASTNode* for_loop = create_ast_node(AST_FOR_LOOP, NULL, var_name->line, var_name->column);
+        for_loop->children = malloc(4 * sizeof(ASTNode*));
+        for_loop->child_count = 4;
+        for_loop->children[0] = init;
+        for_loop->children[1] = condition;
+        for_loop->children[2] = increment;
+        for_loop->children[3] = body;
+        return for_loop;
+    }
+
     expect_token(parser, TOKEN_LEFT_PAREN);
-    
+
     ASTNode* init = NULL;
     Token* token = peek_token(parser);
-    
+
     // Check if init is a variable declaration (int i = 1) or expression (i = 1)
     if (token && (token->type == TOKEN_INT || token->type == TOKEN_STRING ||
                   token->type == TOKEN_FLOAT || token->type == TOKEN_BOOL)) {
         init = parse_variable_declaration_with_semicolon(parser, false);
-        expect_token(parser, TOKEN_SEMICOLON);
+        match_token(parser, TOKEN_SEMICOLON);
     } else if (token && token->type == TOKEN_IDENTIFIER) {
         // Check for Python-style: i = 0 (treat as variable declaration)
         Token* next = peek_ahead(parser, 1);
@@ -936,16 +1056,16 @@ ASTNode* parse_for_loop(Parser* parser) {
         } else {
             init = parse_expression(parser);
         }
-        expect_token(parser, TOKEN_SEMICOLON);
+        match_token(parser, TOKEN_SEMICOLON);
     } else if (!match_token(parser, TOKEN_SEMICOLON)) {
         init = parse_expression(parser);
-        expect_token(parser, TOKEN_SEMICOLON);
+        match_token(parser, TOKEN_SEMICOLON);
     }
     
     ASTNode* condition = NULL;
     if (!match_token(parser, TOKEN_SEMICOLON)) {
         condition = parse_expression(parser);
-        expect_token(parser, TOKEN_SEMICOLON);
+        match_token(parser, TOKEN_SEMICOLON);
     }
     
     ASTNode* increment = NULL;
@@ -1324,7 +1444,7 @@ ASTNode* parse_return_statement(Parser* parser) {
     ASTNode* value = NULL;
     if (!match_token(parser, TOKEN_SEMICOLON)) {
         value = parse_expression(parser);
-        expect_token(parser, TOKEN_SEMICOLON);
+        match_token(parser, TOKEN_SEMICOLON);
     }
     
     ASTNode* return_stmt = create_ast_node(AST_RETURN_STATEMENT, NULL, 0, 0);
@@ -1542,7 +1662,7 @@ ASTNode* parse_print_statement(Parser* parser) {
         expect_token(parser, TOKEN_RIGHT_PAREN);
     }
     
-    expect_token(parser, TOKEN_SEMICOLON);
+    match_token(parser, TOKEN_SEMICOLON);
     return print_stmt;
 }
 
@@ -1558,7 +1678,7 @@ ASTNode* parse_send_statement(Parser* parser) {
     if (!message) return NULL;
     
     expect_token(parser, TOKEN_RIGHT_PAREN);
-    expect_token(parser, TOKEN_SEMICOLON);
+    match_token(parser, TOKEN_SEMICOLON);
     
     ASTNode* send_stmt = create_ast_node(AST_SEND_STATEMENT, NULL, 0, 0);
     add_child(send_stmt, actor_ref);
@@ -1575,7 +1695,7 @@ ASTNode* parse_spawn_actor_statement(Parser* parser) {
     if (!actor_type) return NULL;
     
     expect_token(parser, TOKEN_RIGHT_PAREN);
-    expect_token(parser, TOKEN_SEMICOLON);
+    match_token(parser, TOKEN_SEMICOLON);
     
     ASTNode* spawn_stmt = create_ast_node(AST_SPAWN_ACTOR_STATEMENT, NULL, 0, 0);
     add_child(spawn_stmt, actor_type);
@@ -1889,17 +2009,36 @@ ASTNode* parse_function_definition(Parser* parser) {
     }
     func->node_type = return_type;
     
-    // Check for Erlang-style arrow body: -> expr
+    // Check for Erlang-style arrow body: -> expr OR -> { stmts; expr }
     if (match_token(parser, TOKEN_ARROW)) {
-        ASTNode* body_expr = parse_expression(parser);
-        if (body_expr) {
-            // Wrap in a return statement
-            ASTNode* return_stmt = create_ast_node(AST_RETURN_STATEMENT, NULL, 0, 0);
-            add_child(return_stmt, body_expr);
-            
-            ASTNode* body_block = create_ast_node(AST_BLOCK, NULL, 0, 0);
-            add_child(body_block, return_stmt);
-            add_child(func, body_block);
+        Token* peek = peek_token(parser);
+        if (peek && peek->type == TOKEN_LEFT_BRACE) {
+            // Multi-statement arrow body: -> { stmt1; stmt2; expr }
+            // Parse as a block, but treat the last expression as implicit return
+            ASTNode* body = parse_block(parser);
+            if (body && body->child_count > 0) {
+                // Check if the last statement is already a return
+                ASTNode* last = body->children[body->child_count - 1];
+                if (last->type != AST_RETURN_STATEMENT) {
+                    // Wrap last statement/expression as implicit return
+                    ASTNode* return_stmt = create_ast_node(AST_RETURN_STATEMENT, NULL, 0, 0);
+                    add_child(return_stmt, last);
+                    body->children[body->child_count - 1] = return_stmt;
+                }
+            }
+            add_child(func, body);
+        } else {
+            // Single expression arrow body: -> expr
+            ASTNode* body_expr = parse_expression(parser);
+            if (body_expr) {
+                // Wrap in a return statement
+                ASTNode* return_stmt = create_ast_node(AST_RETURN_STATEMENT, NULL, 0, 0);
+                add_child(return_stmt, body_expr);
+
+                ASTNode* body_block = create_ast_node(AST_BLOCK, NULL, 0, 0);
+                add_child(body_block, return_stmt);
+                add_child(func, body_block);
+            }
         }
     } else {
         // Traditional block body
@@ -2178,6 +2317,25 @@ ASTNode* parse_program(Parser* parser) {
             case TOKEN_EXTERN:
                 node = parse_extern_declaration(parser);
                 break;
+            case TOKEN_CONST: {
+                // Top-level constant: const NAME = value
+                int cline = token->line, ccol = token->column;
+                advance_token(parser); // consume 'const'
+                Token* cname = expect_token(parser, TOKEN_IDENTIFIER);
+                if (!cname) { advance_token(parser); continue; }
+                if (!expect_token(parser, TOKEN_ASSIGN)) { advance_token(parser); continue; }
+                ASTNode* cval = parse_expression(parser);
+                if (!cval) { advance_token(parser); continue; }
+                node = create_ast_node(AST_CONST_DECLARATION, cname->value, cline, ccol);
+                add_child(node, cval);
+                // Infer type from value
+                if (cval->node_type) {
+                    node->node_type = clone_type(cval->node_type);
+                } else {
+                    node->node_type = create_type(TYPE_UNKNOWN);
+                }
+                break;
+            }
             case TOKEN_MAIN:
                 node = parse_main_function(parser);
                 break;

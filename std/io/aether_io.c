@@ -1,19 +1,29 @@
 #include "aether_io.h"
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/stat.h>
 
+#ifdef _WIN32
+#ifndef S_ISDIR
+#define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
+#endif
+#ifndef stat
+#define stat _stat
+#endif
+#endif
+
 // Console I/O
-void io_print(AetherString* str) {
-    if (str && str->data) {
-        printf("%s", str->data);
+void io_print(const char* str) {
+    if (str) {
+        printf("%s", str);
         fflush(stdout);
     }
 }
 
-void io_print_line(AetherString* str) {
-    if (str && str->data) {
-        printf("%s\n", str->data);
+void io_print_line(const char* str) {
+    if (str) {
+        printf("%s\n", str);
     } else {
         printf("\n");
     }
@@ -31,10 +41,10 @@ void io_print_float(float value) {
 }
 
 // File I/O
-AetherString* io_read_file(AetherString* path) {
-    if (!path || !path->data) return NULL;
+AetherString* io_read_file(const char* path) {
+    if (!path) return NULL;
 
-    FILE* file = fopen(path->data, "rb");
+    FILE* file = fopen(path, "rb");
     if (!file) return NULL;
 
     // Get file size
@@ -53,34 +63,36 @@ AetherString* io_read_file(AetherString* path) {
     return content;
 }
 
-int io_write_file(AetherString* path, AetherString* content) {
-    if (!path || !path->data || !content) return 0;
+int io_write_file(const char* path, const char* content) {
+    if (!path || !content) return 0;
 
-    FILE* file = fopen(path->data, "wb");
+    FILE* file = fopen(path, "wb");
     if (!file) return 0;
 
-    size_t written = fwrite(content->data, 1, content->length, file);
+    size_t len = strlen(content);
+    size_t written = fwrite(content, 1, len, file);
     fclose(file);
 
-    return written == content->length ? 1 : 0;
+    return written == len ? 1 : 0;
 }
 
-int io_append_file(AetherString* path, AetherString* content) {
-    if (!path || !path->data || !content) return 0;
+int io_append_file(const char* path, const char* content) {
+    if (!path || !content) return 0;
 
-    FILE* file = fopen(path->data, "ab");
+    FILE* file = fopen(path, "ab");
     if (!file) return 0;
 
-    size_t written = fwrite(content->data, 1, content->length, file);
+    size_t len = strlen(content);
+    size_t written = fwrite(content, 1, len, file);
     fclose(file);
 
-    return written == content->length ? 1 : 0;
+    return written == len ? 1 : 0;
 }
 
-int io_file_exists(AetherString* path) {
-    if (!path || !path->data) return 0;
+int io_file_exists(const char* path) {
+    if (!path) return 0;
 
-    FILE* file = fopen(path->data, "r");
+    FILE* file = fopen(path, "r");
     if (file) {
         fclose(file);
         return 1;
@@ -88,17 +100,17 @@ int io_file_exists(AetherString* path) {
     return 0;
 }
 
-int io_delete_file(AetherString* path) {
-    if (!path || !path->data) return 0;
-    return remove(path->data) == 0 ? 1 : 0;
+int io_delete_file(const char* path) {
+    if (!path) return 0;
+    return remove(path) == 0 ? 1 : 0;
 }
 
 // File info
-FileInfo* io_file_info(AetherString* path) {
-    if (!path || !path->data) return NULL;
+FileInfo* io_file_info(const char* path) {
+    if (!path) return NULL;
 
     struct stat st;
-    if (stat(path->data, &st) != 0) return NULL;
+    if (stat(path, &st) != 0) return NULL;
 
     FileInfo* info = (FileInfo*)malloc(sizeof(FileInfo));
     info->size = st.st_size;

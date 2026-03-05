@@ -2,25 +2,37 @@
 
 Aether provides seamless interoperability with C code, allowing you to leverage the entire C ecosystem including existing libraries like SQLite, libcurl, and OpenSSL.
 
-## Standard C Functions
+## Calling C Functions
 
-Standard C library functions (printf, strlen, malloc, etc.) are automatically available through the included headers. No special declarations are needed:
+Aether compiles to C, and the generated code already includes `<stdio.h>`, `<stdlib.h>`, `<string.h>`, `<math.h>`, etc. To call any C function — whether from the standard library, your own `.c` files, or a third-party library — you declare it with `extern`:
 
 ```aether
-main() {
-    // print() uses printf internally
-    print("Hello from Aether!\n")
+extern abs(x: int) -> int
+extern atoi(s: string) -> int
+extern puts(s: string) -> int
+extern rand() -> int
 
-    x = 42
-    print("Value: ")
-    print(x)
-    print("\n")
+main() {
+    puts("Hello from C's puts()!")
+
+    n = abs(0 - 42)
+    print("abs(-42) = ")
+    println(n)
+
+    val = atoi("123")
+    print("atoi = ")
+    println(val)
 }
 ```
 
+The `extern` signature must match the real C signature. See the type mapping table below.
+
+> **Note:** Aether has built-in functions (`print`, `println`, `sleep`, `clock_ns`, `spawn`, etc.) that don't need `extern`. See [Built-in Functions](language-reference.md#built-in-functions) in the language reference.
+
 ## The `extern` Keyword
 
-Use `extern` to declare C functions you want to call from Aether code. This is useful for:
+Use `extern` to declare C functions you want to call from Aether code:
+- Standard C library functions (`abs`, `atoi`, `puts`, `rand`, etc.)
 - Your own C functions in separate `.c` files
 - Third-party C libraries (SQLite, libcurl, etc.)
 - System APIs
@@ -152,8 +164,8 @@ link_flags = ["-lsqlite3"]
 
 ## Best Practices
 
-1. **Prefer Aether's standard library** for common operations when available
-2. **Use `extern` sparingly** - only for external C code, not standard library functions
+1. **Prefer Aether's standard library** for common operations when available (e.g. `import std.list` rather than hand-rolling a linked list in C)
+2. **Use `extern` for any C function** you want to call — including standard library functions like `abs`, `atoi`, `puts`, etc.
 3. **Document your C dependencies** in your project's README
 4. **Handle errors** - C functions often return error codes
 5. **Memory management** - Be careful with C memory; use Aether's memory management where possible

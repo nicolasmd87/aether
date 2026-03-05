@@ -45,7 +45,7 @@ typedef struct {
     atomic_int active;
     atomic_int assigned_core;
     Mailbox mailbox;
-    SPSCQueue spsc_queue;  // REQUIRED - must match ActorBase layout
+    SPSCQueue* spsc_queue;  // REQUIRED - must match ActorBase layout
     void (*step)(void*);
     atomic_int count;
     atomic_int last_value;
@@ -56,7 +56,7 @@ typedef struct {
     atomic_int active;
     atomic_int assigned_core;
     Mailbox mailbox;
-    SPSCQueue spsc_queue;  // REQUIRED - must match ActorBase layout
+    SPSCQueue* spsc_queue;  // REQUIRED - must match ActorBase layout
     void (*step)(void*);
     atomic_int received[100];  // Track received message IDs
     atomic_int count;
@@ -67,7 +67,7 @@ typedef struct {
     atomic_int active;
     atomic_int assigned_core;
     Mailbox mailbox;
-    SPSCQueue spsc_queue;  // REQUIRED - must match ActorBase layout
+    SPSCQueue* spsc_queue;  // REQUIRED - must match ActorBase layout
     void (*step)(void*);
     atomic_int pings_received;
     atomic_int pongs_sent;

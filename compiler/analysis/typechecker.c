@@ -256,6 +256,10 @@ int is_type_compatible(Type* from, Type* to) {
     if (to->kind == TYPE_ACTOR_REF &&
         (from->kind == TYPE_INT || from->kind == TYPE_INT64 || from->kind == TYPE_PTR)) return 1;
 
+    // int ↔ ptr compatibility (e.g. x = 0 then x = ptr_func(), or passing 0 to ptr param)
+    if (from->kind == TYPE_INT && to->kind == TYPE_PTR) return 1;
+    if (from->kind == TYPE_PTR && to->kind == TYPE_INT) return 1;
+
     return 0;
 }
 
@@ -289,6 +293,16 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
     switch (expr->type) {
         case AST_LITERAL:
             return clone_type(expr->node_type);
+
+        case AST_NULL_LITERAL:
+            return create_type(TYPE_PTR);
+
+        case AST_IF_EXPRESSION:
+            // Type is the type of the then-branch expression
+            if (expr->child_count >= 2) {
+                return infer_type(expr->children[1], table);
+            }
+            return create_type(TYPE_UNKNOWN);
 
         case AST_STRING_INTERP:
             return create_type(TYPE_STRING);
@@ -425,9 +439,27 @@ Type* infer_binary_type(ASTNode* left, ASTNode* right, AeTokenType operator) {
             }
             break;
             
+        case TOKEN_AMPERSAND:
+        case TOKEN_PIPE:
+        case TOKEN_CARET:
+        case TOKEN_LSHIFT:
+        case TOKEN_RSHIFT:
+            // Bitwise operations: integer operands, result matches wider type
+            if (left_type->kind == TYPE_UNKNOWN || right_type->kind == TYPE_UNKNOWN) {
+                return create_type(TYPE_UNKNOWN);
+            }
+            if (left_type->kind == TYPE_INT && right_type->kind == TYPE_INT) {
+                return create_type(TYPE_INT);
+            }
+            if ((left_type->kind == TYPE_INT64 || left_type->kind == TYPE_INT) &&
+                (right_type->kind == TYPE_INT64 || right_type->kind == TYPE_INT)) {
+                return create_type(TYPE_INT64);
+            }
+            break;
+
         case TOKEN_ASSIGN:
             return clone_type(right_type);
-            
+
         default:
             break;
     }
@@ -443,6 +475,9 @@ Type* infer_unary_type(ASTNode* operand, AeTokenType operator) {
         case TOKEN_NOT:
             return create_type(TYPE_BOOL);
             
+        case TOKEN_TILDE:
+            return clone_type(operand_type); // Bitwise NOT: same integer type
+
         case TOKEN_MINUS:
         case TOKEN_INCREMENT:
         case TOKEN_DECREMENT:
@@ -473,7 +508,13 @@ AeTokenType get_token_type_from_string(const char* str) {
     if (strcmp(str, "!") == 0) return TOKEN_NOT;
     if (strcmp(str, "++") == 0) return TOKEN_INCREMENT;
     if (strcmp(str, "--") == 0) return TOKEN_DECREMENT;
-    
+    if (strcmp(str, "&") == 0) return TOKEN_AMPERSAND;
+    if (strcmp(str, "|") == 0) return TOKEN_PIPE;
+    if (strcmp(str, "^") == 0) return TOKEN_CARET;
+    if (strcmp(str, "~") == 0) return TOKEN_TILDE;
+    if (strcmp(str, "<<") == 0) return TOKEN_LSHIFT;
+    if (strcmp(str, ">>") == 0) return TOKEN_RSHIFT;
+
     return TOKEN_ERROR;
 }
 
@@ -519,6 +560,10 @@ int typecheck_program(ASTNode* program) {
     // Output builtins
     Type* println_type = create_type(TYPE_VOID);
     add_symbol(global_table, "println", println_type, 0, 1, 0);
+
+    // Process control builtins
+    Type* exit_type = create_type(TYPE_VOID);
+    add_symbol(global_table, "exit", exit_type, 0, 1, 0);
 
     // First pass: collect all declarations
     for (int i = 0; i < program->child_count; i++) {
@@ -586,6 +631,17 @@ int typecheck_program(ASTNode* program) {
                 if (msg_sym) {
                     msg_sym->node = child;
                 }
+                break;
+            }
+            case AST_CONST_DECLARATION: {
+                // Register constant in symbol table
+                Type* ctype = child->node_type ? clone_type(child->node_type) : create_type(TYPE_UNKNOWN);
+                // Infer type from the value expression if unknown
+                if (ctype->kind == TYPE_UNKNOWN && child->child_count > 0 && child->children[0]->node_type) {
+                    free_type(ctype);
+                    ctype = clone_type(child->children[0]->node_type);
+                }
+                add_symbol(global_table, child->value, ctype, 0, 0, 0);
                 break;
             }
             case AST_MAIN_FUNCTION:
@@ -949,13 +1005,34 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
             }
             return 1;
         }
-        
+
+        case AST_COMPOUND_ASSIGNMENT: {
+            // node->value = variable name, children[0] = operator, children[1] = RHS
+            if (stmt->child_count >= 2) {
+                Symbol* symbol = lookup_symbol(table, stmt->value);
+                if (!symbol) {
+                    char error_msg[256];
+                    snprintf(error_msg, sizeof(error_msg), "Undefined variable '%s'", stmt->value ? stmt->value : "?");
+                    type_error(error_msg, stmt->line, stmt->column);
+                    return 0;
+                }
+                ASTNode* rhs = stmt->children[1];
+                typecheck_expression(rhs, table);
+                infer_type(rhs, table);
+                if (stmt->node_type && stmt->node_type->kind == TYPE_UNKNOWN) {
+                    free_type(stmt->node_type);
+                    stmt->node_type = clone_type(symbol->type);
+                }
+            }
+            return 1;
+        }
+
         case AST_IF_STATEMENT: {
             if (stmt->child_count >= 1) {
                 ASTNode* condition = stmt->children[0];
                 typecheck_expression(condition, table);
                 Type* cond_type = infer_type(condition, table);
-                
+
                 if (cond_type->kind != TYPE_BOOL) {
                     type_error("If condition must be boolean", condition->line, condition->column);
                     return 0;
@@ -1211,7 +1288,26 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
         case AST_LITERAL:
             // Literals are already typed
             return 1;
-            
+
+        case AST_IF_EXPRESSION:
+            // Typecheck all children (condition, then-expr, else-expr)
+            for (int i = 0; i < expr->child_count; i++) {
+                typecheck_expression(expr->children[i], table);
+            }
+            if (expr->child_count >= 2) {
+                Type* then_type = infer_type(expr->children[1], table);
+                if (!expr->node_type || expr->node_type->kind == TYPE_UNKNOWN) {
+                    if (expr->node_type) free_type(expr->node_type);
+                    expr->node_type = clone_type(then_type);
+                }
+            }
+            return 1;
+
+        case AST_NULL_LITERAL:
+            // null is always TYPE_PTR
+            if (!expr->node_type) expr->node_type = create_type(TYPE_PTR);
+            return 1;
+
         case AST_ARRAY_LITERAL:
             // Type check all array elements
             for (int i = 0; i < expr->child_count; i++) {

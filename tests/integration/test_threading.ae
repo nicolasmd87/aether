@@ -1,8 +1,6 @@
 // Integration test: Multi-actor concurrency
 // Tests spawning multiple actors and sending concurrent messages
 
-extern exit(code: int) -> void;
-
 message Increment { amount: int }
 
 actor Counter {

@@ -1,0 +1,28 @@
+// Test: if-expressions (value-producing if/else)
+
+main() {
+    // Basic if-expression
+    x = 10
+    result = if x > 5 { 1 } else { 0 }
+    println(result)       // expect: 1
+
+    // If-expression with variables
+    a = 3
+    b = 7
+    max = if a > b { a } else { b }
+    println(max)          // expect: 7
+
+    // Nested if-expressions
+    score = 85
+    grade = if score >= 90 { 4 } else { if score >= 80 { 3 } else { 2 } }
+    println(grade)        // expect: 3
+
+    // If-expression in function call
+    val = 42
+    println(if val > 0 { val } else { 0 - val })  // expect: 42
+
+    // If-expression with computation
+    n = 5
+    doubled_or_tripled = if n % 2 == 0 { n * 2 } else { n * 3 }
+    println(doubled_or_tripled) // expect: 15
+}

@@ -1,0 +1,28 @@
+// Test: string interpolation
+// Tests ${expr} syntax in strings, both as print arg and as value
+
+main() {
+    // Basic interpolation with println (printf path)
+    name = "world"
+    println("hello ${name}")
+
+    // Integer interpolation
+    x = 42
+    println("value: ${x}")
+
+    // Expression interpolation
+    a = 3
+    b = 4
+    println("sum: ${a + b}")
+
+    // Multiple interpolations in one string
+    println("${a} + ${b} = ${a + b}")
+
+    // String interpolation as a value (heap-allocated path)
+    msg = "result is ${x}"
+    println(msg)
+
+    // Interpolated string assigned then used in expression context
+    greeting = "hi ${name}"
+    println(greeting)
+}

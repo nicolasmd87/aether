@@ -1,22 +1,47 @@
 // Demonstration of C interoperability
-// Standard C library functions are already available - no extern needed
+//
+// Aether compiles to C, so any standard C library function can be called
+// by declaring it with `extern`. The generated C already includes <stdio.h>,
+// <stdlib.h>, <string.h>, <math.h>, etc., so these symbols are available
+// at link time — you just need to tell Aether's type system about them.
+//
+// Note: the extern signature must match the real C signature. Aether maps
+// `string` to `const char*`, `int` to `int`, `float` to `double`.
+
+extern abs(x: int) -> int
+extern atoi(s: string) -> int
+extern puts(s: string) -> int
+extern rand() -> int
 
 main() {
-    // printf, strlen, abs, sqrt are already available from C headers
-    print("Hello from Aether!\n");
+    // C's puts() — prints a string with a newline
+    puts("Hello from C's puts()!")
 
-    // Using basic math (already available)
-    x = 42;
-    y = x * 2;
-    print("x * 2 = ");
-    print(y);
-    print("\n");
+    // C's abs() — absolute value
+    n = abs(0 - 42)
+    print("abs(-42) = ")
+    println(n)
 
-    // String handling
-    msg = "Aether + C interop";
-    print("Message: ");
-    print(msg);
-    print("\n");
+    // C's atoi() — string to integer conversion
+    val = atoi("123")
+    print("atoi(\"123\") = ")
+    println(val)
 
-    print("Standard C functions work out of the box!\n");
+    // C's rand() — pseudo-random number
+    r = rand()
+    print("rand() = ")
+    println(r)
+
+    // Aether's built-in clock_ns() — nanosecond timestamps (no extern needed)
+    start = clock_ns()
+    x = 1
+    i = 0
+    while i < 100 {
+        x = x + rand()
+        i = i + 1
+    }
+    elapsed = clock_ns() - start
+    print("100 rand() calls took ")
+    print(elapsed)
+    println(" ns")
 }

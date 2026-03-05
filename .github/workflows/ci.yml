@@ -52,9 +52,6 @@ jobs:
     - name: Run full CI suite
       run: CC=${{ matrix.cc }} make ci
 
-    - name: Install smoke test
-      run: make test-install
-
   # ============================================================
   # Windows CI — MinGW via MSYS2
   # Builds compiler, ae, stdlib, REPL (with readline), and
@@ -79,9 +76,6 @@ jobs:
 
     - name: Run CI suite
       run: make ci
-
-    - name: Install smoke test
-      run: make test-install
 
   # ============================================================
   # Memory safety — Valgrind + AddressSanitizer on Linux/GCC

@@ -53,57 +53,45 @@ TEST_CATEGORY(map_create_and_free, TEST_CATEGORY_COLLECTIONS) {
 TEST_CATEGORY(map_put_and_get, TEST_CATEGORY_COLLECTIONS) {
     HashMap* map = map_new();
 
-    AetherString* key1 = string_new("name");
-    AetherString* key2 = string_new("age");
-
     int val1 = 42;
     int val2 = 100;
 
-    map_put(map, key1, &val1);
-    map_put(map, key2, &val2);
+    map_put(map, "name", &val1);
+    map_put(map, "age", &val2);
 
     ASSERT_EQ(2, map_size(map));
-    ASSERT_EQ(&val1, map_get(map, key1));
-    ASSERT_EQ(&val2, map_get(map, key2));
+    ASSERT_EQ(&val1, map_get(map, "name"));
+    ASSERT_EQ(&val2, map_get(map, "age"));
 
-    string_release(key1);
-    string_release(key2);
     map_free(map);
 }
 
 TEST_CATEGORY(map_has_and_remove, TEST_CATEGORY_COLLECTIONS) {
     HashMap* map = map_new();
 
-    AetherString* key = string_new("test");
     int val = 123;
 
-    map_put(map, key, &val);
-    ASSERT_TRUE(map_has(map, key));
+    map_put(map, "test", &val);
+    ASSERT_TRUE(map_has(map, "test"));
 
-    map_remove(map, key);
-    ASSERT_FALSE(map_has(map, key));
+    map_remove(map, "test");
+    ASSERT_FALSE(map_has(map, "test"));
     ASSERT_EQ(0, map_size(map));
 
-    string_release(key);
     map_free(map);
 }
 
 TEST_CATEGORY(map_keys, TEST_CATEGORY_COLLECTIONS) {
     HashMap* map = map_new();
 
-    AetherString* key1 = string_new("a");
-    AetherString* key2 = string_new("b");
-
     int val = 1;
-    map_put(map, key1, &val);
-    map_put(map, key2, &val);
+    map_put(map, "a", &val);
+    map_put(map, "b", &val);
 
     MapKeys* keys = map_keys(map);
     ASSERT_NOT_NULL(keys);
     ASSERT_EQ(2, keys->count);
 
     map_keys_free(keys);
-    string_release(key1);
-    string_release(key2);
     map_free(map);
 }

@@ -37,7 +37,7 @@ typedef struct {
     atomic_int assigned_core;
     atomic_int migrate_to;
     atomic_int main_thread_only;
-    SPSCQueue spsc_queue;
+    SPSCQueue* spsc_queue;
     _Atomic(ActorReplySlot*) reply_slot;
     atomic_flag step_lock;
     // Test-specific fields below
@@ -66,7 +66,7 @@ typedef struct {
     atomic_int assigned_core;
     atomic_int migrate_to;
     atomic_int main_thread_only;
-    SPSCQueue spsc_queue;
+    SPSCQueue* spsc_queue;
     _Atomic(ActorReplySlot*) reply_slot;
     atomic_flag step_lock;
     // Test-specific fields below
@@ -99,7 +99,7 @@ typedef struct {
     atomic_int assigned_core;
     atomic_int migrate_to;
     atomic_int main_thread_only;
-    SPSCQueue spsc_queue;
+    SPSCQueue* spsc_queue;
     _Atomic(ActorReplySlot*) reply_slot;
     atomic_flag step_lock;
     // Test-specific fields below

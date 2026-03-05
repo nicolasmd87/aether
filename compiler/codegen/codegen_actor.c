@@ -20,7 +20,14 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
     }
     
     // Generate cache-aligned actor struct with optimized field layout
-    print_line(gen, "typedef struct __attribute__((aligned(64))) %s {", actor->value);
+    print_line(gen, "#ifdef _MSC_VER");
+    print_line(gen, "__declspec(align(64))");
+    print_line(gen, "#endif");
+    print_line(gen, "typedef struct");
+    print_line(gen, "#if defined(__GNUC__) || defined(__clang__)");
+    print_line(gen, "__attribute__((aligned(64)))");
+    print_line(gen, "#endif");
+    print_line(gen, "%s {", actor->value);
     indent(gen);
     
     // Hot fields (accessed every message) - first cache line
@@ -35,7 +42,7 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
     print_line(gen, "atomic_int assigned_core; // Cold: core assignment (atomic for work-stealing)");
     print_line(gen, "atomic_int migrate_to;    // Cold: affinity hint (-1 = none)");
     print_line(gen, "atomic_int main_thread_only; // Cold: scheduler skip flag");
-    print_line(gen, "SPSCQueue spsc_queue;    // Lock-free same-core messaging");
+    print_line(gen, "SPSCQueue* spsc_queue;   // Lock-free same-core messaging (lazy alloc)");
     print_line(gen, "_Atomic(ActorReplySlot*) reply_slot; // Non-NULL only during ask/reply");
     print_line(gen, "atomic_flag step_lock;   // Prevents concurrent step() during work-steal handoff");
     print_line(gen, "");
@@ -106,7 +113,7 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
                 if (pattern && pattern->type == AST_MESSAGE_PATTERN) {
                     MessageDef* msg_def = lookup_message(gen->message_registry, pattern->value);
                     if (msg_def) {
-                        print_line(gen, "static __attribute__((hot)) void %s_handle_%s(%s* self, void* _msg_data) {",
+                        print_line(gen, "static AETHER_HOT void %s_handle_%s(%s* self, void* _msg_data) {",
                                   actor->value, pattern->value, actor->value);
                         indent(gen);
                         print_line(gen, "%s* _pattern = (%s*)_msg_data;", pattern->value, pattern->value);
@@ -213,16 +220,15 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
     print_line(gen, "");
     
     if (pattern_count > 0) {
-        print_line(gen, "// COMPUTED GOTO DISPATCH - 15-30%% faster than function pointers");
-        print_line(gen, "// Used by CPython, LuaJIT for ultra-fast message dispatch");
         print_line(gen, "void* _msg_data = msg.payload_ptr;");
-        print_line(gen, "int _msg_id = msg.type;  // Already set by aether_send_message, avoids pointer dereference");
+        print_line(gen, "int _msg_id = msg.type;");
         print_line(gen, "");
-        print_line(gen, "// Dispatch table: direct jumps to labels (no indirect call overhead)");
+        print_line(gen, "#if AETHER_GCC_COMPAT");
+        print_line(gen, "// COMPUTED GOTO DISPATCH - 15-30%% faster than switch");
         print_line(gen, "static void* dispatch_table[256] = {");
         indent(gen);
-        
-        // Generate dispatch table with labels
+
+        // Generate dispatch table with labels (GCC/Clang path)
         for (int i = 0; i < actor->child_count; i++) {
             ASTNode* child = actor->children[i];
             if (child->type == AST_RECEIVE_STATEMENT && child->child_count > 0) {
@@ -230,11 +236,9 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
                     ASTNode* arm = child->children[j];
                     ASTNode* pattern = NULL;
 
-                    // V2: AST_RECEIVE_ARM contains pattern
                     if (arm->type == AST_RECEIVE_ARM && arm->child_count >= 1) {
                         pattern = arm->children[0];
                     }
-                    // V1: AST_BLOCK contains MESSAGE_PATTERN
                     else if (arm->type == AST_BLOCK) {
                         for (int k = 0; k < arm->child_count; k++) {
                             if (arm->children[k]->type == AST_MESSAGE_PATTERN) {
@@ -253,16 +257,51 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
                 }
             }
         }
-        
+
         unindent(gen);
         print_line(gen, "};");
-        print_line(gen, "");
-        print_line(gen, "// Bounds check with likely hint (message IDs are usually valid)");
         print_line(gen, "if (likely(_msg_id >= 0 && _msg_id < 256 && dispatch_table[_msg_id])) {");
         indent(gen);
-        print_line(gen, "goto *dispatch_table[_msg_id];  // Direct jump - zero overhead");
+        print_line(gen, "goto *dispatch_table[_msg_id];");
         unindent(gen);
         print_line(gen, "}");
+        print_line(gen, "#else");
+        print_line(gen, "// MSVC: switch-case dispatch fallback");
+        print_line(gen, "switch (_msg_id) {");
+
+        // Generate switch cases (MSVC path)
+        for (int i = 0; i < actor->child_count; i++) {
+            ASTNode* child = actor->children[i];
+            if (child->type == AST_RECEIVE_STATEMENT && child->child_count > 0) {
+                for (int j = 0; j < child->child_count; j++) {
+                    ASTNode* arm = child->children[j];
+                    ASTNode* pattern = NULL;
+
+                    if (arm->type == AST_RECEIVE_ARM && arm->child_count >= 1) {
+                        pattern = arm->children[0];
+                    }
+                    else if (arm->type == AST_BLOCK) {
+                        for (int k = 0; k < arm->child_count; k++) {
+                            if (arm->children[k]->type == AST_MESSAGE_PATTERN) {
+                                pattern = arm->children[k];
+                                break;
+                            }
+                        }
+                    }
+
+                    if (pattern && pattern->type == AST_MESSAGE_PATTERN) {
+                        MessageDef* msg_def = lookup_message(gen->message_registry, pattern->value);
+                        if (msg_def) {
+                            print_line(gen, "case %d: goto handle_%s;", msg_def->message_id, pattern->value);
+                        }
+                    }
+                }
+            }
+        }
+
+        print_line(gen, "default: break;");
+        print_line(gen, "}");
+        print_line(gen, "#endif");
         print_line(gen, "return;  // Unknown message type");
         print_line(gen, "");
         

@@ -41,12 +41,15 @@
 #include <time.h>      // struct timespec (MSVC 2015+)
 #include <errno.h>
 
-// ETIMEDOUT / ENOMEM may not be defined on all MSVC runtimes
+// ETIMEDOUT / ENOMEM / EBUSY may not be defined on all MSVC runtimes
 #ifndef ETIMEDOUT
 #  define ETIMEDOUT 138
 #endif
 #ifndef ENOMEM
 #  define ENOMEM 12
+#endif
+#ifndef EBUSY
+#  define EBUSY 16
 #endif
 
 // ---- Types ---------------------------------------------------------------

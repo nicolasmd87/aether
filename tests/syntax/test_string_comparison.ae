@@ -1,0 +1,78 @@
+// Test string comparison operators (== and !=)
+// Verifies: strcmp-based content comparison, not pointer comparison
+
+main() {
+    print("=== String Comparison Tests ===\n\n")
+
+    // Test 1: Direct string literal equality
+    print("Test 1: String literal == literal\n")
+    if "hello" == "hello" {
+        print("  PASS: identical literals are equal\n")
+    } else {
+        print("  FAIL: identical literals should be equal\n")
+        exit(1)
+    }
+
+    // Test 2: Variable string equality
+    a = "hello"
+    b = "hello"
+    print("\nTest 2: Variable == variable (same content)\n")
+    if a == b {
+        print("  PASS: same-content variables are equal\n")
+    } else {
+        print("  FAIL: same-content variables should be equal\n")
+        exit(1)
+    }
+
+    // Test 3: String inequality (different content)
+    c = "hello"
+    d = "world"
+    print("\nTest 3: Different strings are not equal\n")
+    if c != d {
+        print("  PASS: different strings are not equal\n")
+    } else {
+        print("  FAIL: different strings should not be equal\n")
+        exit(1)
+    }
+
+    // Test 4: != with same content
+    e = "test"
+    f = "test"
+    print("\nTest 4: Same strings are not != \n")
+    if e != f {
+        print("  FAIL: same-content strings should not be !=\n")
+        exit(1)
+    } else {
+        print("  PASS: same-content strings are not !=\n")
+    }
+
+    // Test 5: String comparison in while loop condition
+    print("\nTest 5: String comparison in while loop\n")
+    status = "running"
+    iterations = 0
+    while status == "running" {
+        iterations = iterations + 1
+        if iterations >= 3 {
+            status = "done"
+        }
+    }
+    if iterations == 3 {
+        print("  PASS: loop ran 3 times\n")
+    } else {
+        print("  FAIL: unexpected iteration count\n")
+        exit(1)
+    }
+
+    // Test 6: Empty string comparison
+    print("\nTest 6: Empty string comparison\n")
+    empty1 = ""
+    empty2 = ""
+    if empty1 == empty2 {
+        print("  PASS: empty strings are equal\n")
+    } else {
+        print("  FAIL: empty strings should be equal\n")
+        exit(1)
+    }
+
+    print("\n=== All 6 Tests Complete ===\n")
+}

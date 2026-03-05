@@ -173,6 +173,23 @@ void collect_expression_constraints(ASTNode* node, InferenceContext* ctx) {
             }
             break;
             
+        case AST_COMPOUND_ASSIGNMENT:
+            // children[0] = operator, children[1] = RHS expression
+            if (node->child_count >= 2) {
+                collect_constraints(node->children[1], ctx);
+                // Infer type from existing variable
+                if (node->value && ctx->symbols) {
+                    Symbol* sym = lookup_symbol(ctx->symbols, node->value);
+                    if (sym && sym->type && sym->type->kind != TYPE_UNKNOWN) {
+                        if (!node->node_type || node->node_type->kind == TYPE_UNKNOWN) {
+                            if (node->node_type) free_type(node->node_type);
+                            node->node_type = clone_type(sym->type);
+                        }
+                    }
+                }
+            }
+            break;
+
         case AST_VARIABLE_DECLARATION:
         case AST_STATE_DECLARATION:
             // Always process initializer if present (even with explicit types)
@@ -365,13 +382,63 @@ void collect_expression_constraints(ASTNode* node, InferenceContext* ctx) {
 // Infer return type from return statements in function body.
 // Called with is_top_level=true only from infer_function_return_types; the
 // recursive descent into control-flow children uses is_top_level=false.
+// Given an identifier name, scan preceding siblings in a block for the
+// variable declaration of that name and return the type of its initializer.
+static Type* resolve_local_var_type(const char* name, ASTNode* block, int before_index, SymbolTable* symbols) {
+    if (!name || !block) return NULL;
+    for (int i = before_index - 1; i >= 0; i--) {
+        ASTNode* stmt = block->children[i];
+        if (!stmt) continue;
+        if (stmt->type == AST_VARIABLE_DECLARATION && stmt->value &&
+            strcmp(stmt->value, name) == 0 && stmt->child_count > 0) {
+            ASTNode* init = stmt->children[0];
+            // Use node_type if already set
+            if (init->node_type && init->node_type->kind != TYPE_UNKNOWN) {
+                return clone_type(init->node_type);
+            }
+            // Recognize common expression types directly
+            if (init->type == AST_STRING_INTERP) return create_type(TYPE_STRING);
+            if (init->type == AST_NULL_LITERAL) return create_type(TYPE_PTR);
+            if (init->type == AST_LITERAL && init->node_type)
+                return clone_type(init->node_type);
+            if (init->type == AST_ARRAY_LITERAL)
+                return init->node_type ? clone_type(init->node_type) : create_type(TYPE_ARRAY);
+            if (init->type == AST_STRUCT_LITERAL && init->node_type)
+                return clone_type(init->node_type);
+            // Function call — look up function return type in symbol table
+            if (init->type == AST_FUNCTION_CALL && init->value && symbols) {
+                Symbol* func_sym = lookup_symbol(symbols, init->value);
+                if (func_sym && func_sym->type && func_sym->type->kind != TYPE_UNKNOWN)
+                    return clone_type(func_sym->type);
+            }
+            break;
+        }
+    }
+    return NULL;
+}
+
 static Type* infer_return_type_impl(ASTNode* body, SymbolTable* symbols, bool is_top_level) {
     if (!body) return NULL;
 
     if (body->type == AST_RETURN_STATEMENT && body->child_count > 0) {
         ASTNode* return_expr = body->children[0];
+        // Unwrap AST_EXPRESSION_STATEMENT (created by implicit return wrapping)
+        if (return_expr->type == AST_EXPRESSION_STATEMENT && return_expr->child_count > 0) {
+            return_expr = return_expr->children[0];
+        }
         if (return_expr->node_type && return_expr->node_type->kind != TYPE_UNKNOWN) {
             return clone_type(return_expr->node_type);
+        }
+        // node_type may not be set on identifiers — resolve via symbol table
+        if (return_expr->type == AST_IDENTIFIER && return_expr->value && symbols) {
+            Symbol* sym = lookup_symbol(symbols, return_expr->value);
+            if (sym && sym->type && sym->type->kind != TYPE_UNKNOWN) {
+                return clone_type(sym->type);
+            }
+        }
+        // String interpolation always returns a string (ptr)
+        if (return_expr->type == AST_STRING_INTERP) {
+            return create_type(TYPE_STRING);
         }
     }
 
@@ -383,12 +450,42 @@ static Type* infer_return_type_impl(ASTNode* body, SymbolTable* symbols, bool is
             body->node_type->kind != TYPE_VOID) {
             return clone_type(body->node_type);
         }
+        // Resolve identifier types via symbol table
+        if (body->type == AST_IDENTIFIER && body->value && symbols) {
+            Symbol* sym = lookup_symbol(symbols, body->value);
+            if (sym && sym->type && sym->type->kind != TYPE_UNKNOWN) {
+                return clone_type(sym->type);
+            }
+        }
+        if (body->type == AST_STRING_INTERP) {
+            return create_type(TYPE_STRING);
+        }
     }
 
     // Only descend into control-flow nodes that may contain return statements.
     // This avoids mistaking a string literal inside print() for a return type.
     switch (body->type) {
         case AST_BLOCK:
+            for (int i = 0; i < body->child_count; i++) {
+                ASTNode* child = body->children[i];
+                if (!child) continue;
+                // For return statements in a block, resolve local variable types
+                // from preceding siblings before recursing.
+                if (child->type == AST_RETURN_STATEMENT && child->child_count > 0) {
+                    ASTNode* ret_expr = child->children[0];
+                    // Unwrap AST_EXPRESSION_STATEMENT (from implicit return)
+                    if (ret_expr->type == AST_EXPRESSION_STATEMENT && ret_expr->child_count > 0)
+                        ret_expr = ret_expr->children[0];
+                    if (ret_expr->type == AST_IDENTIFIER && ret_expr->value &&
+                        (!ret_expr->node_type || ret_expr->node_type->kind == TYPE_UNKNOWN)) {
+                        Type* local_type = resolve_local_var_type(ret_expr->value, body, i, symbols);
+                        if (local_type) return local_type;
+                    }
+                }
+                Type* rt = infer_return_type_impl(child, symbols, false);
+                if (rt) return rt;
+            }
+            break;
         case AST_IF_STATEMENT:
         case AST_FOR_LOOP:
         case AST_WHILE_LOOP:
@@ -452,7 +549,11 @@ void collect_constraints(ASTNode* node, InferenceContext* ctx) {
         case AST_LITERAL:
             collect_literal_constraints(node, ctx);
             break;
-            
+
+        case AST_NULL_LITERAL:
+            if (!node->node_type) node->node_type = create_type(TYPE_PTR);
+            break;
+
         case AST_ARRAY_LITERAL:
             // Infer array type from first element
             if (node->child_count > 0) {

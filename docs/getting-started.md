@@ -67,11 +67,14 @@ The easiest way is to download the pre-built release binary — no MSYS2, no man
 1. Download `aether-*-windows-x86_64.zip` from [GitHub Releases](https://github.com/nicolasmd87/aether/releases)
 2. Extract to any folder — e.g. `C:\aether`
 3. Add `C:\aether\bin` to your PATH (System Settings → Environment Variables → Path)
-4. Open any terminal (PowerShell or CMD):
+4. **Restart your terminal** (so PATH takes effect)
+5. Open any terminal (PowerShell or CMD):
 
 ```powershell
 ae version
-ae run examples\basics\hello.ae
+ae init hello
+cd hello
+ae run
 ```
 
 **GCC is downloaded automatically on the first `ae run`** (~80 MB, one-time). No MSYS2, no separate installer needed.
@@ -381,6 +384,12 @@ Versions are stored in `~/.aether/versions/`. The active version is symlinked to
 
 ### Build Failures
 
+**"Aether compiler not found" (Windows)**
+- Make sure you **restarted your terminal** after adding `C:\aether\bin` to PATH
+- Verify: `where ae` should show `C:\aether\bin\ae.exe`
+- Verify: `where aetherc` should show `C:\aether\bin\aetherc.exe`
+- If both exist but it still fails, set `AETHER_HOME`: `set AETHER_HOME=C:\aether`
+
 **"gcc: command not found" (Windows)**
 - This should not happen with the pre-built binary — `ae` auto-downloads GCC (~80 MB) on first run
 - If you built from source via MSYS2, open the "MSYS2 MinGW 64-bit" shell, not plain PowerShell
@@ -399,6 +408,7 @@ Versions are stored in `~/.aether/versions/`. The active version is symlinked to
 1. Forgetting to rebuild after changes: run `make clean && make`
 2. Actor structs missing the `migrate_to` field (causes struct layout mismatch)
 3. On Windows, running `ae` from a directory without write permission (GCC download needs `~\.aether\`)
+4. Using `state` as a variable name inside an actor body (it's reserved there — use it freely elsewhere)
 
 ### Platform-Specific Notes
 

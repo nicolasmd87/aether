@@ -72,9 +72,10 @@ Installs to `~/.aether` and adds `ae` to your PATH. Restart your terminal or run
 1. Download `aether-*-windows-x86_64.zip` from [Releases](https://github.com/nicolasmd87/aether/releases)
 2. Extract to any folder (e.g. `C:\aether`)
 3. Add `C:\aether\bin` to your PATH
-4. Open any terminal (PowerShell or CMD) and run `ae run hello.ae`
+4. **Restart your terminal** (so PATH takes effect)
+5. Run `ae init hello && cd hello && ae run`
 
-GCC is downloaded automatically the first time you run a program — no MSYS2 or manual toolchain setup required.
+GCC is downloaded automatically the first time you run a program (~80 MB, one-time) — no MSYS2 or manual toolchain setup required.
 
 **All platforms — manage versions with `ae version`:**
 

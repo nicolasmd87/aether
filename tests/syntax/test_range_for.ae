@@ -1,0 +1,39 @@
+// Test: range-based for loops (for i in start..end)
+
+main() {
+    // Basic range for
+    for i in 0..5 {
+        print(i)
+        print(" ")
+    }
+    println("")           // expect: 0 1 2 3 4
+
+    // Range with variable bound
+    n = 10
+    sum = 0
+    for i in 1..n {
+        sum += i
+    }
+    println(sum)          // expect: 45
+
+    // Range for with single iteration
+    for i in 0..1 {
+        println(i)        // expect: 0
+    }
+
+    // Range for with computation in body
+    total = 0
+    for i in 1..6 {
+        total += i * i
+    }
+    println(total)        // expect: 55
+
+    // Nested range for
+    count = 0
+    for i in 0..3 {
+        for j in 0..3 {
+            count += 1
+        }
+    }
+    println(count)        // expect: 9
+}

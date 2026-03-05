@@ -1,0 +1,49 @@
+// Test defer statement with various return types
+// Verifies: _defer_ret uses correct type (not always int)
+
+extern puts(s: string) -> int
+
+// Helper that has a defer and returns a long value
+get_timestamp() -> {
+    defer puts("  defer ran")
+    t = clock_ns()
+    return t
+}
+
+// Helper that returns a string and has a defer
+get_greeting(name: string) -> {
+    defer puts("  defer ran in get_greeting")
+    msg = "hello"
+    return msg
+}
+
+main() {
+    print("=== Defer Tests ===\n\n")
+
+    // Test 1: defer with long return value (was truncated to int)
+    print("Test 1: Defer with long return\n")
+    ts = get_timestamp()
+    if ts > 0 {
+        print("  PASS: got valid timestamp\n")
+    } else {
+        print("  FAIL: timestamp was zero or negative (truncated?)\n")
+        exit(1)
+    }
+
+    // Test 2: defer with string return value
+    print("\nTest 2: Defer with string return\n")
+    greeting = get_greeting("world")
+    if greeting == "hello" {
+        print("  PASS: got correct greeting\n")
+    } else {
+        print("  FAIL: greeting was wrong\n")
+        exit(1)
+    }
+
+    // Test 3: defer executes in LIFO order
+    print("\nTest 3: Defer LIFO order\n")
+    defer println("  third (outermost)")
+    defer println("  second")
+    defer println("  first (innermost)")
+    print("  defers should print in reverse order after this:\n")
+}

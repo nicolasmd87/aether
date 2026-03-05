@@ -39,13 +39,20 @@ void aether_error_with_suggestion(const char* message, int line, int column, con
 void aether_error_in_context(const char* message, int line, int column, const char* context);
 void aether_error_with_code(const char* message, int line, int column, AetherErrorCode code);
 
-// Terminal colors (ANSI escape codes)
-#define AETHER_COLOR_RESET "\033[0m"
-#define AETHER_COLOR_RED "\033[31m"
-#define AETHER_COLOR_YELLOW "\033[33m"
-#define AETHER_COLOR_BLUE "\033[34m"
-#define AETHER_COLOR_CYAN "\033[36m"
-#define AETHER_COLOR_BOLD "\033[1m"
+// Terminal color support: disabled by NO_COLOR env var or non-tty stderr
+const char* aether_color_reset(void);
+const char* aether_color_red(void);
+const char* aether_color_yellow(void);
+const char* aether_color_blue(void);
+const char* aether_color_cyan(void);
+const char* aether_color_bold(void);
+
+#define AETHER_COLOR_RESET aether_color_reset()
+#define AETHER_COLOR_RED aether_color_red()
+#define AETHER_COLOR_YELLOW aether_color_yellow()
+#define AETHER_COLOR_BLUE aether_color_blue()
+#define AETHER_COLOR_CYAN aether_color_cyan()
+#define AETHER_COLOR_BOLD aether_color_bold()
 
 // Error statistics
 int aether_error_count();

@@ -17,10 +17,10 @@ void list_clear(ArrayList* list);
 void list_free(ArrayList* list);
 
 HashMap* map_new();
-void map_put(HashMap* map, AetherString* key, void* value);
-void* map_get(HashMap* map, AetherString* key);
-int map_has(HashMap* map, AetherString* key);
-void map_remove(HashMap* map, AetherString* key);
+void map_put(HashMap* map, const char* key, void* value);
+void* map_get(HashMap* map, const char* key);
+int map_has(HashMap* map, const char* key);
+void map_remove(HashMap* map, const char* key);
 int map_size(HashMap* map);
 void map_clear(HashMap* map);
 void map_free(HashMap* map);

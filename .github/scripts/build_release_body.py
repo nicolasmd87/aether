@@ -87,14 +87,16 @@ def main() -> None:
     repo_root = os.environ.get("GITHUB_WORKSPACE", os.getcwd())
     changelog_path = os.path.join(repo_root, "CHANGELOG.md")
 
-    if not os.path.exists(changelog_path):
+    changelog_notes = ""
+    if os.path.exists(changelog_path):
+        changelog_notes = extract_changelog_section(changelog_path, version)
+        if not changelog_notes:
+            # No exact version match -- try [Unreleased] section as fallback
+            changelog_notes = extract_changelog_section(changelog_path, "Unreleased")
+    else:
         print(f"CHANGELOG.md not found at {changelog_path}", file=sys.stderr)
-        sys.exit(1)
-
-    changelog_notes = extract_changelog_section(changelog_path, version)
 
     if not changelog_notes:
-        # Fallback: no section found — emit a minimal body so the release still works.
         changelog_notes = f"See [CHANGELOG.md](CHANGELOG.md) for details."
 
     body = f"""\

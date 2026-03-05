@@ -64,11 +64,16 @@ static const char* get_level_name(LogLevel level) {
     }
 }
 
-// Get current timestamp string
+// Get current timestamp string (thread-safe)
 static void get_timestamp(char* buffer, size_t size) {
     time_t now = time(NULL);
-    struct tm* tm_info = localtime(&now);
-    strftime(buffer, size, "%Y-%m-%d %H:%M:%S", tm_info);
+    struct tm tm_buf;
+#ifdef _WIN32
+    localtime_s(&tm_buf, &now);
+#else
+    localtime_r(&now, &tm_buf);
+#endif
+    strftime(buffer, size, "%Y-%m-%d %H:%M:%S", &tm_buf);
 }
 
 // Initialize logging

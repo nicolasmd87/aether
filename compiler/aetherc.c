@@ -34,6 +34,7 @@
 
 // Global flags
 static bool verbose_mode = false;
+static bool dump_ast_mode = false;
 static const char* emit_header_path = NULL;
 
 #ifdef _WIN32
@@ -142,6 +143,17 @@ int compile_source(const char* input_path, const char* output_path) {
         }
     }
     
+    // Check for token overflow (file too large)
+    if (token_count >= MAX_TOKENS - 1 && tokens[token_count - 1]->type != TOKEN_EOF) {
+        fprintf(stderr, "error: source file exceeds maximum token limit (%d tokens)\n", MAX_TOKENS);
+        fprintf(stderr, "  help: split into multiple files using imports\n");
+        for (int i = 0; i < token_count; i++) {
+            free_token(tokens[i]);
+        }
+        free(source);
+        return 0;
+    }
+
     if (verbose_mode) printf("Generated %d tokens\n", token_count);
 
     // Step 2: Parsing
@@ -159,8 +171,20 @@ int compile_source(const char* input_path, const char* output_path) {
         free(source);
         return 0;
     }
-    
+
     if (verbose_mode) printf("Parse successful\n");
+
+    // --dump-ast: print the AST and exit (no codegen)
+    if (dump_ast_mode) {
+        print_ast(program, 0);
+        free_ast_node(program);
+        for (int i = 0; i < token_count; i++) {
+            free_token(tokens[i]);
+        }
+        free_parser(parser);
+        free(source);
+        return 1;  // success
+    }
 
     // Step 2.5: Module Orchestration
     if (verbose_mode) printf("[Phase 2.5/5] Module resolution...\n");
@@ -305,6 +329,7 @@ void print_help(const char* program_name) {
     printf("  --version, -v                    Show version information\n");
     printf("  --verbose                        Show detailed compilation phases and timing\n");
     printf("  --emit-header [path]             Generate C header for embedding (default: auto)\n");
+    printf("  --dump-ast                       Print AST and exit (no code generation)\n");
     printf("  --help, -h                       Show this help message\n");
     printf("\n");
     printf("Examples:\n");
@@ -326,6 +351,9 @@ int main(int argc, char *argv[]) {
             return 0;
         } else if (strcmp(argv[arg_offset], "--verbose") == 0) {
             verbose_mode = true;
+            arg_offset++;
+        } else if (strcmp(argv[arg_offset], "--dump-ast") == 0) {
+            dump_ast_mode = true;
             arg_offset++;
         } else if (strcmp(argv[arg_offset], "--emit-header") == 0) {
             // Check for optional explicit path argument (must end in .h)
@@ -398,13 +426,21 @@ int main(int argc, char *argv[]) {
         return result;
     }
     
+    // --dump-ast only needs the input file
+    if (dump_ast_mode) {
+        if (!compile_source(argv[arg_offset], "/dev/null")) {
+            return 1;
+        }
+        return 0;
+    }
+
     // Default mode: Compile to C (original behavior)
     if (argc - arg_offset < 2) {
         fprintf(stderr, "Usage: %s <input.ae> <output.c>\n", argv[0]);
         fprintf(stderr, "Use --help for more information\n");
         return 1;
     }
-    
+
     if (!compile_source(argv[arg_offset], argv[arg_offset + 1])) {
         return 1;
     }

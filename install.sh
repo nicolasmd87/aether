@@ -1,9 +1,12 @@
-#!/bin/sh
+#!/usr/bin/env bash
 # Aether Language Installer
 # Usage: ./install.sh              (installs to ~/.aether)
 #        ./install.sh /usr/local   (installs to /usr/local, needs sudo)
 #        ./install.sh --editor-only (installs only editor extension)
-set -e
+set -eo pipefail
+
+# Always run from the repository root (where this script lives)
+cd "$(dirname "$0")"
 
 # Handle --editor-only flag
 if [ "$1" = "--editor-only" ]; then
@@ -153,26 +156,24 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
 
     # Build REPL (optional — needs readline)
     info "Building REPL..."
+    _cc=$(command -v gcc 2>/dev/null || command -v cc 2>/dev/null || command -v clang 2>/dev/null || echo gcc)
     if [ "$(uname -s)" = "Linux" ]; then
-        if ! echo 'int main(){return 0;}' | gcc -x c - -lreadline -o /dev/null 2>/dev/null; then
+        if ! echo 'int main(){return 0;}' | "$_cc" -x c - -lreadline -o /dev/null 2>/dev/null; then
             distro=$(detect_linux_distro)
             case "$distro" in
                 ubuntu|debian|pop|mint|elementary)
-                    info "  Installing libreadline-dev for REPL..."
-                    sudo apt-get update -qq >/dev/null 2>&1 && sudo apt-get install -y -qq libreadline-dev >/dev/null 2>&1 || true
+                    warn "  readline not found. Install with: sudo apt-get install libreadline-dev"
                     ;;
                 fedora)
-                    info "  Installing readline-devel for REPL..."
-                    sudo dnf install -y readline-devel >/dev/null 2>&1 || true
+                    warn "  readline not found. Install with: sudo dnf install readline-devel"
                     ;;
                 arch|manjaro|endeavouros)
-                    info "  Installing readline for REPL..."
-                    sudo pacman -S --noconfirm readline >/dev/null 2>&1 || true
+                    warn "  readline not found. Install with: sudo pacman -S readline"
                     ;;
             esac
         fi
     fi
-    make repl 2>&1 | tail -1 || warn "  REPL build skipped (install libreadline-dev to enable)"
+    make repl 2>&1 | tail -1 || warn "  REPL build skipped (install readline: apt-get install libreadline-dev / brew install readline)"
     echo ""
 
     # Install
@@ -196,8 +197,8 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
 
     # Headers (preserve directory structure for relative includes)
     for dir in runtime runtime/actors runtime/scheduler runtime/utils \
-               runtime/memory runtime/config std/string std/math std/net \
-               std/collections std/json std/fs std/log; do
+               runtime/memory runtime/config std std/string std/io std/math \
+               std/net std/collections std/json std/fs std/log; do
         if [ -d "$dir" ]; then
             mkdir -p "$INCLUDE_DIR/$dir"
             for h in "$dir"/*.h; do
@@ -250,21 +251,30 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
         esac
 
         if [ -n "$SHELL_RC" ]; then
-            # Check if already in rc file
-            if ! grep -q "AETHER_HOME" "$SHELL_RC" 2>/dev/null; then
-                # Ensure the file ends with a newline before appending
-                # (prevents concatenation with the last existing line)
+            # Ensure parent directory exists (fish config may not exist yet)
+            mkdir -p "$(dirname "$SHELL_RC")"
+
+            if grep -q "AETHER_HOME" "$SHELL_RC" 2>/dev/null; then
+                # Update existing AETHER_HOME and PATH to point to the new install dir
+                if [ "$IS_FISH" -eq 1 ]; then
+                    sed -i.bak "s|set -gx AETHER_HOME .*|set -gx AETHER_HOME \"$INSTALL_DIR\"|" "$SHELL_RC"
+                    sed -i.bak "s|fish_add_path .*aether.*|fish_add_path \"$BIN_DIR\"|" "$SHELL_RC"
+                else
+                    sed -i.bak "s|export AETHER_HOME=.*|$AETHER_HOME_LINE|" "$SHELL_RC"
+                    sed -i.bak "s|export PATH=.*aether.*|$EXPORT_LINE|" "$SHELL_RC"
+                fi
+                rm -f "$SHELL_RC.bak"
+                ok "  Updated AETHER_HOME in $SHELL_RC"
+            else
+                # Fresh install -- append new block
                 if [ -f "$SHELL_RC" ] && [ -s "$SHELL_RC" ]; then
                     if [ "$(tail -c 1 "$SHELL_RC" | wc -l)" -eq 0 ]; then
                         printf '\n' >> "$SHELL_RC"
                     fi
                 fi
-                # Ensure parent directory exists (fish config may not exist yet)
-                mkdir -p "$(dirname "$SHELL_RC")"
                 echo "" >> "$SHELL_RC"
                 echo "# Aether Language" >> "$SHELL_RC"
                 if [ "$IS_FISH" -eq 1 ]; then
-                    # Fish shell uses different syntax
                     echo "set -gx AETHER_HOME \"$INSTALL_DIR\"" >> "$SHELL_RC"
                     echo "fish_add_path \"$BIN_DIR\"" >> "$SHELL_RC"
                 else
@@ -272,8 +282,6 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
                     echo "$EXPORT_LINE" >> "$SHELL_RC"
                 fi
                 ok "  Added to $SHELL_RC"
-            else
-                ok "  Already configured in $SHELL_RC"
             fi
         fi
         echo ""

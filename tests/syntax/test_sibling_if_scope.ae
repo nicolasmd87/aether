@@ -1,0 +1,40 @@
+// Test: sibling if block variable scoping
+// Same variable name used in two separate (non-nested) if blocks
+// Previously caused "undeclared identifier" in generated C
+
+main() {
+    x = 10
+
+    // First if block declares 'c'
+    if x > 5 {
+        c = x + 1
+        println(c)
+    }
+
+    // Sibling if block re-uses 'c' — must get its own declaration
+    if x > 3 {
+        c = x + 2
+        println(c)
+    }
+
+    // Third sibling with a different condition
+    if x == 10 {
+        c = 99
+        println(c)
+    }
+
+    // Also test with else branches
+    if x > 20 {
+        d = 1
+    } else {
+        d = 2
+        println(d)
+    }
+
+    if x < 20 {
+        d = 3
+        println(d)
+    } else {
+        d = 4
+    }
+}

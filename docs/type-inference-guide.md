@@ -13,6 +13,8 @@ x = 42              // inferred: int
 pi = 3.14           // inferred: float
 name = "Alice"      // inferred: string
 flag = true         // inferred: bool
+p = null            // inferred: ptr
+big = long 0        // inferred: long (int64)
 ```
 
 ### From Expressions
@@ -172,6 +174,31 @@ Once inferred, types are validated for consistency:
 ```aether
 x = 42
 x = "hello"   // ERROR: Can't assign string to int
+```
+
+## Null and Pointer Inference
+
+The `null` keyword is typed as `ptr`:
+
+```aether
+conn = null              // inferred: ptr
+conn = tcp_connect(...)  // still ptr — type is consistent
+```
+
+Integer `0` is compatible with `ptr` for null-initialization patterns:
+
+```aether
+server = 0               // initially int
+server = tcp_listen(80)  // tcp_listen returns ptr — type widens to ptr
+```
+
+### Constants
+
+Top-level `const` declarations infer their type from the value:
+
+```aether
+const MAX = 100          // inferred: int
+const NAME = "hello"     // inferred: string
 ```
 
 ## Edge Cases

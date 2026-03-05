@@ -1,0 +1,11 @@
+// Test exit() builtin (no extern needed)
+// Verifies: exit(0) terminates cleanly, exit(code) sets exit code
+
+main() {
+    // If exit() works as a builtin, this program exits 0 with no output issues
+    println("PASS: exit() is a builtin")
+    exit(0)
+
+    // This line should never execute
+    println("FAIL: code after exit() ran")
+}

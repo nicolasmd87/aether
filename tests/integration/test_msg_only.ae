@@ -1,8 +1,6 @@
 // Integration test: Actor state mutation via messages
 // Verifies that actor state changes persist across messages
 
-extern exit(code: int) -> void;
-
 message Add { value: int }
 message Reset {}
 

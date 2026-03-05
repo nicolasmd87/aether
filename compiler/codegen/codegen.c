@@ -59,6 +59,8 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->extern_registry = NULL;
     gen->extern_registry_count = 0;
     gen->extern_registry_capacity = 0;
+    // MSVC compat: counter for ask-operator temp variables
+    gen->ask_temp_counter = 0;
     // Ask/reply type map
     gen->reply_type_map = NULL;
     gen->reply_type_count = 0;
@@ -451,37 +453,48 @@ const char* get_c_type(Type* type) {
         case TYPE_STRING: return "const char*";
         case TYPE_VOID: return "void";
         case TYPE_ACTOR_REF: {
-            // Actor reference is a pointer to the actor struct
-            static char buffer[256];
+            // Rotating buffers prevent clobber when get_c_type() is called
+            // multiple times in the same printf/expression
+            static char buffers[4][256];
+            static int buf_idx = 0;
+            char* buffer = buffers[buf_idx++ & 3];
             if (type->element_type && type->element_type->kind == TYPE_STRUCT && type->element_type->struct_name) {
-                snprintf(buffer, sizeof(buffer), "%s*", type->element_type->struct_name);
+                snprintf(buffer, 256, "%s*", type->element_type->struct_name);
             } else {
-                snprintf(buffer, sizeof(buffer), "ActorRef*");
+                snprintf(buffer, 256, "ActorRef*");
             }
             return buffer;
         }
         case TYPE_MESSAGE: return "Message";
         case TYPE_PTR: return "void*";
         case TYPE_STRUCT: {
-            static char buffer[256];
-            // Just use the struct name (typedef removes need for "struct" keyword)
-            snprintf(buffer, sizeof(buffer), "%s",
+            static char buffers[4][256];
+            static int buf_idx = 0;
+            char* buffer = buffers[buf_idx++ & 3];
+            snprintf(buffer, 256, "%s",
                     type->struct_name ? type->struct_name : "unnamed");
             return buffer;
         }
         case TYPE_ARRAY: {
-            static char buffer[256];
+            static char buffers[4][256];
+            static int buf_idx = 0;
+            char* buffer = buffers[buf_idx++ & 3];
             const char* element_type = get_c_type(type->element_type);
             if (type->array_size > 0) {
-                snprintf(buffer, sizeof(buffer), "%s[%d]", element_type, type->array_size);
+                snprintf(buffer, 256, "%s[%d]", element_type, type->array_size);
             } else {
-                snprintf(buffer, sizeof(buffer), "%s*", element_type);
+                snprintf(buffer, 256, "%s*", element_type);
             }
             return buffer;
         }
-        case TYPE_UNKNOWN:
-            // TYPE_UNKNOWN is common for pattern variables - silently default to int
+        case TYPE_UNKNOWN: {
+            AetherError w = {NULL, NULL, 0, 0,
+                             "unresolved type in codegen, defaulting to int",
+                             "add explicit type annotation or check that the variable is initialized",
+                             NULL, AETHER_ERR_NONE};
+            aether_warning_report(&w);
             return "int";
+        }
         default: {
             char wbuf[128];
             snprintf(wbuf, sizeof(wbuf), "internal: unknown type kind %d in codegen, defaulting to void", type->kind);
@@ -513,7 +526,13 @@ const char* get_c_operator(const char* aether_op) {
     if (strcmp(aether_op, "=") == 0) return "=";
     if (strcmp(aether_op, "++") == 0) return "++";
     if (strcmp(aether_op, "--") == 0) return "--";
-    
+    if (strcmp(aether_op, "&") == 0) return "&";
+    if (strcmp(aether_op, "|") == 0) return "|";
+    if (strcmp(aether_op, "^") == 0) return "^";
+    if (strcmp(aether_op, "~") == 0) return "~";
+    if (strcmp(aether_op, "<<") == 0) return "<<";
+    if (strcmp(aether_op, ">>") == 0) return ">>";
+
     return aether_op;
 }
 
@@ -650,6 +669,7 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "#include <stdbool.h>");
     print_line(gen, "#include <stdatomic.h>");
     print_line(gen, "#include <stdint.h>");
+    print_line(gen, "#include <time.h>");
     print_line(gen, "#ifdef _WIN32");
     print_line(gen, "#define NOMINMAX");
     print_line(gen, "#include <windows.h>");
@@ -670,6 +690,46 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "#    define likely(x)   (x)");
     print_line(gen, "#    define unlikely(x) (x)");
     print_line(gen, "#  endif");
+    print_line(gen, "#endif");
+    /* GCC/Clang vs MSVC: guards for statement expressions ({...}) and computed goto */
+    print_line(gen, "#ifndef AETHER_GCC_COMPAT");
+    print_line(gen, "#  if defined(__GNUC__) || defined(__clang__)");
+    print_line(gen, "#    define AETHER_GCC_COMPAT 1");
+    print_line(gen, "#  else");
+    print_line(gen, "#    define AETHER_GCC_COMPAT 0");
+    print_line(gen, "#  endif");
+    print_line(gen, "#endif");
+    /* clock_ns helper — statement-expression on GCC, helper function on MSVC */
+    print_line(gen, "#if !AETHER_GCC_COMPAT");
+    print_line(gen, "#ifdef _WIN32");
+    print_line(gen, "static int64_t _aether_clock_ns(void) {");
+    print_line(gen, "    LARGE_INTEGER freq, now;");
+    print_line(gen, "    QueryPerformanceFrequency(&freq);");
+    print_line(gen, "    QueryPerformanceCounter(&now);");
+    print_line(gen, "    return (int64_t)((double)now.QuadPart / freq.QuadPart * 1000000000.0);");
+    print_line(gen, "}");
+    print_line(gen, "#else");
+    print_line(gen, "static int64_t _aether_clock_ns(void) {");
+    print_line(gen, "    struct timespec _ts;");
+    print_line(gen, "    clock_gettime(CLOCK_MONOTONIC, &_ts);");
+    print_line(gen, "    return (int64_t)_ts.tv_sec * 1000000000LL + _ts.tv_nsec;");
+    print_line(gen, "}");
+    print_line(gen, "#endif");
+    print_line(gen, "#endif");
+    /* String interpolation helper — MSVC can't use ({ ... }) statement expressions */
+    print_line(gen, "#if !AETHER_GCC_COMPAT");
+    print_line(gen, "#include <stdarg.h>");
+    print_line(gen, "static void* _aether_interp(const char* fmt, ...) {");
+    print_line(gen, "    va_list args, args2;");
+    print_line(gen, "    va_start(args, fmt);");
+    print_line(gen, "    va_copy(args2, args);");
+    print_line(gen, "    int len = vsnprintf(NULL, 0, fmt, args);");
+    print_line(gen, "    va_end(args);");
+    print_line(gen, "    char* str = (char*)malloc(len + 1);");
+    print_line(gen, "    vsnprintf(str, len + 1, fmt, args2);");
+    print_line(gen, "    va_end(args2);");
+    print_line(gen, "    return (void*)str;");
+    print_line(gen, "}");
     print_line(gen, "#endif");
     print_line(gen, "");
     // Declare runtime args function (avoid full header to prevent conflicts with actor runtime)
@@ -699,12 +759,15 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         print_line(gen, "#include \"aether_tracing.h\"");
         print_line(gen, "#include \"aether_bounds_check.h\"");
         print_line(gen, "#include \"aether_runtime_types.h\"");
+        print_line(gen, "#include \"aether_compiler.h\"");
         print_line(gen, "");
-        print_line(gen, "extern __thread int current_core_id;");
+        print_line(gen, "extern AETHER_TLS int current_core_id;");
         print_line(gen, "");
         print_line(gen, "// Benchmark timing function");
         print_line(gen, "static inline uint64_t rdtsc() {");
-        print_line(gen, "#if defined(__x86_64__) || defined(__i386__)");
+        print_line(gen, "#if defined(_MSC_VER) && (defined(_M_X64) || defined(_M_IX86))");
+        print_line(gen, "    return __rdtsc();");
+        print_line(gen, "#elif defined(__x86_64__) || defined(__i386__)");
         print_line(gen, "    unsigned int lo, hi;");
         print_line(gen, "    __asm__ __volatile__ (\"rdtsc\" : \"=a\" (lo), \"=d\" (hi));");
         print_line(gen, "    return ((uint64_t)hi << 32) | lo;");
@@ -716,6 +779,18 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         print_line(gen, "    return 0;");
         print_line(gen, "#endif");
         print_line(gen, "}");
+        // MSVC ask-operator helper: does ask, extracts field by offset, frees reply
+        print_line(gen, "#if !AETHER_GCC_COMPAT");
+        print_line(gen, "#include <stddef.h>");
+        print_line(gen, "static intptr_t _aether_ask_helper(ActorBase* target, void* msg, size_t msg_size, int timeout_ms, size_t field_offset, size_t field_size) {");
+        print_line(gen, "    void* reply = scheduler_ask_message(target, msg, msg_size, timeout_ms);");
+        print_line(gen, "    if (!reply) return 0;");
+        print_line(gen, "    intptr_t val = 0;");
+        print_line(gen, "    memcpy(&val, (char*)reply + field_offset, field_size < sizeof(intptr_t) ? field_size : sizeof(intptr_t));");
+        print_line(gen, "    free(reply);");
+        print_line(gen, "    return val;");
+        print_line(gen, "}");
+        print_line(gen, "#endif");
     }
     print_line(gen, "");
 
@@ -951,7 +1026,14 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                     
                     // Align large messages to cache line
                     if (field_count > 4) {
-                        print_line(gen, "typedef struct __attribute__((aligned(64))) %s {", child->value);
+                        print_line(gen, "#ifdef _MSC_VER");
+                        print_line(gen, "__declspec(align(64))");
+                        print_line(gen, "#endif");
+                        print_line(gen, "typedef struct");
+                        print_line(gen, "#if defined(__GNUC__) || defined(__clang__)");
+                        print_line(gen, "__attribute__((aligned(64)))");
+                        print_line(gen, "#endif");
+                        print_line(gen, "%s {", child->value);
                     } else {
                         print_line(gen, "typedef struct %s {", child->value);
                     }
@@ -1060,6 +1142,14 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                 break;
             case AST_EXTERN_FUNCTION:
                 generate_extern_declaration(gen, child);
+                break;
+            case AST_CONST_DECLARATION:
+                // Emit top-level constant as #define
+                if (child->value && child->child_count > 0) {
+                    fprintf(gen->output, "#define %s (", child->value);
+                    generate_expression(gen, child->children[0]);
+                    fprintf(gen->output, ")\n");
+                }
                 break;
             default:
                 break;

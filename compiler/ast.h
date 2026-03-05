@@ -16,11 +16,13 @@ typedef enum {
     AST_STRUCT_DEFINITION,
     AST_STRUCT_FIELD,
     AST_EXTERN_FUNCTION,      // External C function declaration
+    AST_CONST_DECLARATION,    // Top-level constant: const NAME = value
 
     // Statements
     AST_BLOCK,
     AST_VARIABLE_DECLARATION,
     AST_ASSIGNMENT,
+    AST_COMPOUND_ASSIGNMENT,  // x += expr, x -= expr, etc.
     AST_IF_STATEMENT,
     AST_FOR_LOOP,
     AST_WHILE_LOOP,
@@ -69,6 +71,8 @@ typedef enum {
     AST_MEMBER_ACCESS,
     AST_STRUCT_LITERAL,
     AST_STRING_INTERP,      // interpolated string "Hello ${expr}"
+    AST_NULL_LITERAL,       // null pointer literal
+    AST_IF_EXPRESSION,      // if cond { expr } else { expr } — value-producing
 
     // Types
     AST_TYPE_ANNOTATION,

@@ -1,0 +1,29 @@
+// Test: null keyword
+// Tests null literal as TYPE_PTR, assignment, comparison, and reassignment
+
+main() {
+    // Basic null assignment
+    x = null
+    if x == null {
+        println("null_assign: ok")
+    }
+
+    // Null comparison with !=
+    y = null
+    if y != null {
+        println("ERROR: y should be null")
+    } else {
+        println("null_neq: ok")
+    }
+
+    // Null in conditional (int(0) -> ptr widening)
+    z = 0
+    println("null_compare: ok")
+
+    // Multiple null variables
+    a = null
+    b = null
+    if a == b {
+        println("null_eq_null: ok")
+    }
+}

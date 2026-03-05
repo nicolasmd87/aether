@@ -7,8 +7,8 @@ typedef struct TcpSocket TcpSocket;
 typedef struct TcpServer TcpServer;
 
 // TCP Client
-TcpSocket* tcp_connect(AetherString* host, int port);
-int tcp_send(TcpSocket* sock, AetherString* data);
+TcpSocket* tcp_connect(const char* host, int port);
+int tcp_send(TcpSocket* sock, const char* data);
 AetherString* tcp_receive(TcpSocket* sock, int max_bytes);
 int tcp_close(TcpSocket* sock);
 

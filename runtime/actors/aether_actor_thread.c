@@ -47,11 +47,7 @@ void* aether_actor_thread(void* arg) {
         // Actor threads are expected to each own a core (or share via the
         // scheduler's round-robin on single-core).  Sleeping or yielding
         // here would add latency on every message round-trip.
-        #if defined(__x86_64__) || defined(_M_X64)
-        __asm__ __volatile__("pause" ::: "memory");
-        #elif defined(__aarch64__)
-        __asm__ __volatile__("yield" ::: "memory");
-        #endif
+        AETHER_CPU_PAUSE();
     }
 
     return NULL;

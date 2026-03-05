@@ -38,6 +38,9 @@ typedef enum {
     TOKEN_EXCLAIM,          // '!' operator for fire-and-forget
     TOKEN_QUESTION,         // '?' operator for ask pattern
     TOKEN_EXTERN,           // 'extern' keyword for C FFI
+    TOKEN_NULL,             // 'null' keyword for null pointer literal
+    TOKEN_CONST,            // 'const' keyword for top-level constants
+    TOKEN_IN,               // 'in' keyword for range-based for loops
 
     // Types
     TOKEN_INT,
@@ -76,7 +79,23 @@ typedef enum {
     TOKEN_NOT,
     TOKEN_INCREMENT,
     TOKEN_DECREMENT,
-    
+    TOKEN_AMPERSAND,        // '&' bitwise AND
+    TOKEN_CARET,            // '^' bitwise XOR
+    TOKEN_TILDE,            // '~' bitwise NOT
+    TOKEN_LSHIFT,           // '<<' left shift
+    TOKEN_RSHIFT,           // '>>' right shift
+    TOKEN_PLUS_ASSIGN,      // '+='
+    TOKEN_MINUS_ASSIGN,     // '-='
+    TOKEN_MULTIPLY_ASSIGN,  // '*='
+    TOKEN_DIVIDE_ASSIGN,    // '/='
+    TOKEN_MODULO_ASSIGN,    // '%='
+    TOKEN_AND_ASSIGN,       // '&='
+    TOKEN_OR_ASSIGN,        // '|='
+    TOKEN_XOR_ASSIGN,       // '^='
+    TOKEN_LSHIFT_ASSIGN,    // '<<='
+    TOKEN_RSHIFT_ASSIGN,    // '>>='
+    TOKEN_DOTDOT,           // '..' range operator
+
     // Delimiters
     TOKEN_LEFT_PAREN,
     TOKEN_RIGHT_PAREN,

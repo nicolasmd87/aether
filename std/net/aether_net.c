@@ -39,10 +39,10 @@ static void net_init() {
     net_initialized = 1;
 }
 
-TcpSocket* tcp_connect(AetherString* host, int port) {
+TcpSocket* tcp_connect(const char* host, int port) {
     net_init();
 
-    struct hostent* server = gethostbyname(host->data);
+    struct hostent* server = gethostbyname(host);
     if (!server) {
         return NULL;
     }
@@ -69,10 +69,10 @@ TcpSocket* tcp_connect(AetherString* host, int port) {
     return sock;
 }
 
-int tcp_send(TcpSocket* sock, AetherString* data) {
+int tcp_send(TcpSocket* sock, const char* data) {
     if (!sock || !sock->connected || !data) return -1;
 
-    int sent = send(sock->fd, data->data, data->length, 0);
+    int sent = send(sock->fd, data, strlen(data), 0);
     return sent;
 }
 

@@ -180,7 +180,13 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
         } else if (child->type == AST_PATTERN_LIST || child->type == AST_PATTERN_CONS) {
             // List pattern becomes array pointer
             if (param_count > 0) fprintf(gen->output, ", ");
-            fprintf(gen->output, "int* _list_%d, int _len_%d", param_count, param_count);
+            // Determine element type from first child's node_type if available
+            const char* elem_ctype = "int";
+            if (child->child_count > 0 && child->children[0]->node_type &&
+                child->children[0]->node_type->kind != TYPE_UNKNOWN) {
+                elem_ctype = get_c_type(child->children[0]->node_type);
+            }
+            fprintf(gen->output, "%s* _list_%d, int _len_%d", elem_ctype, param_count, param_count);
             // has_list_patterns = 1;  // Reserved for future optimization
             param_count++;
         }
@@ -232,8 +238,11 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
                     ASTNode* elem = child->children[j];
                     if (elem->type == AST_PATTERN_VARIABLE) {
                         print_indent(gen);
-                        fprintf(gen->output, "int %s = _list_%d[%d];\n", 
-                                elem->value, list_idx, j);
+                        const char* etype = "int";
+                        if (elem->node_type && elem->node_type->kind != TYPE_UNKNOWN)
+                            etype = get_c_type(elem->node_type);
+                        fprintf(gen->output, "%s %s = _list_%d[%d];\n",
+                                etype, elem->value, list_idx, j);
                     }
                 }
             }
@@ -248,13 +257,19 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
             // Bind head and tail
             if (child->child_count >= 1 && child->children[0]->type == AST_PATTERN_VARIABLE) {
                 print_indent(gen);
-                fprintf(gen->output, "int %s = _list_%d[0];\n", 
-                        child->children[0]->value, list_idx);
+                const char* htype = "int";
+                if (child->children[0]->node_type && child->children[0]->node_type->kind != TYPE_UNKNOWN)
+                    htype = get_c_type(child->children[0]->node_type);
+                fprintf(gen->output, "%s %s = _list_%d[0];\n",
+                        htype, child->children[0]->value, list_idx);
             }
             if (child->child_count >= 2 && child->children[1]->type == AST_PATTERN_VARIABLE) {
                 print_indent(gen);
-                fprintf(gen->output, "int* %s = &_list_%d[1];\n", 
-                        child->children[1]->value, list_idx);
+                const char* ttype = "int";
+                if (child->children[1]->node_type && child->children[1]->node_type->kind != TYPE_UNKNOWN)
+                    ttype = get_c_type(child->children[1]->node_type);
+                fprintf(gen->output, "%s* %s = &_list_%d[1];\n",
+                        ttype, child->children[1]->value, list_idx);
                 print_indent(gen);
                 fprintf(gen->output, "int %s_len = _len_%d - 1;\n",
                         child->children[1]->value, list_idx);

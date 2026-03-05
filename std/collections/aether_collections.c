@@ -77,12 +77,17 @@ struct HashMap {
     int size;
 };
 
-static unsigned int hash_string(AetherString* key) {
+static unsigned int hash_cstr(const char* key) {
     unsigned int hash = 5381;
-    for (size_t i = 0; i < key->length; i++) {
-        hash = ((hash << 5) + hash) + key->data[i];
+    for (const char* p = key; *p; p++) {
+        hash = ((hash << 5) + hash) + *p;
     }
     return hash;
+}
+
+static int key_equals(AetherString* a, const char* b) {
+    if (!a || !b) return 0;
+    return strcmp(a->data, b) == 0;
 }
 
 HashMap* map_new() {
@@ -106,7 +111,7 @@ static void hashmap_resize(HashMap* map) {
         while (entry) {
             HashMapEntry* next = entry->next;
             
-            unsigned int index = hash_string(entry->key) % map->capacity;
+            unsigned int index = hash_cstr(entry->key->data) % map->capacity;
             entry->next = map->buckets[index];
             map->buckets[index] = entry;
             map->size++;
@@ -118,18 +123,18 @@ static void hashmap_resize(HashMap* map) {
     free(old_buckets);
 }
 
-void map_put(HashMap* map, AetherString* key, void* value) {
+void map_put(HashMap* map, const char* key, void* value) {
     if (!map || !key) return;
 
     if ((float)map->size / map->capacity > HASHMAP_LOAD_FACTOR) {
         hashmap_resize(map);
     }
 
-    unsigned int index = hash_string(key) % map->capacity;
+    unsigned int index = hash_cstr(key) % map->capacity;
     HashMapEntry* entry = map->buckets[index];
 
     while (entry) {
-        if (string_equals(entry->key, key)) {
+        if (key_equals(entry->key, key)) {
             entry->value = value;
             return;
         }
@@ -137,22 +142,21 @@ void map_put(HashMap* map, AetherString* key, void* value) {
     }
 
     HashMapEntry* new_entry = (HashMapEntry*)malloc(sizeof(HashMapEntry));
-    new_entry->key = key;
-    string_retain(key);
+    new_entry->key = string_new(key);
     new_entry->value = value;
     new_entry->next = map->buckets[index];
     map->buckets[index] = new_entry;
     map->size++;
 }
 
-void* map_get(HashMap* map, AetherString* key) {
+void* map_get(HashMap* map, const char* key) {
     if (!map || !key) return NULL;
 
-    unsigned int index = hash_string(key) % map->capacity;
+    unsigned int index = hash_cstr(key) % map->capacity;
     HashMapEntry* entry = map->buckets[index];
 
     while (entry) {
-        if (string_equals(entry->key, key)) {
+        if (key_equals(entry->key, key)) {
             return entry->value;
         }
         entry = entry->next;
@@ -161,19 +165,19 @@ void* map_get(HashMap* map, AetherString* key) {
     return NULL;
 }
 
-int map_has(HashMap* map, AetherString* key) {
+int map_has(HashMap* map, const char* key) {
     return map_get(map, key) != NULL;
 }
 
-void map_remove(HashMap* map, AetherString* key) {
+void map_remove(HashMap* map, const char* key) {
     if (!map || !key) return;
 
-    unsigned int index = hash_string(key) % map->capacity;
+    unsigned int index = hash_cstr(key) % map->capacity;
     HashMapEntry* entry = map->buckets[index];
     HashMapEntry* prev = NULL;
 
     while (entry) {
-        if (string_equals(entry->key, key)) {
+        if (key_equals(entry->key, key)) {
             if (prev) {
                 prev->next = entry->next;
             } else {

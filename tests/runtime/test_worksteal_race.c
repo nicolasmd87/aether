@@ -29,7 +29,7 @@ typedef struct {
     atomic_int assigned_core;
     atomic_int migrate_to;
     atomic_int main_thread_only;
-    SPSCQueue spsc_queue;
+    SPSCQueue* spsc_queue;
     _Atomic(ActorReplySlot*) reply_slot;
     atomic_flag step_lock;
     atomic_int count;
@@ -56,7 +56,7 @@ static WStealActor* make_wsteal_actor(int actor_id) {
     atomic_flag_clear_explicit(&a->step_lock, memory_order_relaxed);
     atomic_init(&a->count, 0);
     mailbox_init(&a->mailbox);
-    spsc_queue_init(&a->spsc_queue);
+    // spsc_queue is lazily allocated by the scheduler — leave NULL
     return a;
 }
 

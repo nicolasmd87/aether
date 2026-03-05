@@ -1,8 +1,6 @@
 // Integration test: Message construction and field access
 // Verifies message types can be created with correct field values
 
-extern exit(code: int) -> void;
-
 message Increment { amount: int }
 
 actor Adder {

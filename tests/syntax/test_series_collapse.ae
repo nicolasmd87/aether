@@ -1,8 +1,6 @@
 // Test: arithmetic series loop collapse optimization
 // The compiler should fold these loops into O(1) closed-form expressions.
 
-extern exit(code: int) -> void;
-
 main() {
     // Test 1: constant bound, step 1
     // Expected: total = 50 (5 added 10 times), i = 10

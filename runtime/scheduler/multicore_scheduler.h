@@ -1,6 +1,7 @@
 #ifndef MULTICORE_SCHEDULER_H
 #define MULTICORE_SCHEDULER_H
 
+#include "../utils/aether_compiler.h"
 #include "../utils/aether_thread.h"
 #include <stdatomic.h>
 #include "../actors/actor_state_machine.h"
@@ -153,7 +154,7 @@ int aether_scheduler_poll(int max_per_actor);
 // Thread-local reply slot set by the send path (sender) and step function (receiver).
 // g_pending_reply_slot: set before aether_send_message so the slot rides inside the Message.
 // g_current_reply_slot: set by the generated step function after mailbox_receive.
-extern __thread void* g_pending_reply_slot;
-extern __thread void* g_current_reply_slot;
+extern AETHER_TLS void* g_pending_reply_slot;
+extern AETHER_TLS void* g_current_reply_slot;
 
 #endif

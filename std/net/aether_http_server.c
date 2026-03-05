@@ -11,6 +11,13 @@
         #pragma comment(lib, "ws2_32.lib")
     #endif
     #define close closesocket
+    typedef int socklen_t;
+    #ifndef strcasecmp
+        #define strcasecmp _stricmp
+    #endif
+    #ifndef strdup
+        #define strdup _strdup
+    #endif
 #else
     #include <sys/socket.h>
     #include <netinet/in.h>

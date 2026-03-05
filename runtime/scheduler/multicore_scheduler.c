@@ -37,24 +37,20 @@ extern AETHER_TLS ActorBase* g_sync_step_actor;
 #include <mach/thread_policy.h>
 #endif
 
-// Branch prediction hints
-#ifndef likely
-#define likely(x)   __builtin_expect(!!(x), 1)
-#define unlikely(x) __builtin_expect(!!(x), 0)
-#endif
+// Branch prediction hints — provided by aether_compiler.h (included via
+// multicore_scheduler.h), no local redefinition needed.
 
-// Architecture-specific spin-wait hint (consolidates per-arch inline asm)
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-#  define AETHER_PAUSE() __asm__ __volatile__("pause" ::: "memory")
-#elif defined(__aarch64__) || defined(__arm64__) || defined(__arm__)
-#  define AETHER_PAUSE() __asm__ __volatile__("yield" ::: "memory")
-#else
-#  define AETHER_PAUSE() ((void)0)
+// Architecture-specific spin-wait hint — use AETHER_CPU_PAUSE() from
+// aether_compiler.h which handles GCC, Clang, and MSVC correctly.
+#ifndef AETHER_PAUSE
+#  define AETHER_PAUSE() AETHER_CPU_PAUSE()
 #endif
 
 // MWAIT intrinsics for x86 (auto-detected at runtime)
-#if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
+#if (defined(__x86_64__) || defined(__i386__)) && (defined(__GNUC__) || defined(__clang__))
 #include <immintrin.h>
+#elif (defined(_M_X64) || defined(_M_IX86)) && defined(_MSC_VER)
+#include <intrin.h>
 #define HAS_X86_INTRINSICS 1
 #else
 #define HAS_X86_INTRINSICS 0
@@ -71,7 +67,9 @@ static inline void aether_sched_yield(void) { sched_yield(); }
 #endif
 
 // Layout assertions to catch struct padding/size mismatches between translation units
+#if INTPTR_MAX == INT64_MAX
 _Static_assert(sizeof(Message) == 48, "Message size changed — update tests");
+#endif
 _Static_assert(sizeof(Mailbox) % 8 == 0, "Mailbox not 8-byte aligned");
 
 Scheduler schedulers[MAX_CORES];
@@ -714,11 +712,7 @@ void* AETHER_HOT scheduler_thread(void* arg) {
             // Keep spinning aggressively for high-throughput workloads
             if (idle_count < 10000) {
                 // Tight spin with architecture-specific pause
-                #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
-                __asm__ __volatile__("pause" ::: "memory");
-                #elif defined(__aarch64__) || defined(__arm64__) || defined(__arm__)
-                __asm__ __volatile__("yield" ::: "memory");
-                #endif
+                AETHER_PAUSE();
             } else {
                 // Brief yield only after extended idle
                 aether_sched_yield();
@@ -1485,8 +1479,8 @@ void scheduler_enable_features(int use_pool, int use_lockfree, int use_adaptive,
 // aether_send_message so the slot rides inside the Message._reply_slot field.
 // The receiver's step function copies Message._reply_slot into
 // g_current_reply_slot after mailbox_receive, so scheduler_reply can find it.
-__thread void* g_pending_reply_slot = NULL;
-__thread void* g_current_reply_slot = NULL;
+AETHER_TLS void* g_pending_reply_slot = NULL;
+AETHER_TLS void* g_current_reply_slot = NULL;
 
 static void reply_slot_decref(ActorReplySlot* slot) {
     if (atomic_fetch_sub_explicit(&slot->refcount, 1, memory_order_acq_rel) == 1) {

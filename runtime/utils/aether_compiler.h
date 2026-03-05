@@ -13,10 +13,12 @@
 // COMPILER DETECTION
 // ============================================================================
 
-#if defined(__GNUC__) || defined(__clang__)
-#  define AETHER_GCC_COMPAT 1
-#else
-#  define AETHER_GCC_COMPAT 0
+#ifndef AETHER_GCC_COMPAT
+#  if defined(__GNUC__) || defined(__clang__)
+#    define AETHER_GCC_COMPAT 1
+#  else
+#    define AETHER_GCC_COMPAT 0
+#  endif
 #endif
 
 // ============================================================================

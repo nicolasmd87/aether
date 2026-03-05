@@ -485,7 +485,34 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                 fprintf(gen->output, ";\n");
             }
             break;
-            
+
+        case AST_COMPOUND_ASSIGNMENT: {
+            // node->value = variable name, children[0] = operator literal, children[1] = RHS
+            if (stmt->child_count >= 2 && stmt->value) {
+                const char* op = stmt->children[0]->value;  // "+=", "-=", etc.
+
+                // Check if this is a state variable in an actor
+                int is_state_var = 0;
+                if (gen->current_actor && stmt->value) {
+                    for (int i = 0; i < gen->state_var_count; i++) {
+                        if (strcmp(stmt->value, gen->actor_state_vars[i]) == 0) {
+                            is_state_var = 1;
+                            break;
+                        }
+                    }
+                }
+
+                if (is_state_var) {
+                    fprintf(gen->output, "self->%s %s ", stmt->value, op);
+                } else {
+                    fprintf(gen->output, "%s %s ", stmt->value, op);
+                }
+                generate_expression(gen, stmt->children[1]);
+                fprintf(gen->output, ";\n");
+            }
+            break;
+        }
+
         case AST_IF_STATEMENT:
             fprintf(gen->output, "if (");
             if (stmt->child_count > 0) {
@@ -497,8 +524,9 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
 
             {
                 // Save declared_var_count before if-body.  Variables declared
-                // in the if-branch must not suppress re-declaration in the
-                // else-branch (they are in separate C scopes).
+                // inside if/else blocks live in separate C scopes and must not
+                // leak to sibling statements (fixes Issue #2: sibling if blocks
+                // re-using the same variable name).
                 int saved_var_count = gen->declared_var_count;
 
                 indent(gen);
@@ -508,17 +536,6 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                 unindent(gen);
 
                 if (stmt->child_count > 2) {
-                    // Save if-branch variable names before restoring count,
-                    // because the else-branch may overwrite those array slots.
-                    int if_new_count = gen->declared_var_count - saved_var_count;
-                    char** if_vars = NULL;
-                    if (if_new_count > 0) {
-                        if_vars = malloc(sizeof(char*) * if_new_count);
-                        for (int vi = 0; vi < if_new_count; vi++) {
-                            if_vars[vi] = gen->declared_vars[saved_var_count + vi];
-                        }
-                    }
-
                     // Restore: else-branch sees only pre-if declarations.
                     gen->declared_var_count = saved_var_count;
 
@@ -526,16 +543,11 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     indent(gen);
                     generate_statement(gen, stmt->children[2]);
                     unindent(gen);
-
-                    // Union: merge if-branch declarations back.
-                    for (int vi = 0; vi < if_new_count; vi++) {
-                        if (!is_var_declared(gen, if_vars[vi])) {
-                            mark_var_declared(gen, if_vars[vi]);
-                        }
-                        free(if_vars[vi]);
-                    }
-                    free(if_vars);
                 }
+
+                // Restore after entire if/else: variables declared inside
+                // if/else blocks do not leak to subsequent sibling statements.
+                gen->declared_var_count = saved_var_count;
             }
 
             print_line(gen, "}");
@@ -690,10 +702,20 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                             print_indent(gen);
                             fprintf(gen->output, "if (");
                         }
-                        generate_expression(gen, match_expr);
-                        fprintf(gen->output, " == ");
-                        generate_expression(gen, pattern);
-                        fprintf(gen->output, ") {\n");
+                        // Use strcmp for string match arms
+                        Type* mexpr_type = match_expr->node_type;
+                        if (mexpr_type && mexpr_type->kind == TYPE_STRING) {
+                            fprintf(gen->output, "strcmp(");
+                            generate_expression(gen, match_expr);
+                            fprintf(gen->output, ", ");
+                            generate_expression(gen, pattern);
+                            fprintf(gen->output, ") == 0) {\n");
+                        } else {
+                            generate_expression(gen, match_expr);
+                            fprintf(gen->output, " == ");
+                            generate_expression(gen, pattern);
+                            fprintf(gen->output, ") {\n");
+                        }
                     }
 
                     indent(gen);
@@ -792,13 +814,7 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     print_indent(gen);
                     // Determine return type from expression
                     Type* ret_type = stmt->children[0]->node_type;
-                    if (ret_type && ret_type->kind == TYPE_STRING) {
-                        fprintf(gen->output, "const char* _defer_ret = ");
-                    } else if (ret_type && ret_type->kind == TYPE_FLOAT) {
-                        fprintf(gen->output, "double _defer_ret = ");
-                    } else {
-                        fprintf(gen->output, "int _defer_ret = ");
-                    }
+                    fprintf(gen->output, "%s _defer_ret = ", get_c_type(ret_type));
                     generate_expression(gen, stmt->children[0]);
                     fprintf(gen->output, ";\n");
                     emit_all_defers(gen);
@@ -864,7 +880,9 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
 
                 // Interpolated string: delegate directly to expression codegen (emits printf(...))
                 if (stmt->child_count == 1 && first_arg->type == AST_STRING_INTERP) {
+                    gen->interp_as_printf = 1;
                     generate_expression(gen, first_arg);
+                    gen->interp_as_printf = 0;
                     fprintf(gen->output, ";\n");
                     break;
                 }

@@ -71,6 +71,8 @@ static const char* get_temp_dir(void) {
     if (!t) t = ".";
     return t;
 #else
+    const char* t = getenv("TMPDIR");
+    if (t && t[0]) return t;
     return "/tmp";
 #endif
 }
@@ -83,8 +85,8 @@ typedef struct {
     char root[1024];           // Aether root directory
     char compiler[2048];       // Path to aetherc (root + /bin/aetherc = up to 1036 bytes)
     char lib[1024];            // Path to libaether.a (if exists)
-    char include_flags[2048];  // -I flags for GCC
-    char runtime_srcs[4096];   // Runtime .c files (source fallback)
+    char include_flags[4096];  // -I flags for GCC
+    char runtime_srcs[8192];   // Runtime .c files (source fallback)
     bool has_lib;              // Whether precompiled lib exists
     bool dev_mode;             // Running from source tree
     bool verbose;              // Verbose output
@@ -255,8 +257,9 @@ static void mkdirs(const char* path) {
 }
 
 static char* get_basename(const char* path) {
-    const char* base = strrchr(path, '/');
-    if (!base) base = strrchr(path, '\\');
+    const char* fslash = strrchr(path, '/');
+    const char* bslash = strrchr(path, '\\');
+    const char* base = (!fslash) ? bslash : (!bslash) ? fslash : (fslash > bslash ? fslash : bslash);
     if (!base) base = path; else base++;
     static char result[256];
     strncpy(result, base, sizeof(result) - 1);
@@ -274,7 +277,7 @@ static bool get_exe_dir(char* buf, size_t size) {
         char resolved[PATH_MAX];
         if (realpath(buf, resolved)) {
             char* slash = strrchr(resolved, '/');
-            if (slash) { *slash = '\0'; strncpy(buf, resolved, size); return true; }
+            if (slash) { *slash = '\0'; strncpy(buf, resolved, size - 1); buf[size - 1] = '\0'; return true; }
         }
     }
 #elif defined(__linux__)
@@ -299,6 +302,14 @@ static bool get_exe_dir(char* buf, size_t size) {
 // Toolchain discovery
 // --------------------------------------------------------------------------
 
+// GCC's -Wformat-truncation flags the runtime_srcs snprintf because it
+// multiplies the theoretical max of each %s arg (1023 bytes) by 34 copies,
+// exceeding the buffer.  In practice src is ~30-50 bytes and snprintf
+// truncates safely, so suppress the false positive.
+#if defined(__GNUC__) && !defined(__clang__)
+#  pragma GCC diagnostic push
+#  pragma GCC diagnostic ignored "-Wformat-truncation"
+#endif
 static void discover_toolchain(void) {
     char exe_dir[1024] = {0};
     bool found_exe_dir = get_exe_dir(exe_dir, sizeof(exe_dir));
@@ -351,11 +362,23 @@ static void discover_toolchain(void) {
         if (path_exists(tc.compiler)) goto found_root;
     }
 
-    // Strategy 3: Relative to ae binary — installed layout ($PREFIX/bin/ae, $PREFIX/lib/aether/)
+    // Strategy 3: Relative to ae binary — installed layout ($PREFIX/bin/ae)
+    // Detect installed layout by checking for lib/aether/ (make install),
+    // share/aether/ (release ZIP), or lib/libaether.a (either).
     if (found_exe_dir) {
         char candidate[1024];
+        bool is_installed = false;
         snprintf(candidate, sizeof(candidate), "%s/../lib/aether", exe_dir);
-        if (dir_exists(candidate)) {
+        if (dir_exists(candidate)) is_installed = true;
+        if (!is_installed) {
+            snprintf(candidate, sizeof(candidate), "%s/../share/aether", exe_dir);
+            if (dir_exists(candidate)) is_installed = true;
+        }
+        if (!is_installed) {
+            snprintf(candidate, sizeof(candidate), "%s/../lib/libaether.a", exe_dir);
+            if (path_exists(candidate)) is_installed = true;
+        }
+        if (is_installed) {
             snprintf(tc.root, sizeof(tc.root), "%s/..", exe_dir);
             snprintf(tc.compiler, sizeof(tc.compiler), "%s/aetherc" EXE_EXT, exe_dir);
             if (path_exists(tc.compiler)) goto found_root;
@@ -394,7 +417,20 @@ static void discover_toolchain(void) {
     }
 
     fprintf(stderr, "Error: Aether compiler not found.\n");
+#ifdef _WIN32
+    fprintf(stderr, "\n");
+    fprintf(stderr, "If you downloaded a release ZIP, make sure to:\n");
+    fprintf(stderr, "  1. Extract the ZIP (e.g. to C:\\aether)\n");
+    fprintf(stderr, "  2. Add C:\\aether\\bin to your PATH\n");
+    fprintf(stderr, "  3. Restart your terminal\n");
+    fprintf(stderr, "\n");
+    fprintf(stderr, "Or set AETHER_HOME to the extraction folder:\n");
+    fprintf(stderr, "  set AETHER_HOME=C:\\aether\n");
+    fprintf(stderr, "\n");
+    fprintf(stderr, "Download: https://github.com/nicolasmd87/aether/releases\n");
+#else
     fprintf(stderr, "Run 'make compiler' to build it, or set $AETHER_HOME.\n");
+#endif
     exit(1);
 
 found_root:
@@ -428,9 +464,11 @@ found_root:
             "-I%s/runtime -I%s/runtime/actors -I%s/runtime/scheduler "
             "-I%s/runtime/utils -I%s/runtime/memory -I%s/runtime/config "
             "-I%s/std -I%s/std/string -I%s/std/io -I%s/std/math "
-            "-I%s/std/net -I%s/std/collections -I%s/std/json",
+            "-I%s/std/net -I%s/std/collections -I%s/std/json "
+            "-I%s/std/fs -I%s/std/log",
             tc.root, tc.root, tc.root, tc.root, tc.root, tc.root,
-            tc.root, tc.root, tc.root, tc.root, tc.root, tc.root, tc.root);
+            tc.root, tc.root, tc.root, tc.root, tc.root, tc.root,
+            tc.root, tc.root, tc.root);
 
         if (!tc.has_lib) {
             snprintf(tc.runtime_srcs, sizeof(tc.runtime_srcs),
@@ -461,6 +499,7 @@ found_root:
                 "%s/std/net/aether_net.c "
                 "%s/std/collections/aether_collections.c "
                 "%s/std/json/aether_json.c "
+                "%s/std/io/aether_io.c "
                 "%s/std/fs/aether_fs.c "
                 "%s/std/log/aether_log.c "
                 "%s/std/collections/aether_hashmap.c "
@@ -473,7 +512,7 @@ found_root:
                 tc.root, tc.root, tc.root, tc.root, tc.root,
                 tc.root, tc.root, tc.root, tc.root, tc.root,
                 tc.root, tc.root, tc.root, tc.root, tc.root,
-                tc.root, tc.root, tc.root);
+                tc.root, tc.root, tc.root, tc.root);
         }
     } else {
         // Installed layout: headers in include/aether/, source in share/aether/
@@ -485,14 +524,21 @@ found_root:
             "-I%s/include/aether/std -I%s/include/aether/std/string "
             "-I%s/include/aether/std/io -I%s/include/aether/std/math "
             "-I%s/include/aether/std/net -I%s/include/aether/std/collections "
-            "-I%s/include/aether/std/json "
+            "-I%s/include/aether/std/json -I%s/include/aether/std/fs "
+            "-I%s/include/aether/std/log "
             "-I%s/share/aether/runtime -I%s/share/aether/runtime/actors "
             "-I%s/share/aether/runtime/scheduler -I%s/share/aether/runtime/utils "
             "-I%s/share/aether/runtime/memory -I%s/share/aether/runtime/config "
-            "-I%s/share/aether/std -I%s/share/aether/std/string",
+            "-I%s/share/aether/std -I%s/share/aether/std/string "
+            "-I%s/share/aether/std/io -I%s/share/aether/std/math "
+            "-I%s/share/aether/std/net -I%s/share/aether/std/collections "
+            "-I%s/share/aether/std/json -I%s/share/aether/std/fs "
+            "-I%s/share/aether/std/log",
             tc.root, tc.root, tc.root, tc.root, tc.root, tc.root,
-            tc.root, tc.root, tc.root, tc.root, tc.root, tc.root, tc.root,
-            tc.root, tc.root, tc.root, tc.root, tc.root, tc.root, tc.root, tc.root);
+            tc.root, tc.root, tc.root, tc.root, tc.root, tc.root,
+            tc.root, tc.root, tc.root, tc.root, tc.root, tc.root,
+            tc.root, tc.root, tc.root, tc.root, tc.root, tc.root,
+            tc.root, tc.root, tc.root, tc.root, tc.root, tc.root);
 
         // Source fallback: when libaether.a is not available, compile from share/aether/
         if (!tc.has_lib) {
@@ -526,6 +572,7 @@ found_root:
                 "%s/std/net/aether_net.c "
                 "%s/std/collections/aether_collections.c "
                 "%s/std/json/aether_json.c "
+                "%s/std/io/aether_io.c "
                 "%s/std/fs/aether_fs.c "
                 "%s/std/log/aether_log.c "
                 "%s/std/collections/aether_hashmap.c "
@@ -538,10 +585,13 @@ found_root:
                 src, src, src, src, src,
                 src, src, src, src, src,
                 src, src, src, src, src,
-                src, src, src);
+                src, src, src, src);
         }
     }
 }
+#if defined(__GNUC__) && !defined(__clang__)
+#  pragma GCC diagnostic pop
+#endif
 
 // Get link_flags from aether.toml [build] section
 // Returns empty string if not found or no aether.toml
@@ -572,10 +622,10 @@ static const char* get_link_flags(void) {
 // --------------------------------------------------------------------------
 #ifdef _WIN32
 
-// Pinned WinLibs release — GCC 13.2.0 UCRT, x86-64, no LLVM (~80 MB).
+// Pinned WinLibs release — GCC 14.2.0 UCRT, x86-64, no LLVM (~250 MB).
 // Update WINLIBS_TAG + WINLIBS_ZIP together when upgrading.
-#define WINLIBS_TAG "13.2.0posix-17.0.6-11.0.1-ucrt-r5"
-#define WINLIBS_ZIP "winlibs-x86_64-posix-seh-gcc-13.2.0-mingw-w64ucrt-11.0.1-r5.zip"
+#define WINLIBS_TAG "14.2.0posix-12.0.0-ucrt-r3"
+#define WINLIBS_ZIP "winlibs-x86_64-posix-seh-gcc-14.2.0-mingw-w64ucrt-12.0.0-r3.zip"
 #define WINLIBS_URL \
     "https://github.com/brechtsanders/winlibs_mingw/releases/download/" \
     WINLIBS_TAG "/" WINLIBS_ZIP
@@ -604,11 +654,11 @@ static bool ensure_gcc_windows(void) {
     struct stat st;
     if (stat(tools_gcc, &st) == 0) goto found;
 
-    // 3. Auto-download (one-time, ~80 MB).
-    printf("[ae] GCC not found. Downloading MinGW-w64 GCC (~80 MB) — one-time setup...\n");
+    // 3. Auto-download (one-time, ~250 MB).
+    printf("[ae] GCC not found. Downloading MinGW-w64 GCC (~250 MB) -- one-time setup...\n");
     fflush(stdout);
 
-    _mkdir(tools_dir);  // OK if it already exists
+    mkdirs(tools_dir);  // Create ~/.aether/tools/ (and parents)
 
     // Write a tiny PowerShell script to avoid shell-quoting nightmares.
     char ps_path[1024], zip_path[1024];
@@ -795,9 +845,9 @@ static void build_gcc_cmd(char* cmd, size_t size,
     // Quote s_gcc_bin in case the path contains spaces.
     char opt[600];
     if (user_cflags[0])
-        snprintf(opt, sizeof(opt), "%s %s", optimize ? "-O2" : "-O0", user_cflags);
+        snprintf(opt, sizeof(opt), "%s %s", optimize ? "-O2" : "-O0 -g", user_cflags);
     else
-        snprintf(opt, sizeof(opt), "%s", optimize ? "-O2" : "-O0");
+        snprintf(opt, sizeof(opt), "%s", optimize ? "-O2" : "-O0 -g");
     char lib_dir[1024];
     if (tc.has_lib) {
         strncpy(lib_dir, tc.lib, sizeof(lib_dir) - 1);
@@ -818,9 +868,9 @@ static void build_gcc_cmd(char* cmd, size_t size,
     // POSIX (Linux/macOS): -pthread for POSIX threads, -lm for math
     char opt[600];
     if (user_cflags[0])
-        snprintf(opt, sizeof(opt), "%s %s", optimize ? "-O2 -pipe" : "-O0 -pipe", user_cflags);
+        snprintf(opt, sizeof(opt), "%s %s", optimize ? "-O2 -pipe" : "-O0 -g -pipe", user_cflags);
     else
-        snprintf(opt, sizeof(opt), "%s", optimize ? "-O2 -pipe" : "-O0 -pipe");
+        snprintf(opt, sizeof(opt), "%s", optimize ? "-O2 -pipe" : "-O0 -g -pipe");
     if (tc.has_lib) {
         char lib_dir[1024];
         strncpy(lib_dir, tc.lib, sizeof(lib_dir) - 1);
@@ -890,7 +940,7 @@ static int cmd_run(int argc, char** argv) {
         return 1;
     }
 
-    char c_file[2048], exe_file[2048], cmd[8192];
+    char c_file[2048], exe_file[2048], cmd[16384];
 
     // --- Cache check ---
     // ae run uses -O0 (fast dev builds). Check if we have a cached exe for
@@ -919,6 +969,7 @@ static int cmd_run(int argc, char** argv) {
     }
     if (using_cache) {
         strncpy(exe_file, cached_exe, sizeof(exe_file) - 1);
+        exe_file[sizeof(exe_file) - 1] = '\0';
     } else if (tc.dev_mode) {
         snprintf(exe_file, sizeof(exe_file), "%s/build/_ae_tmp" EXE_EXT, tc.root);
     } else {
@@ -1021,7 +1072,7 @@ static int cmd_build(int argc, char** argv) {
     }
 
     const char* base = get_basename(file);
-    char c_file[2048], exe_file[2048], cmd[8192];
+    char c_file[2048], exe_file[2048], cmd[16384];
 
     if (output_name) {
         // Explicit -o: use the path as-is
@@ -1174,6 +1225,7 @@ static int cmd_test(int argc, char** argv) {
     if (target && path_exists(target) && !dir_exists(target)) {
         // Single file
         strncpy(test_files[0], target, sizeof(test_files[0]) - 1);
+        test_files[0][sizeof(test_files[0]) - 1] = '\0';
         test_count = 1;
     } else {
         // Discover from directory
@@ -1194,7 +1246,7 @@ static int cmd_test(int argc, char** argv) {
 #ifdef _WIN32
         snprintf(find_cmd, sizeof(find_cmd), "dir /b /s \"%s\\*.ae\" 2>nul", test_dir);
 #else
-        snprintf(find_cmd, sizeof(find_cmd), "find %s -name '*.ae' -type f 2>/dev/null | sort", test_dir);
+        snprintf(find_cmd, sizeof(find_cmd), "find \"%s\" -name '*.ae' -type f 2>/dev/null | sort", test_dir);
 #endif
         FILE* pipe = popen(find_cmd, "r");
         if (pipe) {
@@ -1203,6 +1255,7 @@ static int cmd_test(int argc, char** argv) {
                 line[strcspn(line, "\n")] = '\0';
                 if (strlen(line) > 0) {
                     strncpy(test_files[test_count], line, sizeof(test_files[0]) - 1);
+                    test_files[test_count][sizeof(test_files[0]) - 1] = '\0';
                     test_count++;
                 }
             }
@@ -1224,7 +1277,7 @@ static int cmd_test(int argc, char** argv) {
         printf("  %-45s ", test);
         fflush(stdout);
 
-        char c_file[2048], exe_file[2048], cmd[8192];
+        char c_file[2048], exe_file[2048], cmd[16384];
 
         if (tc.dev_mode) {
             snprintf(c_file, sizeof(c_file), "%s/build/_test_%d.c", tc.root, i);
@@ -1303,13 +1356,7 @@ static int cmd_add(int argc, char** argv) {
 
     // Cache directory
     char cache_dir[1024];
-#ifdef _WIN32
-    const char* user_home = getenv("USERPROFILE");
-    snprintf(cache_dir, sizeof(cache_dir), "%s\\.aether\\packages", user_home ? user_home : ".");
-#else
-    const char* user_home = getenv("HOME");
-    snprintf(cache_dir, sizeof(cache_dir), "%s/.aether/packages", user_home ? user_home : ".");
-#endif
+    snprintf(cache_dir, sizeof(cache_dir), "%s/.aether/packages", get_home_dir());
 
     char pkg_dir[2048];
     snprintf(pkg_dir, sizeof(pkg_dir), "%s/%s", cache_dir, package);
@@ -1329,7 +1376,7 @@ static int cmd_add(int argc, char** argv) {
 #  pragma GCC diagnostic ignored "-Wformat-truncation"
 #endif
         char cmd[2048];
-        snprintf(cmd, sizeof(cmd), "git clone --depth 1 https://%s \"%s\" 2>&1", package, pkg_dir);
+        snprintf(cmd, sizeof(cmd), "git clone --depth 1 https://%s %s", package, pkg_dir);
 #if defined(__GNUC__) && !defined(__clang__)
 #  pragma GCC diagnostic pop
 #endif
@@ -1387,7 +1434,7 @@ static int cmd_examples(int argc, char** argv) {
 #ifdef _WIN32
     snprintf(find_cmd, sizeof(find_cmd), "dir /b /s \"%s\\*.ae\" 2>nul", examples_dir);
 #else
-    snprintf(find_cmd, sizeof(find_cmd), "find %s -name '*.ae' -type f 2>/dev/null | sort", examples_dir);
+    snprintf(find_cmd, sizeof(find_cmd), "find \"%s\" -name '*.ae' -type f 2>/dev/null | sort", examples_dir);
 #endif
     FILE* pipe = popen(find_cmd, "r");
     if (pipe) {
@@ -1396,6 +1443,7 @@ static int cmd_examples(int argc, char** argv) {
             line[strcspn(line, "\n\r")] = '\0';
             if (strlen(line) > 0) {
                 strncpy(files[file_count], line, sizeof(files[0]) - 1);
+                files[file_count][sizeof(files[0]) - 1] = '\0';
                 file_count++;
             }
         }
@@ -1409,8 +1457,7 @@ static int cmd_examples(int argc, char** argv) {
 
     printf("Building %d example(s)...\n\n", file_count);
 
-    mkdir_p("build");
-    mkdir_p("build/examples");
+    mkdirs("build/examples");
 
     int pass = 0, fail = 0;
 
@@ -1429,7 +1476,7 @@ static int cmd_examples(int argc, char** argv) {
         printf("  %-30s ", base);
         fflush(stdout);
 
-        char c_file[2048], exe_file[2048], cmd[8192];
+        char c_file[2048], exe_file[2048], cmd[16384];
         snprintf(c_file, sizeof(c_file), "build/examples/%s.c", base);
         snprintf(exe_file, sizeof(exe_file), "build/examples/%s" EXE_EXT, base);
 
@@ -1514,7 +1561,7 @@ static int cmd_repl(void) {
     char line[1024];
     int brace_depth = 0;
 
-    char ae_file[256], c_file[256], exe_file[256];
+    char ae_file[1024], c_file[1024], exe_file[1024];
     snprintf(ae_file,  sizeof(ae_file),  "%s/_aether_repl_%d.ae",  get_temp_dir(), (int)getpid());
     snprintf(c_file,   sizeof(c_file),   "%s/_aether_repl_%d.c",   get_temp_dir(), (int)getpid());
     snprintf(exe_file, sizeof(exe_file), "%s/_aether_repl_%d" EXE_EXT, get_temp_dir(), (int)getpid());
@@ -1547,7 +1594,7 @@ static int cmd_repl(void) {
                 fprintf(f, "main() {\n%s\n}\n", session);
                 fclose(f);
 
-                char cmd[8192];
+                char cmd[16384];
                 snprintf(cmd, sizeof(cmd), "%s %s %s", tc.compiler, ae_file, c_file);
                 if (run_cmd_quiet(cmd) != 0) {
                     run_cmd(cmd);  // show error
@@ -1604,13 +1651,22 @@ static int cmd_repl(void) {
 #define AE_GITHUB_REPO "nicolasmd87/aether"
 
 // Download url → dest file. Uses curl/wget on POSIX, PowerShell on Windows.
+// Creates parent directories of dest if they don't exist.
 static int ae_download(const char* url, const char* dest) {
+    // Ensure parent directory exists (e.g. ~/.aether/ for releases.json)
+    {
+        char parent[1024];
+        strncpy(parent, dest, sizeof(parent) - 1);
+        parent[sizeof(parent) - 1] = '\0';
+        char* slash = strrchr(parent, '/');
+        if (!slash) slash = strrchr(parent, '\\');
+        if (slash) { *slash = '\0'; mkdirs(parent); }
+    }
 #ifdef _WIN32
     char tmp[64];
     snprintf(tmp, sizeof(tmp), "ae_dl_%u.ps1", (unsigned)GetCurrentProcessId());
     char ps_path[1024];
-    snprintf(ps_path, sizeof(ps_path), "%s\\%s",
-             getenv("TEMP") ? getenv("TEMP") : "C:\\Temp", tmp);
+    snprintf(ps_path, sizeof(ps_path), "%s\\%s", get_temp_dir(), tmp);
     FILE* ps = fopen(ps_path, "w");
     if (!ps) return 1;
     fprintf(ps,
@@ -1641,8 +1697,7 @@ static int ae_extract(const char* archive, const char* dest_dir) {
     char tmp[64];
     snprintf(tmp, sizeof(tmp), "ae_ex_%u.ps1", (unsigned)GetCurrentProcessId());
     char ps_path[1024];
-    snprintf(ps_path, sizeof(ps_path), "%s\\%s",
-             getenv("TEMP") ? getenv("TEMP") : "C:\\Temp", tmp);
+    snprintf(ps_path, sizeof(ps_path), "%s\\%s", get_temp_dir(), tmp);
     FILE* ps = fopen(ps_path, "w");
     if (!ps) return 1;
     fprintf(ps,
@@ -1902,141 +1957,6 @@ static int cmd_version(int argc, char** argv) {
     return 0;
 }
 
-// --------------------------------------------------------------------------
-// Release management
-// --------------------------------------------------------------------------
-
-static int parse_version(const char* version, int* major, int* minor, int* patch) {
-    return sscanf(version, "%d.%d.%d", major, minor, patch) == 3;
-}
-
-static int cmd_release(int argc, char** argv) {
-    if (argc < 1) {
-        printf("Usage: ae release <major|minor|patch> [--dry-run]\n");
-        printf("\nBumps the version number and creates a release.\n");
-        printf("\nExamples:\n");
-        printf("  ae release patch      # 0.5.0 -> 0.5.1\n");
-        printf("  ae release minor      # 0.5.0 -> 0.6.0\n");
-        printf("  ae release major      # 0.5.0 -> 1.0.0\n");
-        printf("  ae release patch --dry-run  # Show what would happen\n");
-        return 1;
-    }
-
-    const char* bump_type = argv[0];
-    bool dry_run = false;
-
-    for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--dry-run") == 0 || strcmp(argv[i], "-n") == 0) {
-            dry_run = true;
-        }
-    }
-
-    // Validate bump type
-    if (strcmp(bump_type, "major") != 0 &&
-        strcmp(bump_type, "minor") != 0 &&
-        strcmp(bump_type, "patch") != 0) {
-        fprintf(stderr, "Error: Invalid bump type '%s'. Use major, minor, or patch.\n", bump_type);
-        return 1;
-    }
-
-    // Find VERSION file - prefer current dir (dev mode), then tc.root
-    char version_path[2048];
-    if (path_exists("VERSION")) {
-        strcpy(version_path, "VERSION");
-    } else if (tc.root[0]) {
-        snprintf(version_path, sizeof(version_path), "%s/VERSION", tc.root);
-    } else {
-        strcpy(version_path, "VERSION");
-    }
-
-    // Read current version
-    FILE* f = fopen(version_path, "r");
-    if (!f) {
-        fprintf(stderr, "Error: VERSION file not found at %s\n", version_path);
-        return 1;
-    }
-
-    char current_version[64];
-    if (!fgets(current_version, sizeof(current_version), f)) {
-        fclose(f);
-        fprintf(stderr, "Error: Could not read VERSION file\n");
-        return 1;
-    }
-    fclose(f);
-
-    // Remove trailing newline
-    current_version[strcspn(current_version, "\n")] = '\0';
-
-    // Parse version
-    int major, minor, patch;
-    if (!parse_version(current_version, &major, &minor, &patch)) {
-        fprintf(stderr, "Error: Invalid version format '%s'. Expected X.Y.Z\n", current_version);
-        return 1;
-    }
-
-    // Bump version
-    if (strcmp(bump_type, "major") == 0) {
-        major++;
-        minor = 0;
-        patch = 0;
-    } else if (strcmp(bump_type, "minor") == 0) {
-        minor++;
-        patch = 0;
-    } else {
-        patch++;
-    }
-
-    char new_version[64];
-    snprintf(new_version, sizeof(new_version), "%d.%d.%d", major, minor, patch);
-
-    printf("Version: %s -> %s\n", current_version, new_version);
-
-    if (dry_run) {
-        printf("\n[Dry run] Would:\n");
-        printf("  1. Update VERSION to %s\n", new_version);
-        printf("  2. Commit: 'Release v%s'\n", new_version);
-        printf("  3. Tag: v%s\n", new_version);
-        printf("  4. Push to origin\n");
-        return 0;
-    }
-
-    // Write new version
-    f = fopen(version_path, "w");
-    if (!f) {
-        fprintf(stderr, "Error: Could not write VERSION file\n");
-        return 1;
-    }
-    fprintf(f, "%s\n", new_version);
-    fclose(f);
-    printf("✓ Updated VERSION file\n");
-
-    // Git operations
-    char cmd[512];
-
-    snprintf(cmd, sizeof(cmd), "git add VERSION");
-    if (system(cmd) != 0) {
-        fprintf(stderr, "Warning: git add failed\n");
-    }
-
-    snprintf(cmd, sizeof(cmd), "git commit -m 'Release v%s'", new_version);
-    if (system(cmd) != 0) {
-        fprintf(stderr, "Warning: git commit failed\n");
-    } else {
-        printf("✓ Created commit\n");
-    }
-
-    snprintf(cmd, sizeof(cmd), "git tag v%s", new_version);
-    if (system(cmd) != 0) {
-        fprintf(stderr, "Warning: git tag failed\n");
-    } else {
-        printf("✓ Created tag v%s\n", new_version);
-    }
-
-    printf("\nRelease v%s prepared. To publish:\n", new_version);
-    printf("  git push origin main --tags\n");
-
-    return 0;
-}
 
 // --------------------------------------------------------------------------
 // Cache management command
@@ -2045,9 +1965,9 @@ static int cmd_release(int argc, char** argv) {
 static int cmd_cache(int argc, char** argv) {
     const char* sub = argc > 0 ? argv[0] : "info";
 
-    const char* home = getenv("HOME");
+    const char* home = get_home_dir();
     char cache_path[512];
-    snprintf(cache_path, sizeof(cache_path), "%s/.aether/cache", home ? home : "/tmp");
+    snprintf(cache_path, sizeof(cache_path), "%s/.aether/cache", home);
 
     if (strcmp(sub, "clear") == 0) {
 #ifdef _WIN32
@@ -2155,7 +2075,7 @@ static void print_usage(void) {
     printf("  add <package>        Add a dependency\n");
     printf("  cache [clear]        Show or clear build cache\n");
     printf("  repl                 Start interactive REPL\n");
-    printf("  fmt [file]           Format source code\n");
+    // fmt: hidden from help until implemented
     printf("  version              Show version / manage installed versions\n");
     printf("  version list         List all available releases\n");
     printf("  version install <v>  Download and install a specific version\n");
@@ -2217,11 +2137,6 @@ int main(int argc, char** argv) {
         printf("Formatter not yet implemented.\n");
         return 0;
     }
-    if (strcmp(cmd, "release") == 0) {
-        discover_toolchain();  // Need tc.root for VERSION file path
-        return cmd_release(sub_argc, sub_argv);
-    }
-
     // All other commands need the toolchain
     discover_toolchain();
 

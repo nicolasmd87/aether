@@ -68,20 +68,20 @@ static int parse_url(const char* url, char* host, int* port, char* path) {
     return 1;
 }
 
-static HttpResponse* http_request(const char* method, AetherString* url, AetherString* body, AetherString* content_type) {
+static HttpResponse* http_request(const char* method, const char* url, const char* body, const char* content_type) {
     http_init();
-    
+
     HttpResponse* response = (HttpResponse*)malloc(sizeof(HttpResponse));
     response->status_code = 0;
     response->body = NULL;
     response->headers = NULL;
     response->error = NULL;
-    
+
     char host[256];
     char path[1024];
     int port;
-    
-    if (!parse_url(url->data, host, &port, path)) {
+
+    if (!parse_url(url, host, &port, path)) {
         response->error = string_new("HTTPS not supported in basic implementation");
         return response;
     }
@@ -113,7 +113,7 @@ static HttpResponse* http_request(const char* method, AetherString* url, AetherS
     char request[4096];
     int request_len = 0;
     
-    if (body && body->length > 0) {
+    if (body && strlen(body) > 0) {
         request_len = snprintf(request, sizeof(request),
             "%s %s HTTP/1.1\r\n"
             "Host: %s\r\n"
@@ -123,9 +123,9 @@ static HttpResponse* http_request(const char* method, AetherString* url, AetherS
             "\r\n"
             "%s",
             method, path, host,
-            content_type ? content_type->data : "application/x-www-form-urlencoded",
-            body->length,
-            body->data);
+            content_type ? content_type : "application/x-www-form-urlencoded",
+            strlen(body),
+            body);
     } else {
         request_len = snprintf(request, sizeof(request),
             "%s %s HTTP/1.1\r\n"
@@ -176,19 +176,19 @@ static HttpResponse* http_request(const char* method, AetherString* url, AetherS
     return response;
 }
 
-HttpResponse* http_get(AetherString* url) {
+HttpResponse* http_get(const char* url) {
     return http_request("GET", url, NULL, NULL);
 }
 
-HttpResponse* http_post(AetherString* url, AetherString* body, AetherString* content_type) {
+HttpResponse* http_post(const char* url, const char* body, const char* content_type) {
     return http_request("POST", url, body, content_type);
 }
 
-HttpResponse* http_put(AetherString* url, AetherString* body, AetherString* content_type) {
+HttpResponse* http_put(const char* url, const char* body, const char* content_type) {
     return http_request("PUT", url, body, content_type);
 }
 
-HttpResponse* http_delete(AetherString* url) {
+HttpResponse* http_delete(const char* url) {
     return http_request("DELETE", url, NULL, NULL);
 }
 

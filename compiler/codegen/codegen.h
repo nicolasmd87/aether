@@ -24,6 +24,7 @@ typedef struct {
     int in_condition;  // Track if we're in a condition (if/while) to avoid double parens
     int in_main_loop;  // Track if we're in main's loop for batch send optimization
     int in_main_function;  // Track if we're in main() so return -> goto main_exit
+    int interp_as_printf;  // When set, string interp generates printf() instead of snprintf+malloc
     ASTNode* program;  // Reference to program root for lookups
 
     // Header generation (--emit-header)
@@ -50,6 +51,9 @@ typedef struct {
     }* extern_registry;
     int extern_registry_count;
     int extern_registry_capacity;
+
+    // MSVC compat: counter for ask-operator temp variables (_ask_result_N)
+    int ask_temp_counter;
 
     // Ask/reply type map: request message name -> reply message name.
     // Built by scanning actor receive handlers for reply statements.

@@ -1,0 +1,33 @@
+// Test: bitwise operators
+// Tests &, |, ^, ~, <<, >>
+
+main() {
+    // Bitwise AND
+    a = 5 & 3
+    println(a)
+
+    // Bitwise OR
+    b = 5 | 3
+    println(b)
+
+    // Bitwise XOR
+    c = 5 ^ 3
+    println(c)
+
+    // Left shift
+    d = 1 << 4
+    println(d)
+
+    // Right shift
+    e = 16 >> 2
+    println(e)
+
+    // Bitwise NOT
+    f = ~0
+    println(f)
+
+    // Combined: masking
+    flags = 255
+    mask = flags & 15
+    println(mask)
+}

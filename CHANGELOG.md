@@ -5,28 +5,85 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.13.0]
+## [0.17.0]
 
 ### Added
 
-- **`long` type (64-bit integer)**: `long` keyword maps to `int64_t` in generated C — use `long x = 0` for values that exceed 32-bit range; arithmetic with `long` promotes to 64-bit; `print(long_val)` uses `%lld`; actor state fields and message fields support `long`; full support in typechecker, codegen, and pattern-variable extraction
-- **Skynet benchmark**: Added the [atemerev/skynet](https://github.com/atemerev/skynet) recursive actor tree benchmark across Aether, Go, Rust, Erlang, Elixir, C (pthreads), Zig (std.Thread), and C++ (std::thread) — 6 levels × 10 = 1,111,111 actors, measures actor creation + aggregation throughput; controlled via `SKYNET_LEAVES` env var
-- **Actor state type inference**: Member access on actor refs (`root.total`) now correctly resolves the state field's declared type — enables proper format specifier selection for `print` and type-safe arithmetic on long state fields
+- **`exit()` builtin**: `exit(code)` terminates the program with the given exit code — no `extern` declaration needed; `exit()` with no argument defaults to 0
+- **`--dump-ast` compiler flag**: `aetherc --dump-ast file.ae` prints the parsed AST tree and exits without generating C code — useful for debugging parser behavior and understanding program structure
+- **`-g` debug symbols in dev builds**: `ae run` now compiles with `-g` flag, enabling `gdb`/`lldb` debugging on crashes without requiring manual gcc flags
+- **`NO_COLOR` and `isatty()` support**: Error/warning output respects the `NO_COLOR` environment variable ([no-color.org](https://no-color.org/)) and automatically disables ANSI colors when stderr is not a terminal (e.g. piped to a file or CI log)
+- **`null` keyword**: `null` is now a first-class literal typed as `ptr` — eliminates the need for C `null_ptr()` helpers; `x = null` and `if x == null` work as expected
+- **Bitwise operators**: `&`, `|`, `^`, `~`, `<<`, `>>` with C-compatible precedence — enables bitmask flags, hash functions, and protocol parsing without C shim functions
+- **Top-level constants**: `const NAME = value` at module scope — codegen emits `#define`; supports int, float, and string constant values
+- **Compound assignment operators**: `+=`, `-=`, `*=`, `/=`, `%=`, `&=`, `|=`, `^=`, `<<=`, `>>=` — emit directly to C compound assignments; work with both regular variables and actor state
+- **Hex, octal, and binary numeric literals**: `0xFF`, `0o755`, `0b1010` with underscore separators (`0xFF_FF`, `0b1111_0000`) — converted to decimal at lex time so all downstream code (atoi, codegen) works unchanged
+- **If-expressions**: `result = if cond { a } else { b }` produces a value — codegen emits C ternary `(cond) ? (a) : (b)`; works inline in function arguments and assignments
+- **Range-based for loops**: `for i in 0..n { body }` — desugars to C-style `for (int i = start; i < end; i++)` at parse time; supports variable bounds and nests with other loop forms
+- **Multi-statement arrow function bodies**: `f(x) -> { stmt1; stmt2; expr }` — the last expression is the implicit return value; supports intermediate variables, if/return, and loops inside arrow bodies
 
 ### Fixed
 
-- **Scheduler queue back-pressure deadlock** (skynet N≥100k and other many-actor workloads): All scheduler threads could permanently deadlock in a circular-wait: thread A spinning on a full queue waiting for thread B, while thread B spins on a full queue waiting for thread A (and so on around all cores). Root cause: `scheduler_send_remote` and two migration-forwarding paths used unbounded spin-retries inside the scheduler loop — a blocked thread could not return to drain its own `from_queues`, so the circular wait was unresolvable. Fixed by: (1) replacing unbounded spins with a bounded 8-retry loop; (2) on failure, deferring the `(actor, msg)` pair to a per-target-core thread-local overflow buffer (`OverflowBuf` TLS arrays); (3) flushing deferred sends at the top of every scheduler loop iteration before draining new messages. Main-thread senders retain their original spin-retry (safe because the main thread does not drain `from_queues`). Per-target-core FIFO ordering is preserved: new sends to a backed-up target core are also deferred, not bypassed. Memory for overflow buffers is only allocated under actual queue saturation and grows proportionally to in-flight count.
-- **Scheduler thread startup race** (test suite, fast producer patterns): A race existed between `scheduler_start()` returning and scheduler threads actually polling `from_queues`. Under OS scheduling pressure (common in test suites with many rapid thread create/join cycles), a producer could enqueue messages before any thread was processing them — causing tests to time out waiting for messages that sat unread for hundreds of milliseconds. Fixed with a `g_threads_ready` barrier: each scheduler thread atomically increments the counter (with release) just before entering its main loop; `scheduler_start()` spins (with AETHER_PAUSE) until the counter reaches `num_cores`, guaranteeing all threads are actively polling before returning.
-- **Scheduler migration race** (multi-core, recursive spawn patterns): Two related races fixed. (1) Freshly-spawned actors could be migrated to a new core *before* their `Setup` message was delivered — if a subsequent message arrived on the same core, the work-inlining path executed `step()` before initialization, causing null dereference / state corruption. Fixed by snapshotting `was_active` before message processing: actors where `was_active=0` and whose mailbox is empty are not migrated (setup still in flight). (2) The initial guard (`active=0 && mailbox empty`) was too broad — after processing a message both conditions are true for *any* idle actor, permanently blocking co-location and causing ~15× throughput regression (ping_pong: 1.4 M → 21 M msg/sec). The `was_active` snapshot distinguishes "freshly spawned" (was_active=0) from "just finished processing" (was_active=1), allowing migration in the latter case. Verified with `SKYNET_LEAVES=1000` multi-core and all 26 tests pass.
-- **Work-stealing TOCTOU race on ARM64** (skynet crash at N≥150k): The idle-loop work-stealing path had a TOCTOU race with `aether_send_message`'s same-core fast path: (1) sender reads `actor->assigned_core = C0`, decides to call `scheduler_send_local` (direct mailbox write); (2) work-stealing fires on C1, moves actor to C1 and sets `assigned_core = C1`; (3) C0 writes to `actor->mailbox` without a memory barrier; (4) C1's scheduler reads `actor->mailbox` concurrently — data race on the non-atomic ring buffer. On ARM64 (weakly-ordered), this produces stale reads and heap corruption (`SIGSEGV` at address 0x302c). Fixed by making `Mailbox.count` a `_Atomic int`: `mailbox_send` increments it with `memory_order_release` (publishing message data + the preceding `active=1` write), and `mailbox_receive` reads it with `memory_order_acquire` (establishing happens-before after a work-steal handoff). The `active = 1` flag is now set *before* `mailbox_send` in `scheduler_send_local` so it is covered by the release. The scheduler loop performs an `acquire` read of `mailbox.count` before checking `actor->active` to ensure cross-thread active-flag writes are visible. Work-stealing is retained at the original `idle_count > 5000` threshold — the atomic ordering makes it safe. Also fixed a pre-existing bug in the `spsc_wrap_around` test: it tried to enqueue 100 items into a 64-slot SPSC queue (max 63 usable); corrected to `SPSC_QUEUE_SIZE - 1` per batch.
-- **Actor ref state field type propagation**: `infer_type` and `typecheck_expression` now look up state declarations in the actor's AST definition when resolving member access on actor refs — previously returned `TYPE_UNKNOWN`, causing `printf("%d", ...)` for `long` fields
-- **`clock_ns()` return type**: Corrected from `TYPE_INT` to `TYPE_INT64` — nanosecond timestamps overflow `int32` after ~2.1 seconds, silently truncating benchmark timings; variables assigned from `clock_ns()` now correctly infer as `long`
-- **Actor ref ↔ int/ptr type compatibility**: `is_type_compatible` now allows assigning an actor ref to a state field declared as `int` or `ptr` (e.g., `state pong_ref = 0`) — the common wiring pattern of storing a spawned actor ref in a zero-initialized field; the new actor state type lookup caused spurious `E0200` type mismatch errors on all benchmark files that use this pattern
-- **Overflow buffer O(N) memmove stall** (skynet N≥200k): Overflow buffers used `memmove` to compact entries after each partial flush — with 100k+ entries per buffer, multi-MB memmoves consumed 85% of CPU, stalling throughput to ~900 msg/sec. Fixed by adding a `head` index to `OverflowBuf`: cross-core flushes advance the head pointer (O(drained) not O(total)); own-core direct delivery path uses `memmove` only for the small processed window (≤128 entries). When own-core overflow exceeds 4096 entries (spawn cascade), falls back to the queue-based drain path to prevent the 20:1 amplification cascade where each `step()` call generates many new cross-core overflow entries.
-- **Premature scheduler_wait termination** (ping-pong, thread-ring INCOMPLETE): `count_pending_messages()` only checked from_queues and overflow buffers — messages sitting in actor mailboxes (between work-inline bursts) were invisible, causing `scheduler_wait` to terminate early with actors still mid-conversation. Fixed by including the `messages_sent − messages_processed` counter delta in the pending count, which captures messages in any stage of the pipeline (mailboxes, in-flight step() calls, etc.).
-- **Skynet benchmark non-power-of-10 leaf counts**: Fixed incorrect sums for any leaf count not a power of 10. (1) When `child_size = size/10 = 0` (size < 10), nodes now spawn individual child actors per leaf instead of 10 children with size 0. (2) When `size % 10 != 0`, remainder leaves are distributed across the first `remainder` children (each gets `child_size+1`) instead of being silently dropped. (3) Root with `size=1` no longer sends to NULL parent (N=1 segfault). Verified correct sums for N=1,2,5,7,10,11,15,99,123,9999,12345 and all powers of 10 up to 1M.
-- **Codegen if/else variable scoping**: Variables declared in an `if` branch were suppressing re-declaration in the `else` branch — the `declared_vars` tracking was function-level instead of block-scoped. For example, `int i = 0` in the if-body marked `i` as declared; the else-body then emitted `i = 0` (no type), causing "undeclared identifier" C compilation errors. Fixed by saving/restoring `declared_var_count` around if/else branches, with union merge after both branches for variables that survive their declaring block.
-- **Slow scheduler_wait tail drain** (skynet 1M: 49s → 30s): `scheduler_wait` used a fixed `usleep(100)` between pending-message checks — during the convergence phase with few remaining messages, the 100µs sleep dominated wall time (280k iterations × 100µs ≈ 28s of pure sleeping). Fixed with adaptive wait: tight spin+yield when `pending ≤ 10000`, `usleep(10)` for moderate counts, `usleep(100)` only for bulk processing.
+- **`state` keyword context-awareness**: `state` is now a regular identifier outside actor bodies — previously it was globally reserved, preventing common variable names like `state = 42` in non-actor code
+- **int(0) to ptr type widening**: Variables initialized with `0` and later assigned a `ptr` value no longer cause type mismatch errors — `int` / `ptr` compatibility added for null-initialization patterns
+- **Sibling if block variable scoping**: Reusing a variable name in sibling `if` blocks no longer causes "undeclared identifier" errors in generated C — each block now gets a fresh scope with `declared_var_count` properly restored after the entire if/else chain
+- **String interpolation returns string pointer**: `"text ${expr}"` now produces a heap-allocated `char*` (via `snprintf` + `malloc`) instead of a `printf()` return value (`int`) — interpolated strings can now be passed to `extern` functions expecting `ptr` arguments; `print`/`println` retain the optimized `printf` path
+- **`ae.c` buffer safety**: All `strncpy` calls into stack buffers now have explicit null termination; `get_exe_dir` buffer handling hardened against truncation
+- **`ae.c` mixed-path separators on Windows**: `get_basename()` now handles both `/` and `\` path separators correctly, preventing incorrect toolchain discovery on Windows
+- **`ae.c` source fallback completeness**: Added missing `std/io/aether_io.c` to both dev-mode and installed-mode source fallback lists; installed-mode include flags now cover all `std/` subdirectories and `share/aether/` fallback paths
+- **`ae.c` temp directory consistency**: All temp file operations now use `get_temp_dir()` which checks `$TMPDIR` on POSIX and `%TEMP%` on Windows, instead of inconsistent inline checks
+- **`install.sh` portability**: Changed shebang from `#!/bin/sh` to `#!/usr/bin/env bash` (script uses `local` keyword); added `cd "$(dirname "$0")"` so installer works when invoked from any directory
+- **`install.sh` header completeness**: Added `std` and `std/io` directories to the header installation loop — `ae.c` generates `-I` flags for these paths
+- **`install.sh` readline probe**: Uses the detected compiler (`$CC`) instead of hardcoded `gcc` for the readline compilation test
+- **`install.sh` re-install handling**: Running installer again now updates the existing `AETHER_HOME` value via `sed` instead of skipping silently
+- **Release archives missing headers**: Both Unix and Windows release packaging now include the `include/aether/` directory with all runtime and stdlib headers, matching the layout expected by `ae.c` in installed mode
+- **Release pipeline command injection**: Commit message in the bump job is now passed via `env:` block instead of inline `${{ }}` expansion, preventing shell injection through crafted commit messages
+- **`find` command quoting**: `ae test` discovery now quotes the search directory in `find` commands, preventing failures on paths with spaces
+- **SPSCQueue codegen struct layout mismatch**: Codegen emitted `SPSCQueue spsc_queue` (3KB by-value) but runtime `ActorBase` uses `SPSCQueue* spsc_queue` (8-byte pointer) — caused struct layout corruption when the scheduler cast actor pointers; fixed codegen to emit pointer type
+- **Codegen emits MSVC-incompatible GCC-isms**: Generated C contained bare `__thread`, `__attribute__((aligned(64)))`, `__attribute__((hot))`, and `__asm__` — replaced with portable `AETHER_TLS`, `AETHER_ALIGNED`, `AETHER_HOT`, and `AETHER_CPU_PAUSE()` macros from `aether_compiler.h`; generated code now includes `aether_compiler.h` for cross-platform builds
+- **GCC statement expressions in generated C**: Three uses of `({ ... })` (clock_ns, string interpolation, ask operator) prevented MSVC compilation — each now guarded with `#if AETHER_GCC_COMPAT` with portable helper functions (`_aether_clock_ns`, `_aether_interp`, `_aether_ask_helper`) emitted in the generated preamble for the `#else` path
+- **Computed goto dispatch in generated C**: Actor message dispatch used `&&label` / `goto *ptr` (GCC/Clang extension) — now guarded with `#if AETHER_GCC_COMPAT`; the `#else` path emits an equivalent `switch(_msg_id)` with `case N: goto handle_Msg;` entries; fast computed-goto path preserved for GCC/Clang
+- **Message struct `__attribute__((aligned(64)))` unguarded**: Large message structs emitted bare GCC alignment attribute — now guarded with `__declspec(align(64))` for MSVC and `__attribute__((aligned(64)))` for GCC/Clang
+- **`AETHER_GCC_COMPAT` macro override support**: Both the generated C preamble and `aether_compiler.h` now use `#ifndef AETHER_GCC_COMPAT` so users and tests can force a specific value via `-D` flag or early `#define`
+- **std.http segfault on string arguments**: `http_get`, `http_post`, `http_put`, `http_delete` took `AetherString*` but the compiler passed raw `const char*` string literals — dereferencing `url->data` on a plain `char*` caused immediate segfault; all four functions changed to accept `const char*`
+- **std.io, std.net, std.json, std.collections `AetherString*` mismatch**: 37 stdlib functions across IO, networking, JSON, and collections modules took `AetherString*` parameters but received `const char*` from compiled `.ae` code — all public APIs changed to `const char*`; internal storage (e.g. HashMap keys) still uses `AetherString*` with wrapping at the boundary
+- **`defer` return type truncation**: `defer` blocks stored the return value in `int _defer_ret` regardless of actual return type — functions returning `ptr`, `long`, or `float` had values silently truncated; now uses `get_c_type()` to emit the correct type
+- **String `==`/`!=` pointer comparison instead of content comparison**: `a == b` on two `string` variables emitted C pointer comparison (`==`) instead of `strcmp()` — two strings with identical content but different addresses compared as unequal; now emits `strcmp(a, b) == 0` for `TYPE_STRING` operands
+- **`match` on strings used pointer comparison**: Match arms comparing string expressions used `==` instead of `strcmp()` — match against string literals always fell through to the default arm; now emits `strcmp()` for `TYPE_STRING` match expressions
+- **`TYPE_UNKNOWN` silent fallback to `int`**: `get_c_type()` silently returned `"int"` for unresolved types, masking upstream inference failures — now emits a compiler warning with suggestion to add explicit type annotations
+- **Pattern list element bindings hardcoded to `int`**: List pattern match codegen (`[h|t]`, `[a,b,c]`) always emitted `int` element types regardless of actual list element type — now uses `get_c_type()` from the element's `node_type`
+- **Token overflow silent truncation**: Source files exceeding `MAX_TOKENS` (10,000) silently stopped lexing with no error — now emits a clear error message with suggestion to split into multiple files
+- **`ae fmt` stub shown in help output**: `ae help` listed `fmt [file]` as a command even though the formatter is not implemented — removed from help output until the feature is ready
+- **String interp return type lost through implicit arrow returns**: `f(x) -> { msg = "text ${x}"; msg }` generated C with `int` return type instead of `const char*` — type inference now unwraps `AST_EXPRESSION_STATEMENT` in implicit return nodes and resolves local variable types by scanning preceding block statements
+- **`install.sh` silent build failures**: `make` errors piped through `wc -l` were silently swallowed; added `set -eo pipefail` so pipe failures propagate correctly
+- **`install.sh` unsolicited sudo**: Installer ran `sudo apt-get install libreadline-dev` without asking — replaced with a printed install instruction so users retain control
+- **`ae.c` missing dev-mode include flags**: `-I` flags for `std/fs` and `std/log` directories were present in installed-mode but missing in dev-mode, causing header-not-found errors during development
+- **Runtime scheduler portability**: Replaced bare `__thread` with `AETHER_TLS`, removed duplicate `likely`/`unlikely` macros, replaced bare inline asm with `AETHER_CPU_PAUSE()`, guarded `<immintrin.h>` for MSVC (`<intrin.h>`), wrapped `_Static_assert` for 32-bit compatibility
+- **`aether_actor_thread.c` bare inline asm**: Replaced GCC `__asm__ __volatile__("pause"/"yield")` with portable `AETHER_CPU_PAUSE()` macro
+- **`aether_thread.h` missing EBUSY fallback**: Added `#define EBUSY 16` fallback for platforms that don't define it (alongside existing `ETIMEDOUT` and `ENOMEM` fallbacks)
+- **`aether_http_server.c` Windows compat**: Added `socklen_t`, `strcasecmp` (`_stricmp`), and `strdup` (`_strdup`) fallback defines for MSVC
+- **`aether_io.c` Windows compat**: Added `S_ISDIR` macro and `stat`/`_stat` mapping for MSVC
+- **`aether_log.c` thread safety**: Replaced `localtime()` (returns shared static buffer) with `localtime_r()` (POSIX) / `localtime_s()` (MSVC)
+- **Test struct layouts**: Updated 4 runtime test files (`test_scheduler_stress.c`, `test_scheduler_correctness.c`, `test_worksteal_race.c`, `test_scheduler.c`) to use `SPSCQueue*` pointer matching the current `ActorBase` layout
+
+### Changed
+
+- **Windows CI upgraded to full CI suite**: `windows.yml` now runs `make ci` (8-step suite) instead of a minimal build-only check
+- **`make ci` includes install smoke test**: `test-install` folded into `make ci` as step 8/8 — every CI run verifies the installed toolchain end-to-end
+- **WinLibs GCC updated to 14.2.0**: Auto-download for Windows users without GCC now fetches GCC 14.2.0 (from 13.2.0) for better C11/C17 support and codegen improvements
+- **Release pipeline workflow_dispatch guard**: Manual workflow dispatch no longer triggers build/publish jobs without a valid version tag
+- **MSVC compat codegen regression test**: New `tests/compiler/test_msvc_compat.sh` — compiles generated C with `AETHER_GCC_COMPAT=0` under `-std=c11 -pedantic` to verify all GCC-extension fallback paths; covers string interpolation, actor dispatch, and helper functions
+
+## [0.16.0]
+
+### Fixed
+
+- **macOS x86_64 release built on ARM runner**: GitHub's `macos-latest` shifted to ARM64 images, causing x86_64 release binaries to be ARM binaries mislabeled as x86_64 — fixed by explicitly using `macos-15-intel` for x86_64 builds in both `release.yml` and `ci.yml`
+
+## [0.15.0]
+
+### Fixed
+
 - **`ae run` fails after install** (`Error opening output file: No such file or directory`): Installed `ae` binary falsely detected dev mode because `aetherc` sits next to `ae` in both `build/` (repo) and `bin/` (installed prefix). The tool then tried to write to a non-existent `build/` directory. Fixed by requiring the dev-mode heuristic to verify `../runtime/` exists (only true in the repo root).
 - **`install.sh` corrupts shell RC files**: Appending PATH/AETHER_HOME export lines without checking for a trailing newline caused the first export to concatenate with the last existing line in `.zshrc`/`.bash_profile`. Fixed with a `tail -c 1` check that inserts a newline before appending when needed.
 - **`install.sh` Fish shell syntax**: Fish shell was configured with bash `export` syntax which Fish doesn't understand. Fixed to use `set -gx` and `fish_add_path`.
@@ -35,12 +92,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **SPSCQueue lazy allocation**: `ActorBase.spsc_queue` changed from embedded 3,136-byte struct to an 8-byte pointer, lazily allocated only for `auto_process` actors. Reduces per-actor memory from 4,744 to 1,616 bytes (66% reduction) — critical for million-scale actor workloads (skynet 1M: ~1.1M actors × 3 KB = 3.3 GB saved).
-- **QUEUE_SIZE reduced from 4096 to 1024**: Per-sender SPSC channels in `from_queues` reduced from 4096 to 1024 slots. Saves ~24 MB per core (17 channels × 3072 slots × 56 bytes). Overflow buffers handle the rare burst case efficiently.
-- **Diagnostic prints gated behind AETHER_DEBUG_ORDERING**: `scheduler_wait` progress diagnostics (WAIT Nk lines) no longer printed to stderr in production builds.
 - **CI install smoke test**: Added `make test-install` target and CI step across all 4 platform variants (Linux/GCC, Linux/Clang, macOS/Clang, Windows/MSYS2) — installs to a temp directory, runs `ae init` + `ae run`, and verifies correct output.
 
-- **Benchmark README fairness labeling**: C is labeled `C (pthreads + mutex)`, C++ is labeled `C++ (std::mutex)`, and Zig is labeled `Zig (std.Mutex)` to be transparent about the synchronization primitives used; expanded fairness note linking to [tzcnt/runtime-benchmarks](https://github.com/tzcnt/runtime-benchmarks) for C++ actor/tasking library comparisons; skynet note clarifies thread-depth approach for OS-thread languages
+## [0.14.0]
+
+### Fixed
+
+- **Scheduler migration race — actor setup phase**: Freshly-spawned actors could be migrated to a new core before their `Setup` message was delivered — if a subsequent message arrived on the same core, the work-inlining path executed `step()` before initialization, causing null dereference / state corruption. Fixed by snapshotting `was_active` before message processing: actors where `was_active=0` and whose mailbox is empty are not migrated (setup still in flight).
+- **Portable `usleep`/`sched_yield` wrappers for Windows**: Scheduler code used POSIX `usleep()` and `sched_yield()` which are unavailable on Windows. Added platform wrappers using `Sleep()` and `SwitchToThread()` on Windows, fixing MSYS2/MinGW CI failures.
+- **Overflow buffer back-pressure and adaptive wait**: Overflow buffers could grow unbounded under sustained queue saturation. Added head-index drain (O(drained) instead of O(total) memmove), amplification limiter for own-core overflow, and adaptive `scheduler_wait` that spins tight when few messages remain.
+- **Codegen if/else variable scoping**: Variables declared in an `if` branch were suppressing re-declaration in the `else` branch — the `declared_vars` tracking was function-level instead of block-scoped. Fixed by saving/restoring `declared_var_count` around if/else branches.
+- **Skynet benchmark non-power-of-10 leaf counts**: Fixed incorrect sums when leaf count is not a power of 10; remainder leaves now distributed correctly; root with `size=1` no longer crashes.
+
+## [0.13.0]
+
+### Added
+
+- **`long` type (64-bit integer)**: `long` keyword maps to `int64_t` in generated C — use `long x = 0` for values that exceed 32-bit range; arithmetic with `long` promotes to 64-bit; `print(long_val)` uses `%lld`; actor state fields and message fields support `long`; full support in typechecker, codegen, and pattern-variable extraction
+- **Skynet benchmark**: Added the [atemerev/skynet](https://github.com/atemerev/skynet) recursive actor tree benchmark across Aether, Go, Rust, Erlang, Elixir, C (pthreads), Zig (std.Thread), and C++ (std::thread) — 6 levels x 10 = 1,111,111 actors, measures actor creation + aggregation throughput; controlled via `SKYNET_LEAVES` env var
+- **Actor state type inference**: Member access on actor refs (`root.total`) now correctly resolves the state field's declared type — enables proper format specifier selection for `print` and type-safe arithmetic on long state fields
+
+### Fixed
+
+- **Scheduler queue back-pressure deadlock** (skynet N>=100k): All scheduler threads could permanently deadlock in a circular-wait. Fixed with bounded 8-retry loop, per-target-core thread-local overflow buffers, and flush-before-drain ordering.
+- **Scheduler thread startup race**: Race between `scheduler_start()` returning and threads actually polling. Fixed with `g_threads_ready` barrier that guarantees all threads are actively polling before returning.
+- **Work-stealing TOCTOU race on ARM64** (skynet crash at N>=150k): Data race between work-stealing and same-core fast path. Fixed by making `Mailbox.count` atomic with acquire/release ordering.
+- **Actor ref state field type propagation**: `infer_type` and `typecheck_expression` now look up state declarations in the actor's AST definition when resolving member access on actor refs
+- **`clock_ns()` return type**: Corrected from `TYPE_INT` to `TYPE_INT64` — nanosecond timestamps overflow `int32` after ~2.1 seconds
+- **Actor ref / int/ptr type compatibility**: `is_type_compatible` now allows assigning an actor ref to a state field declared as `int` or `ptr`
+- **Premature `scheduler_wait` termination**: Fixed by including the `messages_sent - messages_processed` counter delta in the pending count
+
+### Changed
+
+- **SPSCQueue lazy allocation**: `ActorBase.spsc_queue` changed from embedded 3,136-byte struct to an 8-byte pointer, lazily allocated only for `auto_process` actors (66% per-actor memory reduction)
+- **QUEUE_SIZE reduced from 4096 to 1024**: Saves ~24 MB per core; overflow buffers handle burst cases
+- **Diagnostic prints gated behind AETHER_DEBUG_ORDERING**: `scheduler_wait` progress diagnostics no longer printed in production builds
+- **Benchmark README fairness labeling**: Transparent synchronization primitive labels for C, C++, and Zig benchmarks
 
 ## [0.12.0]
 

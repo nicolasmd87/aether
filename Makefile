@@ -1,4 +1,4 @@
-.PHONY: all clean test compiler examples examples-run
+.PHONY: all clean test compiler examples examples-run ci
 
 # Detect OS and shell environment.
 # WINDOWS_NATIVE is set only for pure Windows (mingw32-make + cmd.exe).
@@ -103,8 +103,8 @@ STD_OBJS = $(STD_SRC:%.c=$(OBJ_DIR)/%.o)
 COLLECTIONS_OBJS = $(COLLECTIONS_SRC:%.c=$(OBJ_DIR)/%.o)
 TEST_OBJS = $(TEST_SRC:%.c=$(OBJ_DIR)/%.o)
 
-# Dependency files
-DEPS = $(COMPILER_OBJS:.o=.d) $(RUNTIME_OBJS:.o=.d) $(STD_OBJS:.o=.d) $(COLLECTIONS_OBJS:.o=.d)
+# Dependency files (include test objects so header changes trigger test recompilation)
+DEPS = $(COMPILER_OBJS:.o=.d) $(RUNTIME_OBJS:.o=.d) $(STD_OBJS:.o=.d) $(COLLECTIONS_OBJS:.o=.d) $(TEST_OBJS:.o=.d)
 
 # Include dependency files
 -include $(DEPS)
@@ -479,7 +479,7 @@ install: release ae stdlib
 	@install -d $(PREFIX)/lib/aether
 	@install -m 644 build/libaether.a $(PREFIX)/lib/aether/
 	@for dir in runtime runtime/actors runtime/scheduler runtime/utils \
-	            runtime/memory runtime/config std/string std/math std/net \
+	            runtime/memory runtime/config std std/string std/math std/net \
 	            std/collections std/json std/fs std/log std/io; do \
 		if [ -d $$dir ]; then \
 			install -d $(PREFIX)/include/aether/$$dir; \
@@ -696,20 +696,17 @@ help:
 	@echo "  make repl                        - Start interactive REPL"
 	@echo ""
 	@echo "Test Targets:"
-	@echo "  make test           - Run tests (incremental)"
-	@echo "  make test-fast      - Run tests (monolithic)"
-	@echo "  make test-valgrind  - Run tests with Valgrind (memory leak detection)"
-	@echo "  make ae             - Build ae CLI tool (Go-style interface)"
+	@echo "  make test           - Run C unit tests (incremental)"
+	@echo "  make test-ae        - Run .ae integration tests"
+	@echo "  make test-all       - Run both C and .ae tests"
+	@echo "  make test-fast      - Run C tests (monolithic build)"
+	@echo "  make test-install   - Install smoke test (init + run)"
+	@echo "  make test-valgrind  - Run tests with Valgrind"
 	@echo "  make test-asan      - Run tests with AddressSanitizer"
-	@echo "  make test-memory    - Run tests with memory tracking enabled"
 	@echo "  make self-test      - Test compiler on complex examples"
 	@echo ""
-	@echo "Pre-Commit Checks:"
-	@echo "  make check          - Quick check (build + tests, ~30s)"
-	@echo "  make check-full     - Full CI/CD check (includes memory checks, ~2min)"
-	@echo ""
 	@echo "CI/CD Targets:"
-	@echo "  make ci             - Run full CI suite (native)"
+	@echo "  make ci             - Full CI suite (build + test + install smoke test)"
 	@echo "  make docker-ci      - Run CI in Docker (with Valgrind)"
 	@echo "  make docker-build-ci- Build Docker CI image"
 	@echo "  make valgrind-check - Run Valgrind memory leak detection (Linux only)"
@@ -762,26 +759,29 @@ ci: clean
 	@echo "  Aether CI — Full Test Suite"
 	@echo "==================================="
 	@echo ""
-	@echo "[1/7] Building compiler (-Werror)..."
+	@echo "[1/8] Building compiler (-Werror)..."
 	@$(MAKE) compiler EXTRA_CFLAGS=-Werror
 	@echo ""
-	@echo "[2/7] Building ae CLI..."
+	@echo "[2/8] Building ae CLI..."
 	@$(MAKE) ae
 	@echo ""
-	@echo "[3/7] Building stdlib..."
+	@echo "[3/8] Building stdlib..."
 	@$(MAKE) stdlib
 	@echo ""
-	@echo "[4/7] Building REPL..."
+	@echo "[4/8] Building REPL..."
 	@$(MAKE) repl
 	@echo ""
-	@echo "[5/7] Running C unit tests..."
+	@echo "[5/8] Running C unit tests..."
 	@$(MAKE) test
 	@echo ""
-	@echo "[6/7] Running .ae integration tests..."
+	@echo "[6/8] Running .ae integration tests..."
 	@$(MAKE) test-ae
 	@echo ""
-	@echo "[7/7] Building examples..."
+	@echo "[7/8] Building examples..."
 	@$(MAKE) examples
+	@echo ""
+	@echo "[8/8] Install smoke test..."
+	@$(MAKE) test-install
 	@echo ""
 	@echo "==================================="
 	@echo "  CI PASSED — all checks green"
@@ -817,28 +817,7 @@ asan-check: clean
 	  fi
 	@echo "✓ ASan clean — no memory errors detected"
 
-.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime test-install benchmark benchmark-ui examples run compile repl clean help self-test release install stats stdlib ci docker-ci docker-build-ci valgrind-check asan-check bump-patch bump-minor bump-major
-
-# --------------------------------------------------------------------------
-# Version management (CI/CD only -- do not run manually)
-# --------------------------------------------------------------------------
-
-bump-patch bump-minor bump-major:
-	@if [ -z "$$CI" ]; then \
-		echo "Error: version bumps are CI/CD only. Do not run manually." >&2; \
-		exit 1; \
-	fi; \
-	old=$$(cat VERSION | tr -d '[:space:]'); \
-	major=$$(echo $$old | cut -d. -f1); \
-	minor=$$(echo $$old | cut -d. -f2); \
-	patch=$$(echo $$old | cut -d. -f3); \
-	case "$@" in \
-		bump-patch) new="$$major.$$minor.$$((patch+1))" ;; \
-		bump-minor) new="$$major.$$((minor+1)).0" ;; \
-		bump-major) new="$$((major+1)).0.0" ;; \
-	esac; \
-	echo "$$new" > VERSION; \
-	echo "Version bumped: $$old → $$new"
+.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime test-install benchmark benchmark-ui examples run compile repl clean help self-test install stats stdlib ci docker-ci docker-build-ci valgrind-check asan-check
 
 # Cross-language benchmark UI
 benchmark-ui:

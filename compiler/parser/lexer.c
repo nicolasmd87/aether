@@ -149,8 +149,64 @@ Token* read_number() {
     int capacity = MAX_IDENTIFIER_LENGTH;
     char* buffer = malloc(capacity);
     int i = 0;
-    
-    while (current_pos < source_length && (isdigit(peek()) || peek() == '.')) {
+
+    // Check for hex (0x), octal (0o), binary (0b) prefixes
+    if (peek() == '0' && current_pos + 1 < source_length) {
+        char next = source[current_pos + 1];
+        if (next == 'x' || next == 'X') {
+            // Hex literal: 0x[0-9a-fA-F]+
+            buffer[i++] = advance(); // '0'
+            buffer[i++] = advance(); // 'x'
+            while (current_pos < source_length && (isxdigit(peek()) || peek() == '_')) {
+                if (peek() == '_') { advance(); continue; }
+                if (i >= capacity - 1) { capacity *= 2; buffer = realloc(buffer, capacity); }
+                buffer[i++] = advance();
+            }
+            buffer[i] = '\0';
+            long val = strtol(buffer, NULL, 16);
+            char decimal[32];
+            snprintf(decimal, sizeof(decimal), "%ld", val);
+            Token* token = create_token(TOKEN_NUMBER, decimal, current_line, current_column);
+            free(buffer);
+            return token;
+        } else if (next == 'o' || next == 'O') {
+            // Octal literal: 0o[0-7]+
+            buffer[i++] = advance(); // '0'
+            buffer[i++] = advance(); // 'o'
+            while (current_pos < source_length && ((peek() >= '0' && peek() <= '7') || peek() == '_')) {
+                if (peek() == '_') { advance(); continue; }
+                if (i >= capacity - 1) { capacity *= 2; buffer = realloc(buffer, capacity); }
+                buffer[i++] = advance();
+            }
+            buffer[i] = '\0';
+            long val = strtol(buffer + 2, NULL, 8);
+            char decimal[32];
+            snprintf(decimal, sizeof(decimal), "%ld", val);
+            Token* token = create_token(TOKEN_NUMBER, decimal, current_line, current_column);
+            free(buffer);
+            return token;
+        } else if (next == 'b' || next == 'B') {
+            // Binary literal: 0b[01]+
+            buffer[i++] = advance(); // '0'
+            buffer[i++] = advance(); // 'b'
+            while (current_pos < source_length && (peek() == '0' || peek() == '1' || peek() == '_')) {
+                if (peek() == '_') { advance(); continue; }
+                if (i >= capacity - 1) { capacity *= 2; buffer = realloc(buffer, capacity); }
+                buffer[i++] = advance();
+            }
+            buffer[i] = '\0';
+            long val = strtol(buffer + 2, NULL, 2);
+            char decimal[32];
+            snprintf(decimal, sizeof(decimal), "%ld", val);
+            Token* token = create_token(TOKEN_NUMBER, decimal, current_line, current_column);
+            free(buffer);
+            return token;
+        }
+    }
+
+    // Decimal literal (with optional dot for floats)
+    // Don't consume '.' if followed by another '.' (range operator '..')
+    while (current_pos < source_length && (isdigit(peek()) || (peek() == '.' && (current_pos + 1 >= source_length || source[current_pos + 1] != '.')))) {
         if (i >= capacity - 1) {
             capacity *= 2;
             char* new_buf = realloc(buffer, capacity);
@@ -159,7 +215,7 @@ Token* read_number() {
         }
         buffer[i++] = advance();
     }
-    
+
     buffer[i] = '\0';
     Token* token = create_token(TOKEN_NUMBER, buffer, current_line, current_column);
     free(buffer);
@@ -218,6 +274,9 @@ Token* read_identifier() {
     else if (strcmp(buffer, "message") == 0) token = create_token(TOKEN_MESSAGE_KEYWORD, buffer, current_line, current_column);
     else if (strcmp(buffer, "reply") == 0) token = create_token(TOKEN_REPLY, buffer, current_line, current_column);
     else if (strcmp(buffer, "extern") == 0) token = create_token(TOKEN_EXTERN, buffer, current_line, current_column);
+    else if (strcmp(buffer, "null") == 0) token = create_token(TOKEN_NULL, buffer, current_line, current_column);
+    else if (strcmp(buffer, "const") == 0) token = create_token(TOKEN_CONST, buffer, current_line, current_column);
+    else if (strcmp(buffer, "in") == 0) token = create_token(TOKEN_IN, buffer, current_line, current_column);
     else if (strcmp(buffer, "ptr") == 0) token = create_token(TOKEN_PTR, buffer, current_line, current_column);
     else if (strcmp(buffer, "int") == 0) token = create_token(TOKEN_INT, buffer, current_line, current_column);
     else if (strcmp(buffer, "long") == 0) token = create_token(TOKEN_INT64, buffer, current_line, current_column);
@@ -266,14 +325,18 @@ Token* next_token() {
     
     // Handle operators and delimiters
     switch (c) {
-        case '+': 
+        case '+':
             advance();
             if (peek() == '+') {
                 advance();
                 return create_token(TOKEN_INCREMENT, "++", current_line, current_column);
             }
+            if (peek() == '=') {
+                advance();
+                return create_token(TOKEN_PLUS_ASSIGN, "+=", current_line, current_column);
+            }
             return create_token(TOKEN_PLUS, "+", current_line, current_column);
-        case '-': 
+        case '-':
             advance();
             if (peek() == '>') {
                 advance();
@@ -283,10 +346,32 @@ Token* next_token() {
                 advance();
                 return create_token(TOKEN_DECREMENT, "--", current_line, current_column);
             }
+            if (peek() == '=') {
+                advance();
+                return create_token(TOKEN_MINUS_ASSIGN, "-=", current_line, current_column);
+            }
             return create_token(TOKEN_MINUS, "-", current_line, current_column);
-        case '*': advance(); return create_token(TOKEN_MULTIPLY, "*", current_line, current_column);
-        case '/': advance(); return create_token(TOKEN_DIVIDE, "/", current_line, current_column);
-        case '%': advance(); return create_token(TOKEN_MODULO, "%", current_line, current_column);
+        case '*':
+            advance();
+            if (peek() == '=') {
+                advance();
+                return create_token(TOKEN_MULTIPLY_ASSIGN, "*=", current_line, current_column);
+            }
+            return create_token(TOKEN_MULTIPLY, "*", current_line, current_column);
+        case '/':
+            advance();
+            if (peek() == '=') {
+                advance();
+                return create_token(TOKEN_DIVIDE_ASSIGN, "/=", current_line, current_column);
+            }
+            return create_token(TOKEN_DIVIDE, "/", current_line, current_column);
+        case '%':
+            advance();
+            if (peek() == '=') {
+                advance();
+                return create_token(TOKEN_MODULO_ASSIGN, "%=", current_line, current_column);
+            }
+            return create_token(TOKEN_MODULO, "%", current_line, current_column);
         case '=':
             advance();
             if (peek() == '=') {
@@ -309,12 +394,28 @@ Token* next_token() {
                 advance();
                 return create_token(TOKEN_LESS_EQUAL, "<=", current_line, current_column);
             }
+            if (peek() == '<') {
+                advance();
+                if (peek() == '=') {
+                    advance();
+                    return create_token(TOKEN_LSHIFT_ASSIGN, "<<=", current_line, current_column);
+                }
+                return create_token(TOKEN_LSHIFT, "<<", current_line, current_column);
+            }
             return create_token(TOKEN_LESS, "<", current_line, current_column);
         case '>':
             advance();
             if (peek() == '=') {
                 advance();
                 return create_token(TOKEN_GREATER_EQUAL, ">=", current_line, current_column);
+            }
+            if (peek() == '>') {
+                advance();
+                if (peek() == '=') {
+                    advance();
+                    return create_token(TOKEN_RSHIFT_ASSIGN, ">>=", current_line, current_column);
+                }
+                return create_token(TOKEN_RSHIFT, ">>", current_line, current_column);
             }
             return create_token(TOKEN_GREATER, ">", current_line, current_column);
         case '&':
@@ -323,14 +424,30 @@ Token* next_token() {
                 advance();
                 return create_token(TOKEN_AND, "&&", current_line, current_column);
             }
-            return create_token(TOKEN_ERROR, "&", current_line, current_column);
+            if (peek() == '=') {
+                advance();
+                return create_token(TOKEN_AND_ASSIGN, "&=", current_line, current_column);
+            }
+            return create_token(TOKEN_AMPERSAND, "&", current_line, current_column);
         case '|':
             advance();
             if (peek() == '|') {
                 advance();
                 return create_token(TOKEN_OR, "||", current_line, current_column);
             }
+            if (peek() == '=') {
+                advance();
+                return create_token(TOKEN_OR_ASSIGN, "|=", current_line, current_column);
+            }
             return create_token(TOKEN_PIPE, "|", current_line, current_column);
+        case '^':
+            advance();
+            if (peek() == '=') {
+                advance();
+                return create_token(TOKEN_XOR_ASSIGN, "^=", current_line, current_column);
+            }
+            return create_token(TOKEN_CARET, "^", current_line, current_column);
+        case '~': advance(); return create_token(TOKEN_TILDE, "~", current_line, current_column);
         case '(': advance(); return create_token(TOKEN_LEFT_PAREN, "(", current_line, current_column);
         case ')': advance(); return create_token(TOKEN_RIGHT_PAREN, ")", current_line, current_column);
         case '{': advance(); return create_token(TOKEN_LEFT_BRACE, "{", current_line, current_column);
@@ -339,7 +456,13 @@ Token* next_token() {
         case ']': advance(); return create_token(TOKEN_RIGHT_BRACKET, "]", current_line, current_column);
         case ';': advance(); return create_token(TOKEN_SEMICOLON, ";", current_line, current_column);
         case ',': advance(); return create_token(TOKEN_COMMA, ",", current_line, current_column);
-        case '.': advance(); return create_token(TOKEN_DOT, ".", current_line, current_column);
+        case '.':
+            advance();
+            if (peek() == '.') {
+                advance();
+                return create_token(TOKEN_DOTDOT, "..", current_line, current_column);
+            }
+            return create_token(TOKEN_DOT, ".", current_line, current_column);
         case ':': advance(); return create_token(TOKEN_COLON, ":", current_line, current_column);
         case '?': advance(); return create_token(TOKEN_QUESTION, "?", current_line, current_column);
         default:
@@ -431,6 +554,25 @@ const char* token_type_to_string(AeTokenType type) {
         case TOKEN_NOT: return "NOT";
         case TOKEN_INCREMENT: return "INCREMENT";
         case TOKEN_DECREMENT: return "DECREMENT";
+        case TOKEN_AMPERSAND: return "AMPERSAND";
+        case TOKEN_CARET: return "CARET";
+        case TOKEN_TILDE: return "TILDE";
+        case TOKEN_LSHIFT: return "LSHIFT";
+        case TOKEN_RSHIFT: return "RSHIFT";
+        case TOKEN_PLUS_ASSIGN: return "PLUS_ASSIGN";
+        case TOKEN_MINUS_ASSIGN: return "MINUS_ASSIGN";
+        case TOKEN_MULTIPLY_ASSIGN: return "MULTIPLY_ASSIGN";
+        case TOKEN_DIVIDE_ASSIGN: return "DIVIDE_ASSIGN";
+        case TOKEN_MODULO_ASSIGN: return "MODULO_ASSIGN";
+        case TOKEN_AND_ASSIGN: return "AND_ASSIGN";
+        case TOKEN_OR_ASSIGN: return "OR_ASSIGN";
+        case TOKEN_XOR_ASSIGN: return "XOR_ASSIGN";
+        case TOKEN_LSHIFT_ASSIGN: return "LSHIFT_ASSIGN";
+        case TOKEN_RSHIFT_ASSIGN: return "RSHIFT_ASSIGN";
+        case TOKEN_NULL: return "NULL";
+        case TOKEN_IN: return "IN";
+        case TOKEN_DOTDOT: return "DOTDOT";
+        case TOKEN_CONST: return "CONST";
         case TOKEN_LEFT_PAREN: return "LEFT_PAREN";
         case TOKEN_RIGHT_PAREN: return "RIGHT_PAREN";
         case TOKEN_LEFT_BRACE: return "LEFT_BRACE";
