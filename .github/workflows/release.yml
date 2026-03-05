@@ -9,9 +9,9 @@ name: Release
 # Manual tag push (v*.*.*) also triggers a build + publish, without bumping.
 #
 # Version source of truth: git tags (not the VERSION file).
-# The bump job creates a commit updating VERSION + a tag, pushes both to main.
-# Loop prevention: the bump job skips when the commit message starts with
-# "chore: release" (the message used by the bump commit itself).
+# The bump job creates a detached commit with the updated VERSION, tags it,
+# and pushes only the tag.  No direct push to main — all code changes go
+# through PRs.  GITHUB_TOKEN tag pushes do not re-trigger this workflow.
 
 on:
   push:
@@ -25,17 +25,15 @@ jobs:
   #                                                                    #
   # Derives the CURRENT version from the latest v*.*.* tag (not the   #
   # VERSION file), computes the next version, writes VERSION into a   #
-  # commit, tags it, and pushes both to main.                         #
+  # detached commit, tags it, and pushes only the tag.                #
   #                                                                    #
-  # Loop prevention: skips when commit message starts with             #
-  # "chore: release" (the message the bump commit itself uses).        #
+  # No direct push to main — GITHUB_TOKEN tag pushes do not trigger   #
+  # new workflow runs, so there is no feedback loop.                   #
   # ================================================================== #
   bump:
     name: Auto-bump version
     runs-on: ubuntu-latest
-    if: >-
-      github.ref == 'refs/heads/main' &&
-      !startsWith(github.event.head_commit.message, 'chore: release')
+    if: github.ref == 'refs/heads/main'
 
     permissions:
       contents: write
@@ -103,9 +101,9 @@ jobs:
         git commit -m "chore: release ${VERSION}"
         git tag "$TAG"
 
-        # Push the VERSION commit to main AND the tag.
-        # The bump job has a "chore: release" guard to prevent re-triggering.
-        git push origin HEAD:main "$TAG"
+        # Push only the tag — no direct push to main.
+        # GITHUB_TOKEN tag pushes do NOT trigger new workflow runs.
+        git push origin "$TAG"
 
   # ================================================================== #
   # BUILD -- all four platforms                                         #
