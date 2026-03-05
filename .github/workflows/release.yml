@@ -9,10 +9,9 @@ name: Release
 # Manual tag push (v*.*.*) also triggers a build + publish, without bumping.
 #
 # Version source of truth: git tags (not the VERSION file).
-# The bump job creates a lightweight tag; the build checks out that tag so
-# VERSION in the archive is always correct.  No PR or branch is created,
-# which eliminates the feedback loop where merging the chore PR would
-# re-trigger the release pipeline.
+# The bump job creates a commit updating VERSION + a tag, pushes both to main.
+# Loop prevention: the bump job skips when the commit message starts with
+# "chore: release" (the message used by the bump commit itself).
 
 on:
   push:
@@ -26,15 +25,17 @@ jobs:
   #                                                                    #
   # Derives the CURRENT version from the latest v*.*.* tag (not the   #
   # VERSION file), computes the next version, writes VERSION into a   #
-  # detached commit, tags it, and pushes only the tag.                #
+  # commit, tags it, and pushes both to main.                         #
   #                                                                    #
-  # No branch or PR is created -- GITHUB_TOKEN tag pushes do not       #
-  # trigger new workflow runs, so there is no feedback loop.           #
+  # Loop prevention: skips when commit message starts with             #
+  # "chore: release" (the message the bump commit itself uses).        #
   # ================================================================== #
   bump:
     name: Auto-bump version
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      !startsWith(github.event.head_commit.message, 'chore: release')
 
     permissions:
       contents: write
@@ -102,9 +103,9 @@ jobs:
         git commit -m "chore: release ${VERSION}"
         git tag "$TAG"
 
-        # Push only the tag -- no branch, no PR.
-        # GITHUB_TOKEN tag pushes do NOT trigger new workflow runs.
-        git push origin "$TAG"
+        # Push the VERSION commit to main AND the tag.
+        # The bump job has a "chore: release" guard to prevent re-triggering.
+        git push origin HEAD:main "$TAG"
 
   # ================================================================== #
   # BUILD -- all four platforms                                         #

@@ -817,28 +817,7 @@ asan-check: clean
 	  fi
 	@echo "✓ ASan clean — no memory errors detected"
 
-.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime test-install benchmark benchmark-ui examples run compile repl clean help self-test release install stats stdlib ci docker-ci docker-build-ci valgrind-check asan-check bump-patch bump-minor bump-major
-
-# --------------------------------------------------------------------------
-# Version management (CI/CD only -- do not run manually)
-# --------------------------------------------------------------------------
-
-bump-patch bump-minor bump-major:
-	@if [ -z "$$CI" ]; then \
-		echo "Error: version bumps are CI/CD only. Do not run manually." >&2; \
-		exit 1; \
-	fi; \
-	old=$$(cat VERSION | tr -d '[:space:]'); \
-	major=$$(echo $$old | cut -d. -f1); \
-	minor=$$(echo $$old | cut -d. -f2); \
-	patch=$$(echo $$old | cut -d. -f3); \
-	case "$@" in \
-		bump-patch) new="$$major.$$minor.$$((patch+1))" ;; \
-		bump-minor) new="$$major.$$((minor+1)).0" ;; \
-		bump-major) new="$$((major+1)).0.0" ;; \
-	esac; \
-	echo "$$new" > VERSION; \
-	echo "Version bumped: $$old → $$new"
+.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime test-install benchmark benchmark-ui examples run compile repl clean help self-test install stats stdlib ci docker-ci docker-build-ci valgrind-check asan-check
 
 # Cross-language benchmark UI
 benchmark-ui:
