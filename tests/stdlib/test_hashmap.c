@@ -44,7 +44,7 @@ int main(void) {
     // Test 8: Collision handling
     for (int i = 0; i < 100; i++) {
         char key[20];
-        sprintf(key, "key%d", i);
+        snprintf(key, sizeof(key), "key%d", i);
         int *val = test_make_int(i);
         hashmap_insert(map, strdup(key), val);
     }
@@ -57,7 +57,7 @@ int main(void) {
     // Test 10: Resize
     for (int i = 100; i < 200; i++) {
         char *key = malloc(20);
-        sprintf(key, "key%d", i);
+        snprintf(key, 20, "key%d", i);
         int *val = test_make_int(i);
         hashmap_insert(map, key, val);
     }

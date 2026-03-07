@@ -321,8 +321,37 @@ bool compile_and_run(REPLState* state, const char* code, bool is_expression, Inp
     }
 
     // Compile C to executable — use $AETHER_CFLAGS/$AETHER_LDFLAGS if set by ae
+    // Validate env vars to prevent shell injection (only compiler-safe chars)
     const char* cflags = getenv("AETHER_CFLAGS");
     const char* ldflags = getenv("AETHER_LDFLAGS");
+    if (cflags) {
+        for (const char* p = cflags; *p; p++) {
+            char c = *p;
+            if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                  (c >= '0' && c <= '9') || c == '-' || c == '_' ||
+                  c == '/' || c == '.' || c == '=' || c == '+' ||
+                  c == ':' || c == ',' || c == ' ' || c == '\\')) {
+                fprintf(stderr, "%sWarning: AETHER_CFLAGS contains unsafe characters, ignoring%s\n",
+                        COLOR_YELLOW, COLOR_RESET);
+                cflags = NULL;
+                break;
+            }
+        }
+    }
+    if (ldflags) {
+        for (const char* p = ldflags; *p; p++) {
+            char c = *p;
+            if (!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                  (c >= '0' && c <= '9') || c == '-' || c == '_' ||
+                  c == '/' || c == '.' || c == '=' || c == '+' ||
+                  c == ':' || c == ',' || c == ' ' || c == '\\')) {
+                fprintf(stderr, "%sWarning: AETHER_LDFLAGS contains unsafe characters, ignoring%s\n",
+                        COLOR_YELLOW, COLOR_RESET);
+                ldflags = NULL;
+                break;
+            }
+        }
+    }
     char gcc_cmd[2048];
     if (cflags && ldflags) {
         snprintf(gcc_cmd, sizeof(gcc_cmd),

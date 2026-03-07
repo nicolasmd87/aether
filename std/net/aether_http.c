@@ -149,7 +149,14 @@ static HttpResponse* http_request(const char* method, const char* url, const cha
     
     while ((n = recv(sockfd, buffer, sizeof(buffer) - 1, 0)) > 0) {
         buffer[n] = '\0';
-        full_response = (char*)realloc(full_response, total_len + n + 1);
+        char* new_resp = (char*)realloc(full_response, total_len + n + 1);
+        if (!new_resp) {
+            free(full_response);
+            close(sockfd);
+            response->error = string_new("Out of memory reading response");
+            return response;
+        }
+        full_response = new_resp;
         memcpy(full_response + total_len, buffer, n);
         total_len += n;
         full_response[total_len] = '\0';

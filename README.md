@@ -81,8 +81,8 @@ GCC is downloaded automatically the first time you run a program (~80 MB, one-ti
 
 ```bash
 ae version list              # see all available releases
-ae version install v0.10.0   # download and install a specific version
-ae version use v0.10.0       # switch to that version
+ae version install v0.17.0   # download and install a specific version
+ae version use v0.17.0       # switch to that version
 ```
 
 ### Your First Program
@@ -153,8 +153,8 @@ In a project directory (with `aether.toml`), `ae run` and `ae build` compile `sr
 ```bash
 make compiler                    # Build compiler only
 make ae                          # Build ae CLI tool
-make test                        # Run runtime C test suite (162 tests)
-make test-ae                     # Run .ae source tests (24 tests)
+make test                        # Run runtime C test suite (166 tests)
+make test-ae                     # Run .ae source tests (60 tests)
 make test-all                    # Run all tests
 make examples                    # Build all examples
 make -j8                         # Parallel build

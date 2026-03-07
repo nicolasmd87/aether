@@ -313,7 +313,7 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
             
         case AST_IDENTIFIER: {
             Symbol* symbol = lookup_symbol(table, expr->value);
-            return symbol ? symbol->type : create_type(TYPE_UNKNOWN);
+            return (symbol && symbol->type) ? symbol->type : create_type(TYPE_UNKNOWN);
         }
         
         case AST_BINARY_EXPRESSION:
@@ -326,7 +326,7 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
             
         case AST_FUNCTION_CALL: {
             Symbol* symbol = lookup_symbol(table, expr->value);
-            if (symbol && symbol->is_function) {
+            if (symbol && symbol->is_function && symbol->type) {
                 return clone_type(symbol->type);
             }
             return create_type(TYPE_UNKNOWN);
@@ -740,6 +740,9 @@ int typecheck_program(ASTNode* program) {
     // NEW: Run type inference before type checking
     if (!infer_all_types(program, global_table)) {
         free_symbol_table(global_table);
+        // Clean up namespace strings to avoid leaks on re-runs
+        for (int ns = 0; ns < namespace_count; ns++) free(imported_namespaces[ns]);
+        namespace_count = 0;
         return 0;
     }
     
@@ -772,6 +775,10 @@ int typecheck_program(ASTNode* program) {
         fprintf(stderr, "Type checking completed with %d warning(s)\n", warning_count);
     }
     
+    // Clean up namespace strings
+    for (int ns = 0; ns < namespace_count; ns++) free(imported_namespaces[ns]);
+    namespace_count = 0;
+
     return 1;
 }
 
@@ -809,6 +816,38 @@ static Type* lookup_message_field_type(SymbolTable* table, const char* message_n
         }
     }
     return NULL;
+}
+
+// Validate that message constructor field values match declared field types
+static void typecheck_message_constructor(ASTNode* constructor, SymbolTable* table) {
+    if (!constructor || constructor->type != AST_MESSAGE_CONSTRUCTOR || !constructor->value) return;
+    const char* msg_name = constructor->value;
+    Symbol* msg_sym = lookup_symbol(table, msg_name);
+    if (!msg_sym || !msg_sym->node || msg_sym->node->type != AST_MESSAGE_DEFINITION) return;
+
+    for (int i = 0; i < constructor->child_count; i++) {
+        ASTNode* field_init = constructor->children[i];
+        if (!field_init || field_init->type != AST_FIELD_INIT || !field_init->value) continue;
+        if (field_init->child_count == 0) continue;
+
+        Type* declared = lookup_message_field_type(table, msg_name, field_init->value);
+        if (!declared) continue;
+
+        ASTNode* value_expr = field_init->children[0];
+        typecheck_expression(value_expr, table);
+        Type* actual = infer_type(value_expr, table);
+
+        if (actual && actual->kind != TYPE_UNKNOWN &&
+            declared->kind != TYPE_UNKNOWN &&
+            !is_type_compatible(actual, declared)) {
+            char buf[256];
+            snprintf(buf, sizeof(buf),
+                     "Type mismatch in field '%s' of message '%s': expected %s, got %s",
+                     field_init->value, msg_name, type_name(declared), type_name(actual));
+            type_error(buf, field_init->line, field_init->column);
+        }
+        free_type(declared);
+    }
 }
 
 int typecheck_actor_definition(ASTNode* actor, SymbolTable* table) {
@@ -1019,7 +1058,7 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                 ASTNode* rhs = stmt->children[1];
                 typecheck_expression(rhs, table);
                 infer_type(rhs, table);
-                if (stmt->node_type && stmt->node_type->kind == TYPE_UNKNOWN) {
+                if (stmt->node_type && stmt->node_type->kind == TYPE_UNKNOWN && symbol->type) {
                     free_type(stmt->node_type);
                     stmt->node_type = clone_type(symbol->type);
                 }
@@ -1164,7 +1203,7 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                 // Validate that the message type is a registered message definition
                 if (message->type == AST_MESSAGE_CONSTRUCTOR && message->value) {
                     Symbol* msg_sym = lookup_symbol(table, message->value);
-                    if (!msg_sym || msg_sym->type->kind != TYPE_MESSAGE) {
+                    if (!msg_sym || !msg_sym->type || msg_sym->type->kind != TYPE_MESSAGE) {
                         char error_msg[256];
                         snprintf(error_msg, sizeof(error_msg),
                                  "Undefined message type '%s'", message->value);
@@ -1172,10 +1211,13 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                         return 0;
                     }
                 }
+
+                // Validate field value types match declared field types
+                typecheck_message_constructor(message, table);
             }
             return 1;
         }
-        
+
         case AST_SPAWN_ACTOR_STATEMENT: {
             if (stmt->child_count > 0) {
                 typecheck_expression(stmt->children[0], table);
@@ -1281,10 +1323,10 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
                 type_error(error_msg, expr->line, expr->column);
                 return 0;
             }
-            expr->node_type = clone_type(symbol->type);
+            expr->node_type = symbol->type ? clone_type(symbol->type) : create_type(TYPE_UNKNOWN);
             return 1;
         }
-        
+
         case AST_LITERAL:
             // Literals are already typed
             return 1;
@@ -1430,7 +1472,7 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
                 // Validate that the message type is a registered message definition
                 if (message->type == AST_MESSAGE_CONSTRUCTOR && message->value) {
                     Symbol* msg_sym = lookup_symbol(table, message->value);
-                    if (!msg_sym || msg_sym->type->kind != TYPE_MESSAGE) {
+                    if (!msg_sym || !msg_sym->type || msg_sym->type->kind != TYPE_MESSAGE) {
                         char error_msg[256];
                         snprintf(error_msg, sizeof(error_msg),
                                  "Undefined message type '%s'", message->value);
@@ -1438,6 +1480,9 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
                         return 0;
                     }
                 }
+
+                // Validate field value types match declared field types
+                typecheck_message_constructor(message, table);
             }
             expr->node_type = create_type(TYPE_VOID);
             return 1;
@@ -1518,6 +1563,6 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
         typecheck_expression(call->children[i], table);
     }
 
-    call->node_type = clone_type(symbol->type);
+    call->node_type = symbol->type ? clone_type(symbol->type) : create_type(TYPE_UNKNOWN);
     return 1;
 }

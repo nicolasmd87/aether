@@ -1,0 +1,109 @@
+// Test complex match scenarios - single evaluation, NULL safety, nested
+// Verifies: match expression stored in temp var, string match null-safe
+
+main() {
+    print("=== Complex Match Tests ===\n\n")
+
+    // Test 1: Match on integer variable
+    print("Test 1: Match on integer\n")
+    val = 42
+    match (val) {
+        1 -> { print("  FAIL: got 1\n"); exit(1) }
+        42 -> { print("  PASS: got 42\n") }
+        _ -> { print("  FAIL: wildcard\n"); exit(1) }
+    }
+
+    // Test 2: String match
+    print("\nTest 2: String match\n")
+    s = "hello"
+    match (s) {
+        "world" -> { print("  FAIL\n"); exit(1) }
+        "hello" -> { print("  PASS: matched hello\n") }
+        _ -> { print("  FAIL: wildcard\n"); exit(1) }
+    }
+
+    // Test 3: Match with NULL string from getenv
+    print("\nTest 3: Match on NULL string\n")
+    match (getenv("AETHER_MATCH_COMPLEX_NONEXISTENT")) {
+        "a" -> { print("  FAIL\n"); exit(1) }
+        "b" -> { print("  FAIL\n"); exit(1) }
+        _ -> { print("  PASS: wildcard caught NULL\n") }
+    }
+
+    // Test 4: Match on computed value
+    print("\nTest 4: Match on computed value\n")
+    x = 3 + 4
+    match (x) {
+        0 -> { print("  FAIL\n"); exit(1) }
+        7 -> { print("  PASS: matched 7\n") }
+        _ -> { print("  FAIL\n"); exit(1) }
+    }
+
+    // Test 5: Sequential matches
+    print("\nTest 5: Sequential matches\n")
+    a = 10
+    b = 20
+    result1 = 0
+    result2 = 0
+    match (a) {
+        10 -> { result1 = 1 }
+        _ -> { print("  FAIL\n"); exit(1) }
+    }
+    match (b) {
+        20 -> { result2 = 1 }
+        _ -> { print("  FAIL\n"); exit(1) }
+    }
+    if result1 != 1 { print("  FAIL: result1\n"); exit(1) }
+    if result2 != 1 { print("  FAIL: result2\n"); exit(1) }
+    print("  PASS: both matched\n")
+
+    // Test 6: Expressions in match arms
+    print("\nTest 6: Expressions in match arms\n")
+    result = 0
+    y = 3
+    match (y) {
+        1 -> { result = 10 }
+        2 -> { result = 20 }
+        3 -> { result = 30 }
+        _ -> { result = -1 }
+    }
+    if result != 30 {
+        print("  FAIL: result=")
+        println(result)
+        exit(1)
+    }
+    print("  PASS: result=30\n")
+
+    // Test 7: Many string arms
+    print("\nTest 7: Many string arms\n")
+    lang = "aether"
+    found = 0
+    match (lang) {
+        "c" -> { found = 1 }
+        "go" -> { found = 2 }
+        "rust" -> { found = 3 }
+        "python" -> { found = 4 }
+        "aether" -> { found = 5 }
+        _ -> { found = -1 }
+    }
+    if found != 5 {
+        print("  FAIL: found=")
+        println(found)
+        exit(1)
+    }
+    print("  PASS: matched aether (5th arm)\n")
+
+    // Test 8: Match on existing env var
+    print("\nTest 8: Match on existing env var\n")
+    home = getenv("HOME")
+    if home != 0 {
+        match (home) {
+            "definitely_not_a_real_path" -> { print("  FAIL\n"); exit(1) }
+            _ -> { print("  PASS: HOME matched wildcard\n") }
+        }
+    } else {
+        print("  SKIP: HOME not set\n")
+    }
+
+    print("\n=== All 8 Complex Match Tests Passed ===\n")
+}

@@ -9,9 +9,9 @@ name: Release
 # Manual tag push (v*.*.*) also triggers a build + publish, without bumping.
 #
 # Version source of truth: git tags (not the VERSION file).
-# The bump job creates a detached commit with the updated VERSION, tags it,
-# and pushes only the tag.  No direct push to main — all code changes go
-# through PRs.  GITHUB_TOKEN tag pushes do not re-trigger this workflow.
+# The bump job updates VERSION on main, commits, tags, and pushes both.
+# The "chore: release" commit pushed to main re-triggers this workflow,
+# but the bump job skips it (startsWith guard), so no feedback loop.
 
 on:
   push:
@@ -19,21 +19,30 @@ on:
     tags: ['v*.*.*']
   workflow_dispatch:
 
+# Serialize all release runs — prevents race conditions when multiple PRs
+# merge in quick succession (second run queues until first completes).
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
   # ================================================================== #
   # AUTO-BUMP (main branch merges only)                                #
   #                                                                    #
   # Derives the CURRENT version from the latest v*.*.* tag (not the   #
-  # VERSION file), computes the next version, writes VERSION into a   #
-  # detached commit, tags it, and pushes only the tag.                #
+  # VERSION file), computes the next version, updates VERSION on main, #
+  # commits, tags, and pushes both to keep main in sync.               #
   #                                                                    #
-  # No direct push to main — GITHUB_TOKEN tag pushes do not trigger   #
-  # new workflow runs, so there is no feedback loop.                   #
+  # The "chore: release" push to main re-triggers this workflow, but   #
+  # the startsWith guard below skips the bump job, preventing loops.   #
   # ================================================================== #
   bump:
     name: Auto-bump version
     runs-on: ubuntu-latest
-    if: github.ref == 'refs/heads/main'
+    # Skip version-bump commits pushed by this workflow (prevents feedback loop)
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      !startsWith(github.event.head_commit.message, 'chore: release ')
 
     permissions:
       contents: write
@@ -54,8 +63,8 @@ jobs:
         COMMIT_MSG: ${{ github.event.head_commit.message }}
       run: |
         # Derive current version from the highest semver tag (authoritative).
-        # Uses `git tag -l` (not `git describe`) because release tags live
-        # on detached commits that are not ancestors of main.
+        # Uses `git tag -l` sorted by semver (not `git describe`) to ensure
+        # we always find the latest tag regardless of commit topology.
         LATEST_TAG=$(git tag -l 'v*.*.*' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
         if [ -n "$LATEST_TAG" ]; then
           OLD=$(echo "$LATEST_TAG" | sed 's/^v//')
@@ -98,12 +107,19 @@ jobs:
         git config user.name  "github-actions[bot]"
         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
+        # Replace [current] with the actual version in CHANGELOG.md
+        if grep -q '## \[current\]' CHANGELOG.md; then
+          sed -i "s/## \[current\]/## [${VERSION}]/" CHANGELOG.md
+          git add CHANGELOG.md
+        fi
+
+        # Update VERSION on main so clones/installs get the correct version
         git add VERSION
         git commit -m "chore: release ${VERSION}"
-        git tag "$TAG"
+        git push origin HEAD:main
 
-        # Push only the tag — no direct push to main.
-        # GITHUB_TOKEN tag pushes do NOT trigger new workflow runs.
+        # Tag the commit and push the tag
+        git tag "$TAG"
         git push origin "$TAG"
 
   # ================================================================== #
@@ -145,6 +161,7 @@ jobs:
     - uses: actions/checkout@v4
       with:
         ref: ${{ needs.bump.outputs.tag || github.ref }}
+        fetch-tags: true
 
     # -- Linux ---
     - name: Setup (Linux)

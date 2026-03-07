@@ -1,0 +1,35 @@
+// Test: Aether functions named with C reserved words
+// Codegen must mangle these to avoid C keyword collision
+
+double(x) -> x * 2
+auto(x) -> x + 1
+register(x) -> x - 1
+volatile(x) -> x * x
+
+main() {
+    a = double(5)
+    if a == 10 {
+        println("PASS: double() works")
+    }
+
+    b = auto(7)
+    if b == 8 {
+        println("PASS: auto() works")
+    }
+
+    c = register(10)
+    if c == 9 {
+        println("PASS: register() works")
+    }
+
+    d = volatile(3)
+    if d == 9 {
+        println("PASS: volatile() works")
+    }
+
+    // Test: chained calls with reserved word functions
+    e = double(auto(4))
+    if e == 10 {
+        println("PASS: double(auto(4)) chain works")
+    }
+}

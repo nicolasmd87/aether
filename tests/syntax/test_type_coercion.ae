@@ -1,0 +1,61 @@
+// Test type coercion and promotion
+main() {
+    // long arithmetic
+    long x = 2000000000
+    long y = 3000000000
+    long z = x + y
+    print("large sum: ")
+    println(z)
+    if z == 5000000000 {
+        println("PASS: long addition")
+    }
+
+    // Integer division
+    num = 7
+    d = num / 2
+    if d == 3 {
+        println("PASS: integer division truncates")
+    }
+
+    // Negative modulo
+    e = -7 % 3
+    // C semantics: -7 % 3 = -1
+    if e == -1 {
+        println("PASS: negative modulo")
+    }
+
+    // Boolean in conditions
+    flag = true
+    if flag {
+        println("PASS: boolean true")
+    }
+    flag = false
+    if !flag {
+        println("PASS: boolean negation")
+    }
+
+    // Zero comparisons
+    n = 0
+    if n == 0 {
+        println("PASS: zero equality")
+    }
+
+    // Increment and decrement
+    a = 5
+    a = a + 1
+    if a == 6 {
+        println("PASS: increment")
+    }
+    a = a - 1
+    if a == 5 {
+        println("PASS: decrement")
+    }
+
+    // Multiple assignments
+    p = 1
+    q = 2
+    r = p + q
+    if r == 3 {
+        println("PASS: multi assignment")
+    }
+}

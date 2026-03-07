@@ -261,7 +261,9 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
                     sed -i.bak "s|fish_add_path .*aether.*|fish_add_path \"$BIN_DIR\"|" "$SHELL_RC"
                 else
                     sed -i.bak "s|export AETHER_HOME=.*|$AETHER_HOME_LINE|" "$SHELL_RC"
-                    sed -i.bak "s|export PATH=.*aether.*|$EXPORT_LINE|" "$SHELL_RC"
+                    # Match only PATH lines that start with the aether bin dir (not lines
+                    # that happen to contain "aether" alongside other unrelated entries)
+                    sed -i.bak "s|export PATH=\".*aether.*/bin:\\\$PATH\"|$EXPORT_LINE|" "$SHELL_RC"
                 fi
                 rm -f "$SHELL_RC.bak"
                 ok "  Updated AETHER_HOME in $SHELL_RC"
@@ -324,7 +326,7 @@ install_editor_extension() {
     local editor_cmd="$1"
     local editor_name="$2"
     local ext_dir="$3"
-    local version=$(cat "$(dirname "$0")/VERSION" 2>/dev/null | tr -d '[:space:]' || echo "0.5.0")
+    local version=$(cat "$(dirname "$0")/VERSION" 2>/dev/null | tr -d '[:space:]' || echo "0.0.0")
     local ext_name="aether-language-$version"
     local ext_path="$ext_dir/$ext_name"
     local src_dir="$(dirname "$0")/editor/vscode"

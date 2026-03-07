@@ -1,0 +1,71 @@
+// Test string null/pointer comparisons
+// Verifies: getenv returns null-safe strings, null checks use pointer comparison (not strcmp)
+
+main() {
+    print("=== String Null Comparison Tests ===\n\n")
+
+    // Test 1: getenv returns null for unset variable, != 0 is a pointer check
+    print("Test 1: getenv null check with != 0\n")
+    s = getenv("AETHER_TEST_NONEXISTENT_VAR_12345")
+    if s != 0 {
+        print("  FAIL: nonexistent env var should be null\n")
+        exit(1)
+    } else {
+        print("  PASS: null string != 0 is false\n")
+    }
+
+    // Test 2: getenv returns null, == 0 is a pointer check
+    print("\nTest 2: getenv null check with == 0\n")
+    s2 = getenv("AETHER_TEST_NONEXISTENT_VAR_67890")
+    if s2 == 0 {
+        print("  PASS: null string == 0 is true\n")
+    } else {
+        print("  FAIL: nonexistent env var should be null\n")
+        exit(1)
+    }
+
+    // Test 3: reversed null check (0 == string)
+    print("\nTest 3: Reversed null check (0 == s)\n")
+    s3 = getenv("AETHER_TEST_NONEXISTENT_VAR_ABCDE")
+    if 0 == s3 {
+        print("  PASS: 0 == null string is true\n")
+    } else {
+        print("  FAIL: reversed null check should work\n")
+        exit(1)
+    }
+
+    // Test 4: existing env var is not null (PATH always exists)
+    print("\nTest 4: Existing env var is not null\n")
+    path = getenv("PATH")
+    if path != 0 {
+        print("  PASS: PATH env var exists\n")
+    } else {
+        print("  FAIL: PATH should exist\n")
+        exit(1)
+    }
+
+    // Test 5: getenv then atoi pattern (common in benchmarks)
+    print("\nTest 5: getenv + atoi pattern\n")
+    val = 42
+    env = getenv("AETHER_TEST_NONEXISTENT_NUMBER")
+    if env != 0 {
+        val = atoi(env)
+    }
+    if val == 42 {
+        print("  PASS: default value preserved when env unset\n")
+    } else {
+        print("  FAIL: unexpected value\n")
+        exit(1)
+    }
+
+    // Test 6: string variable compared to 0 after conditional assignment
+    print("\nTest 6: Conditional string assignment\n")
+    result = getenv("HOME")
+    if result != 0 {
+        print("  PASS: HOME is set\n")
+    } else {
+        print("  PASS: HOME is not set (ok on some systems)\n")
+    }
+
+    print("\n=== All 6 Tests Complete ===\n")
+}

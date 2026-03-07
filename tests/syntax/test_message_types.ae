@@ -1,0 +1,114 @@
+// Test: Message constructor field type validation
+// Verifies that message fields are type-checked against their declarations.
+
+// --- Test 1: Basic typed fields (int, string, float) ---
+message Info { id: int, name: string, score: float }
+
+actor Printer1 {
+    receive {
+        Info(id, name, score) -> {
+            print("id=")
+            print(id)
+            print(" name=")
+            print(name)
+            print(" score=")
+            println(score)
+            println("PASS: basic typed fields")
+        }
+    }
+}
+
+// --- Test 2: Actor ref via ptr field ---
+message Notify { sender: ptr }
+message Ack { }
+
+actor Responder {
+    receive {
+        Notify(sender) -> {
+            sender ! Ack {}
+        }
+    }
+}
+
+actor Waiter {
+    state got_ack = 0
+
+    receive {
+        Ack() -> {
+            got_ack = 1
+            println("PASS: actor ref via ptr field")
+        }
+    }
+}
+
+// --- Test 3: Mixed field types with ptr ---
+message Task3 { job_id: int, worker: ptr, label: string }
+message Done3 { }
+
+actor Manager3 {
+    state completed = 0
+
+    receive {
+        Done3() -> {
+            completed = completed + 1
+            if completed == 1 {
+                println("PASS: mixed field types with ptr")
+            }
+        }
+    }
+}
+
+actor Worker3 {
+    receive {
+        Task3(job_id, worker, label) -> {
+            worker ! Done3 {}
+        }
+    }
+}
+
+// --- Test 4: Forward actor ref through chain ---
+message Forward { target: ptr, value: int }
+message Result4 { value: int }
+
+actor EndPoint {
+    receive {
+        Result4(value) -> {
+            if value == 42 {
+                println("PASS: forward actor ref through chain")
+            }
+        }
+    }
+}
+
+actor Relay {
+    receive {
+        Forward(target, value) -> {
+            target ! Result4 { value: value }
+        }
+    }
+}
+
+main() {
+    // Test 1: basic typed fields
+    p = spawn(Printer1())
+    p ! Info { id: 1, name: "alice", score: 9.5 }
+    sleep(200)
+
+    // Test 2: actor ref via ptr field
+    w = spawn(Waiter())
+    r = spawn(Responder())
+    r ! Notify { sender: w }
+    sleep(200)
+
+    // Test 3: mixed field types
+    mgr = spawn(Manager3())
+    wrk = spawn(Worker3())
+    wrk ! Task3 { job_id: 1, worker: mgr, label: "test" }
+    sleep(200)
+
+    // Test 4: forward actor ref through chain
+    ep = spawn(EndPoint())
+    relay = spawn(Relay())
+    relay ! Forward { target: ep, value: 42 }
+    sleep(200)
+}

@@ -1,0 +1,69 @@
+// Strings - comparison, ordering, null handling, interpolation
+// Run with: ae run examples/basics/strings.ae
+
+main() {
+    println("=== String Operations ===")
+
+    // String variables
+    greeting = "Hello"
+    name = "Aether"
+    println("${greeting}, ${name}!")
+
+    // String equality (uses strcmp internally, not pointer comparison)
+    a = "hello"
+    b = "hello"
+    if a == b {
+        println("Strings with same content are equal")
+    }
+
+    // String inequality
+    c = "world"
+    if a != c {
+        println("Different strings are not equal")
+    }
+
+    // Lexicographic ordering (< > <= >=)
+    if "apple" < "banana" {
+        println("apple comes before banana")
+    }
+    if "zebra" > "ant" {
+        println("zebra comes after ant")
+    }
+    if "abc" <= "abc" {
+        println("abc <= abc (equal)")
+    }
+
+    // Null-safe string handling with getenv
+    home = getenv("HOME")
+    if home != 0 {
+        println("HOME is set")
+    } else {
+        println("HOME is not set")
+    }
+
+    // Common pattern: default value for missing env var
+    port = 8080
+    port_env = getenv("PORT")
+    if port_env != 0 {
+        port = atoi(port_env)
+    }
+    print("Using port: ")
+    println(port)
+
+    // String matching
+    color = "blue"
+    match (color) {
+        "red" -> { println("Color is red") }
+        "green" -> { println("Color is green") }
+        "blue" -> { println("Color is blue") }
+        _ -> { println("Unknown color") }
+    }
+
+    // String interpolation
+    x = 42
+    println("The answer is ${x}")
+    pi = 3.14159
+    println("Pi is approximately ${pi}")
+
+    println("\n=== Done ===")
+}

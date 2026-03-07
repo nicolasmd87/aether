@@ -9,6 +9,7 @@
 
 Parser* create_parser(Token** tokens, int token_count) {
     Parser* parser = malloc(sizeof(Parser));
+    if (!parser) return NULL;
     parser->tokens = tokens;
     parser->token_count = token_count;
     parser->current_token = 0;
@@ -31,7 +32,7 @@ Token* peek_token(Parser* parser) {
 
 Token* peek_ahead(Parser* parser, int offset) {
     int pos = parser->current_token + offset;
-    if (pos >= parser->token_count) {
+    if (pos < 0 || pos >= parser->token_count) {
         return NULL;
     }
     return parser->tokens[pos];
@@ -59,8 +60,9 @@ Token* expect_token(Parser* parser, AeTokenType expected) {
 }
 
 int is_at_end(Parser* parser) {
-    return parser->current_token >= parser->token_count || 
-           peek_token(parser)->type == TOKEN_EOF;
+    if (parser->current_token >= parser->token_count) return 1;
+    Token* t = peek_token(parser);
+    return !t || t->type == TOKEN_EOF;
 }
 
 int match_token(Parser* parser, AeTokenType type) {
@@ -232,7 +234,12 @@ static ASTNode* parse_interp_string_expr(const char* raw) {
             if (expr_node) add_child(interp, expr_node);
         } else if (*p == '\\' && p[1]) {
             // Escape sequence in literal segment
-            if (lit_len >= lit_cap - 2) { lit_cap *= 2; lit_buf = realloc(lit_buf, lit_cap); }
+            if (lit_len >= lit_cap - 2) {
+                lit_cap *= 2;
+                char* nb = realloc(lit_buf, lit_cap);
+                if (!nb) { free(lit_buf); return interp; }
+                lit_buf = nb;
+            }
             char code = p[1];
             switch (code) {
                 case 'n':  lit_buf[lit_len++] = '\n'; break;
@@ -244,7 +251,12 @@ static ASTNode* parse_interp_string_expr(const char* raw) {
             }
             p += 2;
         } else {
-            if (lit_len >= lit_cap - 2) { lit_cap *= 2; lit_buf = realloc(lit_buf, lit_cap); }
+            if (lit_len >= lit_cap - 2) {
+                lit_cap *= 2;
+                char* nb = realloc(lit_buf, lit_cap);
+                if (!nb) { free(lit_buf); return interp; }
+                lit_buf = nb;
+            }
             lit_buf[lit_len++] = *p++;
         }
     }
@@ -318,7 +330,7 @@ ASTNode* parse_primary_expression(Parser* parser) {
 
         case TOKEN_IDENTIFIER: {
             // Could be identifier or struct literal
-            Token* next = parser->tokens[parser->current_token + 1];
+            Token* next = peek_ahead(parser, 1);
             // Disambiguate: IDENTIFIER { could be a struct literal OR an identifier
             // followed by a block (e.g., while i < n { ... }).
             // A struct literal has the pattern: TypeName { field: value } or TypeName {}
@@ -557,7 +569,7 @@ ASTNode* parse_binary_expression(Parser* parser, int precedence) {
     
     while (1) {
         if (++iteration_count > MAX_BINARY_OPS) {
-            parser_message(parser, "Error: Expression too complex (max %d binary operators)");
+            parser_message(parser, "Error: Expression too complex (max 1000 binary operators)");
             break;
         }
         
@@ -1021,6 +1033,7 @@ ASTNode* parse_for_loop(Parser* parser) {
 
         ASTNode* for_loop = create_ast_node(AST_FOR_LOOP, NULL, var_name->line, var_name->column);
         for_loop->children = malloc(4 * sizeof(ASTNode*));
+        if (!for_loop->children) { free_ast_node(for_loop); return NULL; }
         for_loop->child_count = 4;
         for_loop->children[0] = init;
         for_loop->children[1] = condition;
@@ -1029,7 +1042,7 @@ ASTNode* parse_for_loop(Parser* parser) {
         return for_loop;
     }
 
-    expect_token(parser, TOKEN_LEFT_PAREN);
+    if (!expect_token(parser, TOKEN_LEFT_PAREN)) return NULL;
 
     ASTNode* init = NULL;
     Token* token = peek_token(parser);
@@ -1045,6 +1058,7 @@ ASTNode* parse_for_loop(Parser* parser) {
         if (next && next->type == TOKEN_ASSIGN) {
             // Parse as variable declaration without consuming semicolon
             Token* name = expect_token(parser, TOKEN_IDENTIFIER);
+            if (!name) return NULL;
             init = create_ast_node(AST_VARIABLE_DECLARATION, name->value, name->line, name->column);
             init->node_type = create_type(TYPE_UNKNOWN);
             if (match_token(parser, TOKEN_ASSIGN)) {
@@ -1080,12 +1094,13 @@ ASTNode* parse_for_loop(Parser* parser) {
     ASTNode* for_loop = create_ast_node(AST_FOR_LOOP, NULL, 0, 0);
     // Reserve 4 slots for init, condition, increment, body
     for_loop->children = malloc(4 * sizeof(ASTNode*));
+    if (!for_loop->children) { free_ast_node(for_loop); return NULL; }
     for_loop->child_count = 4;
     for_loop->children[0] = init;
     for_loop->children[1] = condition;
     for_loop->children[2] = increment;
     for_loop->children[3] = body;
-    
+
     return for_loop;
 }
 
@@ -1137,8 +1152,8 @@ ASTNode* parse_switch_statement(Parser* parser) {
 
 ASTNode* parse_case_statement(Parser* parser) {
     if (match_token(parser, TOKEN_DEFAULT)) {
-        expect_token(parser, TOKEN_COLON);
-        
+        if (!expect_token(parser, TOKEN_COLON)) return NULL;
+
         ASTNode* case_stmt = create_ast_node(AST_CASE_STATEMENT, "default", 0, 0);
         
         int iteration_count = 0;
@@ -1146,7 +1161,7 @@ ASTNode* parse_case_statement(Parser* parser) {
         
         while (!is_at_end(parser)) {
             if (++iteration_count > MAX_CASE_STMTS) {
-                parser_message(parser, "Error: Too many statements in case block (max %d)");
+                parser_message(parser, "Error: Too many statements in case block (max 1000)");
                 break;
             }
             
@@ -1166,7 +1181,8 @@ ASTNode* parse_case_statement(Parser* parser) {
     
     if (match_token(parser, TOKEN_CASE)) {
         ASTNode* value = parse_expression(parser);
-        expect_token(parser, TOKEN_COLON);
+        if (!value) return NULL;
+        if (!expect_token(parser, TOKEN_COLON)) return NULL;
         
         ASTNode* case_stmt = create_ast_node(AST_CASE_STATEMENT, NULL, 0, 0);
         add_child(case_stmt, value);
@@ -1176,7 +1192,7 @@ ASTNode* parse_case_statement(Parser* parser) {
         
         while (!is_at_end(parser)) {
             if (++iteration_count > MAX_CASE_STMTS) {
-                parser_message(parser, "Error: Too many statements in case block (max %d)");
+                parser_message(parser, "Error: Too many statements in case block (max 1000)");
                 break;
             }
             
@@ -1207,13 +1223,13 @@ ASTNode* parse_case_statement(Parser* parser) {
 ASTNode* parse_match_statement(Parser* parser) {
     advance_token(parser); // consume 'match'
     
-    // Parse the expression to match on
-    expect_token(parser, TOKEN_LEFT_PAREN);
+    // Parse the expression to match on (parens optional)
+    int has_paren = match_token(parser, TOKEN_LEFT_PAREN);
     ASTNode* expression = parse_expression(parser);
     if (!expression) return NULL;
-    expect_token(parser, TOKEN_RIGHT_PAREN);
-    
-    expect_token(parser, TOKEN_LEFT_BRACE);
+    if (has_paren && !expect_token(parser, TOKEN_RIGHT_PAREN)) return NULL;
+
+    if (!expect_token(parser, TOKEN_LEFT_BRACE)) return NULL;
     
     ASTNode* match_stmt = create_ast_node(AST_MATCH_STATEMENT, NULL, 0, 0);
     add_child(match_stmt, expression);
@@ -1265,16 +1281,19 @@ ASTNode* parse_match_case(Parser* parser) {
         if (!pattern) return NULL;
     }
     
-    // Expect => arrow
-    expect_token(parser, TOKEN_ARROW);
-    
-    // Parse the result (expression or block)
+    // Expect -> arrow
+    if (!expect_token(parser, TOKEN_ARROW)) return NULL;
+
+    // Parse the result (expression, statement, or block)
     ASTNode* result = NULL;
     Token* next = peek_token(parser);
-    
+
     if (next && next->type == TOKEN_LEFT_BRACE) {
         // Block result
         result = parse_block(parser);
+    } else if (next && next->type == TOKEN_PRINT) {
+        // print/println is a statement keyword, not an expression
+        result = parse_statement(parser);
     } else {
         // Expression result
         result = parse_expression(parser);
@@ -1493,9 +1512,9 @@ ASTNode* parse_message_definition(Parser* parser) {
         
         Token* field_name = expect_token(parser, TOKEN_IDENTIFIER);
         if (!field_name) break;
-        
-        expect_token(parser, TOKEN_COLON);
-        
+
+        if (!expect_token(parser, TOKEN_COLON)) break;
+
         Type* field_type = parse_type(parser);
         if (!field_type) {
             parser_message(parser, "Error: Expected type for message field");
@@ -1586,7 +1605,7 @@ ASTNode* parse_reply_statement(Parser* parser) {
             Token* field_name = expect_token(parser, TOKEN_IDENTIFIER);
             if (!field_name) break;
 
-            expect_token(parser, TOKEN_COLON);
+            if (!expect_token(parser, TOKEN_COLON)) break;
 
             ASTNode* field_expr = parse_expression(parser);
             if (!field_expr) break;
@@ -1626,12 +1645,12 @@ ASTNode* parse_message_constructor(Parser* parser) {
             
             Token* field_name = expect_token(parser, TOKEN_IDENTIFIER);
             if (!field_name) break;
-            
-            expect_token(parser, TOKEN_COLON);
-            
+
+            if (!expect_token(parser, TOKEN_COLON)) break;
+
             ASTNode* field_expr = parse_expression(parser);
             if (!field_expr) break;
-            
+
             ASTNode* field_init = create_ast_node(AST_FIELD_INIT, field_name->value, field_name->line, field_name->column);
             add_child(field_init, field_expr);
             add_child(constructor, field_init);
@@ -1741,7 +1760,7 @@ ASTNode* parse_actor_definition(Parser* parser) {
     
     while (!match_token(parser, TOKEN_RIGHT_BRACE)) {
         if (++iteration_count > MAX_ACTOR_BODY) {
-            parser_message(parser, "Error: Too many statements in actor definition (max %d)");
+            parser_message(parser, "Error: Too many statements in actor definition (max 1000)");
             break;
         }
         
@@ -2135,17 +2154,17 @@ ASTNode* parse_struct_pattern(Parser* parser) {
     Token* name = expect_token(parser, TOKEN_IDENTIFIER);
     if (!name) return NULL;
     
-    expect_token(parser, TOKEN_LEFT_BRACE);
-    
-    ASTNode* pattern = create_ast_node(AST_PATTERN_STRUCT, name->value, 
+    if (!expect_token(parser, TOKEN_LEFT_BRACE)) return NULL;
+
+    ASTNode* pattern = create_ast_node(AST_PATTERN_STRUCT, name->value,
                                       name->line, name->column);
-    
+
     if (!match_token(parser, TOKEN_RIGHT_BRACE)) {
         do {
             Token* field = expect_token(parser, TOKEN_IDENTIFIER);
             if (!field) break;
-            
-            expect_token(parser, TOKEN_COLON);
+
+            if (!expect_token(parser, TOKEN_COLON)) break;
             
             ASTNode* field_pattern = parse_pattern(parser);
             if (field_pattern) {
@@ -2341,7 +2360,7 @@ ASTNode* parse_program(Parser* parser) {
                 break;
             case TOKEN_IDENTIFIER: {
                 // Check if this is a function: identifier(...)
-                Token* next = parser->tokens[parser->current_token + 1];
+                Token* next = peek_ahead(parser, 1);
                 if (next && next->type == TOKEN_LEFT_PAREN) {
                     // Function without 'func' keyword
                     node = parse_function_definition(parser);

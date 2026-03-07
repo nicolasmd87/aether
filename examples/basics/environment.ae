@@ -1,0 +1,73 @@
+// Environment Variables - reading config from the environment
+// Run with: ae run examples/basics/environment.ae
+// Try: PORT=3000 ae run examples/basics/environment.ae
+
+main() {
+    println("=== Environment Variables ===")
+
+    // Read a common env var
+    home = getenv("HOME")
+    if home != 0 {
+        print("HOME = ")
+        println(home)
+    } else {
+        println("HOME is not set")
+    }
+
+    // Check for user
+    user = getenv("USER")
+    if user != 0 {
+        println("Hello, ${user}!")
+    }
+
+    // Configuration pattern: read with defaults
+    host = "localhost"
+    port = 8080
+    debug = 0
+
+    host_env = getenv("HOST")
+    if host_env != 0 {
+        host = host_env
+    }
+
+    port_env = getenv("PORT")
+    if port_env != 0 {
+        port = atoi(port_env)
+    }
+
+    debug_env = getenv("DEBUG")
+    if debug_env != 0 {
+        debug = atoi(debug_env)
+    }
+
+    println("\nConfiguration:")
+    print("  Host:  ")
+    println(host)
+    print("  Port:  ")
+    println(port)
+    print("  Debug: ")
+    println(debug)
+
+    // Check for optional features
+    println("\nFeature flags:")
+    features = 0
+
+    if getenv("ENABLE_CACHE") != 0 {
+        println("  [x] Cache enabled")
+        features = features + 1
+    } else {
+        println("  [ ] Cache disabled")
+    }
+
+    if getenv("ENABLE_LOGGING") != 0 {
+        println("  [x] Logging enabled")
+        features = features + 1
+    } else {
+        println("  [ ] Logging disabled")
+    }
+
+    print("Active features: ")
+    println(features)
+
+    println("\n=== Done ===")
+}

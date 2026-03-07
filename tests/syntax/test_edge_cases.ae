@@ -1,0 +1,70 @@
+// Test: miscellaneous edge cases
+// Covers: nested loops, many vars, match wildcard, various patterns
+
+main() {
+    // Test 1: nested for loops
+    count = 0
+    for i in 0..5 {
+        for j in 0..5 {
+            count = count + 1
+        }
+    }
+    if count == 25 {
+        println("PASS: nested for 5x5=25")
+    }
+
+    // Test 2: for loop with break
+    found = -1
+    for i in 0..100 {
+        if i * i > 50 {
+            found = i
+            break
+        }
+    }
+    if found == 8 {
+        println("PASS: for-break found=8")
+    }
+
+    // Test 3: while inside for
+    total = 0
+    for i in 1..4 {
+        j = 0
+        while j < i {
+            total = total + 1
+            j = j + 1
+        }
+    }
+    if total == 6 {
+        println("PASS: while-in-for total=6")
+    }
+
+    // Test 4: many local variables
+    a = 1
+    b = 2
+    c = 3
+    d = 4
+    e = 5
+    f = 6
+    g = 7
+    h = 8
+    ii = 9
+    jj = 10
+    sum = a+b+c+d+e+f+g+h+ii+jj
+    if sum == 55 {
+        println("PASS: 10 vars sum=55")
+    }
+
+    // Test 5: match with wildcard
+    x = 42
+    match x {
+        0 -> println("FAIL: matched 0")
+        _ -> println("PASS: wildcard match")
+    }
+
+    // Test 6: deeply nested arithmetic
+    // ((1+2)*(3+4)) - ((5-6)*(7-8)) = (3*7) - ((-1)*(-1)) = 21-1 = 20
+    result = ((1 + 2) * (3 + 4)) - ((5 - 6) * (7 - 8))
+    if result == 20 {
+        println("PASS: deep arithmetic=20")
+    }
+}

@@ -1,4 +1,5 @@
 #include "aether_tracing.h"
+#include "aether_thread.h"
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>

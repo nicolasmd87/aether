@@ -159,7 +159,7 @@ Token* read_number() {
             buffer[i++] = advance(); // 'x'
             while (current_pos < source_length && (isxdigit(peek()) || peek() == '_')) {
                 if (peek() == '_') { advance(); continue; }
-                if (i >= capacity - 1) { capacity *= 2; buffer = realloc(buffer, capacity); }
+                if (i >= capacity - 1) { capacity *= 2; char* nb = realloc(buffer, capacity); if (!nb) { free(buffer); return create_token(TOKEN_ERROR, "out of memory", current_line, current_column); } buffer = nb; }
                 buffer[i++] = advance();
             }
             buffer[i] = '\0';
@@ -175,7 +175,7 @@ Token* read_number() {
             buffer[i++] = advance(); // 'o'
             while (current_pos < source_length && ((peek() >= '0' && peek() <= '7') || peek() == '_')) {
                 if (peek() == '_') { advance(); continue; }
-                if (i >= capacity - 1) { capacity *= 2; buffer = realloc(buffer, capacity); }
+                if (i >= capacity - 1) { capacity *= 2; char* nb = realloc(buffer, capacity); if (!nb) { free(buffer); return create_token(TOKEN_ERROR, "out of memory", current_line, current_column); } buffer = nb; }
                 buffer[i++] = advance();
             }
             buffer[i] = '\0';
@@ -191,7 +191,7 @@ Token* read_number() {
             buffer[i++] = advance(); // 'b'
             while (current_pos < source_length && (peek() == '0' || peek() == '1' || peek() == '_')) {
                 if (peek() == '_') { advance(); continue; }
-                if (i >= capacity - 1) { capacity *= 2; buffer = realloc(buffer, capacity); }
+                if (i >= capacity - 1) { capacity *= 2; char* nb = realloc(buffer, capacity); if (!nb) { free(buffer); return create_token(TOKEN_ERROR, "out of memory", current_line, current_column); } buffer = nb; }
                 buffer[i++] = advance();
             }
             buffer[i] = '\0';
@@ -465,20 +465,25 @@ Token* next_token() {
             return create_token(TOKEN_DOT, ".", current_line, current_column);
         case ':': advance(); return create_token(TOKEN_COLON, ":", current_line, current_column);
         case '?': advance(); return create_token(TOKEN_QUESTION, "?", current_line, current_column);
-        default:
+        default: {
             advance();
-            return create_token(TOKEN_ERROR, &c, current_line, current_column);
+            char err_ch[2] = { c, '\0' };
+            return create_token(TOKEN_ERROR, err_ch, current_line, current_column);
+        }
     }
 }
 
 Token* create_token(AeTokenType type, const char* value, int line, int column) {
     Token* token = malloc(sizeof(Token));
+    if (!token) return NULL;
     token->type = type;
     token->line = line;
     token->column = column;
     if (value) {
-        token->value = malloc(strlen(value) + 1);
-        strcpy(token->value, value);
+        size_t len = strlen(value);
+        token->value = malloc(len + 1);
+        if (!token->value) { free(token); return NULL; }
+        memcpy(token->value, value, len + 1);
     } else {
         token->value = NULL;
     }

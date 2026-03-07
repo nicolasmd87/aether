@@ -1,0 +1,53 @@
+// Test print/println with NULL values (e.g., from getenv)
+// Verifies: no crash on printf("%s", NULL), prints "(null)" instead
+
+main() {
+    print("=== Print NULL Tests ===\n\n")
+
+    // Test 1: print(null_string) should print "(null)", not crash
+    print("Test 1: print() with NULL string\n")
+    x = getenv("AETHER_NONEXISTENT_PRINT_VAR")
+    print("  Value: ")
+    print(x)
+    print("\n  PASS: no crash\n")
+
+    // Test 2: println(null_string) should print "(null)\n", not crash
+    print("\nTest 2: println() with NULL string\n")
+    y = getenv("AETHER_NONEXISTENT_PRINTLN_VAR")
+    print("  Value: ")
+    println(y)
+    print("  PASS: no crash\n")
+
+    // Test 3: Multiple NULL prints in sequence
+    print("\nTest 3: Multiple NULL prints\n")
+    a = getenv("AETHER_NULL_A_PRINT")
+    b = getenv("AETHER_NULL_B_PRINT")
+    c = getenv("AETHER_NULL_C_PRINT")
+    print("  A=")
+    print(a)
+    print(" B=")
+    print(b)
+    print(" C=")
+    println(c)
+    print("  PASS: no crash on triple NULL\n")
+
+    // Test 4: Mix of NULL and non-NULL
+    print("\nTest 4: Mix NULL and non-NULL\n")
+    home = getenv("HOME")
+    missing = getenv("AETHER_NOPE")
+    if home != 0 {
+        print("  HOME=")
+        println(home)
+    }
+    print("  MISSING=")
+    println(missing)
+    print("  PASS: mixed NULL/non-NULL\n")
+
+    // Test 5: print() with string literal (should never go through safe_str)
+    print("\nTest 5: String literals\n")
+    print("  Hello")
+    println(" World")
+    print("  PASS: literals work\n")
+
+    print("\n=== All 5 Print NULL Tests Passed ===\n")
+}

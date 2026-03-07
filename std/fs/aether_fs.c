@@ -1,4 +1,5 @@
 #include "aether_fs.h"
+#include "../../runtime/utils/aether_compiler.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>

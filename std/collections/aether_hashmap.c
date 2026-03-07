@@ -1,4 +1,5 @@
 #include "aether_hashmap.h"
+#include "../../runtime/utils/aether_compiler.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>

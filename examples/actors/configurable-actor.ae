@@ -1,0 +1,64 @@
+// Configurable Actor - reads settings from environment variables
+// Run with: ae run examples/actors/configurable-actor.ae
+// Try: ITERATIONS=500 ae run examples/actors/configurable-actor.ae
+
+message Tick { count: int }
+message Done { total: int }
+
+actor Counter {
+    state total = 0
+    state target = 0
+
+    receive {
+        Tick(count) -> {
+            total = total + count
+            if total >= target {
+                print("Counter reached target: ")
+                print(total)
+                print("\n")
+            }
+        }
+    }
+}
+
+main() {
+    // Configure from environment with safe defaults
+    iterations = 100
+    env_iter = getenv("ITERATIONS")
+    if env_iter != 0 {
+        iterations = atoi(env_iter)
+        print("Using ITERATIONS=")
+        println(iterations)
+    } else {
+        print("Using default iterations=")
+        println(iterations)
+    }
+
+    // Spawn the actor
+    counter = spawn(Counter())
+    counter.target = iterations
+
+    // Send ticks
+    start = clock_ns()
+    i = 0
+    while i < iterations {
+        counter ! Tick { count: 1 }
+        i = i + 1
+    }
+    wait_for_idle()
+    end = clock_ns()
+
+    elapsed_us = (end - start) / 1000
+    print("Sent ")
+    print(iterations)
+    print(" messages in ")
+    print(elapsed_us)
+    println(" us")
+
+    if elapsed_us > 0 {
+        msg_per_us = iterations / elapsed_us
+        print("Throughput: ~")
+        print(msg_per_us)
+        println(" M msg/sec")
+    }
+}

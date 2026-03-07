@@ -23,25 +23,38 @@ void print_optimization_stats() {
     printf("  Linear loops collapsed: %d\n", global_opt_stats.linear_loops_collapsed);
 }
 
-// Helper: check if node is a literal constant
+// Helper: check if node is a numeric literal constant (not string/bool)
 static int is_constant(ASTNode* node) {
-    if (!node) return 0;
-    return node->type == AST_LITERAL;
+    if (!node || node->type != AST_LITERAL || !node->value) return 0;
+    // Exclude booleans and strings from numeric constant folding
+    if (node->node_type) {
+        if (node->node_type->kind == TYPE_STRING) return 0;
+        if (node->node_type->kind == TYPE_BOOL) return 0;
+    }
+    // Also check by value for untyped literals
+    if (strcmp(node->value, "true") == 0 || strcmp(node->value, "false") == 0) return 0;
+    return 1;
 }
 
 // Helper: get numeric value from literal
 static double get_constant_value(ASTNode* node) {
     if (!node || !node->value) return 0.0;
+    // Handle boolean literals: "true" = 1.0, "false" = 0.0
+    if (strcmp(node->value, "true") == 0) return 1.0;
+    if (strcmp(node->value, "false") == 0) return 0.0;
     return atof(node->value);
 }
 
 // Helper: create a literal node with a numeric value
-static ASTNode* create_numeric_literal(double value, int line, int column) {
+static ASTNode* create_numeric_literal(double value, int is_int, int line, int column) {
     char buffer[64];
-    snprintf(buffer, sizeof(buffer), "%.10g", value);
-    
+    if (is_int && value == (double)(long long)value) {
+        snprintf(buffer, sizeof(buffer), "%lld", (long long)value);
+    } else {
+        snprintf(buffer, sizeof(buffer), "%.10g", value);
+    }
     ASTNode* node = create_ast_node(AST_LITERAL, buffer, line, column);
-    node->node_type = create_type(TYPE_FLOAT);
+    node->node_type = create_type(is_int ? TYPE_INT : TYPE_FLOAT);
     return node;
 }
 
@@ -91,7 +104,10 @@ static ASTNode* fold_binary_expression(ASTNode* node) {
         
         if (can_fold) {
             global_opt_stats.constants_folded++;
-            ASTNode* folded = create_numeric_literal(result, node->line, node->column);
+            // Preserve integer type if both operands are integers
+            int both_int = (left->node_type && left->node_type->kind == TYPE_INT) &&
+                           (right->node_type && right->node_type->kind == TYPE_INT);
+            ASTNode* folded = create_numeric_literal(result, both_int, node->line, node->column);
             
             // Free old node (but not the original structure, return new one)
             free(node->value);
@@ -123,18 +139,32 @@ ASTNode* optimize_constant_folding(ASTNode* node) {
     return node;
 }
 
+// Helper: check if condition is a compile-time known constant (numeric or boolean)
+static int is_constant_condition(ASTNode* node, int* is_truthy) {
+    if (!node || !node->value) return 0;
+    if (node->type == AST_LITERAL) {
+        // Boolean literals
+        if (strcmp(node->value, "true") == 0) { *is_truthy = 1; return 1; }
+        if (strcmp(node->value, "false") == 0) { *is_truthy = 0; return 1; }
+        // Numeric literals (exclude strings)
+        if (node->node_type && node->node_type->kind == TYPE_STRING) return 0;
+        double val = atof(node->value);
+        *is_truthy = (val != 0.0);
+        return 1;
+    }
+    return 0;
+}
+
 // Dead code elimination
 ASTNode* optimize_dead_code(ASTNode* node) {
     if (!node) return NULL;
-    
+
     // If statement with constant condition
     if (node->type == AST_IF_STATEMENT && node->child_count >= 2) {
         ASTNode* condition = node->children[0];
-        
-        if (is_constant(condition)) {
-            double val = get_constant_value(condition);
-            
-            if (val != 0.0) {
+        int truthy = 0;
+        if (is_constant_condition(condition, &truthy)) {
+            if (truthy) {
                 // Condition is always true, replace with then-branch
                 global_opt_stats.dead_code_removed++;
                 ASTNode* then_branch = node->children[1];
@@ -176,11 +206,9 @@ ASTNode* optimize_dead_code(ASTNode* node) {
     // While loop with constant false condition
     if (node->type == AST_WHILE_LOOP && node->child_count >= 1) {
         ASTNode* condition = node->children[0];
-        
-        if (is_constant(condition)) {
-            double val = get_constant_value(condition);
-            
-            if (val == 0.0) {
+        int while_truthy = 0;
+        if (is_constant_condition(condition, &while_truthy)) {
+            if (!while_truthy) {
                 // Loop never executes
                 global_opt_stats.dead_code_removed++;
                 free_ast_node(node);
@@ -220,7 +248,7 @@ ASTNode* optimize_tail_calls(ASTNode* node) {
         // Find return statements in the function body
         ASTNode* body = NULL;
         for (int i = 0; i < node->child_count; i++) {
-            if (node->children[i]->type == AST_BLOCK) {
+            if (node->children[i] && node->children[i]->type == AST_BLOCK) {
                 body = node->children[i];
                 break;
             }
@@ -229,7 +257,8 @@ ASTNode* optimize_tail_calls(ASTNode* node) {
         if (body && body->child_count > 0) {
             // Check last statement for tail call
             ASTNode* last_stmt = body->children[body->child_count - 1];
-            
+            if (!last_stmt) goto recurse_children;
+
             if (last_stmt->type == AST_RETURN_STATEMENT &&
                 last_stmt->child_count > 0 &&
                 is_tail_call(node, last_stmt->children[0])) {
@@ -241,11 +270,14 @@ ASTNode* optimize_tail_calls(ASTNode* node) {
         }
     }
     
+recurse_children:
     // Recursively optimize children
     for (int i = 0; i < node->child_count; i++) {
-        node->children[i] = optimize_tail_calls(node->children[i]);
+        if (node->children[i]) {
+            node->children[i] = optimize_tail_calls(node->children[i]);
+        }
     }
-    
+
     return node;
 }
 

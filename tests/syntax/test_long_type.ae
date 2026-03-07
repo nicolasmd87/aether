@@ -1,0 +1,85 @@
+// Test long (int64) type: declarations, arithmetic, printing, overflow protection
+// Verifies: long holds values > int32_max, arithmetic promotes correctly
+
+main() {
+    print("=== Long Type Tests ===\n\n")
+
+    // Test 1: Basic long declaration and assignment
+    print("Test 1: Long declaration\n")
+    long x = 5000000000
+    if x != 5000000000 {
+        print("  FAIL\n")
+        exit(1)
+    }
+    print("  PASS: 5000000000 stored correctly\n")
+
+    // Test 2: Long arithmetic
+    print("\nTest 2: Long arithmetic\n")
+    long a = 3000000000
+    long b = 2000000000
+    long c = a + b
+    if c != 5000000000 {
+        print("  FAIL\n")
+        exit(1)
+    }
+    print("  PASS: 3B + 2B = 5B\n")
+
+    // Test 3: Long multiplication
+    print("\nTest 3: Long multiplication\n")
+    long d = 100000
+    long e = d * d
+    if e != 10000000000 {
+        print("  FAIL: e=")
+        println(e)
+        exit(1)
+    }
+    print("  PASS: 100K * 100K = 10B\n")
+
+    // Test 4: Long comparison
+    print("\nTest 4: Long comparisons\n")
+    long big = 9999999999
+    long small = 1
+    if big <= small {
+        print("  FAIL: big <= small\n")
+        exit(1)
+    }
+    if small >= big {
+        print("  FAIL: small >= big\n")
+        exit(1)
+    }
+    print("  PASS: comparisons work\n")
+
+    // Test 5: Long in loops
+    print("\nTest 5: Long loop counter\n")
+    long total = 0
+    long i = 0
+    while i < 1000 {
+        total = total + i
+        i = i + 1
+    }
+    if total != 499500 {
+        print("  FAIL: total=")
+        println(total)
+        exit(1)
+    }
+    print("  PASS: loop sum = 499500\n")
+
+    // Test 6: clock_ns returns long
+    print("\nTest 6: clock_ns() returns long\n")
+    t1 = clock_ns()
+    t2 = clock_ns()
+    if t2 < t1 {
+        print("  FAIL: time went backwards\n")
+        exit(1)
+    }
+    print("  PASS: clock_ns() monotonic\n")
+
+    // Test 7: Long print
+    print("\nTest 7: Print long values\n")
+    long val = 1234567890123
+    print("  val=")
+    println(val)
+    print("  PASS\n")
+
+    print("\n=== All 7 Long Type Tests Passed ===\n")
+}

@@ -1,0 +1,72 @@
+// Test series collapse optimizer with long (int64) types
+// Verifies: optimizer uses int64 arithmetic, no overflow
+
+main() {
+    print("=== Series Collapse Long Tests ===\n\n")
+
+    // Test 1: Large linear sum with long — should give correct answer
+    print("Test 1: Sum 1..100000 with long\n")
+    long n = 100000
+    long sum = 0
+    long i = 1
+    while i <= n {
+        sum = sum + i
+        i = i + 1
+    }
+    // Expected: 100000 * 100001 / 2 = 5000050000
+    if sum != 5000050000 {
+        print("  FAIL: sum=")
+        println(sum)
+        exit(1)
+    }
+    print("  PASS: sum=5000050000\n")
+
+    // Test 2: Large constant-addend series with long
+    print("\nTest 2: Constant addend x100000\n")
+    long acc = 0
+    long j = 0
+    while j < 100000 {
+        acc = acc + 7
+        j = j + 1
+    }
+    if acc != 700000 {
+        print("  FAIL: acc=")
+        println(acc)
+        exit(1)
+    }
+    print("  PASS: acc=700000\n")
+
+    // Test 3: Series collapse with int (wraps correctly)
+    print("\nTest 3: int sum wraps at int32 boundary\n")
+    n2 = 100000
+    sum2 = 0
+    k = 1
+    while k <= n2 {
+        sum2 = sum2 + k
+        k = k + 1
+    }
+    // 100000*100001/2 = 5000050000, truncated to int32 = 705082704
+    if sum2 != 705082704 {
+        print("  FAIL: sum2=")
+        println(sum2)
+        exit(1)
+    }
+    print("  PASS: int wraps correctly\n")
+
+    // Test 4: Small sums still work
+    print("\nTest 4: Small sum unaffected\n")
+    small = 0
+    m = 0
+    while m < 10 {
+        small = small + m
+        m = m + 1
+    }
+    if small != 45 {
+        print("  FAIL: small=")
+        println(small)
+        exit(1)
+    }
+    print("  PASS: small=45\n")
+
+    print("\n=== All 4 Series Long Tests Passed ===\n")
+}

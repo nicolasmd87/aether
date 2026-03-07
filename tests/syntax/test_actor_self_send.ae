@@ -1,0 +1,129 @@
+// Test: Actor self-send pattern (self ! Message {})
+// Verifies that actors can send messages to themselves, triggering
+// the main-thread-mode → scheduler transition correctly.
+
+// --- Test 1: Basic self-send (finite loop) ---
+message Go1 { }
+message Step1 { }
+message Check1 { }
+
+actor Counter1 {
+    state count = 0
+
+    receive {
+        Go1() -> {
+            self ! Step1 {}
+        }
+        Step1() -> {
+            count = count + 1
+            if count < 10 {
+                self ! Step1 {}
+            }
+        }
+        Check1() -> {
+            if count == 10 {
+                println("PASS: basic self-send counted to 10")
+            }
+        }
+    }
+}
+
+// --- Test 2: Multiple self-sends from one handler ---
+message Go2 { }
+message A2 { }
+message B2 { }
+message C2 { }
+
+actor Multi2 {
+    state got = 0
+
+    receive {
+        Go2() -> {
+            self ! A2 {}
+            self ! B2 {}
+            self ! C2 {}
+        }
+        A2() -> {
+            got = got + 1
+        }
+        B2() -> {
+            got = got + 1
+        }
+        C2() -> {
+            got = got + 1
+            if got == 3 {
+                println("PASS: three self-sends from one handler")
+            }
+        }
+    }
+}
+
+// --- Test 3: Self-send with external stop (animation pattern) ---
+message Start3 { }
+message Tick3 { }
+message Stop3 { }
+
+actor Animator3 {
+    state running = 0
+    state ticks = 0
+
+    receive {
+        Start3() -> {
+            running = 1
+            self ! Tick3 {}
+        }
+        Tick3() -> {
+            if running == 1 {
+                ticks = ticks + 1
+                self ! Tick3 {}
+            }
+        }
+        Stop3() -> {
+            running = 0
+            if ticks > 0 {
+                println("PASS: animation pattern stopped")
+            }
+        }
+    }
+}
+
+// --- Test 4: Self-send with immediate exit (no sleep after send) ---
+message Go4 { }
+message Done4 { }
+
+actor Quick4 {
+    receive {
+        Go4() -> {
+            self ! Done4 {}
+        }
+        Done4() -> {
+            println("PASS: self-send processed without sleep")
+        }
+    }
+}
+
+main() {
+    // Test 1: basic finite self-send loop
+    c = spawn(Counter1())
+    c ! Go1 {}
+    sleep(200)
+    c ! Check1 {}
+    sleep(200)
+
+    // Test 2: multiple self-sends
+    m = spawn(Multi2())
+    m ! Go2 {}
+    sleep(200)
+
+    // Test 3: animation pattern with stop
+    a = spawn(Animator3())
+    a ! Start3 {}
+    sleep(50)
+    a ! Stop3 {}
+    sleep(200)
+
+    // Test 4: immediate exit after self-send
+    q = spawn(Quick4())
+    q ! Go4 {}
+    sleep(200)
+}

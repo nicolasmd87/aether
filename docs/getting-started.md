@@ -374,8 +374,8 @@ Switch between Aether releases without reinstalling:
 ```bash
 ae version              # Show current version
 ae version list         # List all available releases (marks installed/active)
-ae version install v0.6.0   # Download and install a specific version
-ae version use v0.6.0       # Switch to an installed version
+ae version install v0.17.0  # Download and install a specific version
+ae version use v0.17.0      # Switch to an installed version
 ```
 
 Versions are stored in `~/.aether/versions/`. The active version is symlinked to `~/.aether/current` (Linux/macOS) or copied to `~/.aether/bin/` (Windows).

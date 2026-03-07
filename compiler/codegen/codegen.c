@@ -436,6 +436,39 @@ void print_line(CodeGenerator* gen, const char* format, ...) {
     fprintf(gen->output, "\n");
 }
 
+// Check if a name is a C/C++ reserved keyword that would cause compilation errors
+int is_c_reserved_word(const char* name) {
+    static const char* reserved[] = {
+        "auto", "break", "case", "char", "const", "continue", "default", "do",
+        "double", "else", "enum", "extern", "float", "for", "goto", "if",
+        "inline", "int", "long", "register", "restrict", "return", "short",
+        "signed", "sizeof", "static", "struct", "switch", "typedef", "union",
+        "unsigned", "void", "volatile", "while",
+        // C99/C11
+        "_Alignas", "_Alignof", "_Atomic", "_Bool", "_Complex", "_Generic",
+        "_Imaginary", "_Noreturn", "_Static_assert", "_Thread_local",
+        // Common standard library names that conflict
+        "malloc", "free", "printf", "sprintf", "strlen", "strcmp",
+        "puts", "gets", "abort", "exit", "time", "read", "write",
+        "open", "close", "signal", "sleep",
+        NULL
+    };
+    for (int i = 0; reserved[i]; i++) {
+        if (strcmp(name, reserved[i]) == 0) return 1;
+    }
+    return 0;
+}
+
+// Mangle an Aether name to avoid C reserved word collision.
+// Returns a static buffer — caller must use before next call.
+const char* safe_c_name(const char* name) {
+    if (!name) return name;
+    if (!is_c_reserved_word(name)) return name;
+    static char buf[280];
+    snprintf(buf, sizeof(buf), "ae_%s", name);
+    return buf;
+}
+
 const char* get_c_type(Type* type) {
     if (!type) {
         AetherError w = {NULL, NULL, 0, 0, "internal: NULL type in codegen, defaulting to int",
@@ -731,6 +764,10 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "    return (void*)str;");
     print_line(gen, "}");
     print_line(gen, "#endif");
+    /* NULL-safe string helper for print/println — avoids double-evaluating the expression */
+    print_line(gen, "static inline const char* _aether_safe_str(const void* s) {");
+    print_line(gen, "    return s ? (const char*)s : \"(null)\";");
+    print_line(gen, "}");
     print_line(gen, "");
     // Declare runtime args function (avoid full header to prevent conflicts with actor runtime)
     print_line(gen, "void aether_args_init(int argc, char** argv);");
@@ -821,7 +858,7 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         } else {
             generate_type(gen, ret_type);
         }
-        fprintf(gen->output, " %s(", child->value);
+        fprintf(gen->output, " %s(", safe_c_name(child->value));
 
         // Generate parameter types
         int param_count = 0;
@@ -1059,7 +1096,7 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                     for (int i = 0; i < child->child_count; i++) {
                         ASTNode* field = child->children[i];
                         if (field && field->type == AST_MESSAGE_FIELD) {
-                            if (field->node_type && (field->node_type->kind == TYPE_ACTOR_REF || field->node_type->kind == TYPE_STRING)) {
+                            if (field->node_type && (field->node_type->kind == TYPE_ACTOR_REF || field->node_type->kind == TYPE_STRING || field->node_type->kind == TYPE_PTR)) {
                                 print_indent(gen);
                                 generate_type(gen, field->node_type);
                                 fprintf(gen->output, " %s;\n", field->value);
@@ -1072,7 +1109,7 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                         ASTNode* field = child->children[i];
                         if (field && field->type == AST_MESSAGE_FIELD) {
                             if (field->node_type && field->node_type->kind != TYPE_INT && field->node_type->kind != TYPE_BOOL &&
-                                field->node_type->kind != TYPE_ACTOR_REF && field->node_type->kind != TYPE_STRING) {
+                                field->node_type->kind != TYPE_ACTOR_REF && field->node_type->kind != TYPE_STRING && field->node_type->kind != TYPE_PTR) {
                                 print_indent(gen);
                                 generate_type(gen, field->node_type);
                                 fprintf(gen->output, " %s;\n", field->value);

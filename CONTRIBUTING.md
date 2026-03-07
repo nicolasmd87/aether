@@ -285,6 +285,57 @@ usleep(1000);
 #endif
 ```
 
+## Versioning and Release Process
+
+Aether uses [Semantic Versioning](https://semver.org/). Releases are fully automated.
+
+### How it works
+
+1. **Source of truth**: Git tags (`v*.*.*`). The `VERSION` file is kept in sync for non-git contexts (release tarballs, binary installs).
+
+2. **Automatic release**: Every merge to `main` triggers `.github/workflows/release.yml`, which:
+   - Computes the next version from the highest existing `v*.*.*` tag
+   - Updates the `VERSION` file on `main` and commits `chore: release X.Y.Z`
+   - Tags the commit and pushes both to `main` and the tag
+   - Builds binaries for Linux, macOS (arm64 + x86_64), and Windows
+   - Creates a GitHub Release with all artifacts
+
+3. **Version bump rules**:
+   - Commit message starts with `major` → bumps MAJOR (e.g., 0.17.0 → 1.0.0)
+   - Anything else → bumps MINOR (e.g., 0.17.0 → 0.18.0)
+
+4. **Race prevention**: The workflow uses a `concurrency` group — if two PRs merge in quick succession, the second release queues until the first completes.
+
+### Where the version appears
+
+| Component | How it gets the version |
+|-----------|------------------------|
+| `make ae` / `make compiler` | Makefile reads `git tag -l`, falls back to `VERSION` file |
+| `ae version` | Compiled-in via `-DAETHER_VERSION` from Makefile |
+| `aetherc --version` | Compiled-in via `-DAETHER_VERSION` from Makefile |
+| `install.sh` | Reads `VERSION` file |
+| Release tarballs | `VERSION` file baked into the archive |
+| Windows native builds | Reads `VERSION` file (no git dependency) |
+
+### For contributors
+
+- **Never edit the `VERSION` file manually** — it's updated automatically by the release workflow
+- **Never create `v*.*.*` tags manually** — let the workflow handle it
+- **Update `CHANGELOG.md`** when adding features or fixes; the release workflow does not auto-generate changelogs
+
+### Building locally
+
+```bash
+make ae          # Picks up version from git tags automatically
+./build/ae version   # Verify: should show the latest tag
+```
+
+If you're building outside a git repo (e.g., from a release tarball):
+
+```bash
+make ae          # Falls back to VERSION file
+```
+
 ## Getting Help
 
 - GitHub Issues: Report bugs and request features

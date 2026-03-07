@@ -1,0 +1,73 @@
+// Test control flow edge cases
+main() {
+    // Nested if-else chains
+    x = 15
+    if x < 5 {
+        println("FAIL")
+    } else if x < 10 {
+        println("FAIL")
+    } else if x < 20 {
+        println("PASS: else-if chain")
+    } else {
+        println("FAIL")
+    }
+
+    // While with break
+    i = 0
+    while i < 100 {
+        if i == 5 {
+            break
+        }
+        i = i + 1
+    }
+    if i == 5 {
+        println("PASS: while break")
+    }
+
+    // While with continue
+    sum = 0
+    j = 0
+    while j < 10 {
+        j = j + 1
+        if j % 2 == 0 {
+            continue
+        }
+        sum = sum + j
+    }
+    // sum = 1+3+5+7+9 = 25
+    if sum == 25 {
+        println("PASS: while continue (odd sum=25)")
+    }
+
+    // Nested while loops
+    count = 0
+    a = 0
+    while a < 5 {
+        b = 0
+        while b < 5 {
+            count = count + 1
+            b = b + 1
+        }
+        a = a + 1
+    }
+    if count == 25 {
+        println("PASS: nested while (5x5=25)")
+    }
+
+    // For loop with range
+    total = 0
+    for k in 1..6 {
+        total = total + k
+    }
+    if total == 15 {
+        println("PASS: for range 1..6 sum=15")
+    }
+
+    // Match with default
+    val = 42
+    match val {
+        1 -> println("FAIL")
+        2 -> println("FAIL")
+        _ -> println("PASS: match default")
+    }
+}

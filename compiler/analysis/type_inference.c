@@ -105,6 +105,10 @@ Type* infer_from_binary_op(Type* left, Type* right, const char* operator) {
     if (strcmp(operator, "+") == 0 || strcmp(operator, "-") == 0 ||
         strcmp(operator, "*") == 0 || strcmp(operator, "/") == 0 ||
         strcmp(operator, "%") == 0) {
+        // If either is int64 (long), promote to int64
+        if (left->kind == TYPE_INT64 || right->kind == TYPE_INT64) {
+            return create_type(TYPE_INT64);
+        }
         // If both are int, result is int
         if (left->kind == TYPE_INT && right->kind == TYPE_INT) {
             return create_type(TYPE_INT);
@@ -165,6 +169,7 @@ void collect_expression_constraints(ASTNode* node, InferenceContext* ctx) {
                 if (left_type && right_type && node->value) {
                     Type* result_type = infer_from_binary_op(left_type, right_type, node->value);
                     if (result_type->kind != TYPE_UNKNOWN) {
+                        if (node->node_type) free_type(node->node_type);
                         node->node_type = result_type;
                     } else {
                         free_type(result_type);
@@ -591,6 +596,7 @@ void collect_constraints(ASTNode* node, InferenceContext* ctx) {
 
 // Check if there are unresolved types
 int has_unresolved_types(InferenceContext* ctx) {
+    if (!ctx || !ctx->constraints) return 0;
     for (int i = 0; i < ctx->constraint_count; i++) {
         if (!ctx->constraints[i].resolved) {
             return 1;

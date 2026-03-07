@@ -183,13 +183,27 @@ static inline void AETHER_HOT aether_send_message_sync(ActorBase* actor, void* m
 
     mailbox_send(&actor->mailbox, msg);
 
-    // Tell aether_free_message to skip freeing during this step()
+    // Tell aether_free_message to skip freeing the initial (stack-allocated) message.
+    // Self-sent messages from handlers are heap-allocated (see g_sync_step_actor check
+    // in aether_send_message), so they can be freed normally.
     g_skip_free = 1;
     // Guard: scheduler_spawn_pooled defers main_thread_only=0 while this is set
     g_sync_step_actor = actor;
     actor->step(actor);
-    g_sync_step_actor = NULL;
+    // If step() triggered a self-send transition (which starts scheduler
+    // threads and sets step_lock to prevent concurrent step() calls),
+    // release the lock now that step() has returned safely.
+    if (unlikely(!aether_main_thread_mode_active())) {
+        atomic_flag_clear_explicit(&actor->step_lock, memory_order_release);
+    }
     g_skip_free = 0;
+
+    // Do NOT drain self-sent messages here.  If a handler does self ! Msg {},
+    // the message sits in the mailbox and will be processed on the NEXT call to
+    // aether_send_message (from main) or by the scheduler.  Draining eagerly
+    // would turn self-continuation patterns (animation loops) into infinite
+    // blocking loops that starve main().
+    g_sync_step_actor = NULL;
 
     // Deferred main_thread_only disable: if the second actor was spawned during
     // step() above, scheduler_spawn_pooled skipped clearing main_thread_only to
@@ -214,8 +228,30 @@ void aether_send_message(void* actor_ptr, void* message_data, size_t message_siz
     // For single-actor programs (like counting benchmark), process immediately.
     // No scheduler threads, no queues, no atomics - pure function call.
     if (aether_main_thread_mode_active()) {
-        aether_send_message_sync(actor, message_data, message_size);
-        return;
+        // If we're already inside a step() (self-send from a handler), the actor
+        // needs to run independently from the main thread.  Disable main-thread
+        // mode so the scheduler threads take over message processing.  This
+        // enables patterns like animation loops (self ! AnimateStep {}) that
+        // require the actor to process messages concurrently with main().
+        if (g_sync_step_actor != NULL) {
+            // Self-send from a handler: disable main-thread mode so the
+            // scheduler takes over message processing for this actor.
+            atomic_store_explicit(&g_aether_config.main_thread_mode, false, memory_order_release);
+            g_aether_config.main_actor = NULL;
+            atomic_store_explicit(&actor->main_thread_only, 0, memory_order_release);
+            // Hold step_lock while the main thread's step() is still on the
+            // call stack.  Without this, the scheduler threads (started below)
+            // could call step() concurrently — a data race on actor state.
+            // aether_send_message_sync releases the lock after step() returns.
+            atomic_flag_test_and_set_explicit(&actor->step_lock, memory_order_acquire);
+            // Start scheduler threads if they were never created (main-thread
+            // mode skips thread creation in scheduler_start()).
+            scheduler_ensure_threads_running();
+            // Fall through to the standard multi-actor send path below.
+        } else {
+            aether_send_message_sync(actor, message_data, message_size);
+            return;
+        }
     }
 
     // ==============================================================================

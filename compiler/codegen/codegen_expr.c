@@ -9,13 +9,20 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 fprintf(gen->output, "\"");
                 const char* str = expr->value;
                 while (*str) {
+                    unsigned char ch = (unsigned char)*str;
                     switch (*str) {
                         case '\n': fprintf(gen->output, "\\n"); break;
                         case '\t': fprintf(gen->output, "\\t"); break;
                         case '\r': fprintf(gen->output, "\\r"); break;
                         case '\\': fprintf(gen->output, "\\\\"); break;
                         case '"': fprintf(gen->output, "\\\""); break;
-                        default: fprintf(gen->output, "%c", *str); break;
+                        default:
+                            if (ch < 0x20 || ch == 0x7F) {
+                                fprintf(gen->output, "\\x%02x", ch);
+                            } else {
+                                fprintf(gen->output, "%c", *str);
+                            }
+                            break;
                     }
                     str++;
                 }
@@ -43,6 +50,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             break;
 
         case AST_IDENTIFIER:
+            if (!expr->value) { fprintf(gen->output, "/* NULL identifier */0"); break; }
             if (gen->current_actor) {
                 int is_state_var = 0;
                 for (int i = 0; i < gen->state_var_count; i++) {
@@ -66,7 +74,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 ASTNode* child = expr->children[0];
 
                 int needs_atomic = 0;
-                if (child->node_type && child->node_type->kind == TYPE_ACTOR_REF) {
+                if (child->node_type && child->node_type->kind == TYPE_ACTOR_REF && expr->value) {
                     size_t name_len = strlen(expr->value);
                     int is_ref_field = (name_len > 4 && strcmp(expr->value + name_len - 4, "_ref") == 0);
 
@@ -97,10 +105,24 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 int is_assignment = (expr->value && strcmp(expr->value, "=") == 0);
 
                 // String comparison: emit strcmp instead of pointer ==
+                // Applies to ==, !=, <, >, <=, >= when BOTH sides are strings.
+                // NOT when comparing to 0/NULL (null check, not string compare).
                 int is_string_cmp = 0;
-                if (expr->value && (strcmp(expr->value, "==") == 0 || strcmp(expr->value, "!=") == 0)) {
+                if (expr->value && (strcmp(expr->value, "==") == 0 || strcmp(expr->value, "!=") == 0
+                    || strcmp(expr->value, "<") == 0 || strcmp(expr->value, ">") == 0
+                    || strcmp(expr->value, "<=") == 0 || strcmp(expr->value, ">=") == 0)) {
                     Type* lhs_type = expr->children[0]->node_type;
-                    if (lhs_type && lhs_type->kind == TYPE_STRING) {
+                    Type* rhs_type = expr->children[1]->node_type;
+                    ASTNode* rhs = expr->children[1];
+                    ASTNode* lhs_node = expr->children[0];
+                    int rhs_is_null = (rhs->type == AST_LITERAL && rhs->value && strcmp(rhs->value, "0") == 0)
+                                   || (rhs->type == AST_IDENTIFIER && rhs->value && strcmp(rhs->value, "NULL") == 0);
+                    int lhs_is_null = (lhs_node->type == AST_LITERAL && lhs_node->value && strcmp(lhs_node->value, "0") == 0)
+                                   || (lhs_node->type == AST_IDENTIFIER && lhs_node->value && strcmp(lhs_node->value, "NULL") == 0);
+                    // Both sides must be strings and neither can be a null literal
+                    int rhs_is_string = (rhs_type && rhs_type->kind == TYPE_STRING);
+                    if (lhs_type && lhs_type->kind == TYPE_STRING && rhs_is_string
+                        && !rhs_is_null && !lhs_is_null) {
                         is_string_cmp = 1;
                     }
                 }
@@ -202,13 +224,22 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             generate_expression(gen, arg);
                             fprintf(gen->output, ")");
                         } else if (arg_type->kind == TYPE_STRING) {
-                            fprintf(gen->output, "printf(\"%%s\", ");
-                            generate_expression(gen, arg);
-                            fprintf(gen->output, ")");
+                            if (arg->type == AST_LITERAL) {
+                                // String literal — never NULL, use printf directly
+                                fprintf(gen->output, "printf(");
+                                generate_expression(gen, arg);
+                                fprintf(gen->output, ")");
+                            } else {
+                                // Runtime string — could be NULL
+                                fprintf(gen->output, "printf(\"%%s\", _aether_safe_str(");
+                                generate_expression(gen, arg);
+                                fprintf(gen->output, "))");
+                            }
                         } else if (arg_type->kind == TYPE_PTR) {
-                            fprintf(gen->output, "printf(\"%%p\", ");
+                            // Runtime pointer — could be NULL
+                            fprintf(gen->output, "printf(\"%%s\", _aether_safe_str(");
                             generate_expression(gen, arg);
-                            fprintf(gen->output, ")");
+                            fprintf(gen->output, "))");
                         } else if (arg_type->kind == TYPE_BOOL) {
                             fprintf(gen->output, "printf(\"%%s\", ");
                             generate_expression(gen, arg);
@@ -267,13 +298,22 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             generate_expression(gen, arg);
                             fprintf(gen->output, ")");
                         } else if (arg_type->kind == TYPE_STRING) {
-                            fprintf(gen->output, "printf(\"%%s\\n\", ");
-                            generate_expression(gen, arg);
-                            fprintf(gen->output, ")");
+                            if (arg->type == AST_LITERAL) {
+                                // String literal — never NULL, use puts() directly
+                                fprintf(gen->output, "puts(");
+                                generate_expression(gen, arg);
+                                fprintf(gen->output, ")");
+                            } else {
+                                // Runtime string — could be NULL
+                                fprintf(gen->output, "printf(\"%%s\\n\", _aether_safe_str(");
+                                generate_expression(gen, arg);
+                                fprintf(gen->output, "))");
+                            }
                         } else if (arg_type->kind == TYPE_PTR) {
-                            fprintf(gen->output, "printf(\"%%p\\n\", ");
+                            // Runtime pointer — could be NULL
+                            fprintf(gen->output, "printf(\"%%s\\n\", _aether_safe_str(");
                             generate_expression(gen, arg);
-                            fprintf(gen->output, ")");
+                            fprintf(gen->output, "))");
                         } else if (arg_type->kind == TYPE_BOOL) {
                             fprintf(gen->output, "printf(\"%%s\\n\", ");
                             generate_expression(gen, arg);
@@ -310,15 +350,12 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     fprintf(gen->output, "scheduler_wait()");
                 }
                 else if (strcmp(func_name, "sleep") == 0 && expr->child_count == 1) {
-#ifdef _WIN32
-                    fprintf(gen->output, "Sleep(");
+                    // Emit target-guarded code (not host-guarded)
+                    fprintf(gen->output, "\n#ifdef _WIN32\nSleep(");
                     generate_expression(gen, expr->children[0]);
-                    fprintf(gen->output, ")");
-#else
-                    fprintf(gen->output, "usleep(1000 * (");
+                    fprintf(gen->output, ");\n#else\nusleep(1000 * (");
                     generate_expression(gen, expr->children[0]);
-                    fprintf(gen->output, "))");
-#endif
+                    fprintf(gen->output, "));\n#endif\n");
                 }
                 else if (strcmp(func_name, "getenv") == 0 && expr->child_count == 1) {
                     fprintf(gen->output, "getenv(");
@@ -348,7 +385,9 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 }
                 else {
                     char c_func_name[256];
-                    strncpy(c_func_name, func_name, sizeof(c_func_name) - 1);
+                    // Don't mangle extern functions — they refer to real C symbols
+                    const char* mangled = is_extern_func(gen, func_name) ? func_name : safe_c_name(func_name);
+                    strncpy(c_func_name, mangled, sizeof(c_func_name) - 1);
                     c_func_name[sizeof(c_func_name) - 1] = '\0';
                     for (char* p = c_func_name; *p; p++) {
                         if (*p == '.') *p = '_';
@@ -465,8 +504,14 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
         }
 
         case AST_ACTOR_REF:
+            if (!expr->value) { fprintf(gen->output, "NULL"); break; }
             if (strcmp(expr->value, "self") == 0) {
-                fprintf(gen->output, "aether_self()");
+                if (gen->current_actor) {
+                    // Inside actor handler: self is the function parameter
+                    fprintf(gen->output, "(ActorBase*)self");
+                } else {
+                    fprintf(gen->output, "NULL /* self outside actor */");
+                }
             } else {
                 fprintf(gen->output, "%s", expr->value);
             }
@@ -537,14 +582,14 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                 generate_expression(gen, target);
                                 fprintf(gen->output, "), _imsg, current_core_id); }");
                             } else {
-                                // Inside an actor handler: same-core vs cross-core branch is live
-                                fprintf(gen->output, "if (current_core_id >= 0 && current_core_id == ((ActorBase*)(");
+                                // Inside an actor handler: same-core vs cross-core branch is live.
+                                // Store target in temp to avoid triple-evaluation of side-effecting expressions.
+                                fprintf(gen->output, "ActorBase* _send_target = (ActorBase*)(");
                                 generate_expression(gen, target);
-                                fprintf(gen->output, "))->assigned_core) { scheduler_send_local((ActorBase*)(");
-                                generate_expression(gen, target);
-                                fprintf(gen->output, "), _imsg); } else { scheduler_send_remote((ActorBase*)(");
-                                generate_expression(gen, target);
-                                fprintf(gen->output, "), _imsg, current_core_id); } }");
+                                fprintf(gen->output, "); ");
+                                fprintf(gen->output, "if (current_core_id >= 0 && current_core_id == _send_target->assigned_core) { ");
+                                fprintf(gen->output, "scheduler_send_local(_send_target, _imsg); } else { ");
+                                fprintf(gen->output, "scheduler_send_remote(_send_target, _imsg, current_core_id); } }");
                             }
                         } else {
                             fprintf(gen->output, "{ %s _msg = { ._message_id = %d",
@@ -565,12 +610,12 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             fprintf(gen->output, ", &_msg, sizeof(%s)); }", message->value);
                         }
                     } else {
-                        fprintf(gen->output, "/* ERROR: unknown message type %s */", message->value);
+                        fprintf(gen->output, "/* ERROR: unknown message type %s */", message->value ? message->value : "<?>");
                     }
                 }
             }
             break;
-        
+
         case AST_SEND_ASK:
             if (expr->child_count >= 2) {
                 ASTNode* target = expr->children[0];
@@ -680,12 +725,12 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         }
                         fprintf(gen->output, "\n#endif\n");
                     } else {
-                        fprintf(gen->output, "/* ERROR: unknown message type %s */", message->value);
+                        fprintf(gen->output, "/* ERROR: unknown message type %s */", message->value ? message->value : "<?>");
                     }
                 }
             }
             break;
-            
+
         default:
             for (int i = 0; i < expr->child_count; i++) {
                 generate_expression(gen, expr->children[i]);

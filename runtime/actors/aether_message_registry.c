@@ -36,7 +36,9 @@ int register_message_type(MessageRegistry* registry, const char* name, MessageFi
     }
     
     MessageDef* def = (MessageDef*)malloc(sizeof(MessageDef));
+    if (!def) return -1;
     def->name = strdup(name);
+    if (!def->name) { free(def); return -1; }
     def->message_id = registry->next_id++;
     def->fields = fields;
     def->next = registry->messages;

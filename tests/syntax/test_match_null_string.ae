@@ -1,0 +1,78 @@
+// Test match on potentially null strings (e.g. from getenv)
+// Verifies: strcmp is null-guarded, wildcard catches null
+
+main() {
+    print("=== Match Null String Tests ===\n\n")
+
+    // Test 1: Match on null string falls to wildcard
+    print("Test 1: Null string falls to wildcard\n")
+    s = getenv("AETHER_TEST_NONEXISTENT_MATCH_VAR")
+    match (s) {
+        "hello" -> {
+            print("  FAIL: should not match hello\n")
+            exit(1)
+        }
+        "world" -> {
+            print("  FAIL: should not match world\n")
+            exit(1)
+        }
+        _ -> {
+            print("  PASS: wildcard caught null string\n")
+        }
+    }
+
+    // Test 2: Match non-null string still works
+    print("\nTest 2: Non-null string matches correctly\n")
+    path = getenv("PATH")
+    found = 0
+    if path != 0 {
+        // PATH exists, so it shouldn't match random strings but should hit wildcard
+        match (path) {
+            "definitely_not_a_path" -> {
+                print("  FAIL\n")
+                exit(1)
+            }
+            _ -> {
+                found = 1
+                print("  PASS: non-null string hit wildcard correctly\n")
+            }
+        }
+    } else {
+        print("  SKIP: PATH not set\n")
+        found = 1
+    }
+    if found != 1 {
+        print("  FAIL: match did not execute\n")
+        exit(1)
+    }
+
+    // Test 3: Multiple null string matches in sequence
+    print("\nTest 3: Sequential null matches\n")
+    a = getenv("AETHER_NULL_A")
+    b = getenv("AETHER_NULL_B")
+    count = 0
+    match (a) {
+        "x" -> { print("  FAIL\n"); exit(1) }
+        _ -> { count = count + 1 }
+    }
+    match (b) {
+        "y" -> { print("  FAIL\n"); exit(1) }
+        _ -> { count = count + 1 }
+    }
+    if count == 2 {
+        print("  PASS: both null matches hit wildcard\n")
+    } else {
+        print("  FAIL: expected count=2\n")
+        exit(1)
+    }
+
+    // Test 4: Empty string is not null
+    print("\nTest 4: Empty string matches (not null)\n")
+    empty = ""
+    match (empty) {
+        "" -> { print("  PASS: empty string matched empty pattern\n") }
+        _ -> { print("  FAIL: empty should match empty\n"); exit(1) }
+    }
+
+    print("\n=== All 4 Tests Complete ===\n")
+}

@@ -1,0 +1,108 @@
+// Test while loop edge cases: zero iterations, nested, break/continue
+// Verifies: codegen handles all loop patterns correctly
+
+main() {
+    print("=== While Loop Edge Cases ===\n\n")
+
+    // Test 1: Zero iterations (condition false initially)
+    print("Test 1: Zero iterations\n")
+    count = 0
+    i = 10
+    while i < 5 {
+        count = count + 1
+        i = i + 1
+    }
+    if count != 0 {
+        print("  FAIL: count=")
+        println(count)
+        exit(1)
+    }
+    print("  PASS: zero iterations\n")
+
+    // Test 2: Single iteration
+    print("\nTest 2: Single iteration\n")
+    count = 0
+    j = 0
+    while j < 1 {
+        count = count + 1
+        j = j + 1
+    }
+    if count != 1 {
+        print("  FAIL\n")
+        exit(1)
+    }
+    print("  PASS\n")
+
+    // Test 3: Nested while loops
+    print("\nTest 3: Nested loops\n")
+    total = 0
+    x = 0
+    while x < 5 {
+        y = 0
+        while y < 5 {
+            total = total + 1
+            y = y + 1
+        }
+        x = x + 1
+    }
+    if total != 25 {
+        print("  FAIL: total=")
+        println(total)
+        exit(1)
+    }
+    print("  PASS: 5x5 = 25\n")
+
+    // Test 4: Break out of loop
+    print("\nTest 4: Break\n")
+    sum = 0
+    k = 0
+    while k < 100 {
+        if k == 10 {
+            break
+        }
+        sum = sum + k
+        k = k + 1
+    }
+    if sum != 45 {
+        print("  FAIL: sum=")
+        println(sum)
+        exit(1)
+    }
+    print("  PASS: break at k=10, sum=45\n")
+
+    // Test 5: Continue in loop
+    print("\nTest 5: Continue\n")
+    sum = 0
+    m = 0
+    while m < 10 {
+        m = m + 1
+        // Skip odd numbers
+        if m % 2 != 0 {
+            continue
+        }
+        sum = sum + m
+    }
+    // Even numbers 2+4+6+8+10 = 30
+    if sum != 30 {
+        print("  FAIL: sum=")
+        println(sum)
+        exit(1)
+    }
+    print("  PASS: evens sum = 30\n")
+
+    // Test 6: Large loop count
+    print("\nTest 6: Large loop (100K)\n")
+    acc = 0
+    n = 0
+    while n < 100000 {
+        acc = acc + 1
+        n = n + 1
+    }
+    if acc != 100000 {
+        print("  FAIL\n")
+        exit(1)
+    }
+    print("  PASS: 100K iterations\n")
+
+    print("\n=== All 6 While Loop Tests Passed ===\n")
+}

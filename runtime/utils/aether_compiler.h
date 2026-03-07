@@ -162,6 +162,11 @@ static inline char* aether_strndup_impl(const char* s, size_t n) {
 #    ifndef strndup
 #      define strndup(s, n) aether_strndup_impl((s), (n))
 #    endif
+#    ifdef _MSC_VER
+#      ifndef strdup
+#        define strdup _strdup
+#      endif
+#    endif
 #  endif
 #endif
 

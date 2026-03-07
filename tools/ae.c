@@ -57,7 +57,7 @@ extern char** environ;
 
 // Version is set by Makefile from VERSION file
 #ifndef AETHER_VERSION
-#define AETHER_VERSION "0.5.0"
+#define AETHER_VERSION "0.0.0-dev"
 #endif
 #define AE_VERSION AETHER_VERSION
 
@@ -173,9 +173,10 @@ static unsigned long long compute_cache_key(const char* ae_file, const char* fla
 // Run a command via posix_spawnp (faster than system() — no /bin/sh overhead)
 // Space-splits the command string into argv (no shell quoting supported,
 // but our controlled commands never need it).
-static int posix_run(const char* cmd_str, bool quiet) {
+// quiet=0: show all output, quiet=1: hide stdout+stderr, quiet=2: hide stdout only (keep stderr for warnings)
+static int posix_run(const char* cmd_str, int quiet) {
     if (tc.verbose) fprintf(stderr, "[cmd] %s\n", cmd_str);
-    char buf[8192];
+    char buf[16384];
     strncpy(buf, cmd_str, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
 
@@ -193,9 +194,12 @@ static int posix_run(const char* cmd_str, bool quiet) {
 
     posix_spawn_file_actions_t fa;
     posix_spawn_file_actions_init(&fa);
-    if (quiet) {
+    if (quiet == 1) {
         posix_spawn_file_actions_addopen(&fa, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
         posix_spawn_file_actions_addopen(&fa, STDERR_FILENO, "/dev/null", O_WRONLY, 0);
+    } else if (quiet == 2) {
+        // Hide stdout but keep stderr (so gcc warnings are visible)
+        posix_spawn_file_actions_addopen(&fa, STDOUT_FILENO, "/dev/null", O_WRONLY, 0);
     }
 
     pid_t pid;
@@ -205,13 +209,17 @@ static int posix_run(const char* cmd_str, bool quiet) {
 
     int status = 0;
     waitpid(pid, &status, 0);
-    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
+    if (WIFEXITED(status))
+        return WEXITSTATUS(status);
+    if (WIFSIGNALED(status))
+        return -WTERMSIG(status);  // negative signal number
+    return -1;
 }
 #endif
 
 static int run_cmd(const char* cmd) {
 #ifndef _WIN32
-    return posix_run(cmd, false);
+    return posix_run(cmd, 0);
 #else
     if (tc.verbose) fprintf(stderr, "[cmd] %s\n", cmd);
     return system(cmd);
@@ -221,12 +229,37 @@ static int run_cmd(const char* cmd) {
 // Run a command, suppressing all output (quiet mode)
 static int run_cmd_quiet(const char* cmd) {
 #ifndef _WIN32
-    return posix_run(cmd, true);
+    return posix_run(cmd, 1);
 #else
-    char full[8192 + 16];
+    char full[16384 + 16];
     snprintf(full, sizeof(full), "%s >nul 2>&1", cmd);
     return system(full);
 #endif
+}
+
+// Run a command, showing stderr (warnings) but hiding stdout
+static int run_cmd_show_warnings(const char* cmd) {
+#ifndef _WIN32
+    return posix_run(cmd, 2);
+#else
+    char full[16384 + 16];
+    snprintf(full, sizeof(full), "%s >nul", cmd);
+    return system(full);
+#endif
+}
+
+// Validate that a path is safe for use in shell commands (no metacharacters)
+static bool is_safe_path(const char* path) {
+    if (!path) return false;
+    for (const char* p = path; *p; p++) {
+        // Reject shell metacharacters that could enable command injection
+        if (*p == '`' || *p == '$' || *p == '|' || *p == ';' ||
+            *p == '&' || *p == '\n' || *p == '\r' || *p == '\'' ||
+            *p == '!' || *p == '(' || *p == ')') {
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool path_exists(const char* path) {
@@ -236,6 +269,20 @@ static bool path_exists(const char* path) {
 #else
     return access(path, F_OK) == 0;
 #endif
+}
+
+// Validate a string contains only safe characters for shell commands.
+// Allows: alphanumeric, '.', '/', '-', '_', '@'
+static bool is_safe_shell_arg(const char* s) {
+    if (!s || !*s) return false;
+    for (const char* p = s; *p; p++) {
+        char c = *p;
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '.' || c == '/' ||
+            c == '-' || c == '_' || c == '@') continue;
+        return false;
+    }
+    return true;
 }
 
 static bool dir_exists(const char* path) {
@@ -248,9 +295,10 @@ static void mkdirs(const char* path) {
     snprintf(tmp, sizeof(tmp), "%s", path);
     for (char* p = tmp + 1; *p; p++) {
         if (*p == '/' || *p == '\\') {
+            char sep = *p;
             *p = '\0';
             mkdir_p(tmp);
-            *p = '/';
+            *p = sep;
         }
     }
     mkdir_p(tmp);
@@ -406,7 +454,8 @@ static void discover_toolchain(void) {
     };
     for (int i = 0; standard_paths[i]; i++) {
         if (path_exists(standard_paths[i])) {
-            strcpy(tc.compiler, standard_paths[i]);
+            strncpy(tc.compiler, standard_paths[i], sizeof(tc.compiler) - 1);
+            tc.compiler[sizeof(tc.compiler) - 1] = '\0';
             strncpy(tc.root, standard_paths[i], sizeof(tc.root) - 1);
             char* slash = strrchr(tc.root, '/');
             if (slash) *slash = '\0';
@@ -842,12 +891,13 @@ static void build_gcc_cmd(char* cmd, size_t size,
     }
     // Windows (MinGW): no -pthread (Win32 threads via aether_thread.h), no -lm (CRT).
     // -lws2_32 is required for Winsock2 (aether_http/net always compiled into runtime).
+    // -static links libwinpthread/libgcc into the binary so it runs without MinGW DLLs.
     // Quote s_gcc_bin in case the path contains spaces.
     char opt[600];
     if (user_cflags[0])
-        snprintf(opt, sizeof(opt), "%s %s", optimize ? "-O2" : "-O0 -g", user_cflags);
+        snprintf(opt, sizeof(opt), "-static %s %s", optimize ? "-O2" : "-O0 -g", user_cflags);
     else
-        snprintf(opt, sizeof(opt), "%s", optimize ? "-O2" : "-O0 -g");
+        snprintf(opt, sizeof(opt), "-static %s", optimize ? "-O2" : "-O0 -g");
     char lib_dir[1024];
     if (tc.has_lib) {
         strncpy(lib_dir, tc.lib, sizeof(lib_dir) - 1);
@@ -866,6 +916,19 @@ static void build_gcc_cmd(char* cmd, size_t size,
     }
 #else
     // POSIX (Linux/macOS): -pthread for POSIX threads, -lm for math
+    // Pre-flight check: ensure gcc (or cc) is available
+    if (system("command -v gcc >/dev/null 2>&1") != 0 &&
+        system("command -v cc >/dev/null 2>&1") != 0) {
+        fprintf(stderr, "Error: C compiler not found (gcc or cc).\n");
+#ifdef __APPLE__
+        fprintf(stderr, "Install Xcode Command Line Tools: xcode-select --install\n");
+#else
+        fprintf(stderr, "Install GCC: sudo apt install gcc  (Debian/Ubuntu)\n");
+        fprintf(stderr, "             sudo dnf install gcc  (Fedora)\n");
+#endif
+        snprintf(cmd, size, "false");
+        return;
+    }
     char opt[600];
     if (user_cflags[0])
         snprintf(opt, sizeof(opt), "%s %s", optimize ? "-O2 -pipe" : "-O0 -g -pipe", user_cflags);
@@ -925,7 +988,13 @@ static int cmd_run(int argc, char** argv) {
 
     // Project mode: no file argument, look for aether.toml
     if (!file && path_exists("aether.toml")) {
-        if (path_exists("src/main.ae")) file = "src/main.ae";
+        if (path_exists("src/main.ae"))
+            file = "src/main.ae";
+        else {
+            fprintf(stderr, "Error: aether.toml found but src/main.ae is missing.\n");
+            fprintf(stderr, "Create src/main.ae or specify a file: ae run <file.ae>\n");
+            return 1;
+        }
     }
 
     if (!file) {
@@ -954,7 +1023,14 @@ static int cmd_run(int argc, char** argv) {
         if (path_exists(cached_exe)) {
             if (tc.verbose) fprintf(stderr, "[cache] hit: %016llx\n", cache_key);
             snprintf(cmd, sizeof(cmd), "%s", cached_exe);
-            return run_cmd(cmd);
+            int rc = run_cmd(cmd);
+            if (rc < 0) {
+                fprintf(stderr, "Program crashed (signal %d", -rc);
+                if (-rc == 11) fprintf(stderr, ": segmentation fault");
+                else if (-rc == 6) fprintf(stderr, ": aborted");
+                fprintf(stderr, ")\n");
+            }
+            return rc;
         }
         if (tc.verbose) fprintf(stderr, "[cache] miss: %016llx\n", cache_key);
         using_cache = true;
@@ -962,18 +1038,20 @@ static int cmd_run(int argc, char** argv) {
 
     // Determine temp .c file path and exe path
     // If caching: write exe directly to cache slot (no extra copy needed)
+    // Use PID in temp filenames to avoid symlink attacks and collisions
+    int pid = (int)getpid();
     if (tc.dev_mode) {
-        snprintf(c_file, sizeof(c_file), "%s/build/_ae_tmp.c", tc.root);
+        snprintf(c_file, sizeof(c_file), "%s/build/_ae_%d.c", tc.root, pid);
     } else {
-        snprintf(c_file, sizeof(c_file), "%s/_ae_tmp.c", get_temp_dir());
+        snprintf(c_file, sizeof(c_file), "%s/_ae_%d.c", get_temp_dir(), pid);
     }
     if (using_cache) {
         strncpy(exe_file, cached_exe, sizeof(exe_file) - 1);
         exe_file[sizeof(exe_file) - 1] = '\0';
     } else if (tc.dev_mode) {
-        snprintf(exe_file, sizeof(exe_file), "%s/build/_ae_tmp" EXE_EXT, tc.root);
+        snprintf(exe_file, sizeof(exe_file), "%s/build/_ae_%d" EXE_EXT, tc.root, pid);
     } else {
-        snprintf(exe_file, sizeof(exe_file), "%s/_ae_tmp" EXE_EXT, get_temp_dir());
+        snprintf(exe_file, sizeof(exe_file), "%s/_ae_%d" EXE_EXT, get_temp_dir(), pid);
     }
 
     // Step 1: Compile .ae to .c
@@ -999,7 +1077,8 @@ static int cmd_run(int argc, char** argv) {
     }
     const char* run_extra = extra_files[0] ? extra_files : NULL;
     build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, false, run_extra);
-    int gcc_ret = tc.verbose ? run_cmd(cmd) : run_cmd_quiet(cmd);
+    // Show stderr (gcc warnings like -Wformat) even in non-verbose mode
+    int gcc_ret = tc.verbose ? run_cmd(cmd) : run_cmd_show_warnings(cmd);
     if (gcc_ret != 0) {
         // Re-run with output for error diagnosis
         build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, false, run_extra);
@@ -1015,6 +1094,15 @@ static int cmd_run(int argc, char** argv) {
     // Step 3: Run
     snprintf(cmd, sizeof(cmd), "%s", exe_file);
     int rc = run_cmd(cmd);
+
+    if (rc < 0) {
+        fprintf(stderr, "Program crashed (signal %d", -rc);
+        if (-rc == 11) fprintf(stderr, ": segmentation fault");
+        else if (-rc == 6) fprintf(stderr, ": aborted");
+        fprintf(stderr, ")\n");
+        // Remove crashed binary from cache so next run recompiles
+        if (using_cache) remove(exe_file);
+    }
 
     // If not cached, remove the temp exe
     if (!using_cache) remove(exe_file);
@@ -1057,7 +1145,13 @@ static int cmd_build(int argc, char** argv) {
 
     // Project mode
     if (!file && path_exists("aether.toml")) {
-        if (path_exists("src/main.ae")) file = "src/main.ae";
+        if (path_exists("src/main.ae"))
+            file = "src/main.ae";
+        else {
+            fprintf(stderr, "Error: aether.toml found but src/main.ae is missing.\n");
+            fprintf(stderr, "Create src/main.ae or specify a file: ae build <file.ae>\n");
+            return 1;
+        }
     }
 
     if (!file) {
@@ -1215,7 +1309,14 @@ static int cmd_init(int argc, char** argv) {
 static int cmd_test(int argc, char** argv) {
     const char* target = NULL;
     for (int i = 0; i < argc; i++) {
-        if (argv[i][0] != '-') { target = argv[i]; break; }
+        if (argv[i][0] != '-') {
+            if (!is_safe_path(argv[i])) {
+                fprintf(stderr, "Error: Invalid characters in path\n");
+                return 1;
+            }
+            target = argv[i];
+            break;
+        }
     }
 
     // Collect test files
@@ -1252,7 +1353,7 @@ static int cmd_test(int argc, char** argv) {
         if (pipe) {
             char line[512];
             while (fgets(line, sizeof(line), pipe) && test_count < 256) {
-                line[strcspn(line, "\n")] = '\0';
+                line[strcspn(line, "\r\n")] = '\0';
                 if (strlen(line) > 0) {
                     strncpy(test_files[test_count], line, sizeof(test_files[0]) - 1);
                     test_files[test_count][sizeof(test_files[0]) - 1] = '\0';
@@ -1352,6 +1453,12 @@ static int cmd_add(int argc, char** argv) {
         return 1;
     }
 
+    // Validate package name to prevent command injection
+    if (!is_safe_shell_arg(package)) {
+        fprintf(stderr, "Error: Package name contains invalid characters.\n");
+        return 1;
+    }
+
     printf("Adding %s...\n", package);
 
     // Cache directory
@@ -1388,12 +1495,25 @@ static int cmd_add(int argc, char** argv) {
 
     // Add to aether.toml
     FILE* f = fopen("aether.toml", "r");
-    if (!f) return 1;
+    if (!f) {
+        fprintf(stderr, "Error: Could not read aether.toml\n");
+        return 1;
+    }
     fseek(f, 0, SEEK_END);
     long sz = ftell(f);
+    if (sz < 0) {
+        fclose(f);
+        fprintf(stderr, "Error: Could not determine file size\n");
+        return 1;
+    }
     fseek(f, 0, SEEK_SET);
-    char* content = malloc(sz + 1);
-    size_t nread = fread(content, 1, sz, f);
+    char* content = malloc((size_t)sz + 1);
+    if (!content) {
+        fclose(f);
+        fprintf(stderr, "Error: Out of memory\n");
+        return 1;
+    }
+    size_t nread = fread(content, 1, (size_t)sz, f);
     content[nread] = '\0';
     fclose(f);
 
@@ -1407,6 +1527,11 @@ static int cmd_add(int argc, char** argv) {
     if (deps) {
         char* next_sect = strchr(deps + 14, '[');
         f = fopen("aether.toml", "w");
+        if (!f) {
+            fprintf(stderr, "Error: Could not write aether.toml\n");
+            free(content);
+            return 1;
+        }
         if (next_sect) {
             fwrite(content, 1, next_sect - content, f);
             fprintf(f, "%s = \"latest\"\n", package);
@@ -1415,6 +1540,17 @@ static int cmd_add(int argc, char** argv) {
             fputs(content, f);
             fprintf(f, "%s = \"latest\"\n", package);
         }
+        fclose(f);
+    } else {
+        // No [dependencies] section — append one
+        f = fopen("aether.toml", "a");
+        if (!f) {
+            fprintf(stderr, "Error: Could not write aether.toml\n");
+            free(content);
+            return 1;
+        }
+        fprintf(f, "\n[dependencies]\n");
+        fprintf(f, "%s = \"latest\"\n", package);
         fclose(f);
     }
 
@@ -1425,7 +1561,13 @@ static int cmd_add(int argc, char** argv) {
 
 static int cmd_examples(int argc, char** argv) {
     const char* examples_dir = "examples";
-    if (argc > 0 && argv[0][0] != '-') examples_dir = argv[0];
+    if (argc > 0 && argv[0][0] != '-') {
+        if (!is_safe_path(argv[0])) {
+            fprintf(stderr, "Error: Invalid characters in path\n");
+            return 1;
+        }
+        examples_dir = argv[0];
+    }
 
     char files[512][512];
     int file_count = 0;
@@ -1570,7 +1712,7 @@ static int cmd_repl(void) {
         printf(brace_depth > 0 ? "...  " : "ae> ");
         fflush(stdout);
         if (!fgets(line, sizeof(line), stdin)) break;
-        line[strcspn(line, "\n")] = '\0';
+        line[strcspn(line, "\r\n")] = '\0';
 
         if (strcmp(line, "exit") == 0 || strcmp(line, "quit") == 0) break;
 
@@ -2074,8 +2216,8 @@ static void print_usage(void) {
     printf("  test [file|dir]      Discover and run tests\n");
     printf("  add <package>        Add a dependency\n");
     printf("  cache [clear]        Show or clear build cache\n");
+    printf("  examples             List and run example programs\n");
     printf("  repl                 Start interactive REPL\n");
-    // fmt: hidden from help until implemented
     printf("  version              Show version / manage installed versions\n");
     printf("  version list         List all available releases\n");
     printf("  version install <v>  Download and install a specific version\n");

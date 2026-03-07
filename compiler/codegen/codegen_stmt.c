@@ -240,30 +240,32 @@ static int try_emit_series_collapse(CodeGenerator* gen, ASTNode* while_node) {
             } else {
                 fprintf(gen->output, "%s = %s + (", acc_vars[i], acc_vars[i]);
             }
-            fprintf(gen->output, "(");
+            // Cast to int64_t to prevent overflow for large N.
+            // e.g., N=100000: N*(N-1)/2 = 4999950000 which exceeds int32 max.
+            fprintf(gen->output, "(int64_t)(");
             generate_expression(gen, cond_right);
             if (is_lte) {
-                fprintf(gen->output, ") * ((");
+                fprintf(gen->output, ") * ((int64_t)(");
                 generate_expression(gen, cond_right);
                 fprintf(gen->output, ") + 1)");
             } else {
-                fprintf(gen->output, ") * ((");
+                fprintf(gen->output, ") * ((int64_t)(");
                 generate_expression(gen, cond_right);
                 fprintf(gen->output, ") - 1)");
             }
-            fprintf(gen->output, " / 2 - %s * (%s - 1) / 2);\n", counter_var, counter_var);
+            fprintf(gen->output, " / 2 - (int64_t)%s * ((int64_t)%s - 1) / 2);\n", counter_var, counter_var);
             emitted_linear = 1;
         } else {
-            // Constant addend: multiply by trip count
-            fprintf(gen->output, "%s = %s + (", acc_vars[i], acc_vars[i]);
+            // Constant addend: multiply by trip count (int64 to prevent overflow)
+            fprintf(gen->output, "%s = %s + (int64_t)(", acc_vars[i], acc_vars[i]);
             generate_expression(gen, acc_addends[i]);
             fprintf(gen->output, ") * (");
             if (counter_step == 1.0) {
-                fprintf(gen->output, "(");
+                fprintf(gen->output, "(int64_t)(");
                 generate_expression(gen, cond_right);
                 fprintf(gen->output, ") - %s", counter_var);
             } else {
-                fprintf(gen->output, "((");
+                fprintf(gen->output, "((int64_t)(");
                 generate_expression(gen, cond_right);
                 fprintf(gen->output, ") - %s) / %g", counter_var, counter_step);
             }
@@ -488,7 +490,7 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
 
         case AST_COMPOUND_ASSIGNMENT: {
             // node->value = variable name, children[0] = operator literal, children[1] = RHS
-            if (stmt->child_count >= 2 && stmt->value) {
+            if (stmt->child_count >= 2 && stmt->value && stmt->children[0] && stmt->children[0]->value) {
                 const char* op = stmt->children[0]->value;  // "+=", "-=", etc.
 
                 // Check if this is a state variable in an actor
@@ -630,7 +632,8 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
         case AST_MATCH_STATEMENT:
             // Generate match as a series of if-else statements
             // match (x) { 1 -> a, 2 -> b, _ -> c }
-            // becomes: if (x == 1) { a; } else if (x == 2) { b; } else { c; }
+            // becomes: { T _match_val = x; if (_match_val == 1) { a; } else if ... }
+            // Using a temp variable avoids re-evaluating the match expression per arm.
             if (stmt->child_count > 0) {
                 ASTNode* match_expr = stmt->children[0];
 
@@ -639,25 +642,44 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                 char array_name[64] = "_match_arr";
                 char len_name[64] = "_match_len";
 
-                // If using list patterns, wrap in block and generate array setup
+                // Wrap match in a block and store the match expression in a temp
+                // to avoid evaluating it multiple times (could have side effects).
+                print_line(gen, "{");
+                indent(gen);
+
+                // If using list patterns, generate array setup
                 if (uses_list_patterns) {
-                    print_line(gen, "{");
-                    indent(gen);
                     print_indent(gen);
                     fprintf(gen->output, "int* %s = ", array_name);
                     generate_expression(gen, match_expr);
                     fprintf(gen->output, ";\n");
-                    // For arrays, assume a corresponding _len variable exists
-                    // Convention: if matching on 'arr', expect 'arr_len' to exist
                     print_indent(gen);
                     fprintf(gen->output, "int %s = ", len_name);
                     generate_expression(gen, match_expr);
                     fprintf(gen->output, "_len;\n");
+                } else {
+                    // Emit temp variable for the match expression value
+                    Type* mexpr_type = match_expr->node_type;
+                    const char* match_c_type = "int";
+                    if (mexpr_type) {
+                        if (mexpr_type->kind == TYPE_STRING || mexpr_type->kind == TYPE_PTR)
+                            match_c_type = "const char*";
+                        else if (mexpr_type->kind == TYPE_FLOAT)
+                            match_c_type = "double";
+                        else if (mexpr_type->kind == TYPE_INT64)
+                            match_c_type = "int64_t";
+                        else if (mexpr_type->kind == TYPE_BOOL)
+                            match_c_type = "bool";
+                    }
+                    print_indent(gen);
+                    fprintf(gen->output, "%s _match_val = ", match_c_type);
+                    generate_expression(gen, match_expr);
+                    fprintf(gen->output, ";\n");
                 }
 
                 for (int i = 1; i < stmt->child_count; i++) {
                     ASTNode* match_arm = stmt->children[i];
-                    if (match_arm->type != AST_MATCH_ARM || match_arm->child_count < 2) continue;
+                    if (!match_arm || match_arm->type != AST_MATCH_ARM || match_arm->child_count < 2) continue;
 
                     ASTNode* pattern = match_arm->children[0];
                     ASTNode* result = match_arm->children[1];
@@ -702,17 +724,15 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                             print_indent(gen);
                             fprintf(gen->output, "if (");
                         }
-                        // Use strcmp for string match arms
+                        // Use _match_val (temp) instead of re-evaluating match_expr
                         Type* mexpr_type = match_expr->node_type;
                         if (mexpr_type && mexpr_type->kind == TYPE_STRING) {
-                            fprintf(gen->output, "strcmp(");
-                            generate_expression(gen, match_expr);
-                            fprintf(gen->output, ", ");
+                            // NULL-safe strcmp: guard with _match_val != NULL
+                            fprintf(gen->output, "_match_val && strcmp(_match_val, ");
                             generate_expression(gen, pattern);
                             fprintf(gen->output, ") == 0) {\n");
                         } else {
-                            generate_expression(gen, match_expr);
-                            fprintf(gen->output, " == ");
+                            fprintf(gen->output, "_match_val == ");
                             generate_expression(gen, pattern);
                             fprintf(gen->output, ") {\n");
                         }
@@ -730,6 +750,11 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         for (int j = 0; j < result->child_count; j++) {
                             generate_statement(gen, result->children[j]);
                         }
+                    } else if (result->type == AST_PRINT_STATEMENT
+                            || result->type == AST_RETURN_STATEMENT
+                            || result->type == AST_VARIABLE_DECLARATION) {
+                        // Statement-level node (e.g. print, return)
+                        generate_statement(gen, result);
                     } else {
                         // Single expression, make it a statement
                         print_indent(gen);
@@ -740,11 +765,9 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     print_line(gen, "}");
                 }
 
-                // Close the scoping block for list pattern variables
-                if (uses_list_patterns) {
-                    unindent(gen);
-                    print_line(gen, "}");
-                }
+                // Close the match scoping block
+                unindent(gen);
+                print_line(gen, "}");
             }
             break;
 
@@ -812,9 +835,11 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                 if (stmt->child_count > 0 && stmt->children[0] &&
                     stmt->children[0]->type != AST_PRINT_STATEMENT) {
                     print_indent(gen);
-                    // Determine return type from expression
+                    // Determine return type from expression (fall back to int if untyped)
                     Type* ret_type = stmt->children[0]->node_type;
-                    fprintf(gen->output, "%s _defer_ret = ", get_c_type(ret_type));
+                    const char* ret_c_type = (ret_type && ret_type->kind != TYPE_VOID && ret_type->kind != TYPE_UNKNOWN)
+                                             ? get_c_type(ret_type) : "int";
+                    fprintf(gen->output, "%s _defer_ret = ", ret_c_type);
                     generate_expression(gen, stmt->children[0]);
                     fprintf(gen->output, ";\n");
                     emit_all_defers(gen);
@@ -903,9 +928,10 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         generate_expression(gen, first_arg);
                         fprintf(gen->output, ");\n");
                     } else if (arg_type->kind == TYPE_STRING) {
-                        fprintf(gen->output, "printf(\"%%s\", ");
+                        // NULL-safe via helper (no double-evaluation)
+                        fprintf(gen->output, "printf(\"%%s\", _aether_safe_str(");
                         generate_expression(gen, first_arg);
-                        fprintf(gen->output, ");\n");
+                        fprintf(gen->output, "));\n");
                     } else if (arg_type->kind == TYPE_BOOL) {
                         fprintf(gen->output, "printf(\"%%s\", ");
                         generate_expression(gen, first_arg);
@@ -915,10 +941,10 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         generate_expression(gen, first_arg);
                         fprintf(gen->output, ");\n");
                     } else if (arg_type->kind == TYPE_PTR) {
-                        // ptr type is typically char* (from stdlib string returns)
-                        fprintf(gen->output, "printf(\"%%s\", (char*)");
+                        // NULL-safe via helper (no double-evaluation)
+                        fprintf(gen->output, "printf(\"%%s\", _aether_safe_str(");
                         generate_expression(gen, first_arg);
-                        fprintf(gen->output, ");\n");
+                        fprintf(gen->output, "));\n");
                     } else {
                         // Unknown type - default to %d
                         fprintf(gen->output, "printf(\"%%d\", ");
@@ -948,9 +974,12 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     }
                     fprintf(gen->output, ");\n");
                 }
+                // Flush stdout so partial-line output appears immediately
+                // (without this, print(".") in a loop won't show until \n)
+                fprintf(gen->output, "fflush(stdout);\n");
             }
             break;
-            
+
         case AST_SEND_STATEMENT:
             // Note: Generic send() syntax not yet implemented
             // Use type-specific send_ActorName() functions generated for each actor
@@ -981,7 +1010,7 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             if (stmt->child_count > 0) {
                 ASTNode* reply_expr = stmt->children[0];
 
-                if (reply_expr->type == AST_MESSAGE_CONSTRUCTOR) {
+                if (reply_expr->type == AST_MESSAGE_CONSTRUCTOR && reply_expr->value) {
                     MessageDef* msg_def = lookup_message(gen->message_registry, reply_expr->value);
                     if (msg_def) {
                         print_indent(gen);

@@ -7,9 +7,12 @@ void register_extern_func(CodeGenerator* gen, ASTNode* ext) {
 
     // Grow registry if needed
     if (gen->extern_registry_count >= gen->extern_registry_capacity) {
-        gen->extern_registry_capacity = gen->extern_registry_capacity * 2 + 8;
-        gen->extern_registry = realloc(gen->extern_registry,
-            gen->extern_registry_capacity * sizeof(*gen->extern_registry));
+        int new_cap = gen->extern_registry_capacity * 2 + 8;
+        void* new_reg = realloc(gen->extern_registry,
+            (size_t)new_cap * sizeof(*gen->extern_registry));
+        if (!new_reg) return;  // OOM: skip registration
+        gen->extern_registry = new_reg;
+        gen->extern_registry_capacity = new_cap;
     }
 
     int idx = gen->extern_registry_count++;
@@ -28,6 +31,17 @@ void register_extern_func(CodeGenerator* gen, ASTNode* ext) {
             }
         }
     }
+}
+
+// Check if a function name is registered as an extern function.
+int is_extern_func(CodeGenerator* gen, const char* func_name) {
+    if (!gen || !func_name) return 0;
+    for (int i = 0; i < gen->extern_registry_count; i++) {
+        if (gen->extern_registry[i].name && strcmp(gen->extern_registry[i].name, func_name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
 }
 
 // Look up the expected TypeKind for the nth parameter of an extern function.
@@ -93,7 +107,7 @@ void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext) {
         fprintf(gen->output, "void");
     }
 
-    fprintf(gen->output, " %s(", ext->value);
+    fprintf(gen->output, " %s(", ext->value);  // No mangling: extern refers to actual C symbol
 
     // Generate parameters
     int first_param = 1;
@@ -141,7 +155,7 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
     } else {
         generate_type(gen, ret_type);
     }
-    fprintf(gen->output, " %s(", func->value);
+    fprintf(gen->output, " %s(", safe_c_name(func->value));
 
     // Generate parameters - handle pattern matching
     int param_count = 0;
@@ -438,7 +452,7 @@ static int generate_clause_condition(CodeGenerator* gen, ASTNode* func, int is_f
         ASTNode* child = func->children[i];
         if (child->type == AST_GUARD_CLAUSE || child->type == AST_BLOCK) continue;
 
-        if (child->type == AST_PATTERN_VARIABLE && child->value) {
+        if (child->type == AST_PATTERN_VARIABLE && child->value && mapping_count < 32) {
             mappings[mapping_count].var_name = child->value;
             mappings[mapping_count].arg_index = param_idx;
             mapping_count++;
@@ -598,7 +612,7 @@ void generate_combined_function(CodeGenerator* gen, ASTNode** clauses, int claus
     } else {
         generate_type(gen, ret_type);
     }
-    fprintf(gen->output, " %s(", first->value);
+    fprintf(gen->output, " %s(", safe_c_name(first->value));
 
     // Generate unified parameter list using _argN naming
     // Count parameters from first clause

@@ -1,0 +1,47 @@
+// Test nested and complex expression evaluation
+main() {
+    // Nested arithmetic with precedence
+    a = 2 + 3 * 4
+    if a == 14 {
+        println("PASS: precedence 2+3*4=14")
+    }
+
+    // Deeply nested parentheses
+    b = ((((1 + 2) * 3) + 4) * 5)
+    if b == 65 {
+        println("PASS: nested parens ((((1+2)*3)+4)*5)=65")
+    }
+
+    // Chained comparisons with logical operators
+    x = 10
+    if x > 5 && x < 20 && x != 15 {
+        println("PASS: chained comparisons")
+    }
+
+    // Unary operators
+    c = -5
+    d = -c
+    if d == 5 {
+        println("PASS: double negation")
+    }
+
+    // Modulo operator
+    e = 17 % 5
+    if e == 2 {
+        println("PASS: modulo 17%5=2")
+    }
+
+    // Mixed int and float
+    f = 3.14
+    g = f + 1.0
+    if g > 4.0 {
+        println("PASS: float addition")
+    }
+
+    // Ternary-like if expression
+    h = 5
+    result = if h > 3 { 100 } else { 200 }
+    if result == 100 {
+        println("PASS: if expression")
+    }
+}

@@ -392,7 +392,8 @@ const char* profiler_metrics_to_json(MetricsSnapshot* metrics) {
 const char* profiler_events_to_json(int count, int offset) {
     static char buffer[16384];
     char* ptr = buffer;
-    ptr += sprintf(ptr, "{\"events\":[");
+    char* end = buffer + sizeof(buffer);
+    ptr += snprintf(ptr, end - ptr, "{\"events\":[");
     
     pthread_mutex_lock(&g_profiler.event_mutex);
     
@@ -432,13 +433,13 @@ const char* profiler_events_to_json(int count, int offset) {
                 break;
         }
         
-        ptr += sprintf(ptr, "%s{\"type\":\"%s\",\"timestamp\":%.2f,\"details\":\"%s\"}",
+        ptr += snprintf(ptr, end - ptr, "%s{\"type\":\"%s\",\"timestamp\":%.2f,\"details\":\"%s\"}",
                       i > 0 ? "," : "", type_str, e->timestamp_ms, details);
     }
     
     pthread_mutex_unlock(&g_profiler.event_mutex);
     
-    ptr += sprintf(ptr, "]}");
+    snprintf(ptr, end - ptr, "]}");
     return buffer;
 }
 

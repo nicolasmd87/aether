@@ -15,6 +15,21 @@
 #endif
 #define APKG_VERSION AETHER_VERSION
 
+// Validate a string contains only safe characters for shell commands.
+// Allows: alphanumeric, '.', '/', '-', '_', '@'
+// Rejects anything else (spaces, semicolons, backticks, $, etc.)
+static int is_safe_shell_arg(const char* s) {
+    if (!s || !*s) return 0;
+    for (const char* p = s; *p; p++) {
+        char c = *p;
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+            (c >= '0' && c <= '9') || c == '.' || c == '/' ||
+            c == '-' || c == '_' || c == '@') continue;
+        return 0;
+    }
+    return 1;
+}
+
 int apkg_init(const char* name) {
     printf("Initializing new Aether package '%s'...\n", name);
     
@@ -176,10 +191,13 @@ int apkg_install(const char* package) {
         if (next_section) {
             // Insert before next section
             size_t pos = next_section - content;
-            char* new_content = malloc(size + 1024);
+            size_t alloc_size = size + 1024;
+            char* new_content = malloc(alloc_size);
             strncpy(new_content, content, pos);
             new_content[pos] = '\0';
-            sprintf(new_content + strlen(new_content), "%s = \"%s\"\n", package, pkg_version);
+            snprintf(new_content + strlen(new_content),
+                     alloc_size - strlen(new_content),
+                     "%s = \"%s\"\n", package, pkg_version);
             strcat(new_content, next_section);
             
             toml = fopen("aether.toml", "w");
@@ -404,13 +422,19 @@ int apkg_test() {
     int failed = 0;
     
     while (fgets(test_file, sizeof(test_file), pipe)) {
-        // Remove newline
-        test_file[strcspn(test_file, "\n")] = 0;
+        // Remove newline (including \r on Windows)
+        test_file[strcspn(test_file, "\r\n")] = 0;
         if (strlen(test_file) == 0) continue;
-        
+
+        // Validate filename — reject anything with shell metacharacters
+        if (!is_safe_shell_arg(test_file)) {
+            fprintf(stderr, "Skipping test with unsafe filename: %s\n", test_file);
+            continue;
+        }
+
         test_count++;
         printf("\nRunning test: %s\n", test_file);
-        
+
         // Compile test
         char compile_cmd[1024];
         char output_file[512];
@@ -471,8 +495,14 @@ int apkg_test() {
 }
 
 int apkg_search(const char* query) {
+    // Validate query to prevent shell injection
+    if (!is_safe_shell_arg(query)) {
+        fprintf(stderr, "Error: Search query contains invalid characters\n");
+        return 1;
+    }
+
     printf("Searching for '%s' in package registry...\n\n", query);
-    
+
     // For now, search local cache and provide instructions for online search
     char cache_dir[512];
     #ifdef _WIN32
@@ -501,7 +531,7 @@ int apkg_search(const char* query) {
     if (pipe) {
         char result[512];
         while (fgets(result, sizeof(result), pipe)) {
-            result[strcspn(result, "\n")] = 0;
+            result[strcspn(result, "\r\n")] = 0;
             if (strlen(result) > 0) {
                 printf("  - %s\n", result);
                 found_local++;
@@ -762,7 +792,17 @@ int apkg_download_package(const char* name, const char* version) {
     }
     
     const char* repo_path = name + 11;  // Skip "github.com/"
-    
+
+    // Validate inputs before any filesystem or shell operations
+    if (!is_safe_shell_arg(name)) {
+        fprintf(stderr, "Error: Package name contains invalid characters\n");
+        return 1;
+    }
+    if (version && strcmp(version, "latest") != 0 && !is_safe_shell_arg(version)) {
+        fprintf(stderr, "Error: Version string contains invalid characters\n");
+        return 1;
+    }
+
     // Create package cache directory
     char cache_dir[512];
     #ifdef _WIN32
@@ -772,19 +812,19 @@ int apkg_download_package(const char* name, const char* version) {
         const char* home = getenv("HOME");
         snprintf(cache_dir, sizeof(cache_dir), "%s/.aether/packages", home ? home : ".");
     #endif
-    
+
     // Create nested directories for github.com/user/repo structure
     char full_path[1024];
     snprintf(full_path, sizeof(full_path), "%s/%s", cache_dir, name);
-    
+
     // Check if already downloaded
     if (access(full_path, F_OK) == 0) {
         printf("Package already cached: %s\n", full_path);
         return 0;
     }
-    
+
     printf("Fetching package: %s\n", name);
-    
+
     // Create parent directories
     char mkdir_cmd[1024];
     char parent_dir[1024];

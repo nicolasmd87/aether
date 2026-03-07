@@ -1,0 +1,37 @@
+// Test string handling edge cases
+main() {
+    // Empty string
+    s = ""
+    println("PASS: empty string")
+
+    // String with special characters
+    t = "hello\tworld"
+    println("PASS: tab in string")
+
+    // String with newline
+    u = "line1\nline2"
+    print("PASS: newline in ")
+    println("string")
+
+    // String with backslash
+    v = "path\\to\\file"
+    println("PASS: backslash in string")
+
+    // String with quotes
+    w = "say \"hello\""
+    println("PASS: quotes in string")
+
+    // String interpolation with arithmetic
+    x = 10
+    y = 20
+    msg = "sum=${x + y}"
+    println(msg)
+    println("PASS: interp with arithmetic")
+
+    // Concatenation via interpolation
+    first = "Hello"
+    second = "World"
+    combined = "${first} ${second}"
+    println(combined)
+    println("PASS: interp concatenation")
+}

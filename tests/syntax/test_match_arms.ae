@@ -1,0 +1,88 @@
+// Test match arm body styles
+// Verifies: print/println in single-expression arms, block arms, mixed styles
+
+main() {
+    print("=== Match Arm Style Tests ===\n\n")
+
+    // Test 1: Single-expression arm with print (keyword)
+    print("Test 1: print in arrow arm\n")
+    x = 1
+    match (x) {
+        1 -> print("  PASS: print in arrow arm works\n")
+        _ -> print("  FAIL\n")
+    }
+
+    // Test 2: Single-expression arm with println (function)
+    print("\nTest 2: println in arrow arm\n")
+    y = 2
+    match (y) {
+        2 -> println("  PASS: println in arrow arm works")
+        _ -> println("  FAIL")
+    }
+
+    // Test 3: Block arm with print
+    print("\nTest 3: print in block arm\n")
+    z = 3
+    match (z) {
+        3 -> {
+            print("  PASS: print in block arm works\n")
+        }
+        _ -> {
+            print("  FAIL\n")
+        }
+    }
+
+    // Test 4: Mixed arm styles in same match
+    print("\nTest 4: Mixed arm styles\n")
+    w = 10
+    match (w) {
+        1 -> print("  FAIL: not 1\n")
+        10 -> {
+            print("  PASS: block arm matched\n")
+        }
+        _ -> print("  FAIL: wildcard\n")
+    }
+
+    // Test 5: String match with print in arrow arm
+    print("\nTest 5: String match with arrow print\n")
+    cmd = "run"
+    match (cmd) {
+        "stop" -> print("  FAIL: not stop\n")
+        "run" -> print("  PASS: matched run\n")
+        _ -> print("  FAIL: wildcard\n")
+    }
+
+    // Test 6: Match arm setting a variable (expression arm)
+    print("\nTest 6: Expression arm assigns variable\n")
+    v = 5
+    result = 0
+    match (v) {
+        5 -> { result = 100 }
+        _ -> { result = 0 }
+    }
+    if result == 100 {
+        print("  PASS: variable set from match arm\n")
+    } else {
+        print("  FAIL: expected result=100\n")
+        exit(1)
+    }
+
+    // Test 7: Wildcard with print
+    print("\nTest 7: Wildcard arm with print\n")
+    unknown = 999
+    match (unknown) {
+        1 -> print("  FAIL\n")
+        2 -> print("  FAIL\n")
+        _ -> print("  PASS: wildcard arm printed\n")
+    }
+
+    // Test 8: Match on zero
+    print("\nTest 8: Match zero with print arms\n")
+    n = 0
+    match (n) {
+        0 -> print("  PASS: matched zero\n")
+        _ -> print("  FAIL: should match zero\n")
+    }
+
+    print("\n=== All 8 Tests Complete ===\n")
+}

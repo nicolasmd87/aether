@@ -57,18 +57,21 @@ else
 NPROC ?= $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 endif
 
-# Version from VERSION file (single source of truth)
+# Version: prefer highest git tag (authoritative), fall back to VERSION file (tarballs)
 ifdef WINDOWS_NATIVE
 VERSION := $(shell type VERSION 2>nul || echo 0.0.0)
 else
+VERSION := $(shell git tag -l 'v*.*.*' 2>/dev/null | sort -t. -k1,1n -k2,2n -k3,3n | tail -1 | sed 's/^v//')
+ifeq ($(VERSION),)
 VERSION := $(shell cat VERSION 2>/dev/null || echo "0.0.0")
+endif
 endif
 
 # Compiler configuration with ccache support
 ifdef WINDOWS_NATIVE
 CC := gcc
 else
-CC := $(shell command -v ccache 2>/dev/null && echo "ccache gcc" || echo "gcc")
+CC := $(shell command -v ccache >/dev/null 2>&1 && echo "ccache gcc" || echo "gcc")
 endif
 EXTRA_CFLAGS ?=
 CFLAGS = -O2 -Icompiler -Iruntime -Iruntime/actors -Iruntime/scheduler -Iruntime/utils -Iruntime/memory -Iruntime/config -Istd -Istd/string -Istd/io -Istd/math -Istd/net -Istd/collections -Istd/json -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -MMD -MP -DAETHER_VERSION=\"$(VERSION)\" $(EXTRA_CFLAGS)
@@ -78,15 +81,15 @@ LDFLAGS = -pthread -lm
 BUILD_DIR = build
 OBJ_DIR = $(BUILD_DIR)/obj
 
-# Windows-specific libraries
+# Windows-specific: -static avoids libwinpthread/libgcc DLL dependencies
 ifdef WINDOWS_NATIVE
-    LDFLAGS += -lws2_32
+    LDFLAGS += -static -lws2_32
 else ifneq ($(findstring MINGW,$(DETECTED_OS)),)
-    LDFLAGS += -lws2_32
+    LDFLAGS += -static -lws2_32
 else ifneq ($(findstring MSYS,$(DETECTED_OS)),)
-    LDFLAGS += -lws2_32
+    LDFLAGS += -static -lws2_32
 else ifneq ($(findstring CYGWIN,$(DETECTED_OS)),)
-    LDFLAGS += -lws2_32
+    LDFLAGS += -static -lws2_32
 endif
 
 COMPILER_SRC = compiler/aetherc.c compiler/parser/lexer.c compiler/parser/parser.c compiler/ast.c compiler/analysis/typechecker.c compiler/codegen/codegen.c compiler/codegen/codegen_expr.c compiler/codegen/codegen_stmt.c compiler/codegen/codegen_actor.c compiler/codegen/codegen_func.c compiler/aether_error.c compiler/aether_module.c compiler/analysis/type_inference.c compiler/codegen/optimizer.c compiler/aether_diagnostics.c runtime/actors/aether_message_registry.c
@@ -345,7 +348,8 @@ examples-run: examples
 	@echo "==================================="
 	@echo "  Running Aether Examples"
 	@echo "==================================="
-	@for bin in $$(find $(BUILD_DIR)/examples -type f -perm +111 ! -name '*.c' | sort); do \
+	@for bin in $$(find $(BUILD_DIR)/examples -type f ! -name '*.c' ! -name '*.o' | sort); do \
+		test -x "$$bin" || continue; \
 		name=$$(echo $$bin | sed "s|$(BUILD_DIR)/examples/||"); \
 		echo "--- $$name ---"; \
 		timeout 5 $$bin 2>&1 || true; \
@@ -370,7 +374,7 @@ ae: compiler
 	@echo "==================================="
 	@echo "Building ae command-line tool ($(DETECTED_OS)) v$(VERSION)"
 	@echo "==================================="
-	$(CC) -O2 -DAETHER_VERSION=\"$(VERSION)\" -Itools tools/ae.c tools/apkg/toml_parser.c -o build/ae$(EXE_EXT) -lm
+	$(CC) -O2 -DAETHER_VERSION=\"$(VERSION)\" -Itools tools/ae.c tools/apkg/toml_parser.c -o build/ae$(EXE_EXT) -lm $(LDFLAGS)
 	@echo "✓ Built successfully: build/ae$(EXE_EXT)"
 	@echo ""
 	@echo "Usage:"
@@ -594,8 +598,8 @@ pgo-benchmark: pgo-baseline pgo-generate pgo-build
 
 pgo-clean:
 	@echo "Cleaning PGO profile data..."
-	@$(RM) *.gcda *.gcno 2>nul || true
-	@$(RM) build/pgo_workload$(EXE_EXT) build/bench_pgo_baseline$(EXE_EXT) build/bench_pgo_optimized$(EXE_EXT) 2>nul || true
+	@$(RM) *.gcda *.gcno 2>/dev/null || true
+	@$(RM) build/pgo_workload$(EXE_EXT) build/bench_pgo_baseline$(EXE_EXT) build/bench_pgo_optimized$(EXE_EXT) 2>/dev/null || true
 	@echo "✓ PGO data cleaned"
 
 # Interactive REPL (requires readline library)

@@ -1,0 +1,77 @@
+// Test advanced function features: recursion, multiple returns, nested calls
+// Verifies: codegen handles complex call patterns correctly
+
+factorial(n) {
+    if n <= 1 {
+        return 1
+    }
+    return n * factorial(n - 1)
+}
+
+fibonacci(n) {
+    if n <= 0 { return 0 }
+    if n == 1 { return 1 }
+    return fibonacci(n - 1) + fibonacci(n - 2)
+}
+
+max(a, b) {
+    if a > b { return a }
+    return b
+}
+
+min(a, b) {
+    if a < b { return a }
+    return b
+}
+
+clamp(val, lo, hi) {
+    return max(lo, min(val, hi))
+}
+
+main() {
+    print("=== Advanced Function Tests ===\n\n")
+
+    // Test 1: Recursive factorial
+    print("Test 1: Factorial\n")
+    if factorial(0) != 1 { print("  FAIL 0!\n"); exit(1) }
+    if factorial(1) != 1 { print("  FAIL 1!\n"); exit(1) }
+    if factorial(5) != 120 { print("  FAIL 5!\n"); exit(1) }
+    if factorial(10) != 3628800 { print("  FAIL 10!\n"); exit(1) }
+    print("  PASS\n")
+
+    // Test 2: Fibonacci
+    print("\nTest 2: Fibonacci\n")
+    if fibonacci(0) != 0 { print("  FAIL fib(0)\n"); exit(1) }
+    if fibonacci(1) != 1 { print("  FAIL fib(1)\n"); exit(1) }
+    if fibonacci(10) != 55 { print("  FAIL fib(10)\n"); exit(1) }
+    if fibonacci(15) != 610 { print("  FAIL fib(15)\n"); exit(1) }
+    print("  PASS\n")
+
+    // Test 3: Nested function calls
+    print("\nTest 3: Nested calls\n")
+    if max(3, 7) != 7 { print("  FAIL max\n"); exit(1) }
+    if min(3, 7) != 3 { print("  FAIL min\n"); exit(1) }
+    if clamp(15, 0, 10) != 10 { print("  FAIL clamp high\n"); exit(1) }
+    if clamp(-5, 0, 10) != 0 { print("  FAIL clamp low\n"); exit(1) }
+    if clamp(5, 0, 10) != 5 { print("  FAIL clamp mid\n"); exit(1) }
+    print("  PASS\n")
+
+    // Test 4: Multiple return paths
+    print("\nTest 4: Multiple return paths\n")
+    if factorial(0) != 1 { print("  FAIL\n"); exit(1) }
+    if factorial(1) != 1 { print("  FAIL\n"); exit(1) }
+    if factorial(2) != 2 { print("  FAIL\n"); exit(1) }
+    print("  PASS\n")
+
+    // Test 5: Deep nesting
+    print("\nTest 5: Deep nested calls\n")
+    result = max(min(max(1, 2), 5), min(3, 4))
+    if result != 3 {
+        print("  FAIL: result=")
+        println(result)
+        exit(1)
+    }
+    print("  PASS: max(min(max(1,2),5),min(3,4))=3\n")
+
+    print("\n=== All 5 Function Tests Passed ===\n")
+}

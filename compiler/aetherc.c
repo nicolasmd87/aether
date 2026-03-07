@@ -35,6 +35,7 @@
 // Global flags
 static bool verbose_mode = false;
 static bool dump_ast_mode = false;
+static bool emit_c_mode = false;
 static const char* emit_header_path = NULL;
 
 #ifdef _WIN32
@@ -328,6 +329,7 @@ void print_help(const char* program_name) {
     printf("Options:\n");
     printf("  --version, -v                    Show version information\n");
     printf("  --verbose                        Show detailed compilation phases and timing\n");
+    printf("  --emit-c                         Print generated C code to stdout\n");
     printf("  --emit-header [path]             Generate C header for embedding (default: auto)\n");
     printf("  --dump-ast                       Print AST and exit (no code generation)\n");
     printf("  --help, -h                       Show this help message\n");
@@ -351,6 +353,9 @@ int main(int argc, char *argv[]) {
             return 0;
         } else if (strcmp(argv[arg_offset], "--verbose") == 0) {
             verbose_mode = true;
+            arg_offset++;
+        } else if (strcmp(argv[arg_offset], "--emit-c") == 0) {
+            emit_c_mode = true;
             arg_offset++;
         } else if (strcmp(argv[arg_offset], "--dump-ast") == 0) {
             dump_ast_mode = true;
@@ -431,6 +436,27 @@ int main(int argc, char *argv[]) {
         if (!compile_source(argv[arg_offset], "/dev/null")) {
             return 1;
         }
+        return 0;
+    }
+
+    // --emit-c: compile and print generated C to stdout
+    if (emit_c_mode) {
+        // Compile to a temp file, then cat to stdout
+        char tmp_path[256];
+        snprintf(tmp_path, sizeof(tmp_path), "/tmp/aether_emit_%d.c", (int)getpid());
+        if (!compile_source(argv[arg_offset], tmp_path)) {
+            return 1;
+        }
+        FILE* f = fopen(tmp_path, "r");
+        if (f) {
+            char buf[4096];
+            size_t n;
+            while ((n = fread(buf, 1, sizeof(buf), f)) > 0) {
+                fwrite(buf, 1, n, stdout);
+            }
+            fclose(f);
+        }
+        remove(tmp_path);
         return 0;
     }
 

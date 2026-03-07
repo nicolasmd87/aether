@@ -42,6 +42,13 @@ MessagePool* message_pool_create() {
     // Pre-allocate buffers
     for (int i = 0; i < MESSAGE_POOL_SIZE; i++) {
         pool->buffers[i] = malloc(256); // 256-byte messages
+        if (!pool->buffers[i]) {
+            // Clean up on OOM
+            for (int j = 0; j < i; j++) free(pool->buffers[j]);
+            pthread_mutex_destroy(&pool->lock);
+            free(pool);
+            return NULL;
+        }
     }
     
     return pool;

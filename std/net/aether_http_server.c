@@ -25,6 +25,7 @@
     #include <unistd.h>
     #include <fcntl.h>
     #include <pthread.h>
+    #include <limits.h>
 #endif
 
 // Portable case-insensitive substring search (strcasestr is a GNU extension)
@@ -820,8 +821,12 @@ void http_serve_static(HttpRequest* req, HttpServerResponse* res, void* base_dir
     // Skip leading slash
     if (req_path[0] == '/') req_path++;
 
-    // Security: prevent directory traversal
-    if (strstr(req_path, "..") != NULL) {
+    // Security: reject encoded traversal sequences (%2e, %2f, %5c)
+    if (strstr(req_path, "..") != NULL ||
+        strstr(req_path, "%2e") != NULL || strstr(req_path, "%2E") != NULL ||
+        strstr(req_path, "%2f") != NULL || strstr(req_path, "%2F") != NULL ||
+        strstr(req_path, "%5c") != NULL || strstr(req_path, "%5C") != NULL ||
+        strstr(req_path, "\\") != NULL) {
         http_response_set_status(res, 403);
         http_response_set_body(res, "403 - Forbidden");
         return;
@@ -831,6 +836,37 @@ void http_serve_static(HttpRequest* req, HttpServerResponse* res, void* base_dir
     char filepath[1024];
     snprintf(filepath, sizeof(filepath), "%s/%s", dir, req_path);
 
-    // Serve the file
-    http_serve_file(res, filepath);
+    // Security: resolve to canonical path and verify it's within the root dir
+#ifndef _WIN32
+    char resolved[PATH_MAX];
+    char resolved_dir[PATH_MAX];
+    if (!realpath(filepath, resolved) || !realpath(dir, resolved_dir)) {
+        http_response_set_status(res, 404);
+        http_response_set_body(res, "404 - Not Found");
+        return;
+    }
+    if (strncmp(resolved, resolved_dir, strlen(resolved_dir)) != 0) {
+        http_response_set_status(res, 403);
+        http_response_set_body(res, "403 - Forbidden");
+        return;
+    }
+    // Serve the resolved, validated path
+    http_serve_file(res, resolved);
+#else
+    // On Windows, use _fullpath for canonicalization
+    char resolved[1024];
+    char resolved_dir[1024];
+    if (!_fullpath(resolved, filepath, sizeof(resolved)) ||
+        !_fullpath(resolved_dir, dir, sizeof(resolved_dir))) {
+        http_response_set_status(res, 404);
+        http_response_set_body(res, "404 - Not Found");
+        return;
+    }
+    if (_strnicmp(resolved, resolved_dir, strlen(resolved_dir)) != 0) {
+        http_response_set_status(res, 403);
+        http_response_set_body(res, "403 - Forbidden");
+        return;
+    }
+    http_serve_file(res, resolved);
+#endif
 }

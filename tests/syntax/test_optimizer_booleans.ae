@@ -1,0 +1,61 @@
+// Test: optimizer handles boolean constants correctly
+// Regression: if true body was silently eliminated (atof("true")=0.0)
+
+main() {
+    // Test 1: if true body executes
+    x = 0
+    if true {
+        x = 42
+    }
+    if x == 42 {
+        println("PASS: if true body executes")
+    }
+
+    // Test 2: if false body does not execute
+    y = 10
+    if false {
+        y = 99
+    }
+    if y == 10 {
+        println("PASS: if false body skipped")
+    }
+
+    // Test 3: if true with else - else should not execute
+    z = 0
+    if true {
+        z = 1
+    } else {
+        z = 2
+    }
+    if z == 1 {
+        println("PASS: if true/else picks true branch")
+    }
+
+    // Test 4: if false with else - else should execute
+    w = 0
+    if false {
+        w = 1
+    } else {
+        w = 2
+    }
+    if w == 2 {
+        println("PASS: if false/else picks else branch")
+    }
+
+    // Test 5: constant folding preserves int type
+    a = 3 + 4
+    if a == 7 {
+        println("PASS: constant fold 3+4=7 (int)")
+    }
+
+    // Test 6: nested if true
+    flag = 0
+    if true {
+        if true {
+            flag = 1
+        }
+    }
+    if flag == 1 {
+        println("PASS: nested if true works")
+    }
+}

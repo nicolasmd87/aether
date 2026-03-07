@@ -1,0 +1,108 @@
+// Test string ordering operators (<, >, <=, >=)
+// Verifies: strcmp-based lexicographic ordering, not pointer comparison
+
+main() {
+    print("=== String Ordering Tests ===\n\n")
+
+    // Test 1: Less than
+    print("Test 1: String < comparison\n")
+    a = "apple"
+    b = "banana"
+    if a < b {
+        print("  PASS: apple < banana\n")
+    } else {
+        print("  FAIL: apple should be < banana\n")
+        exit(1)
+    }
+
+    // Test 2: Greater than
+    print("\nTest 2: String > comparison\n")
+    if b > a {
+        print("  PASS: banana > apple\n")
+    } else {
+        print("  FAIL: banana should be > apple\n")
+        exit(1)
+    }
+
+    // Test 3: Less than or equal (equal case)
+    print("\nTest 3: String <= comparison (equal)\n")
+    c = "hello"
+    d = "hello"
+    if c <= d {
+        print("  PASS: hello <= hello\n")
+    } else {
+        print("  FAIL: hello should be <= hello\n")
+        exit(1)
+    }
+
+    // Test 4: Less than or equal (less case)
+    print("\nTest 4: String <= comparison (less)\n")
+    if a <= b {
+        print("  PASS: apple <= banana\n")
+    } else {
+        print("  FAIL: apple should be <= banana\n")
+        exit(1)
+    }
+
+    // Test 5: Greater than or equal (equal case)
+    print("\nTest 5: String >= comparison (equal)\n")
+    if c >= d {
+        print("  PASS: hello >= hello\n")
+    } else {
+        print("  FAIL: hello should be >= hello\n")
+        exit(1)
+    }
+
+    // Test 6: Greater than or equal (greater case)
+    print("\nTest 6: String >= comparison (greater)\n")
+    if b >= a {
+        print("  PASS: banana >= apple\n")
+    } else {
+        print("  FAIL: banana should be >= apple\n")
+        exit(1)
+    }
+
+    // Test 7: Prefix ordering
+    print("\nTest 7: Prefix string ordering\n")
+    e = "abc"
+    f = "abcd"
+    if e < f {
+        print("  PASS: abc < abcd\n")
+    } else {
+        print("  FAIL: abc should be < abcd\n")
+        exit(1)
+    }
+
+    // Test 8: Empty string is less than any non-empty string
+    print("\nTest 8: Empty string ordering\n")
+    empty = ""
+    nonempty = "a"
+    if empty < nonempty {
+        print("  PASS: empty < a\n")
+    } else {
+        print("  FAIL: empty should be < any non-empty string\n")
+        exit(1)
+    }
+
+    // Test 9: Case sensitivity (uppercase < lowercase in ASCII)
+    print("\nTest 9: Case sensitivity\n")
+    upper = "A"
+    lower = "a"
+    if upper < lower {
+        print("  PASS: A < a (ASCII order)\n")
+    } else {
+        print("  FAIL: A should be < a in ASCII\n")
+        exit(1)
+    }
+
+    // Test 10: Not less than
+    print("\nTest 10: Negative < test\n")
+    if b < a {
+        print("  FAIL: banana should not be < apple\n")
+        exit(1)
+    } else {
+        print("  PASS: banana is not < apple\n")
+    }
+
+    print("\n=== All 10 Tests Complete ===\n")
+}

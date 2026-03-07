@@ -121,7 +121,7 @@ void add_child(ASTNode* parent, ASTNode* child) {
     ASTNode** new_children = realloc(parent->children, (parent->child_count + 1) * sizeof(ASTNode*));
     if (!new_children) {
         fprintf(stderr, "Fatal: out of memory adding AST child\n");
-        return;
+        exit(1);
     }
     parent->children = new_children;
     parent->children[parent->child_count] = child;

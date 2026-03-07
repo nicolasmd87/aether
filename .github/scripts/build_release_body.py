@@ -10,6 +10,10 @@ given version, and writes /tmp/release_body.md containing:
   - Changelog notes for that release
   - Download table with direct filenames
   - Quick install instructions
+
+Note: The release pipeline replaces `## [current]` with `## [<version>]` in
+CHANGELOG.md before this script runs, so the version match should always
+succeed.  As a fallback the script also tries the `[current]` section.
 """
 
 import sys
@@ -91,8 +95,10 @@ def main() -> None:
     if os.path.exists(changelog_path):
         changelog_notes = extract_changelog_section(changelog_path, version)
         if not changelog_notes:
-            # No exact version match -- try [Unreleased] section as fallback
-            changelog_notes = extract_changelog_section(changelog_path, "Unreleased")
+            # No exact version match -- try [current] section as fallback
+            # (the release pipeline should have already replaced [current] with
+            # the version, but this handles edge cases like manual tag pushes)
+            changelog_notes = extract_changelog_section(changelog_path, "current")
     else:
         print(f"CHANGELOG.md not found at {changelog_path}", file=sys.stderr)
 

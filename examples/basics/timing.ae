@@ -1,0 +1,59 @@
+// Timing - measure execution time with clock_ns()
+// Run with: ae run examples/basics/timing.ae
+
+main() {
+    println("=== Timing Examples ===")
+
+    // Measure a simple loop - large N using long to avoid int32 overflow
+    long n = 1000000
+    print("Summing 1 to ")
+    println(n)
+
+    start = clock_ns()
+    long sum = 0
+    long i = 1
+    while i <= n {
+        sum = sum + i
+        i = i + 1
+    }
+    end = clock_ns()
+
+    elapsed_ns = end - start
+    elapsed_us = elapsed_ns / 1000
+
+    print("  Sum:     ")
+    println(sum)
+    print("  Time:    ")
+    print(elapsed_us)
+    println(" us")
+
+    // Measure multiple iterations for stability
+    println("\nBenchmark: 10 rounds of 100K additions")
+    best_ns = 0
+    round = 0
+    while round < 10 {
+        t1 = clock_ns()
+        long j = 0
+        long acc = 0
+        while j < 100000 {
+            acc = acc + j
+            j = j + 1
+        }
+        t2 = clock_ns()
+        dt = t2 - t1
+        if best_ns == 0 {
+            best_ns = dt
+        }
+        if dt < best_ns {
+            best_ns = dt
+        }
+        round = round + 1
+    }
+
+    best_us = best_ns / 1000
+    print("  Best round: ")
+    print(best_us)
+    println(" us")
+
+    println("\n=== Done ===")
+}

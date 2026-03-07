@@ -1,0 +1,130 @@
+// Match Advanced - all match features and edge cases
+// Run with: ae run examples/basics/match-advanced.ae
+
+classify(n) {
+    match (n) {
+        0 -> { return "zero" }
+        1 -> { return "one" }
+        _ -> {
+            if n < 0 {
+                return "negative"
+            }
+            if n > 100 {
+                return "large"
+            }
+            return "positive"
+        }
+    }
+    return "unknown"
+}
+
+main() {
+    println("=== Advanced Match Examples ===")
+
+    // Integer matching with print in arrow arms
+    println("\n1. Integer matching:")
+    x = 42
+    match (x) {
+        0 -> print("  zero\n")
+        1 -> print("  one\n")
+        42 -> print("  forty-two (the answer!)\n")
+        _ -> print("  something else\n")
+    }
+
+    // String matching
+    println("\n2. String matching:")
+    lang = "aether"
+    match (lang) {
+        "go" -> println("  Go: goroutines")
+        "rust" -> println("  Rust: ownership")
+        "erlang" -> println("  Erlang: actors")
+        "aether" -> println("  Aether: actors + type inference!")
+        _ -> println("  Unknown language")
+    }
+
+    // Match as a dispatch table
+    println("\n3. Classify numbers:")
+    i = -5
+    while i <= 105 {
+        label = classify(i)
+        if i == -5 {
+            print("  -5 is ")
+            println(label)
+        }
+        if i == 0 {
+            print("  0 is ")
+            println(label)
+        }
+        if i == 1 {
+            print("  1 is ")
+            println(label)
+        }
+        if i == 50 {
+            print("  50 is ")
+            println(label)
+        }
+        if i == 105 {
+            print("  105 is ")
+            println(label)
+        }
+        i = i + 10
+    }
+
+    // Match setting variables
+    println("\n4. Match setting variables:")
+    day = 3
+    day_type = "unknown"
+    match (day) {
+        1 -> { day_type = "weekday" }
+        2 -> { day_type = "weekday" }
+        3 -> { day_type = "weekday" }
+        4 -> { day_type = "weekday" }
+        5 -> { day_type = "weekday" }
+        6 -> { day_type = "weekend" }
+        7 -> { day_type = "weekend" }
+        _ -> { day_type = "invalid" }
+    }
+    print("  Day 3 is a ")
+    println(day_type)
+
+    // Multiple matches in sequence
+    println("\n5. Sequential matches:")
+    cmd = "build"
+    verbose = 0
+    v_env = getenv("VERBOSE")
+    if v_env != 0 {
+        verbose = 1
+    }
+
+    match (cmd) {
+        "build" -> {
+            print("  Building")
+            if verbose == 1 {
+                print(" (verbose)")
+            }
+            println("...")
+        }
+        "test" -> { println("  Testing...") }
+        "run" -> { println("  Running...") }
+        _ -> { println("  Unknown command") }
+    }
+
+    // List pattern matching
+    println("\n6. List patterns:")
+    nums = [10, 20, 30]
+    nums_len = 3
+    match (nums) {
+        [] -> { println("  Empty list") }
+        [x] -> {
+            print("  Single: ")
+            println(x)
+        }
+        [h|t] -> {
+            print("  Head: ")
+            print(h)
+            println(", plus more")
+        }
+    }
+
+    println("\n=== Done ===")
+}

@@ -1,0 +1,39 @@
+// String Processing Example
+// Demonstrates string interpolation, formatting, and output
+
+main() {
+    // String interpolation
+    name = "Aether"
+    version = 17
+    println("Welcome to ${name} v0.${version}.0!")
+
+    // Building strings with interpolation
+    width = 80
+    height = 24
+    println("Terminal size: ${width}x${height}")
+
+    // Numeric formatting in strings
+    pi = 3
+    println("Approximate pi: ${pi}")
+
+    // Multiple interpolations
+    x = 10
+    y = 20
+    println("Point: (${x}, ${y}) -> sum=${x + y}")
+
+    // String with escapes
+    println("Paths use \"backslash\" on Windows")
+    println("Columns:\tA\tB\tC")
+
+    // Printing different types
+    print("int: ")
+    println(42)
+    print("float: ")
+    println(3.14)
+    print("bool: ")
+    println(true)
+    print("string: ")
+    println("hello")
+
+    println("Done!")
+}

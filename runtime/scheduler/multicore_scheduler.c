@@ -86,6 +86,12 @@ static atomic_uint_fast64_t main_thread_sent = 0;
 // pthread_join already-joined threads — undefined behaviour (crash on Linux glibc).
 static atomic_int g_threads_joined = 0;
 
+// Track whether scheduler threads have been created.
+// scheduler_start() skips thread creation in main-thread mode; if main-thread
+// mode is later disabled (e.g. self-send pattern), we need to know whether
+// threads still need to be started.
+static atomic_int g_threads_started = 0;
+
 // Barrier: scheduler_start() spins here until every thread has finished its
 // setup (pin_to_core, send_buffer_init) and entered its main loop.  This
 // ensures that by the time scheduler_start() returns, all scheduler threads
@@ -125,6 +131,11 @@ static AETHER_TLS int tls_overflow_any = 0; // fast gate: any pending at all?
 static atomic_int g_overflow_total = 0;
 
 static void overflow_append(int target, ActorBase* actor, Message msg) {
+    if (unlikely(target < 0 || target > MAX_CORES)) {
+        fprintf(stderr, "aether: overflow_append: target %d out of range [0, %d]\n",
+                target, MAX_CORES);
+        return;
+    }
     OverflowBuf* b = &tls_overflow[target];
     int tail = b->head + b->count;
     if (unlikely(tail >= b->capacity)) {
@@ -139,16 +150,19 @@ static void overflow_append(int target, ActorBase* actor, Message msg) {
             int nc = b->capacity ? b->capacity * 2 : 64;
             while (nc <= tail) nc *= 2;
             ActorBase** new_actors = realloc(b->actors, (size_t)nc * sizeof(ActorBase*));
-            Message*    new_msgs   = realloc(b->msgs,   (size_t)nc * sizeof(Message));
-            if (unlikely(!new_actors || !new_msgs)) {
-                if (new_actors) b->actors = new_actors;
-                if (new_msgs)   b->msgs   = new_msgs;
+            if (unlikely(!new_actors)) {
                 fprintf(stderr, "aether: OOM in overflow_append (target=%d count=%d cap=%d)\n",
                         target, b->count, b->capacity);
                 abort();
             }
-            b->actors   = new_actors;
-            b->msgs     = new_msgs;
+            b->actors = new_actors;
+            Message* new_msgs = realloc(b->msgs, (size_t)nc * sizeof(Message));
+            if (unlikely(!new_msgs)) {
+                fprintf(stderr, "aether: OOM in overflow_append (target=%d count=%d cap=%d)\n",
+                        target, b->count, b->capacity);
+                abort();
+            }
+            b->msgs = new_msgs;
             b->capacity = nc;
         }
     }
@@ -742,6 +756,8 @@ void* AETHER_HOT scheduler_thread(void* arg) {
 void scheduler_init(int cores) {
     // Reset join guard so the scheduler can be restarted (e.g. in tests).
     atomic_store_explicit(&g_threads_joined, 0, memory_order_relaxed);
+    // Reset thread-started flag for the upcoming scheduler_start() call.
+    atomic_store_explicit(&g_threads_started, 0, memory_order_relaxed);
     // Reset thread-ready counter for the upcoming scheduler_start() call.
     atomic_store_explicit(&g_threads_ready, 0, memory_order_relaxed);
     // Reset global overflow counter between scheduler lifecycles.
@@ -828,6 +844,11 @@ void scheduler_start() {
         return;  // No threads to start
     }
 
+    // Only start threads once (idempotent: safe to call multiple times)
+    if (atomic_exchange_explicit(&g_threads_started, 1, memory_order_acq_rel) == 1) {
+        return;  // Threads already running
+    }
+
     // Reset per this start() call in case scheduler_init was not called again.
     atomic_store_explicit(&g_threads_ready, 0, memory_order_relaxed);
 
@@ -849,6 +870,17 @@ void scheduler_start() {
     while (atomic_load_explicit(&g_threads_ready, memory_order_acquire) < num_cores) {
         AETHER_PAUSE();
     }
+}
+
+// Ensure scheduler threads are running. Called when transitioning out of
+// main-thread mode (e.g. self-send from an actor handler). In main-thread
+// mode, scheduler_start() skips thread creation; this function starts them
+// on demand so queued messages get processed.
+void scheduler_ensure_threads_running(void) {
+    if (atomic_load_explicit(&g_threads_started, memory_order_acquire)) {
+        return;  // Already running
+    }
+    scheduler_start();
 }
 
 void scheduler_stop() {
@@ -1429,6 +1461,12 @@ ActorBase* scheduler_spawn_pooled(int preferred_core, void (*step)(void*), size_
             atomic_store_explicit(&prev_main_actor->main_thread_only, 0, memory_order_release);
         }
         // else: aether_send_message_sync will clear it once step() unwinds.
+
+        // aether_on_actor_spawn() (above) disabled main_thread_mode.  If
+        // scheduler_start() was already called and returned early (because
+        // main-thread mode was active at the time), threads were never created.
+        // Start them now so both actors can be processed by the scheduler.
+        scheduler_ensure_threads_running();
     }
 
     scheduler_register_actor(actor, preferred_core);

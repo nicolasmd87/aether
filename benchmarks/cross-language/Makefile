@@ -41,7 +41,7 @@ build-ui:
 		../../../runtime/utils/aether_test.c ../../../runtime/utils/aether_cpu_detect.c \
 		../../../runtime/aether_runtime_types.c ../../../runtime/aether_runtime.c \
 		../../../runtime/aether_numa.c ../../../runtime/actors/aether_send_buffer.c \
-		../../../runtime/actors/aether_actor.c \
+		../../../runtime/actors/aether_send_message.c \
 		../../../runtime/actors/aether_actor_thread.c ../../../runtime/actors/aether_message_registry.c \
 		../../../std/string/aether_string.c \
 		-lpthread -lm

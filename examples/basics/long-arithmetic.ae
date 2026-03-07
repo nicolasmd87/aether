@@ -1,0 +1,59 @@
+// Long Arithmetic - 64-bit integer operations
+// Run with: ae run examples/basics/long-arithmetic.ae
+
+main() {
+    println("=== Long (int64) Arithmetic ===")
+
+    // Values beyond int32 range
+    println("\n1. Large values:")
+    long billion = 1000000000
+    long ten_billion = billion * 10
+    print("  1 billion:  ")
+    println(billion)
+    print("  10 billion: ")
+    println(ten_billion)
+
+    // Nanosecond timing
+    println("\n2. Nanosecond precision:")
+    t1 = clock_ns()
+    // Do some work
+    long sum = 0
+    long i = 0
+    while i < 1000000 {
+        sum = sum + i
+        i = i + 1
+    }
+    t2 = clock_ns()
+    elapsed = t2 - t1
+    print("  Sum 0..999999 = ")
+    println(sum)
+    print("  Elapsed: ")
+    print(elapsed)
+    println(" ns")
+
+    // Large multiplication
+    println("\n3. Large multiplication:")
+    long a = 123456
+    long b = 789012
+    long product = a * b
+    print("  123456 x 789012 = ")
+    println(product)
+
+    // Division of large numbers
+    println("\n4. Large division:")
+    long total = 9999999999
+    long divisor = 3
+    long quotient = total / divisor
+    print("  9999999999 / 3 = ")
+    println(quotient)
+
+    // Comparison
+    println("\n5. Large comparisons:")
+    long x = 5000000000
+    long y = 4999999999
+    if x > y {
+        println("  5B > 4.999B: correct")
+    }
+
+    println("\n=== Done ===")
+}

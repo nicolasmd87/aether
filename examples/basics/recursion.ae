@@ -1,0 +1,73 @@
+// Recursion - classic recursive algorithms
+// Run with: ae run examples/basics/recursion.ae
+
+fibonacci(n) {
+    if n <= 0 { return 0 }
+    if n == 1 { return 1 }
+    return fibonacci(n - 1) + fibonacci(n - 2)
+}
+
+factorial(n) {
+    if n <= 1 { return 1 }
+    return n * factorial(n - 1)
+}
+
+gcd(a, b) {
+    if b == 0 { return a }
+    return gcd(b, a % b)
+}
+
+power(base, exp) {
+    if exp == 0 { return 1 }
+    if exp % 2 == 0 {
+        half = power(base, exp / 2)
+        return half * half
+    }
+    return base * power(base, exp - 1)
+}
+
+main() {
+    println("=== Recursion Examples ===")
+
+    // Fibonacci sequence
+    println("\nFibonacci sequence:")
+    i = 0
+    while i <= 15 {
+        print("  fib(")
+        print(i)
+        print(") = ")
+        println(fibonacci(i))
+        i = i + 5
+    }
+
+    // Factorials
+    println("\nFactorials:")
+    j = 0
+    while j <= 12 {
+        print("  ")
+        print(j)
+        print("! = ")
+        println(factorial(j))
+        j = j + 3
+    }
+
+    // GCD
+    println("\nGreatest Common Divisor:")
+    print("  gcd(48, 18) = ")
+    println(gcd(48, 18))
+    print("  gcd(100, 75) = ")
+    println(gcd(100, 75))
+    print("  gcd(7, 13) = ")
+    println(gcd(7, 13))
+
+    // Fast exponentiation
+    println("\nFast exponentiation:")
+    print("  2^10 = ")
+    println(power(2, 10))
+    print("  3^5  = ")
+    println(power(3, 5))
+    print("  5^3  = ")
+    println(power(5, 3))
+
+    println("\n=== Done ===")
+}

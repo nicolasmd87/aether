@@ -87,10 +87,11 @@ typedef struct {
     atomic_int idle_cycles;     // Track how long core has been idle
     OptimizedSpinlock actor_lock;  // Protects actors array during migration and registration
 
-    // Per-core message counters (no atomics needed - core-local!)
-    // This is the Linux kernel's per-CPU counter pattern for scalability
-    uint64_t messages_sent;      // Messages sent FROM this core
-    uint64_t messages_processed; // Messages processed ON this core
+    // Per-core message counters — only written by owning core, but read
+    // cross-thread by count_pending_messages(), so must be _Atomic to avoid
+    // torn reads on weakly-ordered architectures (e.g. ARM64).
+    _Atomic uint64_t messages_sent;      // Messages sent FROM this core
+    _Atomic uint64_t messages_processed; // Messages processed ON this core
     char counter_padding[48];    // Cache line padding to prevent false sharing
 
     // Message coalescing buffer for 15x throughput improvement
@@ -116,6 +117,7 @@ void scheduler_init(int cores);
 void scheduler_init_with_opts(int cores, AetherOptFlags opts);
 
 void scheduler_start();
+void scheduler_ensure_threads_running();  // Start threads if not already started (for main-thread mode transition)
 void scheduler_stop();
 void scheduler_wait();
 void scheduler_cleanup();
