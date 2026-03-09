@@ -1,5 +1,5 @@
-# Aether language files
-*.ae linguist-language=Aether
+# Aether language files — always LF (no CRLF) so the lexer sees consistent input
+*.ae linguist-language=Aether text eol=lf
 
 # Documentation
 *.md linguist-documentation

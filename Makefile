@@ -329,19 +329,14 @@ examples: compiler
 		fi; \
 		printf "  %-30s " "$$name"; \
 		out_c="$(BUILD_DIR)/examples/$$name.c"; \
-		rm -f "$$out_c"; \
-		./build/aetherc$(EXE_EXT) "$$src" "$$out_c" 2>/tmp/ae_err.txt; \
-		if [ ! -f "$$out_c" ]; then \
-			echo "FAIL (compile)"; \
-			cat /tmp/ae_err.txt 2>/dev/null | head -5; \
-			fail=$$((fail + 1)); \
-		elif $(CC) $(CFLAGS) "$$out_c" $$extra_c $(RUNTIME_SRC) $(STD_SRC) $(COLLECTIONS_SRC) \
-		         -o $(BUILD_DIR)/examples/$$name$(EXE_EXT) $(LDFLAGS) 2>/tmp/cc_err.txt; then \
+		if ./build/aetherc$(EXE_EXT) $$src $$out_c 2>/dev/null && \
+		   $(CC) $(CFLAGS) $$out_c $$extra_c $(RUNTIME_SRC) $(STD_SRC) $(COLLECTIONS_SRC) \
+		         -o $(BUILD_DIR)/examples/$$name$(EXE_EXT) $(LDFLAGS) 2>/dev/null; then \
 			echo "OK"; \
 			pass=$$((pass + 1)); \
 		else \
-			echo "FAIL (build)"; \
-			cat /tmp/cc_err.txt 2>/dev/null | head -10; \
+			echo "FAIL"; \
+			./build/aetherc$(EXE_EXT) --verbose $$src $$out_c 2>&1 | tail -5; \
 			fail=$$((fail + 1)); \
 		fi; \
 	done; \
@@ -765,6 +760,87 @@ docker-ci: docker-build-ci
 	@echo "Running full CI suite + Valgrind + ASan in Docker..."
 	docker run --rm -v $(PWD):/aether -w /aether aether-ci bash -c "make ci && make valgrind-check && make asan-check"
 
+# Cross-compile with MinGW (replicates Windows CI without needing a Windows host)
+# Step 1: Build native aetherc, generate .c from all examples
+# Step 2: Cross-compile compiler sources with MinGW -Werror
+# Step 3: Syntax-check generated .c files with MinGW
+ci-windows: clean compiler
+	@echo "==================================="
+	@echo "  Windows Cross-Compilation Test"
+	@echo "==================================="
+	@echo ""
+	@echo "[1/3] Generating C from all examples with native aetherc..."
+	@mkdir -p build/win
+	@pass=0; fail=0; \
+	for src in $$(find examples -name '*.ae' | sort); do \
+		name=$$(echo $$src | sed 's|examples/||;s|\.ae$$||'); \
+		printf "  %-30s " "$$name"; \
+		mkdir -p "build/win/examples/$$(dirname $$name)"; \
+		out_c="build/win/examples/$$name.c"; \
+		rm -f "$$out_c"; \
+		if ./build/aetherc "$$src" "$$out_c" 2>/tmp/ae_err.txt && [ -f "$$out_c" ]; then \
+			echo "OK"; \
+			pass=$$((pass + 1)); \
+		else \
+			echo "FAIL"; \
+			cat /tmp/ae_err.txt 2>/dev/null | head -5; \
+			fail=$$((fail + 1)); \
+		fi; \
+	done; \
+	echo ""; \
+	echo "  $$pass passed, $$fail failed"; \
+	if [ "$$fail" -gt 0 ]; then exit 1; fi
+	@echo ""
+	@echo "[2/3] Cross-compiling compiler sources with MinGW -Werror..."
+	@for f in $(COMPILER_LIB_SRC); do \
+		printf "  %-50s " "$$f"; \
+		if x86_64-w64-mingw32-gcc -O2 -Werror -c \
+			-Icompiler -Iruntime -Iruntime/actors -Iruntime/scheduler \
+			-Iruntime/utils -Iruntime/memory -Iruntime/config \
+			-Istd -Istd/string -Istd/io -Istd/math -Istd/net -Istd/collections -Istd/json \
+			-Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
+			-DAETHER_VERSION=\"test\" \
+			"$$f" -o /dev/null 2>/tmp/mingw_err.txt; then \
+			echo "OK"; \
+		else \
+			echo "FAIL"; \
+			cat /tmp/mingw_err.txt 2>/dev/null | head -10; \
+			exit 1; \
+		fi; \
+	done
+	@echo "  All compiler sources clean under MinGW -Werror"
+	@echo ""
+	@echo "[3/3] Syntax-checking generated C with MinGW..."
+	@pass=0; fail=0; \
+	for src in $$(find examples -name '*.ae' | sort); do \
+		name=$$(echo $$src | sed 's|examples/||;s|\.ae$$||'); \
+		out_c="build/win/examples/$$name.c"; \
+		printf "  %-30s " "$$name"; \
+		if [ ! -f "$$out_c" ]; then \
+			echo "SKIP"; \
+		elif x86_64-w64-mingw32-gcc -O2 -fsyntax-only \
+			-Wall -Wextra -Wno-unused-parameter -Wno-unused-function \
+			"$$out_c" 2>/tmp/mingw_err.txt; then \
+			echo "OK"; \
+			pass=$$((pass + 1)); \
+		else \
+			echo "FAIL"; \
+			cat /tmp/mingw_err.txt 2>/dev/null | head -10; \
+			fail=$$((fail + 1)); \
+		fi; \
+	done; \
+	echo ""; \
+	echo "  $$pass passed, $$fail failed"; \
+	if [ "$$fail" -gt 0 ]; then exit 1; fi
+	@echo ""
+	@echo "==================================="
+	@echo "  Windows Cross-Compilation PASSED"
+	@echo "==="
+
+docker-ci-windows: docker-build-ci
+	@echo "Running Windows cross-compilation tests in Docker..."
+	docker run --rm -v $(PWD):/aether -w /aether aether-ci make ci-windows
+
 ci: clean
 	@echo "==================================="
 	@echo "  Aether CI — Full Test Suite"
@@ -828,7 +904,7 @@ asan-check: clean
 	  fi
 	@echo "✓ ASan clean — no memory errors detected"
 
-.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime test-install benchmark benchmark-ui examples run compile repl clean help self-test install stats stdlib ci docker-ci docker-build-ci valgrind-check asan-check
+.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime test-install benchmark benchmark-ui examples run compile repl clean help self-test install stats stdlib ci ci-windows docker-ci docker-ci-windows docker-build-ci valgrind-check asan-check
 
 # Cross-language benchmark UI
 benchmark-ui:

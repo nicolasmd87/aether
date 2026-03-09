@@ -7,7 +7,7 @@ FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install all CI dependencies
+# Install all CI dependencies + MinGW cross-compiler for Windows testing
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
@@ -20,6 +20,7 @@ RUN apt-get update && apt-get install -y \
     ccache \
     libreadline-dev \
     bc \
+    mingw-w64 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /aether
