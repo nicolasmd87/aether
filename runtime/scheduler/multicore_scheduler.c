@@ -1358,7 +1358,7 @@ void scheduler_send_batch_flush(void) {
     void* sorted_actors[BATCH_SEND_SIZE];
     Message sorted_msgs[BATCH_SEND_SIZE];
     int positions[MAX_CORES];
-    memcpy(positions, offsets, sizeof(offsets));
+    memcpy(positions, offsets, num_cores * sizeof(int));
 
     for (int i = 0; i < g_batch_buffer->count; i++) {
         ActorBase* actor = g_batch_buffer->actors[i];

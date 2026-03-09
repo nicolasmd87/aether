@@ -313,16 +313,47 @@ static void generate_list_pattern_condition(CodeGenerator* gen, ASTNode* pattern
     }
 }
 
+// Check if any binding in the pattern is actually used by the arm body
+static int pattern_needs_array(ASTNode* pattern, ASTNode* body) {
+    if (!pattern || !body) return 0;
+    if (pattern->type == AST_PATTERN_LIST) {
+        for (int i = 0; i < pattern->child_count; i++) {
+            ASTNode* elem = pattern->children[i];
+            if (elem && elem->type == AST_PATTERN_VARIABLE && elem->value &&
+                expr_references_var(body, elem->value)) return 1;
+        }
+    } else if (pattern->type == AST_PATTERN_CONS && pattern->child_count >= 2) {
+        ASTNode* head = pattern->children[0];
+        ASTNode* tail = pattern->children[1];
+        if (head && head->type == AST_PATTERN_VARIABLE && head->value &&
+            expr_references_var(body, head->value)) return 1;
+        if (tail && tail->type == AST_PATTERN_VARIABLE && tail->value &&
+            expr_references_var(body, tail->value)) return 1;
+    }
+    return 0;
+}
+
 static void generate_list_pattern_bindings(CodeGenerator* gen, ASTNode* pattern,
-                                           const char* array_name, const char* len_name) {
+                                           ASTNode* match_expr, const char* len_name,
+                                           ASTNode* body) {
     if (!pattern) return;
+
+    // Only declare the array pointer if this arm actually uses element bindings
+    int needs_arr = pattern_needs_array(pattern, body);
+    if (needs_arr) {
+        print_indent(gen);
+        fprintf(gen->output, "int* _match_arr = ");
+        generate_expression(gen, match_expr);
+        fprintf(gen->output, ";\n");
+    }
 
     if (pattern->type == AST_PATTERN_LIST && pattern->child_count > 0) {
         for (int i = 0; i < pattern->child_count; i++) {
             ASTNode* elem = pattern->children[i];
             if (elem && elem->type == AST_PATTERN_VARIABLE && elem->value) {
-                print_line(gen, "int %s = %s[%d];", elem->value, array_name, i);
-                print_line(gen, "(void)%s;", elem->value);
+                if (expr_references_var(body, elem->value)) {
+                    print_line(gen, "int %s = _match_arr[%d];", elem->value, i);
+                }
             }
         }
     } else if (pattern->type == AST_PATTERN_CONS && pattern->child_count >= 2) {
@@ -330,12 +361,15 @@ static void generate_list_pattern_bindings(CodeGenerator* gen, ASTNode* pattern,
         ASTNode* tail = pattern->children[1];
 
         if (head && head->type == AST_PATTERN_VARIABLE && head->value) {
-            print_line(gen, "int %s = %s[0];", head->value, array_name);
+            if (expr_references_var(body, head->value)) {
+                print_line(gen, "int %s = _match_arr[0];", head->value);
+            }
         }
         if (tail && tail->type == AST_PATTERN_VARIABLE && tail->value) {
-            print_line(gen, "int* %s = &%s[1];", tail->value, array_name);
-            print_line(gen, "int %s_len = %s - 1;", tail->value, len_name);
-            print_line(gen, "(void)%s; (void)%s_len;", tail->value, tail->value);
+            if (expr_references_var(body, tail->value)) {
+                print_line(gen, "int* %s = &_match_arr[1];", tail->value);
+                print_line(gen, "int %s_len = %s - 1;", tail->value, len_name);
+            }
         }
     }
 }
@@ -641,7 +675,6 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
 
                 // Check if any arm uses list patterns
                 int uses_list_patterns = has_list_patterns(stmt);
-                char array_name[64] = "_match_arr";
                 char len_name[64] = "_match_len";
 
                 // Wrap match in a block and store the match expression in a temp
@@ -649,19 +682,12 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                 print_line(gen, "{");
                 indent(gen);
 
-                // If using list patterns, generate array setup
+                // If using list patterns, generate length variable for conditions
                 if (uses_list_patterns) {
-                    print_indent(gen);
-                    fprintf(gen->output, "int* %s = ", array_name);
-                    generate_expression(gen, match_expr);
-                    fprintf(gen->output, ";\n");
                     print_indent(gen);
                     fprintf(gen->output, "int %s = ", len_name);
                     generate_expression(gen, match_expr);
                     fprintf(gen->output, "_len;\n");
-                    // Suppress unused-variable warnings (arr may only be used in some arms)
-                    print_indent(gen);
-                    fprintf(gen->output, "(void)%s;\n", array_name);
                 } else {
                     // Emit temp variable for the match expression value
                     Type* mexpr_type = match_expr->node_type;
@@ -747,7 +773,7 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
 
                     // Generate list pattern bindings if needed
                     if (is_list_pattern) {
-                        generate_list_pattern_bindings(gen, pattern, array_name, len_name);
+                        generate_list_pattern_bindings(gen, pattern, match_expr, len_name, result);
                     }
 
                     if (result->type == AST_BLOCK) {
