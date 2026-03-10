@@ -981,7 +981,7 @@ static void build_gcc_cmd(char* cmd, size_t size,
         if (slash) *slash = '\0';
 
         snprintf(cmd, size,
-            "gcc %s %s \"%s\" %s -L\"%s\" -laether -o \"%s\" -pthread -lm %s",
+            "gcc %s %s \"%s\" %s -L%s -laether -o \"%s\" -pthread -lm %s",
             opt, tc.include_flags, c_file, extra, lib_dir, out_file, link_flags);
     } else {
         snprintf(cmd, size,
