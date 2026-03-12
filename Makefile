@@ -61,7 +61,7 @@ endif
 ifdef WINDOWS_NATIVE
 VERSION := $(shell type VERSION 2>nul || echo 0.0.0)
 else
-VERSION := $(shell git tag -l 'v*.*.*' 2>/dev/null | sort -t. -k1,1n -k2,2n -k3,3n | tail -1 | sed 's/^v//')
+VERSION := $(shell git tag -l 'v*.*.*' 2>/dev/null | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -1)
 ifeq ($(VERSION),)
 VERSION := $(shell cat VERSION 2>/dev/null || echo "0.0.0")
 endif

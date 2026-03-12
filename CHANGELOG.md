@@ -23,6 +23,8 @@ number (e.g. `[0.18.0]`) before tagging the release.
 - **`ae version install` extracted only one directory from release archives**: The POSIX extraction logic assumed release archives had a single wrapper directory and used `ls -d tmp/*/ | head -1` to find it — but release archives contain `bin/`, `lib/`, `share/`, `include/` at root with no wrapper. `head -1` picked only one directory (e.g. `bin/`), so `lib/libaether.a` and `share/aether/` were lost, causing "flat layout" detection and compilation failures when running `ae run` on an installed version
 - **`ae version install` incomplete install detection**: Pre-existing version directories without actual binaries were treated as complete installations — now probes for `aetherc` binary and reinstalls if missing
 - **Windows `ae version use` missing lib/share**: Only copied `bin/` subdirectory contents — now copies the entire version directory so `lib/`, `include/`, `share/` are available
+- **Makefile version detection picked wrong tag**: `sort -t. -k1,1n` on `v0.X.0` tags tried numeric sort on the `v` prefix — behavior varies across `sort` implementations, causing some systems to pick e.g. `0.18.0` instead of `0.22.0`. Fixed by stripping the `v` prefix before sorting
+- **VERSION file stuck at `0.17.0`**: Release pipeline updates from 0.18.0–0.20.0 never persisted on main — corrected to `0.21.0` so the next merge triggers the `v0.21.0` release
 
 ### Changed
 
