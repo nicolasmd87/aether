@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 the release pipeline automatically replaces `[current]` with the next version
 number (e.g. `[0.18.0]`) before tagging the release.
 
-## [0.18.0]
+## [0.22.0]
 
 ### Added
 
