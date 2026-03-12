@@ -1,12 +1,11 @@
 #include "test_harness.h"
 #include "../../std/net/aether_net.h"
-#include "../../std/string/aether_string.h"
 
 TEST_CATEGORY(socket_null_handling, TEST_CATEGORY_NETWORK) {
     int result = tcp_send(NULL, NULL);
     ASSERT_EQ(-1, result);
 
-    AetherString* received = tcp_receive(NULL, 1024);
+    char* received = tcp_receive(NULL, 1024);
     ASSERT_NULL(received);
 
     result = tcp_close(NULL);

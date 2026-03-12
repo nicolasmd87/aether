@@ -1,6 +1,5 @@
 #include "test_harness.h"
 #include "../../std/json/aether_json.h"
-#include "../../std/string/aether_string.h"
 
 TEST_CATEGORY(json_parse_null, TEST_CATEGORY_STDLIB) {
     JsonValue* value = json_parse("null");
@@ -41,9 +40,9 @@ TEST_CATEGORY(json_parse_string, TEST_CATEGORY_STDLIB) {
     ASSERT_NOT_NULL(value);
     ASSERT_EQ(JSON_STRING, json_type(value));
 
-    AetherString* str_val = json_get_string(value);
+    const char* str_val = json_get_string(value);
     ASSERT_NOT_NULL(str_val);
-    ASSERT_STREQ("hello world", str_val->data);
+    ASSERT_STREQ("hello world", str_val);
 
     json_free(value);
 }
@@ -71,7 +70,7 @@ TEST_CATEGORY(json_parse_object, TEST_CATEGORY_STDLIB) {
 
     JsonValue* name_val = json_object_get(value, "name");
     ASSERT_NOT_NULL(name_val);
-    ASSERT_STREQ("Alice", json_get_string(name_val)->data);
+    ASSERT_STREQ("Alice", json_get_string(name_val));
 
     JsonValue* age_val = json_object_get(value, "age");
     ASSERT_EQ(30, json_get_int(age_val));
@@ -88,12 +87,12 @@ TEST_CATEGORY(json_create_and_stringify, TEST_CATEGORY_STDLIB) {
     JsonValue* age_val = json_create_number(25);
     json_object_set(obj, "age", age_val);
 
-    AetherString* json_str = json_stringify(obj);
+    char* json_str = json_stringify(obj);
     ASSERT_NOT_NULL(json_str);
-    ASSERT_NOT_NULL(strstr(json_str->data, "name"));
-    ASSERT_NOT_NULL(strstr(json_str->data, "Bob"));
+    ASSERT_NOT_NULL(strstr(json_str, "name"));
+    ASSERT_NOT_NULL(strstr(json_str, "Bob"));
 
-    string_release(json_str);
+    free(json_str);
     json_free(obj);
 }
 
