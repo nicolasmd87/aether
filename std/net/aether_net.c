@@ -76,7 +76,7 @@ int tcp_send(TcpSocket* sock, const char* data) {
     return sent;
 }
 
-AetherString* tcp_receive(TcpSocket* sock, int max_bytes) {
+char* tcp_receive(TcpSocket* sock, int max_bytes) {
     if (!sock || !sock->connected) return NULL;
 
     char* buffer = (char*)malloc(max_bytes + 1);
@@ -89,9 +89,7 @@ AetherString* tcp_receive(TcpSocket* sock, int max_bytes) {
     }
 
     buffer[received] = '\0';
-    AetherString* result = string_new_with_length(buffer, received);
-    free(buffer);
-    return result;
+    return buffer;
 }
 
 int tcp_close(TcpSocket* sock) {

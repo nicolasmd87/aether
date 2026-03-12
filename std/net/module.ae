@@ -9,7 +9,7 @@
 // TCP Client
 extern tcp_connect(host: string, port: int) -> ptr
 extern tcp_send(sock: ptr, data: string) -> int
-extern tcp_receive(sock: ptr, max_bytes: int) -> ptr
+extern tcp_receive(sock: ptr, max_bytes: int) -> string
 extern tcp_close(sock: ptr) -> int
 
 // TCP Server

@@ -15,7 +15,7 @@ typedef enum {
 typedef struct JsonValue JsonValue;
 
 JsonValue* json_parse(const char* json_str);
-AetherString* json_stringify(JsonValue* value);
+char* json_stringify(JsonValue* value);
 void json_free(JsonValue* value);
 
 JsonType json_type(JsonValue* value);
@@ -24,7 +24,7 @@ int json_is_null(JsonValue* value);
 int json_get_bool(JsonValue* value);
 double json_get_number(JsonValue* value);
 int json_get_int(JsonValue* value);
-AetherString* json_get_string(JsonValue* value);
+const char* json_get_string(JsonValue* value);
 
 JsonValue* json_object_get(JsonValue* obj, const char* key);
 void json_object_set(JsonValue* obj, const char* key, JsonValue* value);

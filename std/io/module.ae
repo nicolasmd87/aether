@@ -8,7 +8,7 @@ extern io_print_int(value: int)
 extern io_print_float(value: float)
 
 // File I/O
-extern io_read_file(path: string) -> ptr
+extern io_read_file(path: string) -> string
 extern io_write_file(path: string, content: string) -> int
 extern io_append_file(path: string, content: string) -> int
 extern io_file_exists(path: string) -> int
@@ -19,6 +19,6 @@ extern io_file_info(path: string) -> ptr
 extern io_file_info_free(info: ptr)
 
 // Environment variables
-extern io_getenv(name: string) -> ptr
+extern io_getenv(name: string) -> string
 extern io_setenv(name: string, value: string) -> int
 extern io_unsetenv(name: string) -> int

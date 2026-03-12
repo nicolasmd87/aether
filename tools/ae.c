@@ -1859,7 +1859,7 @@ static int ae_download(const char* url, const char* dest) {
     fclose(ps);
     char cmd[2048];
     snprintf(cmd, sizeof(cmd),
-        "powershell -NoProfile -ExecutionPolicy Bypass -File \"%s\"", ps_path);
+        "powershell -NoProfile -ExecutionPolicy Bypass -File \"%s\" >nul 2>&1", ps_path);
     int r = system(cmd);
     remove(ps_path);
     return r;
@@ -1889,7 +1889,7 @@ static int ae_extract(const char* archive, const char* dest_dir) {
     fclose(ps);
     char cmd[2048];
     snprintf(cmd, sizeof(cmd),
-        "powershell -NoProfile -ExecutionPolicy Bypass -File \"%s\"", ps_path);
+        "powershell -NoProfile -ExecutionPolicy Bypass -File \"%s\" >nul 2>&1", ps_path);
     int r = system(cmd);
     remove(ps_path);
     return r;
@@ -2007,9 +2007,36 @@ static int cmd_version_install(const char* version) {
     char ver_dir[512];
     snprintf(ver_dir, sizeof(ver_dir), "%s/.aether/versions/%s", home, vtag);
     if (dir_exists(ver_dir)) {
-        printf("Version %s is already installed.\n", vtag);
-        printf("Switch to it with: ae version use %s\n", vtag);
-        return 0;
+        // Verify the install is complete by checking for binaries
+        char probe[1024];
+        int has_binary = 0;
+#ifdef _WIN32
+        snprintf(probe, sizeof(probe), "%s\\bin\\aetherc.exe", ver_dir);
+        if (path_exists(probe)) has_binary = 1;
+        snprintf(probe, sizeof(probe), "%s\\aetherc.exe", ver_dir);
+        if (path_exists(probe)) has_binary = 1;
+#else
+        snprintf(probe, sizeof(probe), "%s/bin/aetherc", ver_dir);
+        if (path_exists(probe)) has_binary = 1;
+        snprintf(probe, sizeof(probe), "%s/aetherc", ver_dir);
+        if (path_exists(probe)) has_binary = 1;
+#endif
+        if (has_binary) {
+            printf("Version %s is already installed.\n", vtag);
+            printf("Switch to it with: ae version use %s\n", vtag);
+            return 0;
+        }
+        // Incomplete install — remove and re-download
+        printf("Incomplete installation of %s detected, reinstalling...\n", vtag);
+#ifdef _WIN32
+        char rm_cmd[1024];
+        snprintf(rm_cmd, sizeof(rm_cmd), "rmdir /S /Q \"%s\"", ver_dir);
+        system(rm_cmd);
+#else
+        char rm_cmd[1024];
+        snprintf(rm_cmd, sizeof(rm_cmd), "rm -rf '%s'", ver_dir);
+        system(rm_cmd);
+#endif
     }
 
     // Build URL and local archive path
@@ -2114,24 +2141,23 @@ static int cmd_version_use(const char* version) {
     resolve_version_bin_dir(ver_dir, src_bin, sizeof(src_bin));
 
 #ifdef _WIN32
-    char dest_bin[512];
-    snprintf(dest_bin, sizeof(dest_bin), "%s\\.aether\\bin", home);
-    mkdirs(dest_bin);
+    // Copy the entire version directory to ~/.aether/ so lib/, include/,
+    // share/ are available alongside bin/.
+    char dest_root[512];
+    snprintf(dest_root, sizeof(dest_root), "%s\\.aether", home);
     char cmd[2048];
-    // Copy all files from the resolved source to dest; use robocopy which
-    // handles in-use executables better than xcopy. /NFL /NDL /NJH /NJS
-    // suppress per-file output.
+    // robocopy /E copies all subdirectories; /NFL /NDL /NJH /NJS suppress output
     snprintf(cmd, sizeof(cmd),
         "robocopy \"%s\" \"%s\" /E /NFL /NDL /NJH /NJS /IS /IT >nul 2>&1",
-        src_bin, dest_bin);
+        ver_dir, dest_root);
     int rc = system(cmd);
     // robocopy returns 0-7 for success, >=8 for failure
     if (rc >= 8) {
         // Fall back to xcopy
         snprintf(cmd, sizeof(cmd),
-            "xcopy /Y /Q \"%s\\*\" \"%s\\\"", src_bin, dest_bin);
+            "xcopy /E /Y /Q \"%s\\*\" \"%s\\\"", ver_dir, dest_root);
         if (system(cmd) != 0) {
-            fprintf(stderr, "Failed to copy binaries from %s to %s\n", src_bin, dest_bin);
+            fprintf(stderr, "Failed to copy version files from %s to %s\n", ver_dir, dest_root);
             return 1;
         }
     }

@@ -7,7 +7,7 @@
 
 // Parsing and serialization
 extern json_parse(json_str: string) -> ptr
-extern json_stringify(value: ptr) -> ptr
+extern json_stringify(value: ptr) -> string
 extern json_free(value: ptr)
 
 // Type checking
@@ -18,7 +18,7 @@ extern json_is_null(value: ptr) -> int
 extern json_get_bool(value: ptr) -> int
 extern json_get_number(value: ptr) -> float
 extern json_get_int(value: ptr) -> int
-extern json_get_string(value: ptr) -> ptr
+extern json_get_string(value: ptr) -> string
 
 // Object operations (keys are raw strings)
 extern json_object_get(obj: ptr, key: string) -> ptr

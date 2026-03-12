@@ -1,7 +1,7 @@
 #ifndef AETHER_NET_H
 #define AETHER_NET_H
 
-#include "../string/aether_string.h"
+#include <stddef.h>
 
 typedef struct TcpSocket TcpSocket;
 typedef struct TcpServer TcpServer;
@@ -9,7 +9,7 @@ typedef struct TcpServer TcpServer;
 // TCP Client
 TcpSocket* tcp_connect(const char* host, int port);
 int tcp_send(TcpSocket* sock, const char* data);
-AetherString* tcp_receive(TcpSocket* sock, int max_bytes);
+char* tcp_receive(TcpSocket* sock, int max_bytes);
 int tcp_close(TcpSocket* sock);
 
 // TCP Server

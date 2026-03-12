@@ -31,7 +31,7 @@ File* file_open(const char* path, const char* mode) {
     return file;
 }
 
-AetherString* file_read_all(File* file) {
+char* file_read_all(File* file) {
     if (!file || !file->is_open) return NULL;
 
     FILE* fp = (FILE*)file->handle;
@@ -43,17 +43,15 @@ AetherString* file_read_all(File* file) {
     size_t read = fread(buffer, 1, size, fp);
     buffer[read] = '\0';
 
-    AetherString* result = string_new_with_length(buffer, read);
-    free(buffer);
-    return result;
+    return buffer;
 }
 
-int file_write(File* file, const char* data, size_t length) {
+int file_write(File* file, const char* data, int length) {
     if (!file || !file->is_open || !data) return -1;
 
     FILE* fp = (FILE*)file->handle;
-    size_t written = fwrite(data, 1, length, fp);
-    return (written == length) ? 0 : -1;
+    size_t written = fwrite(data, 1, (size_t)length, fp);
+    return (written == (size_t)length) ? 0 : -1;
 }
 
 int file_close(File* file) {
@@ -81,12 +79,12 @@ int file_delete(const char* path) {
     return remove(path);
 }
 
-size_t file_size(const char* path) {
+int file_size(const char* path) {
     if (!path) return 0;
 
     struct stat st;
     if (stat(path, &st) != 0) return 0;
-    return st.st_size;
+    return (int)st.st_size;
 }
 
 // Directory operations
@@ -108,7 +106,7 @@ int dir_delete(const char* path) {
 }
 
 // Path operations
-AetherString* path_join(const char* path1, const char* path2) {
+char* path_join(const char* path1, const char* path2) {
     if (!path1 || !path2) return NULL;
 
     size_t len1 = strlen(path1);
@@ -132,12 +130,10 @@ AetherString* path_join(const char* path1, const char* path2) {
         strcpy(result + len1, path2);
     }
 
-    AetherString* str = string_new(result);
-    free(result);
-    return str;
+    return result;
 }
 
-AetherString* path_dirname(const char* path) {
+char* path_dirname(const char* path) {
     if (!path) return NULL;
 
     const char* last_sep = strrchr(path, '/');
@@ -148,7 +144,7 @@ AetherString* path_dirname(const char* path) {
     }
 
     if (!last_sep) {
-        return string_new(".");
+        return strdup(".");
     }
 
     size_t len = last_sep - path;
@@ -158,12 +154,10 @@ AetherString* path_dirname(const char* path) {
     strncpy(result, path, len);
     result[len] = '\0';
 
-    AetherString* str = string_new(result);
-    free(result);
-    return str;
+    return result;
 }
 
-AetherString* path_basename(const char* path) {
+char* path_basename(const char* path) {
     if (!path) return NULL;
 
     const char* last_sep = strrchr(path, '/');
@@ -173,11 +167,11 @@ AetherString* path_basename(const char* path) {
         last_sep = last_sep_win;
     }
 
-    const char* basename = last_sep ? last_sep + 1 : path;
-    return string_new(basename);
+    const char* base = last_sep ? last_sep + 1 : path;
+    return strdup(base);
 }
 
-AetherString* path_extension(const char* path) {
+char* path_extension(const char* path) {
     if (!path) return NULL;
 
     const char* last_dot = strrchr(path, '.');
@@ -189,10 +183,10 @@ AetherString* path_extension(const char* path) {
     }
 
     if (!last_dot || (last_sep && last_dot < last_sep)) {
-        return string_new("");
+        return strdup("");
     }
 
-    return string_new(last_dot);
+    return strdup(last_dot);
 }
 
 int path_is_absolute(const char* path) {

@@ -622,7 +622,6 @@ Console output, file operations, and environment variable access.
 
 ```aether
 import std.io
-import std.string
 
 main() {
     io.print("Hello ")
@@ -630,18 +629,15 @@ main() {
     io.print_int(42)
     io.print_line("")
 
-    // io.getenv() and io.read_file() return AetherString pointers (ptr).
-    // Use string.to_cstr() to convert to a plain string for printing.
+    // io.getenv() and io.read_file() return strings directly.
     home = io.getenv("HOME")
     if (home != 0) {
-        io.print_line(string.to_cstr(home))
+        io.print_line(home)
     }
 
-    // File read also returns AetherString pointer
     content = io.read_file("myfile.txt")
     if (content != 0) {
-        io.print_line(string.to_cstr(content))
-        string.release(content)
+        io.print_line(content)
     }
 }
 ```
@@ -653,7 +649,7 @@ main() {
 - `io.print_float(value)` - Print float
 
 **File Operations:**
-- `io.read_file(path)` - Read entire file (returns `AetherString*` ptr — use `string.to_cstr()` to print)
+- `io.read_file(path)` - Read entire file contents as a string
 - `io.write_file(path, content)` - Write content to file (returns 1 on success, 0 on failure)
 - `io.append_file(path, content)` - Append content to file (returns 1 on success, 0 on failure)
 - `io.file_exists(path)` - Check if file exists (returns 1/0)
@@ -664,7 +660,7 @@ main() {
 - `io.file_info_free(info)` - Free file info
 
 **Environment:**
-- `io.getenv(name)` - Get environment variable value (returns `AetherString*` ptr — use `string.to_cstr()` to print)
+- `io.getenv(name)` - Get environment variable value as a string
 - `io.setenv(name, value)` - Set environment variable (returns 1 on success)
 - `io.unsetenv(name)` - Unset environment variable (returns 1 on success)
 

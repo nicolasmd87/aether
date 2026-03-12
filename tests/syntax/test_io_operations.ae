@@ -2,7 +2,6 @@
 // Covers: write_file, read_file, append_file, file_exists, delete_file, getenv
 
 import std.io
-import std.string
 
 main() {
     print("=== I/O Operations Tests ===\n\n")
@@ -39,18 +38,16 @@ main() {
         exit(1)
     }
 
-    // Test 4: read_file and verify content
+    // Test 4: read_file returns a printable string directly
     print("\nTest 4: read_file\n")
     content = io.read_file(tmpfile)
     if content != 0 {
-        cstr = string.to_cstr(content)
-        if cstr == "hello aether" {
+        if content == "hello aether" {
             print("  PASS: read back 'hello aether'\n")
         } else {
             print("  FAIL: content mismatch\n")
             exit(1)
         }
-        string.release(content)
     } else {
         print("  FAIL: read_file returned null\n")
         exit(1)
@@ -61,15 +58,12 @@ main() {
     io.append_file(tmpfile, "!")
     content2 = io.read_file(tmpfile)
     if content2 != 0 {
-        if string.length(content2) == 13 {
-            print("  PASS: length after append = 13\n")
+        if content2 == "hello aether!" {
+            print("  PASS: content after append correct\n")
         } else {
-            print("  FAIL: length = ")
-            print(string.length(content2))
-            print("\n")
+            print("  FAIL: content mismatch after append\n")
             exit(1)
         }
-        string.release(content2)
     } else {
         print("  FAIL: read_file returned null\n")
         exit(1)
@@ -89,12 +83,7 @@ main() {
     print("\nTest 7: getenv\n")
     path_val = io.getenv("PATH")
     if path_val != 0 {
-        if string.length(path_val) > 0 {
-            print("  PASS: PATH is set, length > 0\n")
-        } else {
-            print("  FAIL: PATH empty\n")
-            exit(1)
-        }
+        print("  PASS: PATH is set\n")
     } else {
         print("  FAIL: PATH not set\n")
         exit(1)

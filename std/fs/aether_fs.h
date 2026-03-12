@@ -1,7 +1,7 @@
 #ifndef AETHER_FS_H
 #define AETHER_FS_H
 
-#include "../string/aether_string.h"
+#include <stddef.h>
 
 // File operations
 typedef struct {
@@ -11,12 +11,12 @@ typedef struct {
 } File;
 
 File* file_open(const char* path, const char* mode);
-AetherString* file_read_all(File* file);
-int file_write(File* file, const char* data, size_t length);
+char* file_read_all(File* file);
+int file_write(File* file, const char* data, int length);
 int file_close(File* file);
 int file_exists(const char* path);
 int file_delete(const char* path);
-size_t file_size(const char* path);
+int file_size(const char* path);
 
 // Directory operations
 int dir_exists(const char* path);
@@ -24,10 +24,10 @@ int dir_create(const char* path);
 int dir_delete(const char* path);
 
 // Path operations
-AetherString* path_join(const char* path1, const char* path2);
-AetherString* path_dirname(const char* path);
-AetherString* path_basename(const char* path);
-AetherString* path_extension(const char* path);
+char* path_join(const char* path1, const char* path2);
+char* path_dirname(const char* path);
+char* path_basename(const char* path);
+char* path_extension(const char* path);
 int path_is_absolute(const char* path);
 
 // Directory listing

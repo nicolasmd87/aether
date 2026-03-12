@@ -41,7 +41,7 @@ void io_print_float(double value) {
 }
 
 // File I/O
-AetherString* io_read_file(const char* path) {
+char* io_read_file(const char* path) {
     if (!path) return NULL;
 
     FILE* file = fopen(path, "rb");
@@ -58,9 +58,7 @@ AetherString* io_read_file(const char* path) {
     buffer[read] = '\0';
     fclose(file);
 
-    AetherString* content = string_new_with_length(buffer, read);
-    free(buffer);
-    return content;
+    return buffer;
 }
 
 int io_write_file(const char* path, const char* content) {
@@ -124,11 +122,11 @@ void io_file_info_free(FileInfo* info) {
 }
 
 // Environment variables
-AetherString* io_getenv(const char* name) {
+char* io_getenv(const char* name) {
     if (!name) return NULL;
     const char* value = getenv(name);
     if (!value) return NULL;
-    return string_new(value);
+    return strdup(value);
 }
 
 int io_setenv(const char* name, const char* value) {

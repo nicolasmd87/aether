@@ -9,7 +9,7 @@
 
 extern file_open(path: string, mode: string) -> ptr
 extern file_close(file: ptr) -> int
-extern file_read_all(file: ptr) -> ptr
+extern file_read_all(file: ptr) -> string
 extern file_write(file: ptr, data: string, length: int) -> int
 extern file_exists(path: string) -> int
 extern file_delete(path: string) -> int

@@ -60,6 +60,20 @@ main() {
     }
     println("PASS: file.size works")
 
+    // Test file.read_all returns printable content (issue #47 follow-up)
+    f = file.open("_test_issue61_tmp.txt", "w")
+    file.write(f, "Hello!", 6)
+    file.close(f)
+
+    f = file.open("_test_issue61_tmp.txt", "r")
+    content = file.read_all(f)
+    file.close(f)
+    if content == 0 {
+        println("FAIL: file.read_all returned null")
+        exit(1)
+    }
+    println("PASS: file.read_all works")
+
     file.delete("_test_issue61_tmp.txt")
     if file.exists("_test_issue61_tmp.txt") != 0 {
         println("FAIL: file still exists after delete")

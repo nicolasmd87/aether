@@ -202,10 +202,12 @@ static void append_string(AetherString** result, const char* str) {
     *result = new_result;
 }
 
-AetherString* json_stringify(JsonValue* value) {
+char* json_stringify(JsonValue* value) {
     AetherString* result = string_empty();
     stringify_value(value, &result);
-    return result;
+    char* cstr = strdup(result->data);
+    string_release(result);
+    return cstr;
 }
 
 static void stringify_value(JsonValue* value, AetherString** result) {
@@ -317,8 +319,9 @@ int json_get_int(JsonValue* value) {
     return (int)json_get_number(value);
 }
 
-AetherString* json_get_string(JsonValue* value) {
-    return (value && value->type == JSON_STRING) ? value->data.string_value : NULL;
+const char* json_get_string(JsonValue* value) {
+    if (!value || value->type != JSON_STRING || !value->data.string_value) return NULL;
+    return value->data.string_value->data;
 }
 
 JsonValue* json_object_get(JsonValue* obj, const char* key) {
