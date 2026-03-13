@@ -419,22 +419,60 @@ static void discover_toolchain(void) {
         char current_compiler[1024];
         snprintf(current_compiler, sizeof(current_compiler), "%s/current/bin/aetherc" EXE_EXT, home);
         if (path_exists(current_compiler)) {
-            snprintf(tc.root, sizeof(tc.root), "%s/current", home);
-            strncpy(tc.compiler, current_compiler, sizeof(tc.compiler) - 1);
-            if (tc.verbose) fprintf(stderr, "[toolchain] compiler=%s (via current symlink)\n", tc.compiler);
-            goto found_root;
+            // Verify the installation has lib or share/aether — if neither,
+            // the version was installed with a buggy ae that only extracted bin/.
+            char share_probe[1024], lib_probe[1024];
+            snprintf(share_probe, sizeof(share_probe), "%s/current/share/aether", home);
+            snprintf(lib_probe, sizeof(lib_probe), "%s/current/lib/libaether.a", home);
+            if (dir_exists(share_probe) || path_exists(lib_probe)) {
+                snprintf(tc.root, sizeof(tc.root), "%s/current", home);
+                strncpy(tc.compiler, current_compiler, sizeof(tc.compiler) - 1);
+                if (tc.verbose) fprintf(stderr, "[toolchain] compiler=%s (via current symlink)\n", tc.compiler);
+                goto found_root;
+            }
+            fprintf(stderr, "Warning: %s/current has bin/aetherc but no lib/ or share/ — installation is incomplete.\n", home);
+            fprintf(stderr, "Fix with: ae version install <version> or ./install.sh\n");
+            // Fall through to try other strategies
         }
         snprintf(current_compiler, sizeof(current_compiler), "%s/current/aetherc" EXE_EXT, home);
         if (path_exists(current_compiler)) {
-            snprintf(tc.root, sizeof(tc.root), "%s/current", home);
-            strncpy(tc.compiler, current_compiler, sizeof(tc.compiler) - 1);
-            if (tc.verbose) fprintf(stderr, "[toolchain] compiler=%s (via current symlink, flat layout)\n", tc.compiler);
-            goto found_root;
+            // Flat layout: aetherc at root of current/ with no bin/ subdirectory.
+            // This is a broken install (old ae version install bug). Check if
+            // share/aether/ exists — if not, warn and skip so we fall through
+            // to a working toolchain.
+            char share_check[1024];
+            snprintf(share_check, sizeof(share_check), "%s/current/share/aether", home);
+            if (dir_exists(share_check)) {
+                snprintf(tc.root, sizeof(tc.root), "%s/current", home);
+                strncpy(tc.compiler, current_compiler, sizeof(tc.compiler) - 1);
+                if (tc.verbose) fprintf(stderr, "[toolchain] compiler=%s (via current symlink, flat layout)\n", tc.compiler);
+                goto found_root;
+            }
+            // Also check for lib
+            char lib_check[1024];
+            snprintf(lib_check, sizeof(lib_check), "%s/current/lib/libaether.a", home);
+            if (path_exists(lib_check)) {
+                snprintf(tc.root, sizeof(tc.root), "%s/current", home);
+                strncpy(tc.compiler, current_compiler, sizeof(tc.compiler) - 1);
+                goto found_root;
+            }
+            fprintf(stderr, "Warning: %s/current has aetherc but no lib/ or share/ — installation is incomplete.\n", home);
+            fprintf(stderr, "Fix with: ae version install <version> or ./install.sh\n");
+            // Fall through to try other strategies
         }
         strncpy(tc.root, home, sizeof(tc.root) - 1);
         snprintf(tc.compiler, sizeof(tc.compiler), "%s/bin/aetherc" EXE_EXT, tc.root);
         if (tc.verbose) fprintf(stderr, "[toolchain] compiler=%s exists=%d\n", tc.compiler, path_exists(tc.compiler));
-        if (path_exists(tc.compiler)) goto found_root;
+        if (path_exists(tc.compiler)) {
+            // Verify AETHER_HOME has sources or lib — otherwise build will fail
+            char share_check[1024], lib_check[1024];
+            snprintf(share_check, sizeof(share_check), "%s/share/aether", home);
+            snprintf(lib_check, sizeof(lib_check), "%s/lib/libaether.a", home);
+            if (dir_exists(share_check) || path_exists(lib_check)) {
+                goto found_root;
+            }
+            // AETHER_HOME is incomplete — fall through to other strategies
+        }
     }
 
     // Strategy 3: Relative to ae binary — installed layout ($PREFIX/bin/ae)
@@ -2022,9 +2060,21 @@ static int cmd_version_install(const char* version) {
         if (path_exists(probe)) has_binary = 1;
 #endif
         if (has_binary) {
-            printf("Version %s is already installed.\n", vtag);
-            printf("Switch to it with: ae version use %s\n", vtag);
-            return 0;
+            // Also verify the install has sources or a prebuilt lib —
+            // old ae versions had an extraction bug that only copied bin/
+            char lib_probe[1024], share_probe[1024];
+            int has_sources = 0;
+            snprintf(lib_probe, sizeof(lib_probe), "%s/lib/libaether.a", ver_dir);
+            if (path_exists(lib_probe)) has_sources = 1;
+            snprintf(share_probe, sizeof(share_probe), "%s/share/aether/runtime", ver_dir);
+            if (dir_exists(share_probe)) has_sources = 1;
+            if (has_sources) {
+                printf("Version %s is already installed.\n", vtag);
+                printf("Switch to it with: ae version use %s\n", vtag);
+                return 0;
+            }
+            printf("Version %s has binaries but missing lib/share — reinstalling...\n", vtag);
+            // Fall through to remove and re-download
         }
         // Incomplete install — remove and re-download
         printf("Incomplete installation of %s detected, reinstalling...\n", vtag);
@@ -2106,6 +2156,24 @@ static int cmd_version_install(const char* version) {
         if (system(cmd) != 0) { /* non-fatal: temp dir cleanup */ }
     }
 #endif
+
+    // Verify the installation has the expected structure.
+    // Releases should have bin/, lib/ or share/aether/ — if we only see
+    // flat binaries, the extraction went wrong.
+    {
+        char probe[1024];
+        int has_structure = 0;
+        snprintf(probe, sizeof(probe), "%s/bin", ver_dir);
+        if (dir_exists(probe)) has_structure = 1;
+        snprintf(probe, sizeof(probe), "%s/lib", ver_dir);
+        if (dir_exists(probe)) has_structure = 1;
+        snprintf(probe, sizeof(probe), "%s/share/aether", ver_dir);
+        if (dir_exists(probe)) has_structure = 1;
+        if (!has_structure) {
+            fprintf(stderr, "Warning: Installation may be incomplete — no bin/, lib/, or share/ found in %s\n", ver_dir);
+            fprintf(stderr, "Try: ae version install %s --force  or  ./install.sh\n", vtag);
+        }
+    }
 
     printf("Installed Aether %s → %s\n", vtag, ver_dir);
     printf("Switch to it with: ae version use %s\n", vtag);
