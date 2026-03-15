@@ -69,6 +69,11 @@ HttpServer* http_server_create(int port) {
     server->max_connections = 1000;
     server->keep_alive_timeout = 30;
     server->scheduler = NULL;
+    server->handler_actor = NULL;
+    server->send_fn = NULL;
+    server->spawn_fn = NULL;
+    server->release_fn = NULL;
+    server->step_fn = NULL;
 
     return server;
 }
@@ -633,6 +638,7 @@ static void* connection_thread(void* arg) {
     free(ctx);
     return NULL;
 }
+
 #endif
 
 int http_server_start(HttpServer* server) {
@@ -641,6 +647,8 @@ int http_server_start(HttpServer* server) {
     }
 
     server->is_running = 1;
+
+    int use_actor_mode = (server->spawn_fn && server->send_fn && server->step_fn);
 
     printf("Server running at http://%s:%d\n", server->host, server->port);
     printf("Press Ctrl+C to stop\n\n");
@@ -660,20 +668,36 @@ int http_server_start(HttpServer* server) {
 #ifdef _WIN32
         handle_client_connection(server, client_fd);
 #else
-        ConnectionCtx* ctx = malloc(sizeof(ConnectionCtx));
-        if (!ctx) { close(client_fd); continue; }
-        ctx->server = server;
-        ctx->client_fd = client_fd;
+        if (use_actor_mode) {
+            // Full-actor mode: send only the fd to a worker actor.
+            // The worker does recv+parse+respond+close — zero work on accept thread.
+            void* worker = server->spawn_fn(-1, server->step_fn, 0);
+            if (worker) {
+                HttpConnectionMessage conn_msg;
+                conn_msg.type = MSG_HTTP_CONNECTION;
+                conn_msg.client_fd = client_fd;
+                server->send_fn(worker, &conn_msg, sizeof(conn_msg));
+            } else {
+                const char* err = "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 19\r\n\r\nService Unavailable";
+                send(client_fd, err, strlen(err), 0);
+                close(client_fd);
+            }
+        } else {
+            ConnectionCtx* ctx = malloc(sizeof(ConnectionCtx));
+            if (!ctx) { close(client_fd); continue; }
+            ctx->server = server;
+            ctx->client_fd = client_fd;
 
-        pthread_t tid;
-        pthread_attr_t attr;
-        pthread_attr_init(&attr);
-        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-        if (pthread_create(&tid, &attr, connection_thread, ctx) != 0) {
-            free(ctx);
-            handle_client_connection(server, client_fd);
+            pthread_t tid;
+            pthread_attr_t attr;
+            pthread_attr_init(&attr);
+            pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+            if (pthread_create(&tid, &attr, connection_thread, ctx) != 0) {
+                free(ctx);
+                handle_client_connection(server, client_fd);
+            }
+            pthread_attr_destroy(&attr);
         }
-        pthread_attr_destroy(&attr);
 #endif
     }
 
@@ -869,4 +893,36 @@ void http_serve_static(HttpRequest* req, HttpServerResponse* res, void* base_dir
     }
     http_serve_file(res, resolved);
 #endif
+}
+
+// ============================================================================
+// Actor dispatch mode
+// ============================================================================
+
+void http_server_set_actor_handler(HttpServer* server, void (*step_fn)(void*),
+                                    void (*send_fn)(void*, void*, size_t),
+                                    void* (*spawn_fn)(int, void (*)(void*), size_t),
+                                    void (*release_fn)(void*)) {
+    if (!server || !step_fn || !send_fn || !spawn_fn) return;
+    server->step_fn = step_fn;
+    server->send_fn = send_fn;
+    server->spawn_fn = spawn_fn;
+    server->release_fn = release_fn;
+}
+
+// Request accessors (for Aether .ae code via opaque ptr)
+const char* http_request_method(HttpRequest* req) {
+    return req ? req->method : "";
+}
+
+const char* http_request_path(HttpRequest* req) {
+    return req ? req->path : "";
+}
+
+const char* http_request_body(HttpRequest* req) {
+    return req ? req->body : "";
+}
+
+const char* http_request_query(HttpRequest* req) {
+    return req ? req->query_string : "";
 }
