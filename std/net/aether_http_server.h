@@ -71,10 +71,40 @@ typedef struct {
     // Actor system
     Scheduler* scheduler;
 
+    // Actor dispatch mode (opt-in: set via http_server_set_actor_handler)
+    void* handler_actor;            // Legacy single actor (NULL = use C handlers)
+    // Fire-and-forget: spawn one actor per request
+    void (*send_fn)(void*, void*, size_t);      // aether_send_message (avoids link dep)
+    void* (*spawn_fn)(int, void (*)(void*), size_t);  // scheduler_spawn_pooled
+    void (*release_fn)(void*);                  // scheduler_release_pooled
+    void (*step_fn)(void*);                     // User-provided step function for per-request actors
+
     // Configuration
     int max_connections;
     int keep_alive_timeout;
 } HttpServer;
+
+// ============================================================================
+// Actor dispatch mode
+// ============================================================================
+
+// Message type IDs for HTTP actor dispatch
+#define MSG_HTTP_REQUEST  200   // Pre-parsed request (legacy actor dispatch)
+#define MSG_HTTP_CONNECTION 201 // Raw fd — actor does recv+parse+respond+close
+
+// Legacy: pre-parsed request message (accept thread does recv+parse).
+typedef struct {
+    int type;               // MSG_HTTP_REQUEST (must be first field)
+    int client_fd;          // Socket fd (actor writes response + closes)
+    HttpRequest* request;   // Parsed request (actor must call http_request_free)
+} HttpActorRequest;
+
+// Full-actor mode: only the fd crosses thread boundary.
+// The worker actor owns the entire lifecycle: recv, parse, respond, close.
+typedef struct {
+    int type;               // MSG_HTTP_CONNECTION (must be first field)
+    int client_fd;          // Socket fd (actor owns everything)
+} HttpConnectionMessage;
 
 // Server lifecycle
 HttpServer* http_server_create(int port);
@@ -119,5 +149,21 @@ const char* http_mime_type(const char* path);
 // Static file serving
 void http_serve_file(HttpServerResponse* res, const char* filepath);
 void http_serve_static(HttpRequest* req, HttpServerResponse* res, void* base_dir);
+
+// Actor dispatch mode (fire-and-forget, one actor per request)
+// step_fn: actor step function that handles MSG_HTTP_REQUEST messages
+// send_fn: pass aether_send_message
+// spawn_fn: pass scheduler_spawn_pooled
+// release_fn: pass scheduler_release_pooled
+void http_server_set_actor_handler(HttpServer* server, void (*step_fn)(void*),
+                                    void (*send_fn)(void*, void*, size_t),
+                                    void* (*spawn_fn)(int, void (*)(void*), size_t),
+                                    void (*release_fn)(void*));
+
+// Request accessors (for use from Aether .ae code via opaque ptr)
+const char* http_request_method(HttpRequest* req);
+const char* http_request_path(HttpRequest* req);
+const char* http_request_body(HttpRequest* req);
+const char* http_request_query(HttpRequest* req);
 
 #endif

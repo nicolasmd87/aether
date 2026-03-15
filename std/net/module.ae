@@ -53,3 +53,12 @@ extern http_response_set_header(res: ptr, name: string, value: string)
 extern http_response_set_body(res: ptr, body: string)
 extern http_response_json(res: ptr, json: string)
 extern http_server_response_free(res: ptr)
+
+// HTTP Server - actor dispatch mode
+extern http_server_set_actor_handler(server: ptr, step_fn: ptr, send_fn: ptr, spawn_fn: ptr, release_fn: ptr)
+
+// HTTP Request - field accessors (for actor dispatch mode)
+extern http_request_method(req: ptr) -> string
+extern http_request_path(req: ptr) -> string
+extern http_request_body(req: ptr) -> string
+extern http_request_query(req: ptr) -> string

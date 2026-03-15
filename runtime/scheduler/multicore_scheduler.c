@@ -1207,6 +1207,24 @@ int scheduler_register_actor(ActorBase* actor, int preferred_core) {
     return preferred_core;
 }
 
+// Remove an actor from its scheduler's actor array.
+// Must be called before freeing actor memory to avoid dangling pointers.
+void scheduler_deregister_actor(ActorBase* actor) {
+    if (!actor) return;
+    int core = atomic_load_explicit(&actor->assigned_core, memory_order_relaxed);
+    if (core < 0 || core >= num_cores) return;
+
+    Scheduler* sched = &schedulers[core];
+    spinlock_lock(&sched->actor_lock);
+    for (int i = 0; i < sched->actor_count; i++) {
+        if (sched->actors[i] == actor) {
+            sched->actors[i] = sched->actors[--sched->actor_count];
+            break;
+        }
+    }
+    spinlock_unlock(&sched->actor_lock);
+}
+
 // Thread-local recursion guard for work inlining (prevent stack overflow)
 static AETHER_TLS int inline_depth = 0;
 #define MAX_INLINE_DEPTH 2
