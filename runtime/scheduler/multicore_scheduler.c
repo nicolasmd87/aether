@@ -14,6 +14,10 @@
 #include <sched.h>
 #include <unistd.h>
 #endif
+#ifdef __linux__
+#include <sys/epoll.h>
+#include <fcntl.h>
+#endif
 #include <errno.h>
 #include <time.h>
 #include "multicore_scheduler.h"
@@ -39,6 +43,9 @@ static inline uint64_t aether_now_ns(void) {
 
 // Forward declaration to avoid header cycle with aether_send_message.h
 extern void aether_send_message(void* actor_ptr, void* message_data, size_t message_size);
+
+// Forward declaration: I/O polling used in scheduler thread loop
+static int scheduler_io_poll(Scheduler* sched, int timeout_ms);
 
 // Forward declaration: TLS guard set by aether_send_message_sync while an
 // actor's step() is executing synchronously on the main thread.  Used to
@@ -386,6 +393,11 @@ void* AETHER_HOT scheduler_thread(void* arg) {
         // from_queues.  This ensures deferred messages land on every loop and
         // prevents them from indefinitely blocking behind a saturated queue.
         overflow_flush(sched->core_id);
+
+        // Poll I/O events (non-blocking) — delivers MSG_IO_READY to actor mailboxes.
+        // Must run every iteration so epoll events are picked up promptly,
+        // not only when the scheduler is idle.
+        scheduler_io_poll(sched, 0);
 
         // TIER 1 ALWAYS ON: Adaptive batch sizing
         int batch_size = sched->batch_state.current_batch_size;
@@ -793,9 +805,14 @@ void* AETHER_HOT scheduler_thread(void* arg) {
                 // Tight spin with architecture-specific pause
                 AETHER_PAUSE();
             } else {
-                // Brief yield only after extended idle
-                aether_sched_yield();
-                idle_count = 5000;
+                // Extended idle: use epoll_wait with short timeout instead of blind yield
+                int io_events = scheduler_io_poll(sched, 1);
+                if (io_events > 0) {
+                    idle_count = 0;  // I/O activity — go back to active processing
+                } else {
+                    aether_sched_yield();
+                    idle_count = 5000;
+                }
             }
         } else {
             idle_count = 0;
@@ -897,6 +914,16 @@ void scheduler_init(int cores) {
         }
         // TIER 1 ALWAYS ON: Initialize adaptive batching
         adaptive_batch_init(&schedulers[i].batch_state);
+
+        // I/O event loop: per-core epoll (Linux only)
+#ifdef __linux__
+        schedulers[i].epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+        if (schedulers[i].epoll_fd < 0) {
+            fprintf(stderr, "WARNING: epoll_create1 failed for core %d: %s\n", i, strerror(errno));
+        }
+#endif
+        schedulers[i].io_map = calloc(AETHER_IO_MAX_FDS, sizeof(AetherIoEntry));
+        schedulers[i].io_registered_count = 0;
     }
 }
 
@@ -1151,6 +1178,17 @@ void scheduler_cleanup() {
             schedulers[i].actor_pool = NULL;
         }
 
+        // Clean up I/O event loop
+#ifdef __linux__
+        if (schedulers[i].epoll_fd >= 0) {
+            close(schedulers[i].epoll_fd);
+            schedulers[i].epoll_fd = -1;
+        }
+#endif
+        free(schedulers[i].io_map);
+        schedulers[i].io_map = NULL;
+        schedulers[i].io_registered_count = 0;
+
         // Reset counters
         schedulers[i].actor_count = 0;
         schedulers[i].capacity = 0;
@@ -1223,6 +1261,125 @@ void scheduler_deregister_actor(ActorBase* actor) {
         }
     }
     spinlock_unlock(&sched->actor_lock);
+}
+
+// ---------------------------------------------------------------------------
+// I/O event integration (epoll on Linux)
+// ---------------------------------------------------------------------------
+
+int scheduler_io_register(int core_id, int fd, void* actor, uint32_t events) {
+    if (core_id < 0 || core_id >= num_cores) return -1;
+    if (fd < 0 || fd >= AETHER_IO_MAX_FDS) return -1;
+
+    Scheduler* sched = &schedulers[core_id];
+
+#ifdef __linux__
+    if (sched->epoll_fd < 0) return -1;
+
+    struct epoll_event ev;
+    ev.events = events | EPOLLONESHOT;  // One-shot: auto-disables after firing (no duplicate events)
+    ev.data.fd = fd;
+
+    if (epoll_ctl(sched->epoll_fd, EPOLL_CTL_ADD, fd, &ev) != 0) {
+        if (errno == EEXIST) {
+            // Already registered — modify instead
+            if (epoll_ctl(sched->epoll_fd, EPOLL_CTL_MOD, fd, &ev) != 0)
+                return -1;
+        } else {
+            return -1;
+        }
+    }
+#endif
+
+    sched->io_map[fd].fd = fd;
+    sched->io_map[fd].actor = actor;
+    sched->io_map[fd].events = events;
+    if (!sched->io_map[fd].active) {
+        sched->io_map[fd].active = 1;
+        sched->io_registered_count++;
+    }
+    return 0;
+}
+
+void scheduler_io_unregister(int core_id, int fd) {
+    if (core_id < 0 || core_id >= num_cores) return;
+    if (fd < 0 || fd >= AETHER_IO_MAX_FDS) return;
+
+    Scheduler* sched = &schedulers[core_id];
+
+#ifdef __linux__
+    if (sched->epoll_fd >= 0) {
+        epoll_ctl(sched->epoll_fd, EPOLL_CTL_DEL, fd, NULL);
+    }
+#endif
+
+    if (sched->io_map[fd].active) {
+        sched->io_map[fd].active = 0;
+        sched->io_map[fd].actor = NULL;
+        sched->io_registered_count--;
+    }
+}
+
+// Drain epoll events for a scheduler core, delivering MSG_IO_READY messages.
+// Called from the scheduler's main loop. Returns number of events processed.
+static int scheduler_io_poll(Scheduler* sched, int timeout_ms) {
+#ifdef __linux__
+    if (sched->epoll_fd < 0 || sched->io_registered_count == 0) return 0;
+
+    struct epoll_event events[64];
+    int n = epoll_wait(sched->epoll_fd, events, 64, timeout_ms);
+    if (n <= 0) return 0;
+
+    for (int i = 0; i < n; i++) {
+        int fd = events[i].data.fd;
+        if (fd < 0 || fd >= AETHER_IO_MAX_FDS) continue;
+
+        AetherIoEntry* entry = &sched->io_map[fd];
+        if (!entry->active || !entry->actor) continue;
+
+        ActorBase* actor = (ActorBase*)entry->actor;
+
+        // Build and deliver MSG_IO_READY directly to mailbox
+        IoReadyMessage io_msg;
+        io_msg.type = MSG_IO_READY;
+        io_msg.fd = fd;
+        io_msg.events = events[i].events;
+
+        Message msg;
+        msg.type = MSG_IO_READY;
+        msg.sender_id = 0;
+        msg.payload_int = fd;
+
+        // Allocate payload copy for mailbox ownership
+        void* payload = malloc(sizeof(IoReadyMessage));
+        if (!payload) continue;
+        memcpy(payload, &io_msg, sizeof(IoReadyMessage));
+        msg.payload_ptr = payload;
+        msg.zerocopy.data = NULL;
+        msg.zerocopy.size = 0;
+        msg.zerocopy.owned = 0;
+        msg._reply_slot = NULL;
+
+        // EPOLLONESHOT auto-disables the fd in the kernel.
+        // Mark our io_map entry inactive so we don't try to unregister again.
+        entry->active = 0;
+        entry->actor = NULL;
+        sched->io_registered_count--;
+
+        // Route through the scheduler's self-channel (from_queues[core_id])
+        // instead of mailbox_send. The mailbox is SPSC and the accept thread
+        // is already the producer via direct_send — adding a second producer
+        // (this scheduler thread) would corrupt the ring buffer.
+        if (!queue_enqueue(&sched->from_queues[sched->core_id], actor, msg)) {
+            overflow_append(sched->core_id, actor, msg);
+        }
+        atomic_store_explicit(&actor->active, 1, memory_order_relaxed);
+    }
+    return n;
+#else
+    (void)sched; (void)timeout_ms;
+    return 0;
+#endif
 }
 
 // Thread-local recursion guard for work inlining (prevent stack overflow)

@@ -61,6 +61,7 @@ void http_serve_static(HttpRequest* r, HttpServerResponse* s, void* d) { (void)r
     #include <fcntl.h>
     #include <limits.h>
     #include <poll.h>
+    #include <errno.h>
 #endif
 
 // Portable case-insensitive substring search (strcasestr is a GNU extension)
@@ -109,6 +110,7 @@ HttpServer* http_server_create(int port) {
     server->spawn_fn = NULL;
     server->release_fn = NULL;
     server->step_fn = NULL;
+    server->accept_epoll_fd = -1;
 
     return server;
 }
@@ -780,53 +782,107 @@ int http_server_start(HttpServer* server) {
     HttpConnectionPool* pool = http_pool_create(server);
 #endif
 
-    while (server->is_running) {
-        // Poll the server socket with a 1-second timeout so we can check
-        // is_running periodically for graceful shutdown.  Without this,
-        // accept() blocks indefinitely and a server with no traffic
-        // can't shut down until the next connection arrives.
+    // Actor mode with epoll: accept → epoll_wait for data → dispatch to worker
+    // This ensures workers never block on recv() inside their step() function.
+#if defined(__linux__) && !defined(_WIN32)
+    if (use_actor_mode) {
+        server->accept_epoll_fd = epoll_create1(EPOLL_CLOEXEC);
+        if (server->accept_epoll_fd < 0) {
+            fprintf(stderr, "epoll_create1 failed: %s\n", strerror(errno));
+            return -1;
+        }
+
+        // Add the listen socket to epoll so we can multiplex accept + data-ready
+        struct epoll_event listen_ev;
+        listen_ev.events = EPOLLIN;
+        listen_ev.data.fd = server->socket_fd;
+        epoll_ctl(server->accept_epoll_fd, EPOLL_CTL_ADD, server->socket_fd, &listen_ev);
+
+        // Set listen socket non-blocking for edge-case safety
+        int flags = fcntl(server->socket_fd, F_GETFL, 0);
+        if (flags >= 0) fcntl(server->socket_fd, F_SETFL, flags | O_NONBLOCK);
+
+        struct epoll_event events[256];
+
+        while (server->is_running) {
+            int n = epoll_wait(server->accept_epoll_fd, events, 256, 100);
+            if (n < 0) {
+                if (errno == EINTR) continue;
+                break;
+            }
+
+            for (int i = 0; i < n; i++) {
+                int fd = events[i].data.fd;
+
+                if (fd == server->socket_fd) {
+                    // Listen socket ready — accept all pending connections
+                    while (1) {
+                        struct sockaddr_in client_addr;
+                        socklen_t client_len = sizeof(client_addr);
+                        int client_fd = accept(server->socket_fd,
+                            (struct sockaddr*)&client_addr, &client_len);
+                        if (client_fd < 0) break;
+
+                        // Set client fd non-blocking
+                        int cflags = fcntl(client_fd, F_GETFL, 0);
+                        if (cflags >= 0) fcntl(client_fd, F_SETFL, cflags | O_NONBLOCK);
+
+                        // Register with epoll — wait for data before dispatching
+                        struct epoll_event cev;
+                        cev.events = EPOLLIN | EPOLLONESHOT;
+                        cev.data.fd = client_fd;
+                        if (epoll_ctl(server->accept_epoll_fd, EPOLL_CTL_ADD, client_fd, &cev) != 0) {
+                            close(client_fd);
+                        }
+                    }
+                } else {
+                    // Client fd has data ready — dispatch to worker actor.
+                    void* worker = server->spawn_fn(-1, server->step_fn, 0);
+                    if (worker) {
+                        HttpConnectionMessage conn_msg;
+                        conn_msg.type = MSG_HTTP_CONNECTION;
+                        conn_msg.client_fd = fd;
+                        server->send_fn(worker, &conn_msg, sizeof(conn_msg));
+                    } else {
+                        const char* err = "HTTP/1.1 503 Service Unavailable\r\n"
+                                          "Content-Length: 19\r\n\r\nService Unavailable";
+                        send(fd, err, strlen(err), MSG_NOSIGNAL);
+                        close(fd);
+                    }
+                }
+            }
+        }
+
+        close(server->accept_epoll_fd);
+        server->accept_epoll_fd = -1;
+
+    } else
+#endif
+    {
+        // Fallback: poll + thread pool (non-Linux or no actor handler)
+        while (server->is_running) {
 #if !defined(_WIN32)
-        struct pollfd pfd = { .fd = server->socket_fd, .events = POLLIN };
-        int ready = poll(&pfd, 1, 1000);
-        if (ready <= 0) continue;  // timeout or error — re-check is_running
+            struct pollfd pfd = { .fd = server->socket_fd, .events = POLLIN };
+            int ready = poll(&pfd, 1, 1000);
+            if (ready <= 0) continue;
 #endif
 
-        struct sockaddr_in client_addr;
-        socklen_t client_len = sizeof(client_addr);
-
-        int client_fd = accept(server->socket_fd, (struct sockaddr*)&client_addr, &client_len);
-
-        if (client_fd < 0) {
-            if (!server->is_running) break;
-            continue;
-        }
+            struct sockaddr_in client_addr;
+            socklen_t client_len = sizeof(client_addr);
+            int client_fd = accept(server->socket_fd, (struct sockaddr*)&client_addr, &client_len);
+            if (client_fd < 0) {
+                if (!server->is_running) break;
+                continue;
+            }
 
 #if !AETHER_HAS_THREADS
-        // Single-threaded: handle synchronously (cooperative/WASM/embedded)
-        handle_client_connection(server, client_fd);
+            handle_client_connection(server, client_fd);
 #elif defined(_WIN32)
-        // Windows: synchronous (thread pool uses pthreads, not available here)
-        handle_client_connection(server, client_fd);
+            handle_client_connection(server, client_fd);
 #else
-        if (use_actor_mode) {
-            // Full-actor mode: send only the fd to a worker actor.
-            // The worker does recv+parse+respond+close — zero work on accept thread.
-            void* worker = server->spawn_fn(-1, server->step_fn, 0);
-            if (worker) {
-                HttpConnectionMessage conn_msg;
-                conn_msg.type = MSG_HTTP_CONNECTION;
-                conn_msg.client_fd = client_fd;
-                server->send_fn(worker, &conn_msg, sizeof(conn_msg));
-            } else {
-                const char* err = "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 19\r\n\r\nService Unavailable";
-                send(client_fd, err, strlen(err), 0);
-                close(client_fd);
-            }
-        } else {
-            // Dispatch to bounded thread pool — no unbounded thread creation
             http_pool_submit(pool, client_fd);
-        }
 #endif
+        }
     }
 
 #if AETHER_HAS_THREADS && !defined(_WIN32)
@@ -840,6 +896,13 @@ void http_server_stop(HttpServer* server) {
     if (!server) return;
 
     server->is_running = 0;
+
+#if defined(__linux__) && !defined(_WIN32)
+    if (server->accept_epoll_fd >= 0) {
+        close(server->accept_epoll_fd);
+        server->accept_epoll_fd = -1;
+    }
+#endif
 
     if (server->socket_fd >= 0) {
 #ifdef _WIN32

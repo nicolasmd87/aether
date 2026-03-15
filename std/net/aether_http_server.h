@@ -82,6 +82,9 @@ typedef struct {
     // Configuration
     int max_connections;
     int keep_alive_timeout;
+
+    // Accept-side epoll: wait for client data before dispatching to worker
+    int accept_epoll_fd;            // -1 if not using epoll
 } HttpServer;
 
 // ============================================================================
