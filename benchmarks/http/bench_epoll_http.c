@@ -24,7 +24,6 @@
 #include "../../runtime/scheduler/multicore_scheduler.h"
 #include "../../runtime/actors/actor_state_machine.h"
 #include "../../runtime/config/aether_optimization_config.h"
-#include "../../runtime/scheduler/lockfree_queue.h"
 
 #ifndef MSG_NOSIGNAL
 #define MSG_NOSIGNAL 0
@@ -39,21 +38,33 @@ static atomic_int total_requests = 0;
 
 static ActorBase** workers = NULL;
 static int worker_count = 0;
-static atomic_int next_worker = 0;
 
-// Round-robin worker selection
+// Thread-local accept thread identity — used to partition workers per accept thread.
+// Each accept thread only sends to workers on its own core → one producer per mailbox → SPSC safe.
+static __thread int tls_accept_core = -1;
+static __thread int tls_worker_rr = 0;
+
+// Auto-assign accept core on first call per thread
+static atomic_int accept_core_counter = 0;
+
 static void* pick_worker(int preferred_core, void (*step)(void*), size_t size) {
     (void)preferred_core; (void)step; (void)size;
-    int idx = atomic_fetch_add(&next_worker, 1) % worker_count;
+    // Lazy init: assign this accept thread to a core
+    if (tls_accept_core < 0) {
+        tls_accept_core = atomic_fetch_add(&accept_core_counter, 1) % num_cores;
+    }
+    int base = tls_accept_core * WORKERS_PER_CORE;
+    int idx = base + (tls_worker_rr++ % WORKERS_PER_CORE);
     return workers[idx];
 }
 
 static void noop_release(void* actor) { (void)actor; }
 
 // ---------------------------------------------------------------------------
-// Send via scheduler from_queues — SPSC safe (only accept thread writes)
+// Direct mailbox send — safe because each worker has exactly one accept thread
+// as producer (partitioned by core). Scheduler thread only reads (consumer).
 // ---------------------------------------------------------------------------
-static void queue_send(void* actor_ptr, void* message_data, size_t message_size) {
+static void direct_send(void* actor_ptr, void* message_data, size_t message_size) {
     ActorBase* actor = (ActorBase*)actor_ptr;
 
     void* msg_copy = malloc(message_size);
@@ -70,14 +81,7 @@ static void queue_send(void* actor_ptr, void* message_data, size_t message_size)
     msg.zerocopy.owned = 0;
     msg._reply_slot = NULL;
 
-    int core = atomic_load_explicit(&actor->assigned_core, memory_order_relaxed);
-    if (core >= 0 && core < num_cores) {
-        if (!queue_enqueue(&schedulers[core].from_queues[MAX_CORES], actor, msg)) {
-            mailbox_send(&actor->mailbox, msg);
-        }
-    } else {
-        mailbox_send(&actor->mailbox, msg);
-    }
+    mailbox_send(&actor->mailbox, msg);
     atomic_store_explicit(&actor->active, 1, memory_order_relaxed);
 }
 
@@ -181,7 +185,7 @@ int main() {
 
     http_server_set_actor_handler(server,
         worker_step,
-        (void (*)(void*, void*, size_t))queue_send,
+        (void (*)(void*, void*, size_t))direct_send,
         (void* (*)(int, void (*)(void*), size_t))pick_worker,
         (void (*)(void*))noop_release);
 
