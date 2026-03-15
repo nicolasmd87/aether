@@ -84,7 +84,14 @@ typedef struct {
     int keep_alive_timeout;
 
     // Accept-side epoll: wait for client data before dispatching to worker
-    int accept_epoll_fd;            // -1 if not using epoll
+    int accept_epoll_fd;            // -1 if not using epoll (single-thread mode)
+
+    // Multi-accept: one accept thread per core with SO_REUSEPORT (opt-in)
+    int multi_accept;               // 0 = single accept (default), 1 = SO_REUSEPORT multi-accept
+    int accept_thread_count;
+    pthread_t* accept_threads;      // Array of accept thread handles
+    int* accept_listen_fds;         // Per-thread listen sockets (SO_REUSEPORT)
+    int* accept_epoll_fds;          // Per-thread epoll instances
 } HttpServer;
 
 // ============================================================================

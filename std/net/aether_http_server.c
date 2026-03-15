@@ -111,6 +111,11 @@ HttpServer* http_server_create(int port) {
     server->release_fn = NULL;
     server->step_fn = NULL;
     server->accept_epoll_fd = -1;
+    server->multi_accept = 0;
+    server->accept_thread_count = 0;
+    server->accept_threads = NULL;
+    server->accept_listen_fds = NULL;
+    server->accept_epoll_fds = NULL;
 
     return server;
 }
@@ -765,93 +770,222 @@ static void http_pool_destroy(HttpConnectionPool* pool) {
 
 #endif // AETHER_HAS_THREADS && !_WIN32
 
-int http_server_start(HttpServer* server) {
-    if (http_server_bind(server, server->host, server->port) < 0) {
+// ---------------------------------------------------------------------------
+// Accept thread context (one per core in multi-accept mode)
+// ---------------------------------------------------------------------------
+#if defined(__linux__) && !defined(_WIN32)
+typedef struct {
+    HttpServer* server;
+    int listen_fd;      // This thread's SO_REUSEPORT listen socket
+    int epoll_fd;       // This thread's epoll instance
+    int thread_index;   // Which core's workers to prefer
+} AcceptThreadCtx;
+
+// Create a SO_REUSEPORT listen socket bound to the same port
+static int create_reuseport_socket(const char* host, int port, int backlog) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+
+    int opt = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+    setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    if (strcmp(host, "0.0.0.0") == 0) {
+        addr.sin_addr.s_addr = INADDR_ANY;
+    } else {
+        inet_pton(AF_INET, host, &addr.sin_addr);
+    }
+
+    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        close(fd);
+        return -1;
+    }
+    if (listen(fd, backlog) < 0) {
+        close(fd);
         return -1;
     }
 
+    // Non-blocking for epoll
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+
+    return fd;
+}
+
+// Per-core accept + epoll loop
+static void accept_epoll_loop(HttpServer* server, int listen_fd, int epoll_fd) {
+    struct epoll_event events[256];
+
+    while (server->is_running) {
+        int n = epoll_wait(epoll_fd, events, 256, 100);
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            break;
+        }
+
+        for (int i = 0; i < n; i++) {
+            int fd = events[i].data.fd;
+
+            if (fd == listen_fd) {
+                // Accept all pending connections
+                while (1) {
+                    struct sockaddr_in client_addr;
+                    socklen_t client_len = sizeof(client_addr);
+                    int client_fd = accept(listen_fd,
+                        (struct sockaddr*)&client_addr, &client_len);
+                    if (client_fd < 0) break;
+
+                    int cflags = fcntl(client_fd, F_GETFL, 0);
+                    if (cflags >= 0) fcntl(client_fd, F_SETFL, cflags | O_NONBLOCK);
+
+                    struct epoll_event cev;
+                    cev.events = EPOLLIN | EPOLLONESHOT;
+                    cev.data.fd = client_fd;
+                    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, &cev) != 0) {
+                        close(client_fd);
+                    }
+                }
+            } else {
+                // Data ready — dispatch to worker
+                void* worker = server->spawn_fn(-1, server->step_fn, 0);
+                if (worker) {
+                    HttpConnectionMessage conn_msg;
+                    conn_msg.type = MSG_HTTP_CONNECTION;
+                    conn_msg.client_fd = fd;
+                    server->send_fn(worker, &conn_msg, sizeof(conn_msg));
+                } else {
+                    const char* err = "HTTP/1.1 503 Service Unavailable\r\n"
+                                      "Content-Length: 19\r\n\r\nService Unavailable";
+                    send(fd, err, strlen(err), MSG_NOSIGNAL);
+                    close(fd);
+                }
+            }
+        }
+    }
+}
+
+static void* accept_thread_fn(void* arg) {
+    AcceptThreadCtx* ctx = (AcceptThreadCtx*)arg;
+    accept_epoll_loop(ctx->server, ctx->listen_fd, ctx->epoll_fd);
+    free(ctx);
+    return NULL;
+}
+#endif
+
+int http_server_start(HttpServer* server) {
     server->is_running = 1;
 
     int use_actor_mode = (server->spawn_fn && server->send_fn && server->step_fn);
 
-    printf("Server running at http://%s:%d\n", server->host, server->port);
-    printf("Press Ctrl+C to stop\n\n");
-    fflush(stdout);
-
-#if AETHER_HAS_THREADS && !defined(_WIN32)
-    HttpConnectionPool* pool = http_pool_create(server);
-#endif
-
     // Actor mode with epoll: accept → epoll_wait for data → dispatch to worker
     // This ensures workers never block on recv() inside their step() function.
 #if defined(__linux__) && !defined(_WIN32)
-    if (use_actor_mode) {
+    if (use_actor_mode && server->multi_accept) {
+        // Multi-accept mode (opt-in): one accept thread per core with SO_REUSEPORT.
+        // Best for very high connection rates where accept() is the bottleneck.
+        int n_threads = (int)sysconf(_SC_NPROCESSORS_ONLN);
+        if (n_threads <= 0) n_threads = 4;
+        if (n_threads > 16) n_threads = 16;
+
+        server->accept_listen_fds = calloc(n_threads, sizeof(int));
+        server->accept_epoll_fds = calloc(n_threads, sizeof(int));
+        server->accept_threads = calloc(n_threads, sizeof(pthread_t));
+        if (!server->accept_listen_fds || !server->accept_epoll_fds || !server->accept_threads) {
+            fprintf(stderr, "Failed to allocate accept thread state\n");
+            return -1;
+        }
+
+        for (int i = 0; i < n_threads; i++) {
+            server->accept_listen_fds[i] = -1;
+            server->accept_epoll_fds[i] = -1;
+        }
+
+        for (int i = 0; i < n_threads; i++) {
+            server->accept_listen_fds[i] = create_reuseport_socket(
+                server->host, server->port, server->max_connections);
+            if (server->accept_listen_fds[i] < 0) {
+                fprintf(stderr, "Failed to create SO_REUSEPORT socket for thread %d\n", i);
+                return -1;
+            }
+
+            server->accept_epoll_fds[i] = epoll_create1(EPOLL_CLOEXEC);
+            if (server->accept_epoll_fds[i] < 0) {
+                fprintf(stderr, "epoll_create1 failed for thread %d\n", i);
+                return -1;
+            }
+
+            struct epoll_event ev;
+            ev.events = EPOLLIN;
+            ev.data.fd = server->accept_listen_fds[i];
+            epoll_ctl(server->accept_epoll_fds[i], EPOLL_CTL_ADD,
+                      server->accept_listen_fds[i], &ev);
+        }
+
+        server->accept_thread_count = n_threads;
+
+        printf("Server running at http://%s:%d (%d accept threads, SO_REUSEPORT)\n",
+               server->host, server->port, n_threads);
+        printf("Press Ctrl+C to stop\n\n");
+        fflush(stdout);
+
+        for (int i = 1; i < n_threads; i++) {
+            AcceptThreadCtx* ctx = malloc(sizeof(AcceptThreadCtx));
+            ctx->server = server;
+            ctx->listen_fd = server->accept_listen_fds[i];
+            ctx->epoll_fd = server->accept_epoll_fds[i];
+            ctx->thread_index = i;
+            pthread_create(&server->accept_threads[i], NULL, accept_thread_fn, ctx);
+        }
+
+        accept_epoll_loop(server, server->accept_listen_fds[0],
+                          server->accept_epoll_fds[0]);
+
+        for (int i = 1; i < n_threads; i++) {
+            pthread_join(server->accept_threads[i], NULL);
+        }
+
+        for (int i = 0; i < n_threads; i++) {
+            if (server->accept_epoll_fds[i] >= 0) close(server->accept_epoll_fds[i]);
+            if (server->accept_listen_fds[i] >= 0) close(server->accept_listen_fds[i]);
+        }
+        free(server->accept_listen_fds);
+        free(server->accept_epoll_fds);
+        free(server->accept_threads);
+        server->accept_listen_fds = NULL;
+        server->accept_epoll_fds = NULL;
+        server->accept_threads = NULL;
+        server->accept_thread_count = 0;
+
+    } else if (use_actor_mode) {
+        // Single-accept with epoll (default): one accept thread waits for data
+        // before dispatching to worker actors. Best for most workloads.
+        if (http_server_bind(server, server->host, server->port) < 0) {
+            return -1;
+        }
+
         server->accept_epoll_fd = epoll_create1(EPOLL_CLOEXEC);
         if (server->accept_epoll_fd < 0) {
             fprintf(stderr, "epoll_create1 failed: %s\n", strerror(errno));
             return -1;
         }
 
-        // Add the listen socket to epoll so we can multiplex accept + data-ready
         struct epoll_event listen_ev;
         listen_ev.events = EPOLLIN;
         listen_ev.data.fd = server->socket_fd;
         epoll_ctl(server->accept_epoll_fd, EPOLL_CTL_ADD, server->socket_fd, &listen_ev);
 
-        // Set listen socket non-blocking for edge-case safety
         int flags = fcntl(server->socket_fd, F_GETFL, 0);
         if (flags >= 0) fcntl(server->socket_fd, F_SETFL, flags | O_NONBLOCK);
 
-        struct epoll_event events[256];
+        printf("Server running at http://%s:%d\n", server->host, server->port);
+        printf("Press Ctrl+C to stop\n\n");
+        fflush(stdout);
 
-        while (server->is_running) {
-            int n = epoll_wait(server->accept_epoll_fd, events, 256, 100);
-            if (n < 0) {
-                if (errno == EINTR) continue;
-                break;
-            }
-
-            for (int i = 0; i < n; i++) {
-                int fd = events[i].data.fd;
-
-                if (fd == server->socket_fd) {
-                    // Listen socket ready — accept all pending connections
-                    while (1) {
-                        struct sockaddr_in client_addr;
-                        socklen_t client_len = sizeof(client_addr);
-                        int client_fd = accept(server->socket_fd,
-                            (struct sockaddr*)&client_addr, &client_len);
-                        if (client_fd < 0) break;
-
-                        // Set client fd non-blocking
-                        int cflags = fcntl(client_fd, F_GETFL, 0);
-                        if (cflags >= 0) fcntl(client_fd, F_SETFL, cflags | O_NONBLOCK);
-
-                        // Register with epoll — wait for data before dispatching
-                        struct epoll_event cev;
-                        cev.events = EPOLLIN | EPOLLONESHOT;
-                        cev.data.fd = client_fd;
-                        if (epoll_ctl(server->accept_epoll_fd, EPOLL_CTL_ADD, client_fd, &cev) != 0) {
-                            close(client_fd);
-                        }
-                    }
-                } else {
-                    // Client fd has data ready — dispatch to worker actor.
-                    void* worker = server->spawn_fn(-1, server->step_fn, 0);
-                    if (worker) {
-                        HttpConnectionMessage conn_msg;
-                        conn_msg.type = MSG_HTTP_CONNECTION;
-                        conn_msg.client_fd = fd;
-                        server->send_fn(worker, &conn_msg, sizeof(conn_msg));
-                    } else {
-                        const char* err = "HTTP/1.1 503 Service Unavailable\r\n"
-                                          "Content-Length: 19\r\n\r\nService Unavailable";
-                        send(fd, err, strlen(err), MSG_NOSIGNAL);
-                        close(fd);
-                    }
-                }
-            }
-        }
+        accept_epoll_loop(server, server->socket_fd, server->accept_epoll_fd);
 
         close(server->accept_epoll_fd);
         server->accept_epoll_fd = -1;
@@ -859,6 +993,18 @@ int http_server_start(HttpServer* server) {
     } else
 #endif
     {
+        if (http_server_bind(server, server->host, server->port) < 0) {
+            return -1;
+        }
+
+        printf("Server running at http://%s:%d\n", server->host, server->port);
+        printf("Press Ctrl+C to stop\n\n");
+        fflush(stdout);
+
+#if AETHER_HAS_THREADS && !defined(_WIN32)
+        HttpConnectionPool* pool = http_pool_create(server);
+#endif
+
         // Fallback: poll + thread pool (non-Linux or no actor handler)
         while (server->is_running) {
 #if !defined(_WIN32)
@@ -883,11 +1029,11 @@ int http_server_start(HttpServer* server) {
             http_pool_submit(pool, client_fd);
 #endif
         }
-    }
 
 #if AETHER_HAS_THREADS && !defined(_WIN32)
-    http_pool_destroy(pool);
+        http_pool_destroy(pool);
 #endif
+    }
 
     return 0;
 }
@@ -898,6 +1044,18 @@ void http_server_stop(HttpServer* server) {
     server->is_running = 0;
 
 #if defined(__linux__) && !defined(_WIN32)
+    // Close all accept epoll fds to unblock epoll_wait in accept threads
+    for (int i = 0; i < server->accept_thread_count; i++) {
+        if (server->accept_epoll_fds && server->accept_epoll_fds[i] >= 0) {
+            close(server->accept_epoll_fds[i]);
+            server->accept_epoll_fds[i] = -1;
+        }
+        if (server->accept_listen_fds && server->accept_listen_fds[i] >= 0) {
+            close(server->accept_listen_fds[i]);
+            server->accept_listen_fds[i] = -1;
+        }
+    }
+
     if (server->accept_epoll_fd >= 0) {
         close(server->accept_epoll_fd);
         server->accept_epoll_fd = -1;
