@@ -321,7 +321,47 @@ Aether uses [Semantic Versioning](https://semver.org/). Releases are fully autom
 
 - **Never edit the `VERSION` file manually** — it's updated automatically by the release workflow
 - **Never create `v*.*.*` tags manually** — let the workflow handle it
-- **Update `CHANGELOG.md`** when adding features or fixes; the release workflow does not auto-generate changelogs
+- **Always update `CHANGELOG.md`** when adding features or fixes (see below)
+
+### Changelog convention: `[current]`
+
+All new changes go under the `## [current]` section at the top of `CHANGELOG.md`. **Do not invent a version number** — just add your entry under `[current]`.
+
+When your PR merges to `main`, the release pipeline automatically:
+1. Computes the next version from the highest existing git tag
+2. Replaces `## [current]` with `## [X.Y.Z]` (the new version number)
+3. Commits the updated `CHANGELOG.md` and `VERSION` file
+4. Tags, builds, and publishes the release
+
+**Example workflow:**
+
+```markdown
+## [current]
+
+### Added
+- My new feature description
+
+### Fixed
+- Bug fix description
+```
+
+After merge, the pipeline transforms this into:
+
+```markdown
+## [0.22.0]
+
+### Added
+- My new feature description
+
+### Fixed
+- Bug fix description
+```
+
+**Rules:**
+- Use [Keep a Changelog](https://keepachangelog.com/) categories: `Added`, `Fixed`, `Changed`, `Removed`, `Deprecated`
+- One `[current]` section at a time — if it already exists, add your entries to it
+- If `[current]` is missing, create it at the top (below the header)
+- Keep entries concise but specific — mention what changed and why
 
 ### Building locally
 
