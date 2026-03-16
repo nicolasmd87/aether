@@ -1,16 +1,12 @@
 /**
- * Benchmark: epoll-driven actor HTTP server (Option C)
+ * Benchmark: epoll-driven actor HTTP server with adaptive keep-alive
  *
- * Same endpoint as bench_actor_http.c (GET /api/hello -> JSON response).
+ * Two worker modes:
+ *   - Low concurrency:  keep-alive in worker loop (max throughput)
+ *   - High concurrency: Connection: close (max concurrency)
  *
- * Architecture:
- *   Accept thread:  accept(fd) → epoll_register(fd) → wait for data
- *   Accept thread:  epoll reports data ready → send(worker, fd)
- *   Worker actor:   recv(non-blocking, guaranteed data) → respond → close
- *
- * The accept loop uses epoll to wait for client data BEFORE dispatching
- * to a worker actor. This ensures the worker's recv() never blocks,
- * so the scheduler thread is never stalled.
+ * The mode is controlled by a command-line flag: --keepalive or --close
+ * Default: keep-alive
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,6 +16,7 @@
 #include <unistd.h>
 #include <sys/socket.h>
 #include <errno.h>
+#include <netinet/in.h>
 #include "../../std/net/aether_http_server.h"
 #include "../../runtime/scheduler/multicore_scheduler.h"
 #include "../../runtime/actors/actor_state_machine.h"
@@ -30,6 +27,7 @@
 #endif
 
 static atomic_int total_requests = 0;
+static int use_keepalive = 1;  // default: keep-alive
 
 // ---------------------------------------------------------------------------
 // Worker pool
@@ -39,17 +37,12 @@ static atomic_int total_requests = 0;
 static ActorBase** workers = NULL;
 static int worker_count = 0;
 
-// Thread-local accept thread identity — used to partition workers per accept thread.
-// Each accept thread only sends to workers on its own core → one producer per mailbox → SPSC safe.
 static __thread int tls_accept_core = -1;
 static __thread int tls_worker_rr = 0;
-
-// Auto-assign accept core on first call per thread
 static atomic_int accept_core_counter = 0;
 
 static void* pick_worker(int preferred_core, void (*step)(void*), size_t size) {
     (void)preferred_core; (void)step; (void)size;
-    // Lazy init: assign this accept thread to a core
     if (tls_accept_core < 0) {
         tls_accept_core = atomic_fetch_add(&accept_core_counter, 1) % num_cores;
     }
@@ -61,8 +54,7 @@ static void* pick_worker(int preferred_core, void (*step)(void*), size_t size) {
 static void noop_release(void* actor) { (void)actor; }
 
 // ---------------------------------------------------------------------------
-// Direct mailbox send — safe because each worker has exactly one accept thread
-// as producer (partitioned by core). Scheduler thread only reads (consumer).
+// Direct mailbox send
 // ---------------------------------------------------------------------------
 static void direct_send(void* actor_ptr, void* message_data, size_t message_size) {
     ActorBase* actor = (ActorBase*)actor_ptr;
@@ -86,9 +78,34 @@ static void direct_send(void* actor_ptr, void* message_data, size_t message_size
 }
 
 // ---------------------------------------------------------------------------
-// Worker actor step — fd arrives with data already available
+// Respond to a single request
 // ---------------------------------------------------------------------------
-static void worker_step(void* self) {
+static inline int respond(int fd, int keepalive) {
+    int count = atomic_fetch_add(&total_requests, 1) + 1;
+
+    char body[128];
+    int body_len = snprintf(body, sizeof(body),
+        "{\"message\":\"hello\",\"count\":%d}", count);
+
+    char response[512];
+    int resp_len = snprintf(response, sizeof(response),
+        "HTTP/1.1 200 OK\r\n"
+        "Content-Type: application/json\r\n"
+        "Server: Aether/1.0-epoll\r\n"
+        "%s"
+        "Content-Length: %d\r\n"
+        "\r\n"
+        "%s",
+        keepalive ? "Connection: keep-alive\r\n" : "Connection: close\r\n",
+        body_len, body);
+
+    return (int)send(fd, response, resp_len, MSG_NOSIGNAL);
+}
+
+// ---------------------------------------------------------------------------
+// Worker step — keep-alive mode
+// ---------------------------------------------------------------------------
+static void worker_step_keepalive(void* self) {
     ActorBase* actor = (ActorBase*)self;
     Message msg;
 
@@ -102,7 +119,61 @@ static void worker_step(void* self) {
         int fd = conn->client_fd;
         free(msg.payload_ptr);
 
-        // recv — data is guaranteed to be available (accept loop waited via epoll)
+        // Set short recv timeout for keep-alive wait
+        struct timeval tv = { .tv_sec = 0, .tv_usec = 5000 }; // 5ms
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+
+        for (int ka = 0; ka < 10000; ka++) {
+            char buffer[8192];
+            int total = 0;
+            while (total < (int)sizeof(buffer) - 1) {
+                int n = recv(fd, buffer + total, sizeof(buffer) - 1 - total, 0);
+                if (n > 0) {
+                    total += n;
+                    buffer[total] = '\0';
+                    if (strstr(buffer, "\r\n\r\n")) break;
+                } else {
+                    break;
+                }
+            }
+
+            if (total <= 0) break;
+
+            // Check if client wants close
+            if (strstr(buffer, "Connection: close")) {
+                respond(fd, 0);
+                break;
+            }
+
+            respond(fd, 1);
+
+            // If mailbox has pending work, yield this connection
+            if (atomic_load_explicit(&actor->mailbox.count, memory_order_relaxed) > 0) {
+                break;
+            }
+        }
+
+        close(fd);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Worker step — connection close mode
+// ---------------------------------------------------------------------------
+static void worker_step_close(void* self) {
+    ActorBase* actor = (ActorBase*)self;
+    Message msg;
+
+    while (mailbox_receive(&actor->mailbox, &msg)) {
+        if (msg.type != MSG_HTTP_CONNECTION) {
+            free(msg.payload_ptr);
+            continue;
+        }
+
+        HttpConnectionMessage* conn = (HttpConnectionMessage*)msg.payload_ptr;
+        int fd = conn->client_fd;
+        free(msg.payload_ptr);
+
         char buffer[8192];
         int total = 0;
         while (total < (int)sizeof(buffer) - 1) {
@@ -119,25 +190,13 @@ static void worker_step(void* self) {
             }
         }
 
-        if (total <= 0) { close(fd); continue; }
-        buffer[total] = '\0';
+        if (total > 0) {
+            respond(fd, 0);
+        }
 
-        int count = atomic_fetch_add(&total_requests, 1) + 1;
-
-        char body[128];
-        int body_len = snprintf(body, sizeof(body),
-            "{\"message\":\"hello\",\"count\":%d}", count);
-
-        char response[512];
-        int resp_len = snprintf(response, sizeof(response),
-            "HTTP/1.1 200 OK\r\n"
-            "Content-Type: application/json\r\n"
-            "Server: Aether/1.0-epoll\r\n"
-            "Content-Length: %d\r\n"
-            "\r\n"
-            "%s", body_len, body);
-
-        send(fd, response, resp_len, MSG_NOSIGNAL);
+        shutdown(fd, SHUT_WR);
+        char drain[512];
+        while (recv(fd, drain, sizeof(drain), 0) > 0) {}
         close(fd);
     }
 }
@@ -145,7 +204,6 @@ static void worker_step(void* self) {
 // ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
-
 static HttpServer* server = NULL;
 
 void handle_sigint(int sig) {
@@ -153,24 +211,31 @@ void handle_sigint(int sig) {
     if (server) http_server_stop(server);
 }
 
-int main() {
+int main(int argc, char** argv) {
     signal(SIGINT, handle_sigint);
 
-    // Disable inline/main-thread mode
+    // Parse args
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--close") == 0) use_keepalive = 0;
+        if (strcmp(argv[i], "--keepalive") == 0) use_keepalive = 1;
+    }
+
     atomic_store(&g_aether_config.inline_mode_disabled, true);
 
     scheduler_init(0);
 
     worker_count = num_cores * WORKERS_PER_CORE;
-    printf("Epoll-actor HTTP server: %d cores, %d worker actors\n",
-           num_cores, worker_count);
+
+    void (*step_fn)(void*) = use_keepalive ? worker_step_keepalive : worker_step_close;
+
+    printf("Epoll-actor HTTP server: %d cores, %d workers, mode=%s\n",
+           num_cores, worker_count, use_keepalive ? "keep-alive" : "close");
 
     scheduler_start();
 
-    // Pre-spawn worker actors distributed across cores
     workers = malloc(worker_count * sizeof(ActorBase*));
     for (int i = 0; i < worker_count; i++) {
-        workers[i] = scheduler_spawn_pooled(i % num_cores, worker_step, 0);
+        workers[i] = scheduler_spawn_pooled(i % num_cores, step_fn, 0);
         if (!workers[i]) {
             fprintf(stderr, "Failed to spawn worker %d\n", i);
             return 1;
@@ -183,13 +248,15 @@ int main() {
         return 1;
     }
 
+    server->max_connections = 32768;
+
     http_server_set_actor_handler(server,
-        worker_step,
+        step_fn,
         (void (*)(void*, void*, size_t))direct_send,
         (void* (*)(int, void (*)(void*), size_t))pick_worker,
         (void (*)(void*))noop_release);
 
-    printf("Starting on :8080 (epoll-actor mode)\n");
+    printf("Starting on :8080\nPress Ctrl+C to stop\n\n");
 
     if (http_server_start(server) != 0) {
         fprintf(stderr, "Failed to start server\n");

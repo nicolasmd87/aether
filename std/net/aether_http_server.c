@@ -816,7 +816,26 @@ static int create_reuseport_socket(const char* host, int port, int backlog) {
     return fd;
 }
 
-// Per-core accept + epoll loop
+// Dispatch a data-ready fd to a worker actor
+static inline void dispatch_to_worker(HttpServer* server, int fd) {
+    void* worker = server->spawn_fn(-1, server->step_fn, 0);
+    if (worker) {
+        HttpConnectionMessage conn_msg;
+        conn_msg.type = MSG_HTTP_CONNECTION;
+        conn_msg.client_fd = fd;
+        server->send_fn(worker, &conn_msg, sizeof(conn_msg));
+    } else {
+        const char* err = "HTTP/1.1 503 Service Unavailable\r\n"
+                          "Content-Length: 19\r\n\r\nService Unavailable";
+        send(fd, err, strlen(err), MSG_NOSIGNAL);
+        close(fd);
+    }
+}
+
+// Per-core accept + epoll loop with optimistic recv
+// Strategy: try MSG_PEEK on accept() — if data is already there (common for
+// short-lived HTTP), dispatch immediately without touching epoll (saves 3 syscalls).
+// Only register with epoll if the client hasn't sent data yet.
 static void accept_epoll_loop(HttpServer* server, int listen_fd, int epoll_fd) {
     struct epoll_event events[256];
 
@@ -839,6 +858,18 @@ static void accept_epoll_loop(HttpServer* server, int listen_fd, int epoll_fd) {
                         (struct sockaddr*)&client_addr, &client_len);
                     if (client_fd < 0) break;
 
+                    // Optimistic path: check if data already arrived (very common
+                    // for HTTP — request follows TCP handshake immediately).
+                    // This skips 3 syscalls: fcntl×2 + epoll_ctl per connection.
+                    char peek;
+                    int peeked = recv(client_fd, &peek, 1, MSG_PEEK | MSG_DONTWAIT);
+                    if (peeked > 0) {
+                        // Data ready — dispatch directly, no epoll needed
+                        dispatch_to_worker(server, client_fd);
+                        continue;
+                    }
+
+                    // Slow path: no data yet, register with epoll
                     int cflags = fcntl(client_fd, F_GETFL, 0);
                     if (cflags >= 0) fcntl(client_fd, F_SETFL, cflags | O_NONBLOCK);
 
@@ -850,19 +881,9 @@ static void accept_epoll_loop(HttpServer* server, int listen_fd, int epoll_fd) {
                     }
                 }
             } else {
-                // Data ready — dispatch to worker
-                void* worker = server->spawn_fn(-1, server->step_fn, 0);
-                if (worker) {
-                    HttpConnectionMessage conn_msg;
-                    conn_msg.type = MSG_HTTP_CONNECTION;
-                    conn_msg.client_fd = fd;
-                    server->send_fn(worker, &conn_msg, sizeof(conn_msg));
-                } else {
-                    const char* err = "HTTP/1.1 503 Service Unavailable\r\n"
-                                      "Content-Length: 19\r\n\r\nService Unavailable";
-                    send(fd, err, strlen(err), MSG_NOSIGNAL);
-                    close(fd);
-                }
+                // Data ready (from epoll) — remove from epoll and dispatch
+                epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, NULL);
+                dispatch_to_worker(server, fd);
             }
         }
     }
