@@ -58,6 +58,7 @@ number (e.g. `[0.18.0]`) before tagging the release.
 - **Spurious "installation is incomplete" warning on `ae run`**: Toolchain discovery checked `~/.aether/current/lib/` first — if a stale `current` symlink existed from `ae version use` but `install.sh` had put files directly in `~/.aether/`, the warning fired even though the fallback strategy found a working toolchain. Now suppresses the warning when the direct `~/.aether/` layout has valid `lib/` or `share/`
 - **`install.sh` left stale `current` symlink**: Direct installs via `install.sh` didn't remove the `~/.aether/current` symlink created by `ae version use`, causing the above warning on every `ae run`
 - **`file.write`/`file.close`/`file.delete`/`dir.create`/`dir.delete` returned raw POSIX values**: These functions returned `0`/`-1` (C convention) instead of `1`/`0` (Aether convention where `1` = success, `0` = failure), inconsistent with `io.write_file`, `io.delete_file`, and the rest of the stdlib. Fixed all five to return `1` on success, `0` on failure
+- **Release pipeline computed next version from stale VERSION file**: The `prepare` job derived the next version by reading `VERSION` and incrementing — but if `VERSION` was stale (e.g. stuck at `0.21.0` while latest tag was `v0.25.0`), every bump PR proposed `0.22.0` instead of `0.26.0`, and the existing `release/v0.22.0` branch check caused it to skip silently. Now computes next version from the latest `v*.*.*` git tag, making the pipeline self-healing even if VERSION drifts
 
 ### Changed
 

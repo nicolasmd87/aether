@@ -56,8 +56,13 @@ jobs:
         TAG="v${VERSION}"
 
         if git rev-parse "$TAG" >/dev/null 2>&1; then
-          # Tag exists for current VERSION → compute next version and open PR
-          OLD="$VERSION"
+          # Tag exists for current VERSION → compute next version from latest tag
+          # Use latest git tag (not VERSION file) to avoid stale-VERSION chains
+          LATEST_TAG=$(git tag -l 'v*.*.*' --sort=-version:refname | head -1)
+          if [ -z "$LATEST_TAG" ]; then
+            LATEST_TAG="$TAG"
+          fi
+          OLD=$(echo "$LATEST_TAG" | sed 's/^v//')
           MAJOR=$(echo "$OLD" | cut -d. -f1)
           MINOR=$(echo "$OLD" | cut -d. -f2)
 
@@ -86,7 +91,7 @@ jobs:
           echo "action=bump"      >> "$GITHUB_OUTPUT"
           echo "version=$NEW"     >> "$GITHUB_OUTPUT"
           echo "tag=$NEW_TAG"     >> "$GITHUB_OUTPUT"
-          echo "Will bump: $OLD -> $NEW"
+          echo "Will bump: $OLD -> $NEW (latest tag: $LATEST_TAG)"
         else
           # No tag for current VERSION → this is a merged release PR, create tag
           echo "action=tag"       >> "$GITHUB_OUTPUT"

@@ -152,6 +152,12 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
     ok "  make: $($MAKE_CMD --version 2>&1 | head -1)"
     echo ""
 
+    # Fetch latest tags so the Makefile picks up the correct version number.
+    # Without this, make clean + rebuild uses stale local tags (e.g. 0.22.0 instead of 0.25.0).
+    if git rev-parse --git-dir > /dev/null 2>&1; then
+        git fetch --tags --quiet 2>/dev/null || true
+    fi
+
     # Build
     info "Building Aether..."
     $MAKE_CMD compiler 2>&1 | tail -1
