@@ -83,8 +83,8 @@ GCC is downloaded automatically the first time you run a program (~80 MB, one-ti
 
 ```bash
 ae version list              # see all available releases
-ae version install v0.17.0   # download and install a specific version
-ae version use v0.17.0       # switch to that version
+ae version install v0.25.0   # download and install a specific version
+ae version use v0.25.0       # switch to that version
 ```
 
 ### Your First Program
@@ -187,6 +187,7 @@ aether/
 │   ├── fs/           # File system operations
 │   ├── math/         # Math functions and random numbers
 │   ├── io/           # Console I/O, environment variables
+│   ├── os/           # Shell execution, command capture, env vars
 │   └── log/          # Structured logging
 ├── tools/            # Developer tools
 │   ├── ae.c          # Unified CLI tool (ae command)
@@ -206,7 +207,6 @@ aether/
 // Counter actor with message handling
 message Increment {}
 message Decrement {}
-message GetCount {}
 message Reset {}
 
 actor Counter {
@@ -218,9 +218,6 @@ actor Counter {
         }
         Decrement() -> {
             count = count - 1
-        }
-        GetCount() -> {
-            println("Current count: ${count}")
         }
         Reset() -> {
             count = 0
@@ -235,11 +232,14 @@ main() {
     // Send messages
     counter ! Increment {}
     counter ! Increment {}
-    counter ! GetCount {}
     counter ! Decrement {}
-    counter ! GetCount {}
     counter ! Reset {}
-    counter ! GetCount {}
+    counter ! Increment {}
+
+    // Wait for all messages to be processed
+    wait_for_idle()
+
+    println("Final count: ${counter.count}")
 }
 ```
 
@@ -348,7 +348,7 @@ Aether is under active development. The compiler, runtime, and standard library 
 - Main-thread actor mode — single-actor programs bypass the scheduler entirely (zero-overhead path)
 - Batch fan-out send for main-to-many patterns
 - Lock-free message passing with adaptive optimizations
-- Standard library (collections, networking, JSON, file I/O)
+- Standard library (collections, networking, JSON, file I/O, OS/shell)
 - C embedding via `--emit-header`
 - IDE support (VS Code, Cursor) with syntax highlighting
 - Cross-platform (macOS, Linux, Windows)

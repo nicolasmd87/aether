@@ -9,40 +9,40 @@ extern string_new_with_length(data: string, length: int) -> ptr
 extern string_empty() -> ptr
 
 // Reference counting
-extern string_retain(str: ptr)
-extern string_release(str: ptr)
-extern string_free(str: ptr)
+extern string_retain(str: string)
+extern string_release(str: string)
+extern string_free(str: string)
 
 // String operations
-extern string_concat(a: ptr, b: ptr) -> ptr
-extern string_length(str: ptr) -> int
-extern string_char_at(str: ptr, index: int) -> int
-extern string_equals(a: ptr, b: ptr) -> int
-extern string_compare(a: ptr, b: ptr) -> int
+extern string_concat(a: string, b: string) -> string
+extern string_length(str: string) -> int
+extern string_char_at(str: string, index: int) -> int
+extern string_equals(a: string, b: string) -> int
+extern string_compare(a: string, b: string) -> int
 
 // String methods
-extern string_starts_with(str: ptr, prefix: string) -> int
-extern string_ends_with(str: ptr, suffix: string) -> int
-extern string_contains(str: ptr, substring: string) -> int
-extern string_index_of(str: ptr, substring: string) -> int
-extern string_substring(str: ptr, start: int, end: int) -> ptr
-extern string_to_upper(str: ptr) -> ptr
-extern string_to_lower(str: ptr) -> ptr
-extern string_trim(str: ptr) -> ptr
+extern string_starts_with(str: string, prefix: string) -> int
+extern string_ends_with(str: string, suffix: string) -> int
+extern string_contains(str: string, substring: string) -> int
+extern string_index_of(str: string, substring: string) -> int
+extern string_substring(str: string, start: int, end: int) -> string
+extern string_to_upper(str: string) -> string
+extern string_to_lower(str: string) -> string
+extern string_trim(str: string) -> string
 
 // String array operations
-extern string_split(str: ptr, delimiter: string) -> ptr
+extern string_split(str: string, delimiter: string) -> ptr
 extern string_array_size(arr: ptr) -> int
 extern string_array_get(arr: ptr, index: int) -> ptr
 extern string_array_free(arr: ptr)
 
 // Conversion
-extern string_to_cstr(str: ptr) -> string
+extern string_to_cstr(str: string) -> string
 extern string_from_int(value: int) -> ptr
 extern string_from_float(value: float) -> ptr
 
 // Parsing
-extern string_to_int(str: ptr, out_value: ptr) -> int
-extern string_to_long(str: ptr, out_value: ptr) -> int
-extern string_to_float(str: ptr, out_value: ptr) -> int
-extern string_to_double(str: ptr, out_value: ptr) -> int
+extern string_to_int(str: string, out_value: ptr) -> int
+extern string_to_long(str: string, out_value: ptr) -> int
+extern string_to_float(str: string, out_value: ptr) -> int
+extern string_to_double(str: string, out_value: ptr) -> int

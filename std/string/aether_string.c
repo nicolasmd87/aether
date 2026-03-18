@@ -31,7 +31,7 @@ AetherString* string_from_cstr(const char* cstr) {
 }
 
 // Alias for free
-void string_free(AetherString* str) {
+void string_free(const void* str) {
     string_release(str);
 }
 
@@ -57,22 +57,25 @@ AetherString* string_empty() {
     return string_new_with_length("", 0);
 }
 
-// Reference counting
-void string_retain(AetherString* str) {
-    if (str && is_aether_string(str)) str->ref_count++;
+// Reference counting — safe to call with plain char* (no-op)
+void string_retain(const void* str) {
+    if (str && is_aether_string(str)) ((AetherString*)str)->ref_count++;
 }
 
-void string_release(AetherString* str) {
+void string_release(const void* str) {
     if (!str || !is_aether_string(str)) return;
-    str->ref_count--;
-    if (str->ref_count <= 0) {
-        free(str->data);
-        free(str);
+    AetherString* s = (AetherString*)str;
+    s->ref_count--;
+    if (s->ref_count <= 0) {
+        free(s->data);
+        free(s);
     }
 }
 
 // String operations
-AetherString* string_concat(AetherString* a, AetherString* b) {
+// Returns plain char* — usable directly with print/interpolation.
+// Caller owns the memory (free with free() or string_release()).
+char* string_concat(const void* a, const void* b) {
     if (!a || !b) return NULL;
     size_t la = str_len(a), lb = str_len(b);
     const char* da = str_data(a);
@@ -85,22 +88,20 @@ AetherString* string_concat(AetherString* a, AetherString* b) {
     memcpy(new_data + la, db, lb);
     new_data[new_length] = '\0';
 
-    AetherString* result = string_new_with_length(new_data, new_length);
-    free(new_data);
-    return result;
+    return new_data;
 }
 
-int string_length(AetherString* str) {
+int string_length(const void* str) {
     return (int)str_len(str);
 }
 
-char string_char_at(AetherString* str, int index) {
+char string_char_at(const void* str, int index) {
     size_t len = str_len(str);
     if (!str || index < 0 || index >= (int)len) return '\0';
     return str_data(str)[index];
 }
 
-int string_equals(AetherString* a, AetherString* b) {
+int string_equals(const void* a, const void* b) {
     if (a == b) return 1;
     if (!a || !b) return 0;
     size_t la = str_len(a), lb = str_len(b);
@@ -108,13 +109,13 @@ int string_equals(AetherString* a, AetherString* b) {
     return memcmp(str_data(a), str_data(b), la) == 0;
 }
 
-int string_compare(AetherString* a, AetherString* b) {
+int string_compare(const void* a, const void* b) {
     if (!a || !b) return 0;
     return strcmp(str_data(a), str_data(b));
 }
 
 // String methods
-int string_starts_with(AetherString* str, const char* prefix) {
+int string_starts_with(const void* str, const char* prefix) {
     if (!str || !prefix) return 0;
     size_t prefix_len = strlen(prefix);
     size_t slen = str_len(str);
@@ -122,7 +123,7 @@ int string_starts_with(AetherString* str, const char* prefix) {
     return memcmp(str_data(str), prefix, prefix_len) == 0;
 }
 
-int string_ends_with(AetherString* str, const char* suffix) {
+int string_ends_with(const void* str, const char* suffix) {
     if (!str || !suffix) return 0;
     size_t suffix_len = strlen(suffix);
     size_t slen = str_len(str);
@@ -131,11 +132,11 @@ int string_ends_with(AetherString* str, const char* suffix) {
                   suffix, suffix_len) == 0;
 }
 
-int string_contains(AetherString* str, const char* substring) {
+int string_contains(const void* str, const char* substring) {
     return string_index_of(str, substring) >= 0;
 }
 
-int string_index_of(AetherString* str, const char* substring) {
+int string_index_of(const void* str, const char* substring) {
     if (!str || !substring) return -1;
     size_t sub_len = strlen(substring);
     size_t slen = str_len(str);
@@ -150,50 +151,55 @@ int string_index_of(AetherString* str, const char* substring) {
     return -1;
 }
 
-AetherString* string_substring(AetherString* str, int start, int end) {
+char* string_substring(const void* str, int start, int end) {
     if (!str) return NULL;
     size_t slen = str_len(str);
     const char* sdata = str_data(str);
     if (start < 0) start = 0;
     if (end > (int)slen) end = (int)slen;
-    if (start >= end) return string_empty();
+    if (start >= end) {
+        char* empty = (char*)malloc(1);
+        if (empty) empty[0] = '\0';
+        return empty;
+    }
 
-    return string_new_with_length(sdata + start, end - start);
+    size_t len = end - start;
+    char* result = (char*)malloc(len + 1);
+    if (!result) return NULL;
+    memcpy(result, sdata + start, len);
+    result[len] = '\0';
+    return result;
 }
 
-AetherString* string_to_upper(AetherString* str) {
+char* string_to_upper(const void* str) {
     if (!str) return NULL;
     size_t slen = str_len(str);
     const char* sdata = str_data(str);
 
     char* new_data = (char*)malloc(slen + 1);
+    if (!new_data) return NULL;
     for (size_t i = 0; i < slen; i++) {
         new_data[i] = toupper(sdata[i]);
     }
     new_data[slen] = '\0';
-
-    AetherString* result = string_new_with_length(new_data, slen);
-    free(new_data);
-    return result;
+    return new_data;
 }
 
-AetherString* string_to_lower(AetherString* str) {
+char* string_to_lower(const void* str) {
     if (!str) return NULL;
     size_t slen = str_len(str);
     const char* sdata = str_data(str);
 
     char* new_data = (char*)malloc(slen + 1);
+    if (!new_data) return NULL;
     for (size_t i = 0; i < slen; i++) {
         new_data[i] = tolower(sdata[i]);
     }
     new_data[slen] = '\0';
-
-    AetherString* result = string_new_with_length(new_data, slen);
-    free(new_data);
-    return result;
+    return new_data;
 }
 
-AetherString* string_trim(AetherString* str) {
+char* string_trim(const void* str) {
     if (!str) return NULL;
     size_t slen = str_len(str);
     const char* sdata = str_data(str);
@@ -204,16 +210,16 @@ AetherString* string_trim(AetherString* str) {
     while (start < slen && isspace(sdata[start])) start++;
     while (end > start && isspace(sdata[end - 1])) end--;
 
-    if (start == 0 && end == slen && is_aether_string(str)) {
-        string_retain(str);
-        return str;
-    }
-
-    return string_new_with_length(sdata + start, end - start);
+    size_t len = end - start;
+    char* result = (char*)malloc(len + 1);
+    if (!result) return NULL;
+    memcpy(result, sdata + start, len);
+    result[len] = '\0';
+    return result;
 }
 
 // String array operations
-AetherStringArray* string_split(AetherString* str, const char* delimiter) {
+AetherStringArray* string_split(const void* str, const char* delimiter) {
     if (!str || !delimiter) return NULL;
     size_t slen = str_len(str);
     const char* sdata = str_data(str);
@@ -280,9 +286,9 @@ void string_array_free(AetherStringArray* arr) {
 }
 
 // Conversion
-const char* string_to_cstr(AetherString* str) {
+const char* string_to_cstr(const void* str) {
     if (!str) return "";
-    if (is_aether_string(str)) return str->data;
+    if (is_aether_string(str)) return ((const AetherString*)str)->data;
     // Already a plain char*
     return (const char*)str;
 }
@@ -300,7 +306,7 @@ AetherString* string_from_float(float value) {
 }
 
 // Parsing functions - convert string to numbers
-int string_to_int(AetherString* str, int* out_value) {
+int string_to_int(const void* str, int* out_value) {
     const char* data = str_data(str);
     if (!str || !data[0] || !out_value) return 0;
 
@@ -321,7 +327,7 @@ int string_to_int(AetherString* str, int* out_value) {
     return 1;
 }
 
-int string_to_long(AetherString* str, long* out_value) {
+int string_to_long(const void* str, long* out_value) {
     const char* data = str_data(str);
     if (!str || !data[0] || !out_value) return 0;
 
@@ -340,7 +346,7 @@ int string_to_long(AetherString* str, long* out_value) {
     return 1;
 }
 
-int string_to_float(AetherString* str, float* out_value) {
+int string_to_float(const void* str, float* out_value) {
     const char* data = str_data(str);
     if (!str || !data[0] || !out_value) return 0;
 
@@ -359,7 +365,7 @@ int string_to_float(AetherString* str, float* out_value) {
     return 1;
 }
 
-int string_to_double(AetherString* str, double* out_value) {
+int string_to_double(const void* str, double* out_value) {
     const char* data = str_data(str);
     if (!str || !data[0] || !out_value) return 0;
 

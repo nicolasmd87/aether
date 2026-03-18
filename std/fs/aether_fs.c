@@ -50,15 +50,15 @@ char* file_read_all(File* file) {
 }
 
 int file_write(File* file, const char* data, int length) {
-    if (!file || !file->is_open || !data) return -1;
+    if (!file || !file->is_open || !data) return 0;
 
     FILE* fp = (FILE*)file->handle;
     size_t written = fwrite(data, 1, (size_t)length, fp);
-    return (written == (size_t)length) ? 0 : -1;
+    return (written == (size_t)length) ? 1 : 0;
 }
 
 int file_close(File* file) {
-    if (!file) return -1;
+    if (!file) return 0;
 
     if (file->is_open) {
         fclose((FILE*)file->handle);
@@ -67,7 +67,7 @@ int file_close(File* file) {
 
     free((void*)file->path);
     free(file);
-    return 0;
+    return 1;
 }
 
 int file_exists(const char* path) {
@@ -78,8 +78,8 @@ int file_exists(const char* path) {
 }
 
 int file_delete(const char* path) {
-    if (!path) return -1;
-    return remove(path);
+    if (!path) return 0;
+    return remove(path) == 0 ? 1 : 0;
 }
 
 int file_size(const char* path) {
@@ -99,13 +99,13 @@ int dir_exists(const char* path) {
 }
 
 int dir_create(const char* path) {
-    if (!path) return -1;
-    return mkdir(path, 0755);
+    if (!path) return 0;
+    return mkdir(path, 0755) == 0 ? 1 : 0;
 }
 
 int dir_delete(const char* path) {
-    if (!path) return -1;
-    return rmdir(path);
+    if (!path) return 0;
+    return rmdir(path) == 0 ? 1 : 0;
 }
 
 // Path operations

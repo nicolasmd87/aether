@@ -152,6 +152,12 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
     ok "  make: $($MAKE_CMD --version 2>&1 | head -1)"
     echo ""
 
+    # Fetch latest tags so the Makefile picks up the correct version number.
+    # Without this, make clean + rebuild uses stale local tags (e.g. 0.22.0 instead of 0.25.0).
+    if git rev-parse --git-dir > /dev/null 2>&1; then
+        git fetch --tags --quiet 2>/dev/null || true
+    fi
+
     # Build
     info "Building Aether..."
     $MAKE_CMD compiler 2>&1 | tail -1
@@ -212,7 +218,7 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
     for dir in runtime runtime/actors runtime/scheduler runtime/utils \
                runtime/memory runtime/config std std/string std/io std/math \
                std/net std/collections std/json std/fs std/log std/http \
-               std/file std/dir std/path std/tcp std/list std/map; do
+               std/file std/dir std/path std/tcp std/list std/map std/os; do
         if [ -d "$dir" ]; then
             mkdir -p "$INCLUDE_DIR/$dir"
             for h in "$dir"/*.h; do
@@ -230,7 +236,7 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
             cp runtime/$subdir/*.c runtime/$subdir/*.h "$SRC_DIR/runtime/$subdir/" 2>/dev/null || true
         fi
     done
-    for subdir in string math net collections json fs log io file dir path tcp http list map; do
+    for subdir in string math net collections json fs log io file dir path tcp http list map os; do
         if [ -d "std/$subdir" ]; then
             mkdir -p "$SRC_DIR/std/$subdir"
             cp std/$subdir/*.c std/$subdir/*.h "$SRC_DIR/std/$subdir/" 2>/dev/null || true
@@ -238,6 +244,41 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
             cp std/$subdir/*.ae "$SRC_DIR/std/$subdir/" 2>/dev/null || true
         fi
     done
+
+    # Register installed version in ~/.aether/versions/ so that:
+    # - 'ae version list' shows it as "installed"
+    # - 'ae version use vX.Y.Z' can switch back after trying another version
+    INSTALLED_VER=$("$BIN_DIR/ae" version 2>&1 | head -1 | awk '{print $2}')
+    if [ -n "$INSTALLED_VER" ] && [ "$INSTALLED_VER" != "0.0.0-dev" ]; then
+        VTAG="v$INSTALLED_VER"
+        VER_ENTRY="$INSTALL_DIR/versions/$VTAG"
+        mkdir -p "$INSTALL_DIR/versions"
+
+        # Copy the full install into versions/ so 'ae version use' works.
+        # Remove old entry first (may be stale from a previous build).
+        rm -rf "$VER_ENTRY"
+        mkdir -p "$VER_ENTRY"
+        for subdir in bin lib include share; do
+            if [ -d "$INSTALL_DIR/$subdir" ]; then
+                cp -r "$INSTALL_DIR/$subdir" "$VER_ENTRY/$subdir"
+            fi
+        done
+        for f in VERSION LICENSE README.md; do
+            if [ -f "$INSTALL_DIR/$f" ]; then
+                cp -f "$INSTALL_DIR/$f" "$VER_ENTRY/$f" 2>/dev/null || true
+            fi
+        done
+
+        # Write active_version marker and update current symlink
+        echo "$INSTALLED_VER" > "$INSTALL_DIR/active_version"
+        rm -f "$INSTALL_DIR/current"
+        ln -sf "$VER_ENTRY" "$INSTALL_DIR/current"
+    else
+        # Fallback: just remove stale symlink
+        if [ -L "$INSTALL_DIR/current" ]; then
+            rm -f "$INSTALL_DIR/current"
+        fi
+    fi
 
     ok "  Installed successfully"
     echo ""

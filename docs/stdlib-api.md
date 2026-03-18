@@ -22,6 +22,7 @@ Functions are called using **namespace-style syntax**: `namespace.function()`
 | `import std.math` | `math` | `math.sqrt(x)`, `math.sin(x)` |
 | `import std.log` | `log` | `log.init(file, level)`, `log.write(level, msg)` |
 | `import std.io` | `io` | `io.print(str)`, `io.read_file(path)`, `io.getenv(name)` |
+| `import std.os` | `os` | `os.system(cmd)`, `os.exec(cmd)`, `os.getenv(name)` |
 
 ---
 
@@ -41,6 +42,7 @@ import std.map          // HashMap
 import std.math         // Math functions
 import std.log          // Logging
 import std.io           // Console I/O, environment variables
+import std.os           // Shell execution, environment variables
 ```
 
 Call functions using namespace syntax:
@@ -76,12 +78,15 @@ extern my_c_function(x: int) -> ptr
 
 ```c
 typedef struct AetherString {
-    char* data;
+    unsigned int magic;    // Always 0xAE57C0DE — enables runtime type detection
+    int ref_count;
     size_t length;
     size_t capacity;
-    int ref_count;
+    char* data;
 } AetherString;
 ```
+
+> **Note:** All `std.string` functions accept both plain `char*` strings and managed `AetherString*` transparently. The `magic` field is used internally to distinguish between the two at runtime.
 
 ### Available Functions
 
@@ -116,6 +121,10 @@ typedef struct AetherString {
 - `string_to_cstr(AetherString* str)` - Get C string pointer
 - `string_from_int(int value)` - Convert int to string
 - `string_from_float(float value)` - Convert float to string
+- `string_to_int(str, out_ptr)` - Parse integer (returns 1 on success, 0 on failure)
+- `string_to_long(str, out_ptr)` - Parse 64-bit integer (returns 1 on success, 0 on failure)
+- `string_to_float(str, out_ptr)` - Parse float (returns 1 on success, 0 on failure)
+- `string_to_double(str, out_ptr)` - Parse double (returns 1 on success, 0 on failure)
 
 #### Memory Management
 

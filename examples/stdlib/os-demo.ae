@@ -1,0 +1,33 @@
+// std.os demo — shell execution and environment
+
+import std.os
+
+main() {
+    println("=== std.os Demo ===\n")
+
+    // Run a command, get exit code
+    println("Running 'echo hello from shell':")
+    code = os.system("echo hello from shell")
+    println("Exit code: ${code}\n")
+
+    // Capture command output
+    println("Capturing 'date' output:")
+    output = os.exec("date")
+    print("Date: ${output}")
+
+    // Get environment variable
+    home = os.getenv("HOME")
+    if home != 0 {
+        println("HOME = ${home}")
+    } else {
+        println("HOME not set")
+    }
+
+    // Unknown env var returns NULL
+    missing = os.getenv("AETHER_NONEXISTENT_VAR")
+    if missing == 0 {
+        println("Unknown var correctly returns NULL")
+    }
+
+    println("\n=== Done ===")
+}

@@ -1,0 +1,166 @@
+// Regression test: file and directory operation return values
+// Covers: file.delete, file.write, file.close return values,
+//         dir.create, dir.delete, dir.exists return values
+// All functions return 1 = success, 0 = failure
+
+import std.file
+import std.dir
+
+main() {
+    println("=== FS Return Value Tests ===")
+
+    // Test 1: file.delete on non-existent file returns 0
+    println("\nTest 1: file.delete non-existent returns 0")
+    r = file.delete("/tmp/aether_fs_test_nonexistent_xyz")
+    if r == 0 {
+        println("  PASS")
+    } else {
+        println("  FAIL: expected 0, got ${r}")
+        exit(1)
+    }
+
+    // Test 2: file.write returns 1 on success
+    println("\nTest 2: file.write returns 1 on success")
+    f = file.open("/tmp/aether_fs_write_test.txt", "w")
+    wr = file.write(f, "test data", 9)
+    if wr == 1 {
+        println("  PASS")
+    } else {
+        println("  FAIL: expected 1, got ${wr}")
+        exit(1)
+    }
+
+    // Test 3: file.close returns 1 on success
+    println("\nTest 3: file.close returns 1 on success")
+    cr = file.close(f)
+    if cr == 1 {
+        println("  PASS")
+    } else {
+        println("  FAIL: expected 1, got ${cr}")
+        exit(1)
+    }
+
+    // Test 4: file.delete on existing file returns 1
+    println("\nTest 4: file.delete existing file returns 1")
+    dr = file.delete("/tmp/aether_fs_write_test.txt")
+    if dr == 1 {
+        println("  PASS")
+    } else {
+        println("  FAIL: expected 1, got ${dr}")
+        exit(1)
+    }
+
+    // Test 5: file.delete same file again returns 0 (already deleted)
+    println("\nTest 5: file.delete already-deleted file returns 0")
+    dr2 = file.delete("/tmp/aether_fs_write_test.txt")
+    if dr2 == 0 {
+        println("  PASS")
+    } else {
+        println("  FAIL: expected 0, got ${dr2}")
+        exit(1)
+    }
+
+    // Test 6: dir.exists on non-existent directory returns 0
+    println("\nTest 6: dir.exists non-existent returns 0")
+    de = dir.exists("/tmp/aether_fs_test_nonexistent_dir_xyz")
+    if de == 0 {
+        println("  PASS")
+    } else {
+        println("  FAIL: expected 0, got ${de}")
+        exit(1)
+    }
+
+    // Test 7: dir.create returns 1 on success
+    println("\nTest 7: dir.create returns 1 on success")
+    dc = dir.create("/tmp/aether_fs_test_dir")
+    if dc == 1 {
+        println("  PASS")
+    } else {
+        println("  FAIL: expected 1, got ${dc}")
+        exit(1)
+    }
+
+    // Test 8: dir.exists on existing directory returns 1
+    println("\nTest 8: dir.exists on existing directory returns 1")
+    de2 = dir.exists("/tmp/aether_fs_test_dir")
+    if de2 == 1 {
+        println("  PASS")
+    } else {
+        println("  FAIL: expected 0, got ${de2}")
+        exit(1)
+    }
+
+    // Test 9: dir.create on already-existing directory returns 0
+    println("\nTest 9: dir.create duplicate returns 0")
+    dc2 = dir.create("/tmp/aether_fs_test_dir")
+    if dc2 == 0 {
+        println("  PASS")
+    } else {
+        println("  FAIL: expected 0, got ${dc2}")
+        exit(1)
+    }
+
+    // Test 10: dir.delete on existing directory returns 1
+    println("\nTest 10: dir.delete existing returns 1")
+    dd = dir.delete("/tmp/aether_fs_test_dir")
+    if dd == 1 {
+        println("  PASS")
+    } else {
+        println("  FAIL: expected 1, got ${dd}")
+        exit(1)
+    }
+
+    // Test 11: dir.delete on non-existent directory returns 0
+    println("\nTest 11: dir.delete non-existent returns 0")
+    dd2 = dir.delete("/tmp/aether_fs_test_nonexistent_dir_xyz")
+    if dd2 == 0 {
+        println("  PASS")
+    } else {
+        println("  FAIL: expected 0, got ${dd2}")
+        exit(1)
+    }
+
+    // Test 12: dir.delete same directory again returns 0
+    println("\nTest 12: dir.delete already-deleted returns 0")
+    dd3 = dir.delete("/tmp/aether_fs_test_dir")
+    if dd3 == 0 {
+        println("  PASS")
+    } else {
+        println("  FAIL: expected 0, got ${dd3}")
+        exit(1)
+    }
+
+    // Test 13: dir.exists confirms deletion
+    println("\nTest 13: dir.exists after delete returns 0")
+    de3 = dir.exists("/tmp/aether_fs_test_dir")
+    if de3 == 0 {
+        println("  PASS")
+    } else {
+        println("  FAIL: expected 0, got ${de3}")
+        exit(1)
+    }
+
+    // Test 14: file.close on NULL returns 0
+    println("\nTest 14: file.close on NULL returns 0")
+    cr2 = file.close(0)
+    if cr2 == 0 {
+        println("  PASS")
+    } else {
+        println("  FAIL: expected 0, got ${cr2}")
+        exit(1)
+    }
+
+    // Test 15: file.exists on file vs directory
+    println("\nTest 15: file.exists on directory returns 0")
+    dir.create("/tmp/aether_fs_test_dir2")
+    fe = file.exists("/tmp/aether_fs_test_dir2")
+    if fe == 0 {
+        println("  PASS: file.exists correctly rejects directory")
+    } else {
+        println("  FAIL: file.exists should return 0 for directories")
+        exit(1)
+    }
+    dir.delete("/tmp/aether_fs_test_dir2")
+
+    println("\n=== All FS Return Value Tests Passed ===")
+}

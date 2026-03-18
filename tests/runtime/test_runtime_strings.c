@@ -1,18 +1,19 @@
 #include "test_harness.h"
 #include "../../std/string/aether_string.h"
 #include <string.h>
+#include <stdlib.h>
 
 TEST_CATEGORY(string_concat_basic, TEST_CATEGORY_STDLIB) {
     AetherString* s1 = string_from_cstr("Hello");
     AetherString* s2 = string_from_cstr(" World");
-    AetherString* result = string_concat(s1, s2);
+    char* result = string_concat(s1, s2);
 
     ASSERT_NOT_NULL(result);
-    ASSERT_STREQ("Hello World", result->data);
+    ASSERT_STREQ("Hello World", result);
 
     string_free(s1);
     string_free(s2);
-    string_free(result);
+    free(result);
 }
 
 TEST_CATEGORY(string_length, TEST_CATEGORY_STDLIB) {
@@ -60,13 +61,13 @@ TEST_CATEGORY(string_reference_counting, TEST_CATEGORY_STDLIB) {
 TEST_CATEGORY(string_concat_empty, TEST_CATEGORY_STDLIB) {
     AetherString* s1 = string_from_cstr("");
     AetherString* s2 = string_from_cstr("Hello");
-    AetherString* result = string_concat(s1, s2);
+    char* result = string_concat(s1, s2);
 
-    ASSERT_STREQ("Hello", result->data);
+    ASSERT_STREQ("Hello", result);
 
     string_free(s1);
     string_free(s2);
-    string_free(result);
+    free(result);
 }
 
 TEST_CATEGORY(string_special_chars, TEST_CATEGORY_STDLIB) {

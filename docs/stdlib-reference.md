@@ -105,25 +105,25 @@ main() {
 
 Reference-counted strings with comprehensive operations.
 
-### String Types: `string` vs Managed Strings
+### String Types: Plain Strings vs Managed Strings
 
-> **Most users don't need this.** Aether's native `string` type (plain C strings) works for printing,
-> interpolation, message fields, file I/O, and JSON. Only use `std.string` when you need operations
-> like `trim`, `split`, `to_upper`, etc. — those return managed strings that require `string.release()`.
+> **Most users don't need managed strings.** All `std.string` functions work on both plain strings
+> and managed strings transparently. `string.length("hello")` just works — no conversion needed.
+> Only create managed strings via `string.new()` when you need reference counting.
 
 Aether has two string representations:
 
-| | `string` (raw) | Managed (`ptr` via `std.string`) |
+| | `string` (plain) | Managed (`ptr` via `string.new()`) |
 |---|---|---|
 | **C type** | `const char*` | `AetherString*` |
 | **Allocation** | Static (literals) or manual | Heap (reference-counted) |
 | **Memory** | None needed | `string.release()` or `defer string.free()` |
-| **Knows length?** | No (`O(n)` via `strlen`) | Yes (`O(1)`) |
-| **Manipulation** | Not possible | Full API (`trim`, `split`, `concat`, etc.) |
+| **Knows length?** | Computed via `strlen` | Stored in struct (`O(1)`) |
+| **std.string functions** | All work | All work |
 
-**`string`** — raw C string. String literals like `"hello"` are this type. Use for message fields, constants, and passing text to extern functions.
+**`string`** — plain C string. String literals like `"hello"` are this type. All `std.string` functions accept these directly.
 
-**Managed strings** — heap-allocated objects returned by `std.string` functions (`string.new`, `string.trim`, `string.split`, etc.). Typed as `ptr` in Aether code. Required for any string manipulation.
+**Managed strings** — heap-allocated objects returned by `string.new()`. Typed as `ptr` in Aether code. Use when you need reference counting or the result of transformation functions like `string.trim()`, `string.to_upper()`.
 
 **Converting between them:**
 
@@ -235,7 +235,9 @@ main() {
 
 **Parsing:**
 - `string.to_int(str, out_ptr)` - Parse integer (returns 1 on success, 0 on failure)
+- `string.to_long(str, out_ptr)` - Parse 64-bit integer (returns 1 on success, 0 on failure)
 - `string.to_float(str, out_ptr)` - Parse float (returns 1 on success, 0 on failure)
+- `string.to_double(str, out_ptr)` - Parse double (returns 1 on success, 0 on failure)
 
 **Memory:**
 - `string.retain(str)` - Increment reference count
@@ -280,13 +282,13 @@ main() {
 ```
 
 **Functions:**
-- `file.open(path, mode)` - Open file (returns handle)
-- `file.close(file)` - Close file
-- `file.read_all(file)` - Read entire contents
-- `file.write(file, data, len)` - Write data
+- `file.open(path, mode)` - Open file (returns handle, or 0 on failure)
+- `file.close(file)` - Close file (returns 1 on success, 0 on failure)
+- `file.read_all(file)` - Read entire contents as string
+- `file.write(file, data, len)` - Write data (returns 1 on success, 0 on failure)
 - `file.exists(path)` - Check if file exists (returns 1/0)
 - `file.size(path)` - Get file size in bytes
-- `file.delete(path)` - Delete file
+- `file.delete(path)` - Delete file (returns 1 on success, 0 on failure)
 
 > **Note:** `file.read_all()` returns a plain string (`char*`). You can print it directly with `print(content)` or use it in interpolation: `println("Got: ${content}")`. The memory is heap-allocated — use `defer free(content)` if you want explicit cleanup, but for short-lived programs it's fine to skip.
 
@@ -313,8 +315,8 @@ main() {
 
 **Functions:**
 - `dir.exists(path)` - Check if directory exists (returns 1/0)
-- `dir.create(path)` - Create directory
-- `dir.delete(path)` - Delete empty directory
+- `dir.create(path)` - Create directory (returns 1 on success, 0 on failure)
+- `dir.delete(path)` - Delete empty directory (returns 1 on success, 0 on failure)
 - `dir.list(path)` - List directory contents
 - `dir.list_free(list)` - Free directory listing
 
@@ -546,6 +548,37 @@ main() {
 - `log.set_colors(enabled)` - Enable/disable colored output (1/0)
 - `log.set_timestamps(enabled)` - Enable/disable timestamps (1/0)
 - `log.print_stats()` - Print logging statistics
+
+---
+
+## OS (`std.os`)
+
+Shell execution, command output capture, and environment variables.
+
+```aether
+import std.os
+
+main() {
+    // Run a shell command, get exit code
+    code = os.system("echo hello")
+    println("Exit: ${code}")
+
+    // Capture command output as string
+    output = os.exec("date")
+    println("Date: ${output}")
+
+    // Get environment variable
+    home = os.getenv("HOME")
+    if home != 0 {
+        println("HOME = ${home}")
+    }
+}
+```
+
+**Functions:**
+- `os.system(cmd)` - Run shell command, returns exit code (0 = success)
+- `os.exec(cmd)` - Run command and capture stdout as string (returns NULL on failure)
+- `os.getenv(name)` - Get environment variable (returns string, or NULL if not set)
 
 ---
 

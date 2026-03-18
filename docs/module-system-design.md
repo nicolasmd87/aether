@@ -67,6 +67,7 @@ cached ASTs — each module file is read and parsed exactly once.
 | `import std.math` | `math` | `math.sqrt()`, `math.sin()`, `math.cos()` |
 | `import std.log` | `log` | `log.init()`, `log.write()`, `log.shutdown()` |
 | `import std.io` | `io` | `io.print()`, `io.read_file()`, `io.getenv()` |
+| `import std.os` | `os` | `os.system()`, `os.exec()`, `os.getenv()` |
 
 ---
 

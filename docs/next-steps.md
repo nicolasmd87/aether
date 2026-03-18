@@ -4,36 +4,53 @@ Planned features and improvements for upcoming Aether releases.
 
 ## Standard Library
 
-### `std.os` — Shell & Process Execution
+### ~~`std.os` — Shell & Process Execution~~ ✓ Done
 
-Currently users must `extern system(cmd: string) -> int` to run shell commands. This should be a first-class stdlib module.
+Shipped. `import std.os` provides `os.system()`, `os.exec()`, `os.getenv()`. See `examples/stdlib/os-demo.ae`.
 
-**Planned API:**
+**Origin:** [Issue #39](https://github.com/nicolasmd87/aether/issues/39)
+
+## Language Features
+
+### Result Type — Structured Error Handling
+
+Currently all stdlib functions return `int` where `1` = success and `0` = failure. This works but has drawbacks: the caller can silently ignore errors, there's no way to carry error details, and it's easy to confuse success/failure when mixing with C conventions.
+
+Go-style multiple return values would fit Aether's inferred-type philosophy — no generics or sum types needed. The compiler already knows types through inference, so a `(value, err)` pair just works.
+
+**Planned syntax (tentative):**
 
 ```aether
-import std.os
+import std.file
+import std.io
 
 main() {
-    // Run a command, get exit code
-    code = os.system("ls -la")
+    // Multiple return values — err is a string (or empty "" on success)
+    f, err = file.open("data.txt", "r")
+    if err {
+        println("Failed: ${err}")
+        exit(1)
+    }
+    content = file.read_all(f)
+    file.close(f)
 
-    // Run a command, capture stdout as string
-    output = os.exec("date")
-    println(output)
+    // Ignore the error (explicit _ discard)
+    data, _ = io.read_file("config.txt")
 
-    // Get environment variable
-    home = os.getenv("HOME")
-    println(home)
+    // Or default on failure
+    content = io.read_file("config.txt") or "default config"
 }
 ```
 
-**Implementation notes:**
-- `os.system(cmd)` — wraps C `system()`, returns exit code
-- `os.exec(cmd)` — wraps C `popen()` + read loop, returns stdout as string
-- `os.getenv(name)` — wraps C `getenv()`, returns string (or empty)
-- Cross-platform: all three functions exist on POSIX and Windows
+**What's needed:**
+- Multiple return values from functions (codegen emits a C struct or out-parameter)
+- Tuple destructuring in assignment (`a, b = func()`)
+- Error type convention: empty string `""` = no error, non-empty = error message
+- Optional: `or` keyword for inline defaults on error
 
-**Origin:** [Issue #39](https://github.com/nicolasmd87/aether/issues/39) — user requested shell execution and terminal control (`clear`, capturing output)
+**Why not now:** Aether currently supports only single return values. Adding multiple returns touches the parser (tuple destructuring), type inference (propagating paired types), and codegen (struct returns or out-params). The `1`/`0` int convention is consistent across the stdlib today and works for v0.x. Multiple returns is the natural next step once the core language stabilizes.
+
+**Origin:** Observed during stdlib hardening — `file.delete()`, `file.write()`, `dir.create()` were returning raw POSIX values (`0`/`-1`) instead of Aether's `1`/`0` convention. Even after fixing the convention, the underlying problem remains: int return values can't carry error context and are easy to ignore.
 
 ## Tooling
 

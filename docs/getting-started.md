@@ -130,7 +130,7 @@ Create `hello.ae`:
 
 ```aether
 main() {
-    print("Hello, Aether!\n");
+    println("Hello, Aether!")
 }
 ```
 
@@ -171,9 +171,7 @@ main() {
     // Wait for all messages to be processed
     wait_for_idle()
 
-    print("Count: ")
-    print(c.count)
-    print("\n")
+    println("Count: ${c.count}")
 }
 ```
 
@@ -194,7 +192,7 @@ main() {
 
     map.put(mymap, "greeting", "hello")
 
-    print("Map created\n")
+    println("Map created")
 }
 ```
 
@@ -207,6 +205,7 @@ Functions are called using **namespace-style syntax**: `namespace.function()`.
 | `import std.map` | `map` | `map.new()`, `map.put()` |
 | `import std.list` | `list` | `list.new()`, `list.add()` |
 | `import std.json` | `json` | `json.parse(str)` |
+| `import std.os` | `os` | `os.exec("ls")` |
 
 See [Module System Design](module-system-design.md) for creating your own packages.
 
@@ -228,6 +227,7 @@ Aether includes a standard library with the following modules:
 | `std.log` | Structured logging |
 | `std.math` | Math functions |
 | `std.io` | Console I/O, environment variables |
+| `std.os` | Shell execution, command output capture |
 
 See [stdlib-api.md](stdlib-api.md) for the full API reference.
 
@@ -271,9 +271,9 @@ Use `match` for value dispatch:
 
 ```aether
 match (value) {
-    0 -> { print("Zero\n") }
-    1 -> { print("One\n") }
-    _ -> { print("Other\n") }
+    0 -> { println("Zero") }
+    1 -> { println("One") }
+    _ -> { println("Other") }
 }
 ```
 
@@ -286,12 +286,10 @@ nums = [1, 2, 3]
 nums_len = 3
 
 match (nums) {
-    [] -> { print("empty\n") }
-    [x] -> { print("one element\n") }
+    [] -> { println("empty") }
+    [x] -> { println("one element") }
     [h|t] -> {
-        print("head: ")
-        print(h)
-        print("\n")
+        println("head: ${h}")
     }
 }
 ```
@@ -352,16 +350,20 @@ ae build myprogram.ae -o myprogram
 
 ### Environment Variables
 
-Read configuration from environment variables:
+Read configuration from environment variables using `std.os`:
 
 ```aether
+import std.os
+
 main() {
-    home = getenv("HOME")
+    home = os.getenv("HOME")
     if home != 0 {
         println("Home directory: ${home}")
     }
 }
 ```
+
+The builtin `getenv()` also works without an import for quick scripts.
 
 ## Next Steps
 
@@ -380,8 +382,8 @@ Switch between Aether releases without reinstalling:
 ```bash
 ae version              # Show current version
 ae version list         # List all available releases (marks installed/active)
-ae version install v0.21.0  # Download and install a specific version
-ae version use v0.21.0      # Switch to an installed version
+ae version install v0.25.0  # Download and install a specific version
+ae version use v0.25.0      # Switch to an installed version
 ```
 
 Versions are stored in `~/.aether/versions/`. The active version is symlinked to `~/.aether/current` (Linux/macOS) or copied to `~/.aether/bin/` (Windows).
@@ -412,9 +414,8 @@ Versions are stored in `~/.aether/versions/`. The active version is symlinked to
 ### Common Pitfalls
 
 1. Forgetting to rebuild after changes: run `make clean && make`
-2. Actor structs missing the `migrate_to` field (causes struct layout mismatch)
-3. On Windows, running `ae` from a directory without write permission (GCC download needs `~\.aether\`)
-4. Using `state` as a variable name inside an actor body (it's reserved there — use it freely elsewhere)
+2. On Windows, running `ae` from a directory without write permission (GCC download needs `~\.aether\`)
+3. Using `state` as a variable name inside an actor body (it's reserved there — use it freely elsewhere)
 
 ### Platform-Specific Notes
 

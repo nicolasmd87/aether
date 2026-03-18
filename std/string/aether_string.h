@@ -29,27 +29,28 @@ AetherString* string_from_literal(const char* cstr);  // Alias for new
 AetherString* string_new_with_length(const char* data, size_t length);
 AetherString* string_empty();
 
-// Reference counting
-void string_retain(AetherString* str);
-void string_release(AetherString* str);
-void string_free(AetherString* str);  // Alias for release
+// Reference counting — safe to call with plain char* (no-op)
+void string_retain(const void* str);
+void string_release(const void* str);
+void string_free(const void* str);  // Alias for release
 
-// String operations
-AetherString* string_concat(AetherString* a, AetherString* b);
-int string_length(AetherString* str);
-char string_char_at(AetherString* str, int index);
-int string_equals(AetherString* a, AetherString* b);
-int string_compare(AetherString* a, AetherString* b);
+// String operations — accept both AetherString* and plain char*
+char* string_concat(const void* a, const void* b);
+int string_length(const void* str);
+char string_char_at(const void* str, int index);
+int string_equals(const void* a, const void* b);
+int string_compare(const void* a, const void* b);
 
-// String methods
-int string_starts_with(AetherString* str, const char* prefix);
-int string_ends_with(AetherString* str, const char* suffix);
-int string_contains(AetherString* str, const char* substring);
-int string_index_of(AetherString* str, const char* substring);
-AetherString* string_substring(AetherString* str, int start, int end);
-AetherString* string_to_upper(AetherString* str);
-AetherString* string_to_lower(AetherString* str);
-AetherString* string_trim(AetherString* str);
+// String methods — accept both AetherString* and plain char*
+// Return plain char* (caller owns memory, free with free())
+int string_starts_with(const void* str, const char* prefix);
+int string_ends_with(const void* str, const char* suffix);
+int string_contains(const void* str, const char* substring);
+int string_index_of(const void* str, const char* substring);
+char* string_substring(const void* str, int start, int end);
+char* string_to_upper(const void* str);
+char* string_to_lower(const void* str);
+char* string_trim(const void* str);
 
 // String array operations (for split)
 typedef struct {
@@ -57,22 +58,22 @@ typedef struct {
     size_t count;
 } AetherStringArray;
 
-AetherStringArray* string_split(AetherString* str, const char* delimiter);
+AetherStringArray* string_split(const void* str, const char* delimiter);
 int string_array_size(AetherStringArray* arr);
 AetherString* string_array_get(AetherStringArray* arr, int index);
 void string_array_free(AetherStringArray* arr);
 
 // Conversion
-const char* string_to_cstr(AetherString* str);
+const char* string_to_cstr(const void* str);
 AetherString* string_from_int(int value);
 AetherString* string_from_float(float value);
 
 // Parsing (string -> number)
 // Returns 1 on success, 0 on failure. Result stored in out_value.
-int string_to_int(AetherString* str, int* out_value);
-int string_to_long(AetherString* str, long* out_value);
-int string_to_float(AetherString* str, float* out_value);
-int string_to_double(AetherString* str, double* out_value);
+int string_to_int(const void* str, int* out_value);
+int string_to_long(const void* str, long* out_value);
+int string_to_float(const void* str, float* out_value);
+int string_to_double(const void* str, double* out_value);
 
 // Formatting (printf-style)
 AetherString* string_format(const char* fmt, ...);

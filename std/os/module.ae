@@ -1,0 +1,11 @@
+// std.os - Shell & Process Execution
+// Import with: import std.os
+
+// Run a shell command, returns exit code (0 = success)
+extern os_system(cmd: string) -> int
+
+// Run a command and capture stdout as a string
+extern os_exec(cmd: string) -> string
+
+// Get environment variable, returns string or NULL if not set
+extern os_getenv(name: string) -> string

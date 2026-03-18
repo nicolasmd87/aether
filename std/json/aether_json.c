@@ -198,81 +198,88 @@ JsonValue* json_parse(const char* json_str) {
     return parse_value_depth(&json, 0);
 }
 
-static void stringify_value(JsonValue* value, AetherString** result, int depth);
-
-static void append_string(AetherString** result, const char* str) {
-    AetherString* temp = string_new(str);
-    AetherString* new_result = string_concat(*result, temp);
-    string_release(*result);
-    string_release(temp);
-    *result = new_result;
+// Internal append helper — builds a plain char* buffer, doesn't depend on AetherString
+static void append_cstr(char** result, size_t* len, size_t* cap, const char* str) {
+    size_t slen = strlen(str);
+    while (*len + slen + 1 > *cap) {
+        *cap = (*cap == 0) ? 256 : *cap * 2;
+        *result = (char*)realloc(*result, *cap);
+    }
+    memcpy(*result + *len, str, slen);
+    *len += slen;
+    (*result)[*len] = '\0';
 }
+
+static void stringify_value_buf(JsonValue* value, char** buf, size_t* len, size_t* cap, int depth);
 
 char* json_stringify(JsonValue* value) {
-    AetherString* result = string_empty();
-    stringify_value(value, &result, 0);
-    char* cstr = strdup(result->data);
-    string_release(result);
-    return cstr;
+    char* buf = NULL;
+    size_t len = 0, cap = 0;
+    stringify_value_buf(value, &buf, &len, &cap, 0);
+    if (!buf) {
+        buf = (char*)malloc(1);
+        if (buf) buf[0] = '\0';
+    }
+    return buf;
 }
 
-static void stringify_value(JsonValue* value, AetherString** result, int depth) {
+static void stringify_value_buf(JsonValue* value, char** buf, size_t* len, size_t* cap, int depth) {
     if (!value || depth > JSON_MAX_DEPTH) {
-        append_string(result, "null");
+        append_cstr(buf, len, cap, "null");
         return;
     }
 
     switch (value->type) {
         case JSON_NULL:
-            append_string(result, "null");
+            append_cstr(buf, len, cap, "null");
             break;
 
         case JSON_BOOL:
-            append_string(result, value->data.bool_value ? "true" : "false");
+            append_cstr(buf, len, cap, value->data.bool_value ? "true" : "false");
             break;
 
         case JSON_NUMBER: {
-            char buf[64];
-            snprintf(buf, sizeof(buf), "%g", value->data.number_value);
-            append_string(result, buf);
+            char numbuf[64];
+            snprintf(numbuf, sizeof(numbuf), "%g", value->data.number_value);
+            append_cstr(buf, len, cap, numbuf);
             break;
         }
 
         case JSON_STRING:
-            append_string(result, "\"");
+            append_cstr(buf, len, cap, "\"");
             if (value->data.string_value) {
-                append_string(result, value->data.string_value->data);
+                append_cstr(buf, len, cap, value->data.string_value->data);
             }
-            append_string(result, "\"");
+            append_cstr(buf, len, cap, "\"");
             break;
 
         case JSON_ARRAY: {
-            append_string(result, "[");
+            append_cstr(buf, len, cap, "[");
             int size = list_size(value->data.array_value);
             for (int i = 0; i < size; i++) {
-                if (i > 0) append_string(result, ",");
+                if (i > 0) append_cstr(buf, len, cap, ",");
                 JsonValue* item = (JsonValue*)list_get(value->data.array_value, i);
-                stringify_value(item, result, depth + 1);
+                stringify_value_buf(item, buf, len, cap, depth + 1);
             }
-            append_string(result, "]");
+            append_cstr(buf, len, cap, "]");
             break;
         }
 
         case JSON_OBJECT: {
-            append_string(result, "{");
+            append_cstr(buf, len, cap, "{");
             MapKeys* keys = map_keys(value->data.object_value);
             if (keys) {
                 for (int i = 0; i < keys->count; i++) {
-                    if (i > 0) append_string(result, ",");
-                    append_string(result, "\"");
-                    append_string(result, keys->keys[i]->data);
-                    append_string(result, "\":");
+                    if (i > 0) append_cstr(buf, len, cap, ",");
+                    append_cstr(buf, len, cap, "\"");
+                    append_cstr(buf, len, cap, keys->keys[i]->data);
+                    append_cstr(buf, len, cap, "\":");
                     JsonValue* val = (JsonValue*)map_get(value->data.object_value, keys->keys[i]->data);
-                    stringify_value(val, result, depth + 1);
+                    stringify_value_buf(val, buf, len, cap, depth + 1);
                 }
                 map_keys_free(keys);
             }
-            append_string(result, "}");
+            append_cstr(buf, len, cap, "}");
             break;
         }
     }
