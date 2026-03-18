@@ -21,6 +21,7 @@ Functions are called using **namespace-style syntax**: `namespace.function()`
 | `import std.map` | `map` | `map.new()`, `map.put(m, key, val)` |
 | `import std.math` | `math` | `math.sqrt(x)`, `math.sin(x)` |
 | `import std.log` | `log` | `log.init(file, level)`, `log.write(level, msg)` |
+| `import std.io` | `io` | `io.print(str)`, `io.read_file(path)`, `io.getenv(name)` |
 
 ---
 
@@ -39,6 +40,7 @@ import std.list         // ArrayList
 import std.map          // HashMap
 import std.math         // Math functions
 import std.log          // Logging
+import std.io           // Console I/O, environment variables
 ```
 
 Call functions using namespace syntax:
@@ -181,12 +183,13 @@ main() {
 
 ### Console Output
 
-The primary I/O function in Aether is `print()`, which works like C's `printf`:
+The primary I/O functions in Aether are `print()` and `println()`:
 
 ```aether
 print("Hello, World!\n")
-print("Value: %d\n", x)
-print("Float: %f\n", pi)
+println("Hello, World!")       // same, with automatic newline
+println("Value: ${x}")         // string interpolation
+println("Float: ${pi}")
 ```
 
 ### Additional I/O
@@ -195,14 +198,14 @@ print("Float: %f\n", pi)
 - `io.print_line(str)` - Print string with newline
 - `io.print_int(value)` - Print integer
 - `io.print_float(value)` - Print float
-- `io.read_file(path)` - Read entire file (returns ptr — use `string.to_cstr()` to print)
+- `io.read_file(path)` - Read entire file as a string (print directly with `println(content)`)
 - `io.write_file(path, content)` - Write to file
 - `io.append_file(path, content)` - Append to file
 - `io.file_exists(path)` - Check if file exists (returns 1/0)
 - `io.delete_file(path)` - Delete file
 - `io.file_info(path)` - Get file metadata (returns ptr)
 - `io.file_info_free(info)` - Free file info
-- `io.getenv(name)` - Get environment variable (returns ptr — use `string.to_cstr()` to print)
+- `io.getenv(name)` - Get environment variable as a string (print directly with `println(value)`)
 - `io.setenv(name, value)` - Set environment variable
 - `io.unsetenv(name)` - Unset environment variable
 
@@ -244,11 +247,6 @@ print("Float: %f\n", pi)
 - `math.random_seed(seed)` - Set random seed
 - `math.random_int(min, max)` - Random int in range [min, max]
 - `math.random_float()` - Random float in [0.0, 1.0)
-
-### Constants
-
-- `PI` - 3.14159265358979323846
-- `E` - 2.71828182845904523536
 
 ---
 
@@ -320,9 +318,7 @@ import std.http
 main() {
     response = http.get("http://example.com")
     if (response != 0) {
-        print("Status: ")
-        print(response.status)
-        print("\n")
+        println("Got response")
         http.response_free(response)
     }
 }
@@ -406,17 +402,14 @@ main() {
 
 ```aether
 import std.map
-import std.string
 
 main() {
     mymap = map.new()
     defer map.free(mymap)
 
-    key = string.new("name")
-    defer string.free(key)
-
-    map.put(mymap, key, value_ptr)
-    result = map.get(mymap, key)
+    map.put(mymap, "name", some_ptr)
+    result = map.get(mymap, "name")
+    exists = map.has(mymap, "name")
 }
 ```
 

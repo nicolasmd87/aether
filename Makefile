@@ -306,7 +306,8 @@ test-release-archive: compiler ae stdlib
 	if [ -f build/libaether.a ]; then cp build/libaether.a "$$reldir/lib/"; fi && \
 	for dir in runtime runtime/actors runtime/scheduler runtime/utils \
 	           runtime/memory runtime/config std std/string std/io std/math \
-	           std/net std/collections std/json std/fs std/log std/http; do \
+	           std/net std/collections std/json std/fs std/log std/http \
+	           std/file std/dir std/path std/tcp std/list std/map; do \
 	  if [ -d "$$dir" ]; then \
 	    mkdir -p "$$reldir/include/aether/$$dir"; \
 	    cp "$$dir"/*.h "$$reldir/include/aether/$$dir/" 2>/dev/null || true; \

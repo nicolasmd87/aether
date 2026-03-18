@@ -15,9 +15,18 @@ number (e.g. `[0.18.0]`) before tagging the release.
 
 - **Release archive CI test (`test-release-archive`)**: New Makefile target and CI step [9/9] that packages a tarball exactly like the release pipeline, extracts it, and verifies `ae init` + `ae run` work from the extracted layout — catches archive structure bugs that `test-install` (which tests `install.sh`) would miss
 - **4 regression tests for CLI helper battle-testing**: `test_actor_print_char.ae` (print_char/escapes in actor handlers, self-send animation), `test_box_drawing.ae` (ASCII boxes, ANSI escapes, progress bars, tab tables, nested boxes), `test_interp_escape_combo.ae` (10 hex/octal + interpolation combos), `test_file_io_char_return.ae` (file I/O roundtrip, char* returns, append, cleanup)
+- **Regression test for printing stdlib returns**: `test_print_stdlib_returns.ae` — covers `file.read_all`, `io.read_file`, `io.getenv` through `print()`, `println()`, and string interpolation paths
+- **5 stdlib regression test suites (71 tests)**: Comprehensive edge-case coverage for every stdlib module:
+  - `test_string_plain_char.ae` — 18 tests: every `std.string` function with plain `char*` (length, to_upper, to_lower, contains, starts_with, ends_with, index_of, substring, concat, equals, char_at, trim, split, to_cstr, release no-op, mixed managed+plain, empty string)
+  - `test_stdlib_edge_cases.ae` — 25 tests: path return types and edge cases, file ops on missing files, JSON parsing edge cases, string ops on plain strings, mixed managed/plain equality
+  - `test_json_edge_cases.ae` — 17 tests: escape handling (`\n`, `\t`, `\"`, `\\`, `\/`), booleans, negative numbers, floats, mixed-type arrays, type-safe getters on wrong types, stringify round-trip, nested arrays, empty strings, out-of-bounds, empty object/array creation
+  - `test_io_edge_cases.ae` — 10 tests: read non-existent file, write+read round-trip, append, file_exists, delete, delete non-existent, empty content, getenv known/unknown, file_info on missing
+  - `test_collections_edge_cases.ae` — 16 tests: empty list/map ops, out-of-bounds get, negative index, remove+re-add, set, clear+re-use, put+overwrite, remove non-existent key, many keys (trigger resize), all keys accessible after resize, managed string values in map
 
 ### Fixed
 
+- **String interpolation used `%d` for ptr/string types**: `println("${file.read_all(f)}")` and similar interpolations with `TYPE_PTR` values fell through to the `%d` default in `EMIT_INTERP_FMT`, printing pointer addresses as integers instead of string content. Added `TYPE_PTR` case to format specifier switch and `_aether_safe_str()` wrapping for `TYPE_STRING`/`TYPE_PTR` in `EMIT_INTERP_ARGS`
+- **`std/tcp/module.ae` declared `tcp_receive -> ptr` instead of `-> string`**: Inconsistent with `std/net/module.ae` which correctly declared `-> string`. Now both match
 - **Stdlib functions returned `AetherString*` instead of `char*`**: All stdlib modules (fs, io, json, net) returned opaque `AetherString*` pointers from functions like `file_read_all()`, `io_read_file()`, `json_stringify()`, `tcp_receive()` — but Aether's native string type is `const char*`, so codegen generated `printf("%s", ...)` which interpreted the struct pointer as a string, producing garbage output on all platforms. Changed all public stdlib APIs to return `char*` directly; module.ae declarations updated from `-> ptr` to `-> string`
 - **`file_write` / `file_size` ABI mismatch**: `file_write()` C signature used `size_t length` (8 bytes on 64-bit) but module.ae declared `int` (4 bytes) — misaligned stack on ARM64. `file_size()` returned `size_t` but module declared `int`. Fixed C signatures to use `int` matching the module declarations
 - **`ae version install` extracted only one directory from release archives**: The POSIX extraction logic assumed release archives had a single wrapper directory and used `ls -d tmp/*/ | head -1` to find it — but release archives contain `bin/`, `lib/`, `share/`, `include/` at root with no wrapper. `head -1` picked only one directory (e.g. `bin/`), so `lib/libaether.a` and `share/aether/` were lost, causing "flat layout" detection and compilation failures when running `ae run` on an installed version
@@ -26,6 +35,25 @@ number (e.g. `[0.18.0]`) before tagging the release.
 - **Windows `ae version use` missing lib/share**: Only copied `bin/` subdirectory contents — now copies the entire version directory so `lib/`, `include/`, `share/` are available
 - **Makefile version detection picked wrong tag**: `sort -t. -k1,1n` on `v0.X.0` tags tried numeric sort on the `v` prefix — behavior varies across `sort` implementations, causing some systems to pick e.g. `0.18.0` instead of `0.22.0`. Fixed by stripping the `v` prefix before sorting
 - **VERSION file stuck at `0.17.0`**: Release pipeline updates from 0.18.0–0.20.0 never persisted on main — corrected to `0.21.0` so the next merge triggers the `v0.21.0` release
+- **`string.length()` returned garbage on plain `char*`**: `string_length("hello")` produced values like 168427553 because the `AetherString` struct layout interpreted raw bytes as the `length` field. Added `AETHER_STRING_MAGIC` (0xAE57C0DE) marker to `AetherString` struct with `is_aether_string()` runtime detection — all `std.string` functions now transparently handle both `AetherString*` and plain `char*` via `str_data()`/`str_len()` helpers. `string_retain()`/`string_release()` are safe no-ops on plain strings
+- **`std/path/module.ae` returned `ptr` instead of `string`**: `path_join`, `path_dirname`, `path_basename`, `path_extension` declared `-> ptr` but return `char*` — fixed to `-> string`
+- **`std/string/module.ae` missing exports**: Added `string_to_long` and `string_to_double` declarations
+- **JSON parser stack overflow on deeply nested input**: `parse_value`, `stringify_value`, and `json_free` recursed without depth limit — added `JSON_MAX_DEPTH` (256) guard to all three recursive paths
+- **JSON parser read past end on truncated escape**: `parse_string` advanced past `\\` without checking for end of input — added `if (!**json) break;` guard
+- **JSON parser missing `\/` escape**: Valid JSON escape `\/` (forward slash) was not handled — added `case '/'` to escape switch
+- **JSON `parse_string` missing malloc NULL check**: `JsonValue` allocation after string parsing had no NULL check — added guard with `free(buffer)` cleanup
+- **`io_read_file` / `file_read_all` missing `ftell`/`malloc` checks**: `ftell()` returning -1 was passed to `malloc()` causing undefined behavior — added `if (size < 0)` guard and malloc NULL check with proper `fclose()` cleanup
+- **`file_open` missing malloc NULL check**: `malloc(sizeof(File))` failure caused NULL dereference — added check with `fclose(fp)` cleanup
+- **`dir_list` unsafe realloc**: `realloc()` failure leaked original `entries` array — fixed with safe realloc pattern (temp variable, break on failure)
+- **`list_add` unsafe realloc**: Same pattern — `realloc()` failure lost original `items` pointer. Fixed with temp variable
+- **`hashmap_resize` unsafe calloc**: Failure overwrote map state with NULL — now allocates new buckets first, only updates map on success
+- **`map_keys` on empty map**: `malloc(0)` is implementation-defined — added special case returning `keys->keys = NULL` with `count = 0`
+- **`map_put` missing malloc NULL check**: `HashMapEntry` allocation had no NULL guard — added `if (!new_entry) return;`
+- **`tcp_connect`/`tcp_accept`/`tcp_listen` NULL dereference on malloc failure**: All three allocated structs without checking — added NULL checks with `close(fd)` cleanup on failure
+- **`tcp_receive` missing malloc NULL check**: Buffer allocation had no guard — added `if (!buffer) return NULL;`
+- **HTTP `parse_url` buffer overflow**: Fixed-size `host[256]`/`path[1024]` buffers used `strcpy()`/`strncpy()` without bounds checking — refactored to pass buffer sizes and use `snprintf()`/bounded `memcpy()`
+- **HTTP `http_request` missing malloc NULL checks**: `HttpResponse` and response buffer allocations had no guards — added NULL checks with proper cleanup
+- **HTTP server header overflow**: Request parsing and `set_header` had no bounds check on header count — added `header_count < 50` guard
 
 ### Changed
 

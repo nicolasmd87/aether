@@ -21,7 +21,9 @@ void list_add(ArrayList* list, void* item) {
 
     if (list->size >= list->capacity) {
         int new_capacity = list->capacity == 0 ? 8 : list->capacity * 2;
-        list->items = (void**)realloc(list->items, new_capacity * sizeof(void*));
+        void** new_items = (void**)realloc(list->items, new_capacity * sizeof(void*));
+        if (!new_items) return;
+        list->items = new_items;
         list->capacity = new_capacity;
     }
 
@@ -101,25 +103,29 @@ HashMap* map_new() {
 static void hashmap_resize(HashMap* map) {
     int old_capacity = map->capacity;
     HashMapEntry** old_buckets = map->buckets;
-    
-    map->capacity *= 2;
-    map->buckets = (HashMapEntry**)calloc(map->capacity, sizeof(HashMapEntry*));
+    int new_capacity = map->capacity * 2;
+
+    HashMapEntry** new_buckets = (HashMapEntry**)calloc(new_capacity, sizeof(HashMapEntry*));
+    if (!new_buckets) return;  // Keep existing map on alloc failure
+
+    map->capacity = new_capacity;
+    map->buckets = new_buckets;
     map->size = 0;
-    
+
     for (int i = 0; i < old_capacity; i++) {
         HashMapEntry* entry = old_buckets[i];
         while (entry) {
             HashMapEntry* next = entry->next;
-            
+
             unsigned int index = hash_cstr(entry->key->data) % map->capacity;
             entry->next = map->buckets[index];
             map->buckets[index] = entry;
             map->size++;
-            
+
             entry = next;
         }
     }
-    
+
     free(old_buckets);
 }
 
@@ -142,6 +148,7 @@ void map_put(HashMap* map, const char* key, void* value) {
     }
 
     HashMapEntry* new_entry = (HashMapEntry*)malloc(sizeof(HashMapEntry));
+    if (!new_entry) return;
     new_entry->key = string_new(key);
     new_entry->value = value;
     new_entry->next = map->buckets[index];
@@ -225,8 +232,14 @@ MapKeys* map_keys(HashMap* map) {
     if (!map) return NULL;
 
     MapKeys* keys = (MapKeys*)malloc(sizeof(MapKeys));
-    keys->keys = (AetherString**)malloc(map->size * sizeof(AetherString*));
+    if (!keys) return NULL;
     keys->count = 0;
+    if (map->size == 0) {
+        keys->keys = NULL;
+        return keys;
+    }
+    keys->keys = (AetherString**)malloc(map->size * sizeof(AetherString*));
+    if (!keys->keys) { free(keys); return NULL; }
 
     for (int i = 0; i < map->capacity; i++) {
         HashMapEntry* entry = map->buckets[i];

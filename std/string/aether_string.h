@@ -3,13 +3,24 @@
 
 #include <stddef.h>
 
+// Magic number to distinguish AetherString* from raw char*
+#define AETHER_STRING_MAGIC 0xAE57C0DE
+
 // String structure - immutable, reference counted
 typedef struct AetherString {
-    char* data;
+    unsigned int magic;     // Always AETHER_STRING_MAGIC for valid AetherString
+    int ref_count;
     size_t length;
     size_t capacity;
-    int ref_count;
+    char* data;
 } AetherString;
+
+// Check if a pointer is an AetherString (vs raw char*)
+static inline int is_aether_string(const void* ptr) {
+    if (!ptr) return 0;
+    const AetherString* s = (const AetherString*)ptr;
+    return s->magic == AETHER_STRING_MAGIC;
+}
 
 // String creation
 AetherString* string_new(const char* cstr);

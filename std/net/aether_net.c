@@ -64,6 +64,7 @@ TcpSocket* tcp_connect(const char* host, int port) {
     }
 
     TcpSocket* sock = (TcpSocket*)malloc(sizeof(TcpSocket));
+    if (!sock) { close(sockfd); return NULL; }
     sock->fd = sockfd;
     sock->connected = 1;
     return sock;
@@ -77,9 +78,10 @@ int tcp_send(TcpSocket* sock, const char* data) {
 }
 
 char* tcp_receive(TcpSocket* sock, int max_bytes) {
-    if (!sock || !sock->connected) return NULL;
+    if (!sock || !sock->connected || max_bytes <= 0) return NULL;
 
     char* buffer = (char*)malloc(max_bytes + 1);
+    if (!buffer) return NULL;
     int received = recv(sock->fd, buffer, max_bytes, 0);
 
     if (received <= 0) {
@@ -137,6 +139,7 @@ TcpServer* tcp_listen(int port) {
     }
 
     TcpServer* server = (TcpServer*)malloc(sizeof(TcpServer));
+    if (!server) { close(sockfd); return NULL; }
     server->fd = sockfd;
     server->port = port;
     return server;
@@ -154,6 +157,7 @@ TcpSocket* tcp_accept(TcpServer* server) {
     }
 
     TcpSocket* sock = (TcpSocket*)malloc(sizeof(TcpSocket));
+    if (!sock) { close(newsockfd); return NULL; }
     sock->fd = newsockfd;
     sock->connected = 1;
     return sock;

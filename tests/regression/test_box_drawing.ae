@@ -88,7 +88,7 @@ main() {
     println("----\x09---\x09----")
     print_row("Alice", "30", "NYC")
     print_row("Bob", "25", "LA")
-    print_row("Teuvo", "28", "Helsinki")
+    print_row("Juan", "28", "MVD")
     println("")
 
     // Test 5: Nested boxes (box within output)

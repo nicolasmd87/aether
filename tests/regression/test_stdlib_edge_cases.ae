@@ -1,0 +1,300 @@
+// Regression test: stdlib edge cases across all modules
+// Tests for bugs found in audit: type mismatches, bounds issues, etc.
+
+import std.string
+import std.fs
+import std.file
+import std.path
+import std.json
+
+main() {
+    print("=== Stdlib Edge Case Tests ===\n\n")
+
+    // === PATH MODULE: return types should be string, not ptr ===
+    print("Test 1: path.join returns usable string\n")
+    joined = path.join("/tmp", "test.txt")
+    if joined == "/tmp/test.txt" {
+        print("  PASS: path.join returns string\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    print("\nTest 2: path.dirname returns usable string\n")
+    dir = path.dirname("/tmp/test.txt")
+    if dir == "/tmp" {
+        print("  PASS: path.dirname returns string\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    print("\nTest 3: path.basename returns usable string\n")
+    base = path.basename("/tmp/test.txt")
+    if base == "test.txt" {
+        print("  PASS: path.basename returns string\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    print("\nTest 4: path.extension returns usable string\n")
+    ext = path.extension("/tmp/test.txt")
+    if ext == ".txt" {
+        print("  PASS: path.extension returns string\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // === PATH EDGE CASES ===
+    print("\nTest 5: path.is_absolute with short strings\n")
+    r1 = path.is_absolute("")
+    if r1 == 0 {
+        print("  PASS: empty string not absolute\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    r2 = path.is_absolute("/")
+    if r2 == 1 {
+        print("  PASS: '/' is absolute\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    r3 = path.is_absolute("relative")
+    if r3 == 0 {
+        print("  PASS: 'relative' not absolute\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // === PATH with empty components ===
+    print("\nTest 6: path.dirname of bare filename\n")
+    dir2 = path.dirname("file.txt")
+    if dir2 == "." {
+        print("  PASS: dirname('file.txt') = '.'\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    print("\nTest 7: path.extension with no extension\n")
+    ext2 = path.extension("Makefile")
+    if ext2 == "" {
+        print("  PASS: extension('Makefile') = ''\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // === FILE SIZE ===
+    print("\nTest 8: file.size on non-existent file\n")
+    sz = file.size("/tmp/nonexistent_aether_test_file_xyz")
+    if sz == 0 {
+        print("  PASS: file.size returns 0 for missing file\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // === FILE EXISTS ===
+    print("\nTest 9: file.exists on non-existent file\n")
+    ex = file.exists("/tmp/nonexistent_aether_test_file_xyz")
+    if ex == 0 {
+        print("  PASS: file.exists returns 0 for missing file\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // === JSON EDGE CASES ===
+    print("\nTest 10: json.parse empty string\n")
+    empty_json = json.parse("")
+    if empty_json == 0 {
+        print("  PASS: json.parse('') returns NULL\n")
+    } else {
+        json.free(empty_json)
+        print("  FAIL: should return NULL\n")
+        exit(1)
+    }
+
+    print("\nTest 11: json.parse simple values\n")
+    jn = json.parse("42")
+    if json.type(jn) == 2 {
+        print("  PASS: json.parse('42') is number\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    json.free(jn)
+
+    print("\nTest 12: json.parse null\n")
+    jnull = json.parse("null")
+    if json.is_null(jnull) == 1 {
+        print("  PASS: json.parse('null') is null\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    json.free(jnull)
+
+    print("\nTest 13: json.parse nested object\n")
+    nested = json.parse("{\"a\":{\"b\":{\"c\":1}}}")
+    if json.type(nested) == 5 {
+        a = json.object_get(nested, "a")
+        b = json.object_get(a, "b")
+        c = json.object_get(b, "c")
+        val = json.get_int(c)
+        if val == 1 {
+            print("  PASS: nested object access works\n")
+        } else {
+            print("  FAIL: wrong value\n")
+            exit(1)
+        }
+    } else {
+        print("  FAIL: not an object\n")
+        exit(1)
+    }
+    json.free(nested)
+
+    print("\nTest 14: json.object_get missing key\n")
+    obj = json.parse("{\"x\":1}")
+    missing = json.object_get(obj, "y")
+    if missing == 0 {
+        print("  PASS: missing key returns NULL\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    json.free(obj)
+
+    print("\nTest 15: json.get_string on non-string\n")
+    num = json.parse("99")
+    s = json.get_string(num)
+    if s == 0 {
+        print("  PASS: get_string on number returns NULL\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    json.free(num)
+
+    // === STRING OPERATIONS ON PLAIN STRINGS (from earlier fix) ===
+    print("\nTest 16: string.split on plain string\n")
+    parts = string.split("hello world", " ")
+    if string.array_size(parts) == 2 {
+        print("  PASS: split plain string works\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    string.array_free(parts)
+
+    // === STRING EDGE CASES ===
+    print("\nTest 17: string.length on single char\n")
+    l = string.length("x")
+    if l == 1 {
+        print("  PASS: length('x') = 1\n")
+    } else {
+        print("  FAIL: got ")
+        print(l)
+        print("\n")
+        exit(1)
+    }
+
+    print("\nTest 18: string.contains empty substring\n")
+    has = string.contains("hello", "")
+    if has == 1 {
+        print("  PASS: contains empty substring\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    print("\nTest 19: string.index_of not found\n")
+    idx = string.index_of("hello", "xyz")
+    if idx == 0 - 1 {
+        print("  PASS: index_of returns -1 for not found\n")
+    } else {
+        print("  FAIL: got ")
+        print(idx)
+        print("\n")
+        exit(1)
+    }
+
+    print("\nTest 20: string.char_at out of bounds\n")
+    ch = string.char_at("hi", 99)
+    if ch == 0 {
+        print("  PASS: char_at out of bounds returns 0\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // === FILE WRITE / READ ROUND-TRIP ===
+    print("\nTest 21: file write + read round-trip\n")
+    test_path = "/tmp/aether_edge_test.txt"
+    f = file.open(test_path, "w")
+    file.write(f, "edge case test", 14)
+    file.close(f)
+
+    f2 = file.open(test_path, "r")
+    content = file.read_all(f2)
+    file.close(f2)
+    if content == "edge case test" {
+        print("  PASS: write + read round-trip\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    file.delete(test_path)
+
+    // === JSON ARRAY ===
+    print("\nTest 22: json empty array\n")
+    earr = json.parse("[]")
+    if json.array_size(earr) == 0 {
+        print("  PASS: empty array size = 0\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    json.free(earr)
+
+    print("\nTest 23: json empty object\n")
+    eobj = json.parse("{}")
+    if json.type(eobj) == 5 {
+        print("  PASS: empty object is type 5\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    json.free(eobj)
+
+    // === MIXED STRING OPS ===
+    print("\nTest 24: string.equals managed vs plain\n")
+    managed = string.new("hello")
+    eq = string.equals(managed, "hello")
+    if eq == 1 {
+        print("  PASS: managed equals plain\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    string.release(managed)
+
+    print("\nTest 25: string.compare plain strings\n")
+    cmp = string.compare("abc", "def")
+    if cmp < 0 {
+        print("  PASS: compare('abc','def') < 0\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    print("\n=== All Edge Case Tests Passed ===\n")
+}

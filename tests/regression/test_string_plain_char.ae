@@ -1,0 +1,231 @@
+// Regression test: std.string functions must work with plain char* strings
+// (not just managed AetherString*)
+// Bug: string.length("hello") returned garbage (168427553) because
+// the C function interpreted raw char* bytes as AetherString struct fields.
+// Fixed by adding magic number detection to all std.string functions.
+
+import std.string
+
+main() {
+    print("=== Plain char* with std.string Tests ===\n\n")
+
+    // Test 1: length on plain string literal
+    print("Test 1: length on string literal\n")
+    len = string.length(" brother!")
+    if len == 9 {
+        print("  PASS: length(' brother!') = 9\n")
+    } else {
+        print("  FAIL: got ")
+        print(len)
+        print("\n")
+        exit(1)
+    }
+
+    // Test 2: length on plain string variable
+    print("\nTest 2: length on string variable\n")
+    msg = "Hi there"
+    len2 = string.length(msg)
+    if len2 == 8 {
+        print("  PASS: length('Hi there') = 8\n")
+    } else {
+        print("  FAIL: got ")
+        print(len2)
+        print("\n")
+        exit(1)
+    }
+
+    // Test 3: length on const string
+    print("\nTest 3: length on const string\n")
+    const GREETING = "Hello World"
+    len3 = string.length(GREETING)
+    if len3 == 11 {
+        print("  PASS: length('Hello World') = 11\n")
+    } else {
+        print("  FAIL: got ")
+        print(len3)
+        print("\n")
+        exit(1)
+    }
+
+    // Test 4: to_upper on plain string
+    print("\nTest 4: to_upper on plain string\n")
+    upper = string.to_upper("hello")
+    defer string.release(upper)
+    result = string.to_cstr(upper)
+    if result == "HELLO" {
+        print("  PASS: to_upper('hello') = 'HELLO'\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // Test 5: to_lower on plain string
+    print("\nTest 5: to_lower on plain string\n")
+    lower = string.to_lower("WORLD")
+    defer string.release(lower)
+    result2 = string.to_cstr(lower)
+    if result2 == "world" {
+        print("  PASS: to_lower('WORLD') = 'world'\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // Test 6: contains on plain string
+    print("\nTest 6: contains on plain string\n")
+    has = string.contains("hello world", "world")
+    if has == 1 {
+        print("  PASS: contains('hello world', 'world')\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // Test 7: starts_with / ends_with on plain string
+    print("\nTest 7: starts_with / ends_with on plain string\n")
+    plain = "Hello World"
+    if string.starts_with(plain, "Hello") == 1 {
+        print("  PASS: starts_with('Hello')\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    if string.ends_with(plain, "World") == 1 {
+        print("  PASS: ends_with('World')\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // Test 8: index_of on plain string
+    print("\nTest 8: index_of on plain string\n")
+    idx = string.index_of("abcdef", "cd")
+    if idx == 2 {
+        print("  PASS: index_of('abcdef', 'cd') = 2\n")
+    } else {
+        print("  FAIL: got ")
+        print(idx)
+        print("\n")
+        exit(1)
+    }
+
+    // Test 9: substring on plain string
+    print("\nTest 9: substring on plain string\n")
+    sub = string.substring("Hello World", 6, 11)
+    defer string.release(sub)
+    sub_cstr = string.to_cstr(sub)
+    if sub_cstr == "World" {
+        print("  PASS: substring('Hello World', 6, 11) = 'World'\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // Test 10: concat two plain strings
+    print("\nTest 10: concat two plain strings\n")
+    joined = string.concat("Hello ", "World")
+    defer string.release(joined)
+    joined_cstr = string.to_cstr(joined)
+    if joined_cstr == "Hello World" {
+        print("  PASS: concat('Hello ', 'World') = 'Hello World'\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // Test 11: equals on plain strings
+    print("\nTest 11: equals on plain strings\n")
+    if string.equals("abc", "abc") == 1 {
+        print("  PASS: equals('abc', 'abc')\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    if string.equals("abc", "xyz") == 0 {
+        print("  PASS: !equals('abc', 'xyz')\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // Test 12: char_at on plain string
+    print("\nTest 12: char_at on plain string\n")
+    ch = string.char_at("hello", 1)
+    if ch == 101 {
+        print("  PASS: char_at('hello', 1) = 101 ('e')\n")
+    } else {
+        print("  FAIL: got ")
+        print(ch)
+        print("\n")
+        exit(1)
+    }
+
+    // Test 13: trim on plain string
+    print("\nTest 13: trim on plain string\n")
+    trimmed = string.trim("  spaced  ")
+    defer string.release(trimmed)
+    if string.length(trimmed) == 6 {
+        print("  PASS: trim('  spaced  ') length = 6\n")
+    } else {
+        print("  FAIL: got ")
+        print(string.length(trimmed))
+        print("\n")
+        exit(1)
+    }
+
+    // Test 14: split on plain string
+    print("\nTest 14: split on plain string\n")
+    parts = string.split("a,b,c", ",")
+    defer string.array_free(parts)
+    if string.array_size(parts) == 3 {
+        print("  PASS: split('a,b,c', ',') = 3 parts\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // Test 15: to_cstr on plain string (should return same pointer)
+    print("\nTest 15: to_cstr on plain string\n")
+    plain2 = "already a cstr"
+    back = string.to_cstr(plain2)
+    if back == "already a cstr" {
+        print("  PASS: to_cstr(plain) round-trips\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // Test 16: release on plain string (should be no-op, not crash)
+    print("\nTest 16: release on plain string (no-op)\n")
+    string.release("should not crash")
+    string.free("also should not crash")
+    print("  PASS: release/free on plain string is no-op\n")
+
+    // Test 17: mixed managed + plain in same operation
+    print("\nTest 17: mixed managed + plain\n")
+    managed = string.new("Hello")
+    defer string.release(managed)
+    mixed = string.concat(managed, " World")
+    defer string.release(mixed)
+    mixed_cstr = string.to_cstr(mixed)
+    if mixed_cstr == "Hello World" {
+        print("  PASS: concat(managed, plain) = 'Hello World'\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // Test 18: length on empty plain string
+    print("\nTest 18: length on empty string\n")
+    empty_len = string.length("")
+    if empty_len == 0 {
+        print("  PASS: length('') = 0\n")
+    } else {
+        print("  FAIL: got ")
+        print(empty_len)
+        print("\n")
+        exit(1)
+    }
+
+    print("\n=== All Plain char* Tests Passed ===\n")
+}

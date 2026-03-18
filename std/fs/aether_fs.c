@@ -25,6 +25,7 @@ File* file_open(const char* path, const char* mode) {
     if (!fp) return NULL;
 
     File* file = (File*)malloc(sizeof(File));
+    if (!file) { fclose(fp); return NULL; }
     file->handle = fp;
     file->is_open = 1;
     file->path = strdup(path);
@@ -37,9 +38,11 @@ char* file_read_all(File* file) {
     FILE* fp = (FILE*)file->handle;
     fseek(fp, 0, SEEK_END);
     long size = ftell(fp);
+    if (size < 0) return NULL;
     fseek(fp, 0, SEEK_SET);
 
     char* buffer = (char*)malloc(size + 1);
+    if (!buffer) return NULL;
     size_t read = fread(buffer, 1, size, fp);
     buffer[read] = '\0';
 
@@ -191,20 +194,20 @@ char* path_extension(const char* path) {
 
 int path_is_absolute(const char* path) {
     if (!path || path[0] == '\0') return 0;
-    
+
     #ifdef _WIN32
     // Windows: C:\ or \\server\share
     if ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) {
-        if (path[1] == ':' && (path[2] == '\\' || path[2] == '/')) {
+        if (path[1] && path[1] == ':' && path[2] && (path[2] == '\\' || path[2] == '/')) {
             return 1;
         }
     }
-    if (path[0] == '\\' && path[1] == '\\') return 1;
+    if (path[0] == '\\' && path[1] && path[1] == '\\') return 1;
     #else
     // Unix: /path
     if (path[0] == '/') return 1;
     #endif
-    
+
     return 0;
 }
 
@@ -229,7 +232,9 @@ DirList* dir_list(const char* path) {
     do {
         if (strcmp(find_data.cFileName, ".") != 0 &&
             strcmp(find_data.cFileName, "..") != 0) {
-            list->entries = (char**)realloc(list->entries, (list->count + 1) * sizeof(char*));
+            char** new_entries = (char**)realloc(list->entries, (list->count + 1) * sizeof(char*));
+            if (!new_entries) break;
+            list->entries = new_entries;
             list->entries[list->count] = strdup(find_data.cFileName);
             list->count++;
         }
@@ -243,7 +248,9 @@ DirList* dir_list(const char* path) {
     struct dirent* entry;
     while ((entry = readdir(dir)) != NULL) {
         if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
-            list->entries = (char**)realloc(list->entries, (list->count + 1) * sizeof(char*));
+            char** new_entries = (char**)realloc(list->entries, (list->count + 1) * sizeof(char*));
+            if (!new_entries) break;
+            list->entries = new_entries;
             list->entries[list->count] = strdup(entry->d_name);
             list->count++;
         }

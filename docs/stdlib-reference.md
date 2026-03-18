@@ -37,17 +37,17 @@ Dynamic array (ArrayList) implementation.
 import std.list
 
 main() {
-    mylist = list.new();
-    defer list.free(mylist);
+    mylist = list.new()
+    defer list.free(mylist)
 
-    list.add(mylist, item1);
-    list.add(mylist, item2);
+    list.add(mylist, 10)
+    list.add(mylist, 20)
 
-    item = list.get(mylist, 0);
-    size = list.size(mylist);
+    item = list.get(mylist, 0)
+    size = list.size(mylist)
 
-    list.remove(mylist, 0);
-    list.clear(mylist);
+    list.remove(mylist, 0)
+    list.clear(mylist)
 }
 ```
 
@@ -106,6 +106,10 @@ main() {
 Reference-counted strings with comprehensive operations.
 
 ### String Types: `string` vs Managed Strings
+
+> **Most users don't need this.** Aether's native `string` type (plain C strings) works for printing,
+> interpolation, message fields, file I/O, and JSON. Only use `std.string` when you need operations
+> like `trim`, `split`, `to_upper`, etc. — those return managed strings that require `string.release()`.
 
 Aether has two string representations:
 
@@ -261,6 +265,8 @@ main() {
     if (f != 0) {
         content = file.read_all(f);
         file.close(f);
+        println(content)              // prints file contents directly
+        println("Read: ${content}")   // works in interpolation too
     }
 
     // Write
@@ -282,7 +288,7 @@ main() {
 - `file.size(path)` - Get file size in bytes
 - `file.delete(path)` - Delete file
 
-> **Note:** `file.read_all()` returns a managed string — use `defer string.release(content)` to free it.
+> **Note:** `file.read_all()` returns a plain string (`char*`). You can print it directly with `print(content)` or use it in interpolation: `println("Got: ${content}")`. The memory is heap-allocated — use `defer free(content)` if you want explicit cleanup, but for short-lived programs it's fine to skip.
 
 ### Directories (`std.dir`)
 
@@ -314,30 +320,29 @@ main() {
 
 ### Paths (`std.path`)
 
-Path functions return managed strings — use `defer string.release()` or `defer string.free()` to free them.
+Path functions return heap-allocated plain strings (`char*`). Use `defer free(result)` if you want explicit cleanup.
 
 ```aether
 import std.path
-import std.string
 
 main() {
     joined = path.join("dir", "file.txt")
-    defer string.release(joined)
-    dirname = path.dirname("/a/b/file.txt")   // "/a/b"
-    defer string.release(dirname)
+    println(joined)                            // "dir/file.txt"
+
+    dirname = path.dirname("/a/b/file.txt")    // "/a/b"
     basename = path.basename("/a/b/file.txt")  // "file.txt"
-    defer string.release(basename)
     ext = path.extension("file.txt")           // ".txt" (includes dot)
-    defer string.release(ext)
     is_abs = path.is_absolute("/usr/bin")      // 1
+
+    println("${dirname}/${basename}")
 }
 ```
 
 **Functions:**
-- `path.join(a, b)` - Join path components (returns managed string)
-- `path.dirname(path)` - Get directory name (returns managed string)
-- `path.basename(path)` - Get file name (returns managed string)
-- `path.extension(path)` - Get file extension including dot (returns managed string)
+- `path.join(a, b)` - Join path components
+- `path.dirname(path)` - Get directory name
+- `path.basename(path)` - Get file name
+- `path.extension(path)` - Get file extension including dot
 - `path.is_absolute(path)` - Check if absolute path (returns 1/0)
 
 ---
@@ -348,13 +353,12 @@ JSON parsing, creation, and serialization.
 
 ```aether
 import std.json
-import std.string
 
 main() {
     // Parse JSON string
     data = json.parse("{\"name\": \"Aether\", \"version\": 1}")
     name = json.object_get(data, "name")
-    println(string.to_cstr(json.get_string(name)))  // "Aether"
+    println(json.get_string(name))  // "Aether"
 
     // Create values
     obj = json.create_object()
@@ -367,10 +371,10 @@ main() {
     json.array_add(arr, json.create_number(2.0))
     size = json.array_size(arr)
 
-    // Serialize to string
+    // Serialize to string — returns plain char*, print directly
     output = json.stringify(obj)
-    println(string.to_cstr(output))
-    string.release(output)
+    println(output)
+    println("JSON: ${output}")
 
     // Type checking
     type = json.type(json.create_number(3.0))  // 2 = JSON_NUMBER
@@ -387,7 +391,7 @@ main() {
 
 **Parsing / Serialization:**
 - `json.parse(json_str)` - Parse JSON string into value tree
-- `json.stringify(value)` - Serialize to JSON string (returns managed string, call `string.release()`)
+- `json.stringify(value)` - Serialize to JSON string (returns plain `char*`)
 - `json.free(value)` - Free a JSON value tree
 
 **Type Checking:**
@@ -398,7 +402,7 @@ main() {
 - `json.get_number(value)` - Get float value
 - `json.get_int(value)` - Get integer value
 - `json.get_bool(value)` - Get boolean (1/0)
-- `json.get_string(value)` - Get string (returns managed string)
+- `json.get_string(value)` - Get string value (returns plain `char*`)
 
 **Object Operations:**
 - `json.object_get(obj, key)` - Get value by key (key is a raw string)
@@ -418,12 +422,12 @@ main() {
 
 ## Networking
 
-### HTTP (`std.net`)
+### HTTP (`std.http`)
 
-> **Note:** HTTP and TCP are both in `std.net`. Use `import std.net` and call with `http.*` or `tcp.*` prefix.
+> **Note:** Use `import std.http` for the `http.*` prefix shown below. You can also `import std.net` which includes both HTTP and TCP functions, but the namespace prefix becomes `net` (e.g., `net.http_get(url)`).
 
 ```aether
-import std.net
+import std.http
 
 main() {
     // HTTP Client

@@ -16,11 +16,13 @@ struct JsonValue {
     } data;
 };
 
+#define JSON_MAX_DEPTH 256
+
 static void skip_whitespace(const char** json) {
     while (**json && isspace(**json)) (*json)++;
 }
 
-static JsonValue* parse_value(const char** json);
+static JsonValue* parse_value_depth(const char** json, int depth);
 
 static JsonValue* parse_null(const char** json) {
     if (strncmp(*json, "null", 4) == 0) {
@@ -69,12 +71,14 @@ static JsonValue* parse_string(const char** json) {
         }
         if (**json == '\\') {
             (*json)++;
+            if (!**json) break;  // Truncated escape at end of input
             switch (**json) {
                 case 'n': buffer[i++] = '\n'; break;
                 case 't': buffer[i++] = '\t'; break;
                 case 'r': buffer[i++] = '\r'; break;
                 case '\\': buffer[i++] = '\\'; break;
                 case '"': buffer[i++] = '"'; break;
+                case '/': buffer[i++] = '/'; break;
                 default: buffer[i++] = **json; break;
             }
             (*json)++;
@@ -88,13 +92,14 @@ static JsonValue* parse_string(const char** json) {
     buffer[i] = '\0';
 
     JsonValue* value = (JsonValue*)malloc(sizeof(JsonValue));
+    if (!value) { free(buffer); return NULL; }
     value->type = JSON_STRING;
     value->data.string_value = string_new(buffer);
     free(buffer);
     return value;
 }
 
-static JsonValue* parse_array(const char** json) {
+static JsonValue* parse_array(const char** json, int depth) {
     if (**json != '[') return NULL;
     (*json)++;
 
@@ -108,7 +113,7 @@ static JsonValue* parse_array(const char** json) {
 
     while (1) {
         skip_whitespace(json);
-        JsonValue* value = parse_value(json);
+        JsonValue* value = parse_value_depth(json, depth + 1);
         if (value) {
             json_array_add(arr, value);
         }
@@ -127,7 +132,7 @@ static JsonValue* parse_array(const char** json) {
     return arr;
 }
 
-static JsonValue* parse_object(const char** json) {
+static JsonValue* parse_object(const char** json, int depth) {
     if (**json != '{') return NULL;
     (*json)++;
 
@@ -153,7 +158,7 @@ static JsonValue* parse_object(const char** json) {
         if (**json == ':') (*json)++;
 
         skip_whitespace(json);
-        JsonValue* value = parse_value(json);
+        JsonValue* value = parse_value_depth(json, depth + 1);
         if (value) {
             json_object_set(obj, key->data, value);
         }
@@ -173,26 +178,27 @@ static JsonValue* parse_object(const char** json) {
     return obj;
 }
 
-static JsonValue* parse_value(const char** json) {
+static JsonValue* parse_value_depth(const char** json, int depth) {
+    if (depth > JSON_MAX_DEPTH) return NULL;
     skip_whitespace(json);
-    
+
     if (**json == 'n') return parse_null(json);
     if (**json == 't' || **json == 'f') return parse_bool(json);
     if (**json == '"') return parse_string(json);
-    if (**json == '[') return parse_array(json);
-    if (**json == '{') return parse_object(json);
+    if (**json == '[') return parse_array(json, depth);
+    if (**json == '{') return parse_object(json, depth);
     if (**json == '-' || isdigit(**json)) return parse_number(json);
-    
+
     return NULL;
 }
 
 JsonValue* json_parse(const char* json_str) {
     if (!json_str) return NULL;
     const char* json = json_str;
-    return parse_value(&json);
+    return parse_value_depth(&json, 0);
 }
 
-static void stringify_value(JsonValue* value, AetherString** result);
+static void stringify_value(JsonValue* value, AetherString** result, int depth);
 
 static void append_string(AetherString** result, const char* str) {
     AetherString* temp = string_new(str);
@@ -204,47 +210,49 @@ static void append_string(AetherString** result, const char* str) {
 
 char* json_stringify(JsonValue* value) {
     AetherString* result = string_empty();
-    stringify_value(value, &result);
+    stringify_value(value, &result, 0);
     char* cstr = strdup(result->data);
     string_release(result);
     return cstr;
 }
 
-static void stringify_value(JsonValue* value, AetherString** result) {
-    if (!value) {
+static void stringify_value(JsonValue* value, AetherString** result, int depth) {
+    if (!value || depth > JSON_MAX_DEPTH) {
         append_string(result, "null");
         return;
     }
-    
+
     switch (value->type) {
         case JSON_NULL:
             append_string(result, "null");
             break;
-            
+
         case JSON_BOOL:
             append_string(result, value->data.bool_value ? "true" : "false");
             break;
-            
+
         case JSON_NUMBER: {
             char buf[64];
             snprintf(buf, sizeof(buf), "%g", value->data.number_value);
             append_string(result, buf);
             break;
         }
-            
+
         case JSON_STRING:
             append_string(result, "\"");
-            append_string(result, value->data.string_value->data);
+            if (value->data.string_value) {
+                append_string(result, value->data.string_value->data);
+            }
             append_string(result, "\"");
             break;
-            
+
         case JSON_ARRAY: {
             append_string(result, "[");
             int size = list_size(value->data.array_value);
             for (int i = 0; i < size; i++) {
                 if (i > 0) append_string(result, ",");
                 JsonValue* item = (JsonValue*)list_get(value->data.array_value, i);
-                stringify_value(item, result);
+                stringify_value(item, result, depth + 1);
             }
             append_string(result, "]");
             break;
@@ -253,23 +261,26 @@ static void stringify_value(JsonValue* value, AetherString** result) {
         case JSON_OBJECT: {
             append_string(result, "{");
             MapKeys* keys = map_keys(value->data.object_value);
-            for (int i = 0; i < keys->count; i++) {
-                if (i > 0) append_string(result, ",");
-                append_string(result, "\"");
-                append_string(result, keys->keys[i]->data);
-                append_string(result, "\":");
-                JsonValue* val = (JsonValue*)map_get(value->data.object_value, keys->keys[i]->data);
-                stringify_value(val, result);
+            if (keys) {
+                for (int i = 0; i < keys->count; i++) {
+                    if (i > 0) append_string(result, ",");
+                    append_string(result, "\"");
+                    append_string(result, keys->keys[i]->data);
+                    append_string(result, "\":");
+                    JsonValue* val = (JsonValue*)map_get(value->data.object_value, keys->keys[i]->data);
+                    stringify_value(val, result, depth + 1);
+                }
+                map_keys_free(keys);
             }
-            map_keys_free(keys);
             append_string(result, "}");
             break;
         }
     }
 }
 
-void json_free(JsonValue* value) {
+static void json_free_depth(JsonValue* value, int depth) {
     if (!value) return;
+    if (depth > JSON_MAX_DEPTH) { free(value); return; }
 
     switch (value->type) {
         case JSON_STRING:
@@ -278,17 +289,19 @@ void json_free(JsonValue* value) {
         case JSON_ARRAY: {
             int size = list_size(value->data.array_value);
             for (int i = 0; i < size; i++) {
-                json_free((JsonValue*)list_get(value->data.array_value, i));
+                json_free_depth((JsonValue*)list_get(value->data.array_value, i), depth + 1);
             }
             list_free(value->data.array_value);
             break;
         }
         case JSON_OBJECT: {
             MapKeys* keys = map_keys(value->data.object_value);
-            for (int i = 0; i < keys->count; i++) {
-                json_free((JsonValue*)map_get(value->data.object_value, keys->keys[i]->data));
+            if (keys) {
+                for (int i = 0; i < keys->count; i++) {
+                    json_free_depth((JsonValue*)map_get(value->data.object_value, keys->keys[i]->data), depth + 1);
+                }
+                map_keys_free(keys);
             }
-            map_keys_free(keys);
             map_free(value->data.object_value);
             break;
         }
@@ -297,6 +310,10 @@ void json_free(JsonValue* value) {
     }
 
     free(value);
+}
+
+void json_free(JsonValue* value) {
+    json_free_depth(value, 0);
 }
 
 JsonType json_type(JsonValue* value) {

@@ -1,0 +1,235 @@
+// Regression test: collections edge cases
+// Covers: empty list/map ops, out-of-bounds, overwrite, removal patterns
+
+import std.list
+import std.map
+import std.string
+
+main() {
+    print("=== Collections Edge Case Tests ===\n\n")
+
+    // === LIST EDGE CASES ===
+
+    // Test 1: empty list size
+    print("Test 1: empty list size\n")
+    l = list.new()
+    if list.size(l) == 0 {
+        print("  PASS: empty list size = 0\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // Test 2: get from empty list
+    print("\nTest 2: get from empty list\n")
+    v = list.get(l, 0)
+    if v == 0 {
+        print("  PASS: get(0) on empty list = NULL\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // Test 3: get negative index
+    print("\nTest 3: get negative index\n")
+    list.add(l, 42)
+    v2 = list.get(l, 0 - 1)
+    if v2 == 0 {
+        print("  PASS: get(-1) = NULL\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // Test 4: get past end
+    print("\nTest 4: get past end\n")
+    v3 = list.get(l, 100)
+    if v3 == 0 {
+        print("  PASS: get(100) on size-1 list = NULL\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // Test 5: remove then re-add
+    print("\nTest 5: remove then re-add\n")
+    list.remove(l, 0)
+    if list.size(l) == 0 {
+        list.add(l, 99)
+        if list.size(l) == 1 {
+            print("  PASS: remove + re-add works\n")
+        } else {
+            print("  FAIL: size after re-add\n")
+            exit(1)
+        }
+    } else {
+        print("  FAIL: remove\n")
+        exit(1)
+    }
+
+    // Test 6: list set
+    print("\nTest 6: list set\n")
+    list.set(l, 0, 77)
+    v6 = list.get(l, 0)
+    if v6 == 77 {
+        print("  PASS: set(0, 77) then get(0) = 77\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // Test 7: clear and re-use
+    print("\nTest 7: clear and re-use\n")
+    list.clear(l)
+    if list.size(l) == 0 {
+        list.add(l, 1)
+        list.add(l, 2)
+        if list.size(l) == 2 {
+            print("  PASS: clear + re-use works\n")
+        } else {
+            print("  FAIL\n")
+            exit(1)
+        }
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    list.free(l)
+
+    // === MAP EDGE CASES ===
+
+    // Test 8: empty map
+    print("\nTest 8: empty map\n")
+    m = map.new()
+    if map.size(m) == 0 {
+        print("  PASS: empty map size = 0\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // Test 9: get from empty map
+    print("\nTest 9: get from empty map\n")
+    v9 = map.get(m, "missing")
+    if v9 == 0 {
+        print("  PASS: get from empty map = NULL\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // Test 10: has on empty map
+    print("\nTest 10: has on empty map\n")
+    h10 = map.has(m, "missing")
+    if h10 == 0 {
+        print("  PASS: has on empty map = 0\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // Test 11: put + overwrite
+    print("\nTest 11: put + overwrite\n")
+    map.put(m, "key", 10)
+    map.put(m, "key", 20)
+    if map.size(m) == 1 {
+        v11 = map.get(m, "key")
+        if v11 == 20 {
+            print("  PASS: overwrite keeps size=1, value=20\n")
+        } else {
+            print("  FAIL: value wrong\n")
+            exit(1)
+        }
+    } else {
+        print("  FAIL: size != 1\n")
+        exit(1)
+    }
+
+    // Test 12: remove non-existent key
+    print("\nTest 12: remove non-existent key\n")
+    map.remove(m, "nonexistent")
+    if map.size(m) == 1 {
+        print("  PASS: remove non-existent doesn't change size\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // Test 13: many keys (trigger resize)
+    print("\nTest 13: many keys (trigger resize)\n")
+    m2 = map.new()
+    map.put(m2, "k1", 1)
+    map.put(m2, "k2", 2)
+    map.put(m2, "k3", 3)
+    map.put(m2, "k4", 4)
+    map.put(m2, "k5", 5)
+    map.put(m2, "k6", 6)
+    map.put(m2, "k7", 7)
+    map.put(m2, "k8", 8)
+    map.put(m2, "k9", 9)
+    map.put(m2, "k10", 10)
+    map.put(m2, "k11", 11)
+    map.put(m2, "k12", 12)
+    map.put(m2, "k13", 13)
+    if map.size(m2) == 13 {
+        v13 = map.get(m2, "k13")
+        if v13 == 13 {
+            print("  PASS: 13 keys after resize, k13=13\n")
+        } else {
+            print("  FAIL: k13 wrong value\n")
+            exit(1)
+        }
+    } else {
+        print("  FAIL: size != 13\n")
+        exit(1)
+    }
+
+    // Test 14: all keys still accessible after resize
+    print("\nTest 14: all keys accessible after resize\n")
+    all_good = 1
+    if map.get(m2, "k1") != 1 { all_good = 0 }
+    if map.get(m2, "k7") != 7 { all_good = 0 }
+    if map.get(m2, "k12") != 12 { all_good = 0 }
+    if all_good == 1 {
+        print("  PASS: k1=1, k7=7, k12=12 after resize\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    map.free(m2)
+
+    // Test 15: map clear + re-use
+    print("\nTest 15: map clear + re-use\n")
+    map.clear(m)
+    if map.size(m) == 0 {
+        map.put(m, "new", 42)
+        if map.get(m, "new") == 42 {
+            print("  PASS: clear + re-use works\n")
+        } else {
+            print("  FAIL\n")
+            exit(1)
+        }
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    map.free(m)
+
+    // Test 16: string values in map via managed string
+    print("\nTest 16: managed string value in map\n")
+    m3 = map.new()
+    sv = string.new("hello")
+    map.put(m3, "greeting", sv)
+    got = map.get(m3, "greeting")
+    cstr = string.to_cstr(got)
+    if cstr == "hello" {
+        print("  PASS: managed string stored and retrieved\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    string.release(sv)
+    map.free(m3)
+
+    print("\n=== All Collections Edge Case Tests Passed ===\n")
+}

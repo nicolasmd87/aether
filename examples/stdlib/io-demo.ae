@@ -1,11 +1,9 @@
 // I/O Module Demo - console output, environment variables, file operations
 // Run with: ae run examples/stdlib/io-demo.ae
 //
-// io.getenv() and io.read_file() return AetherString pointers.
-// Use string.to_cstr() to convert them to plain strings for printing.
+// io.getenv() and io.read_file() return plain strings — print them directly.
 
 import std.io
-import std.string
 
 main() {
     print("=== std.io Demo ===\n\n")
@@ -21,15 +19,11 @@ main() {
     io.print_float(3.14)
     io.print_line("")
 
-    // Environment variables
-    // io.getenv() returns an AetherString pointer — convert with string.to_cstr()
+    // Environment variables — io.getenv() returns a plain string
     print("\n2. Environment variables:\n")
-    // PATH exists on all platforms (Unix, macOS, Windows)
     path_str = io.getenv("PATH")
     if path_str != 0 {
-        io.print("   PATH is set, length: ")
-        io.print_int(string.length(path_str))
-        io.print_line("")
+        io.print_line("   PATH is set")
     } else {
         io.print_line("   PATH not set")
     }
@@ -37,22 +31,25 @@ main() {
     // Try HOME (Unix/macOS) then USERPROFILE (Windows)
     home = io.getenv("HOME")
     if home != 0 {
-        cstr = string.to_cstr(home)
-        io.print("   HOME = ")
-        io.print_line(cstr)
+        print("   HOME = ")
+        println(home)
     } else {
         home = io.getenv("USERPROFILE")
         if home != 0 {
-            cstr = string.to_cstr(home)
-            io.print("   USERPROFILE = ")
-            io.print_line(cstr)
+            print("   USERPROFILE = ")
+            println(home)
         } else {
             io.print_line("   No home directory variable found")
         }
     }
 
-    // File operations using a cross-platform temp path
-    // Use the current directory for the temp file (works everywhere)
+    // String interpolation works directly with getenv results
+    user = io.getenv("USER")
+    if user != 0 {
+        println("   Hello, ${user}!")
+    }
+
+    // File operations
     print("\n3. File operations:\n")
     tmpfile = "aether_io_test_tmp.txt"
 
@@ -60,25 +57,23 @@ main() {
     io.write_file(tmpfile, "Hello from Aether!")
     io.print_line("   Wrote temp file")
 
-    // Read back — returns AetherString pointer
+    // Read back — returns a plain string, print directly
     content = io.read_file(tmpfile)
     if content != 0 {
-        io.print("   Read back: ")
-        io.print_line(string.to_cstr(content))
-        string.release(content)
+        print("   Read back: ")
+        println(content)
+        println("   Interpolated: ${content}")
     }
 
     // Append
     io.append_file(tmpfile, "\nSecond line")
     io.print_line("   Appended to file")
 
-    // Read again to see both lines
+    // Read again
     content2 = io.read_file(tmpfile)
     if content2 != 0 {
-        io.print("   Full content length: ")
-        io.print_int(string.length(content2))
-        io.print_line("")
-        string.release(content2)
+        print("   Full content:\n")
+        println(content2)
     }
 
     // Check existence

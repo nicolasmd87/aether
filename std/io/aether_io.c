@@ -50,10 +50,12 @@ char* io_read_file(const char* path) {
     // Get file size
     fseek(file, 0, SEEK_END);
     long size = ftell(file);
+    if (size < 0) { fclose(file); return NULL; }
     fseek(file, 0, SEEK_SET);
 
     // Read file
     char* buffer = (char*)malloc(size + 1);
+    if (!buffer) { fclose(file); return NULL; }
     size_t read = fread(buffer, 1, size, file);
     buffer[read] = '\0';
     fclose(file);

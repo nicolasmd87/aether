@@ -204,14 +204,14 @@ HttpRequest* http_parse_request(const char* raw_request) {
         header_line[line_len] = '\0';
         
         char* colon = strchr(header_line, ':');
-        if (colon) {
+        if (colon && req->header_count < 50) {
             *colon = '\0';
             char* key = header_line;
             char* value = colon + 1;
-            
+
             // Trim whitespace from value
             while (*value == ' ') value++;
-            
+
             req->header_keys[req->header_count] = strdup(key);
             req->header_values[req->header_count] = strdup(value);
             req->header_count++;
@@ -340,7 +340,8 @@ void http_response_set_header(HttpServerResponse* res, const char* key, const ch
         }
     }
     
-    // Add new header
+    // Add new header (max 50)
+    if (res->header_count >= 50) return;
     res->header_keys[res->header_count] = strdup(key);
     res->header_values[res->header_count] = strdup(value);
     res->header_count++;

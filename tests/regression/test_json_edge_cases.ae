@@ -1,0 +1,265 @@
+// Regression test: JSON parser edge cases
+// Covers: escape handling, empty inputs, type checking, nested structures
+
+import std.json
+import std.string
+
+main() {
+    print("=== JSON Edge Case Tests ===\n\n")
+
+    // Test 1: escaped characters in strings
+    print("Test 1: JSON escaped characters\n")
+    j1 = json.parse("{\"msg\":\"hello\\nworld\"}")
+    s1 = json.get_string(json.object_get(j1, "msg"))
+    if string.length(s1) == 11 {
+        print("  PASS: escaped newline parsed (length 11)\n")
+    } else {
+        print("  FAIL: length = ")
+        print(string.length(s1))
+        print("\n")
+        exit(1)
+    }
+    json.free(j1)
+
+    // Test 2: escaped tab
+    print("\nTest 2: JSON escaped tab\n")
+    j2 = json.parse("{\"t\":\"a\\tb\"}")
+    s2 = json.get_string(json.object_get(j2, "t"))
+    if string.length(s2) == 3 {
+        print("  PASS: escaped tab parsed (length 3)\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    json.free(j2)
+
+    // Test 3: escaped quote in string
+    print("\nTest 3: JSON escaped quote\n")
+    j3 = json.parse("{\"q\":\"he said \\\"hi\\\"\"}")
+    s3 = json.get_string(json.object_get(j3, "q"))
+    if string.length(s3) == 12 {
+        print("  PASS: escaped quotes parsed\n")
+    } else {
+        print("  FAIL: length = ")
+        print(string.length(s3))
+        print("\n")
+        exit(1)
+    }
+    json.free(j3)
+
+    // Test 4: escaped backslash
+    print("\nTest 4: JSON escaped backslash\n")
+    j4 = json.parse("{\"p\":\"C:\\\\Users\"}")
+    s4 = json.get_string(json.object_get(j4, "p"))
+    if s4 == "C:\\Users" {
+        print("  PASS: escaped backslash parsed\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    json.free(j4)
+
+    // Test 5: escaped forward slash (valid JSON)
+    print("\nTest 5: JSON escaped forward slash\n")
+    j5 = json.parse("{\"url\":\"http:\\/\\/example.com\"}")
+    s5 = json.get_string(json.object_get(j5, "url"))
+    if s5 == "http://example.com" {
+        print("  PASS: escaped slash parsed\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    json.free(j5)
+
+    // Test 6: boolean values
+    print("\nTest 6: JSON booleans\n")
+    j6 = json.parse("{\"a\":true,\"b\":false}")
+    a6 = json.get_bool(json.object_get(j6, "a"))
+    b6 = json.get_bool(json.object_get(j6, "b"))
+    if a6 == 1 {
+        if b6 == 0 {
+            print("  PASS: true=1, false=0\n")
+        } else {
+            print("  FAIL: false != 0\n")
+            exit(1)
+        }
+    } else {
+        print("  FAIL: true != 1\n")
+        exit(1)
+    }
+    json.free(j6)
+
+    // Test 7: negative numbers
+    print("\nTest 7: JSON negative number\n")
+    j7 = json.parse("-42")
+    n7 = json.get_int(j7)
+    if n7 == 0 - 42 {
+        print("  PASS: -42 parsed\n")
+    } else {
+        print("  FAIL: got ")
+        print(n7)
+        print("\n")
+        exit(1)
+    }
+    json.free(j7)
+
+    // Test 8: float number
+    print("\nTest 8: JSON float\n")
+    j8 = json.parse("3.14")
+    if json.type(j8) == 2 {
+        print("  PASS: 3.14 is number type\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    json.free(j8)
+
+    // Test 9: array of mixed types
+    print("\nTest 9: mixed-type array\n")
+    j9 = json.parse("[1,\"two\",true,null]")
+    if json.array_size(j9) == 4 {
+        e0 = json.array_get(j9, 0)
+        e1 = json.array_get(j9, 1)
+        e2 = json.array_get(j9, 2)
+        e3 = json.array_get(j9, 3)
+        if json.type(e0) == 2 {
+            if json.type(e1) == 3 {
+                if json.type(e2) == 1 {
+                    if json.is_null(e3) == 1 {
+                        print("  PASS: [number, string, bool, null]\n")
+                    } else {
+                        print("  FAIL: e3 not null\n")
+                        exit(1)
+                    }
+                } else {
+                    print("  FAIL: e2 not bool\n")
+                    exit(1)
+                }
+            } else {
+                print("  FAIL: e1 not string\n")
+                exit(1)
+            }
+        } else {
+            print("  FAIL: e0 not number\n")
+            exit(1)
+        }
+    } else {
+        print("  FAIL: array size\n")
+        exit(1)
+    }
+    json.free(j9)
+
+    // Test 10: json.get_bool on non-bool returns 0
+    print("\nTest 10: get_bool on string returns 0\n")
+    j10 = json.parse("\"text\"")
+    if json.get_bool(j10) == 0 {
+        print("  PASS: get_bool on string = 0\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    json.free(j10)
+
+    // Test 11: json.get_int on non-number returns 0
+    print("\nTest 11: get_int on string returns 0\n")
+    j11 = json.parse("\"text\"")
+    if json.get_int(j11) == 0 {
+        print("  PASS: get_int on string = 0\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    json.free(j11)
+
+    // Test 12: stringify round-trip
+    print("\nTest 12: stringify round-trip\n")
+    j12 = json.parse("{\"x\":1,\"y\":\"hello\"}")
+    s12 = json.stringify(j12)
+    // Parse again
+    j12b = json.parse(s12)
+    x12 = json.get_int(json.object_get(j12b, "x"))
+    y12 = json.get_string(json.object_get(j12b, "y"))
+    if x12 == 1 {
+        if y12 == "hello" {
+            print("  PASS: round-trip preserves values\n")
+        } else {
+            print("  FAIL: y != hello\n")
+            exit(1)
+        }
+    } else {
+        print("  FAIL: x != 1\n")
+        exit(1)
+    }
+    json.free(j12)
+    json.free(j12b)
+
+    // Test 13: deeply nested (but within limit)
+    print("\nTest 13: moderately nested JSON\n")
+    j13 = json.parse("[[[[1]]]]")
+    if json.type(j13) == 4 {
+        inner = json.array_get(j13, 0)
+        inner2 = json.array_get(inner, 0)
+        inner3 = json.array_get(inner2, 0)
+        val = json.get_int(json.array_get(inner3, 0))
+        if val == 1 {
+            print("  PASS: 4-level nested array\n")
+        } else {
+            print("  FAIL: inner value\n")
+            exit(1)
+        }
+    } else {
+        print("  FAIL: not array\n")
+        exit(1)
+    }
+    json.free(j13)
+
+    // Test 14: empty string value in JSON
+    print("\nTest 14: empty string in JSON\n")
+    j14 = json.parse("{\"empty\":\"\"}")
+    s14 = json.get_string(json.object_get(j14, "empty"))
+    if s14 == "" {
+        print("  PASS: empty string value\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    json.free(j14)
+
+    // Test 15: json.array_get out of bounds
+    print("\nTest 15: array_get out of bounds\n")
+    j15 = json.parse("[1,2]")
+    oob = json.array_get(j15, 99)
+    if oob == 0 {
+        print("  PASS: out of bounds returns NULL\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    json.free(j15)
+
+    // Test 16: create and stringify empty object
+    print("\nTest 16: create + stringify empty object\n")
+    obj = json.create_object()
+    s16 = json.stringify(obj)
+    if s16 == "{}" {
+        print("  PASS: empty object stringifies to {}\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    json.free(obj)
+
+    // Test 17: create and stringify empty array
+    print("\nTest 17: create + stringify empty array\n")
+    arr = json.create_array()
+    s17 = json.stringify(arr)
+    if s17 == "[]" {
+        print("  PASS: empty array stringifies to []\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    json.free(arr)
+
+    print("\n=== All JSON Edge Case Tests Passed ===\n")
+}

@@ -231,6 +231,10 @@ Aether includes a standard library with the following modules:
 
 See [stdlib-api.md](stdlib-api.md) for the full API reference.
 
+> **Strings just work.** When you read a file or get data from stdlib functions, the result is a
+> regular string — you can `print()` it, use it in `"${interpolation}"`, or pass it in messages
+> directly. No conversion needed.
+
 ## Pattern Matching
 
 Aether features Erlang-inspired pattern matching, one of its most powerful features.
@@ -325,19 +329,26 @@ This allows Aether programs to use libraries like SQLite, libcurl, OpenSSL, etc.
 
 ### Command-Line Arguments
 
-Access command-line arguments in your program:
+Access command-line arguments using the runtime's argument functions:
 
 ```aether
+extern aether_args_count() -> int
+extern aether_args_get(index: int) -> string
+
 main() {
-    count = args_count()
+    count = aether_args_count()
     for (i = 0; i < count; i = i + 1) {
-        print(args_get(i))
-        print("\n")
+        println(aether_args_get(i))
     }
 }
 ```
 
-Run with arguments: `ae run myprogram.ae -- arg1 arg2`
+To pass arguments, build and run the binary directly:
+
+```bash
+ae build myprogram.ae -o myprogram
+./myprogram arg1 arg2
+```
 
 ### Environment Variables
 
@@ -346,10 +357,8 @@ Read configuration from environment variables:
 ```aether
 main() {
     home = getenv("HOME")
-    if (home) {
-        print("Home directory: ")
-        print(home)
-        print("\n")
+    if home != 0 {
+        println("Home directory: ${home}")
     }
 }
 ```
@@ -371,8 +380,8 @@ Switch between Aether releases without reinstalling:
 ```bash
 ae version              # Show current version
 ae version list         # List all available releases (marks installed/active)
-ae version install v0.17.0  # Download and install a specific version
-ae version use v0.17.0      # Switch to an installed version
+ae version install v0.21.0  # Download and install a specific version
+ae version use v0.21.0      # Switch to an installed version
 ```
 
 Versions are stored in `~/.aether/versions/`. The active version is symlinked to `~/.aether/current` (Linux/macOS) or copied to `~/.aether/bin/` (Windows).

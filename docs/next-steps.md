@@ -45,15 +45,26 @@ main() {
 | `ae check` | Not started | Type-check without compiling |
 | Dead code diagnostics | Not started | Warn on unused variables/functions |
 
-### Recently Completed (0.17.0)
+> See [CHANGELOG.md](../CHANGELOG.md) for what shipped in each release.
 
-| Feature | Notes |
-|---------|-------|
-| `aetherc --dump-ast` | Print parsed AST for debugging |
-| `ae run -g` debug symbols | Dev builds include debug info for gdb/lldb |
-| `NO_COLOR` / `isatty()` support | Clean error output in pipes and CI |
-| `exit()` builtin | Terminate program with exit code |
-| String `==`/`!=` with `strcmp` | Content comparison, not pointer comparison |
-| `match` on strings with `strcmp` | String match arms work correctly |
-| `defer` correct return types | No more truncation of ptr/long/float returns |
-| Token overflow error | Clear error when source exceeds MAX_TOKENS |
+## Compiler Diagnostics
+
+### Planned
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Type mismatch hints | Not started | "expected 'string', got 'ptr'" with help text |
+| Unused variable warnings | Not started | Warn on declared-but-unused locals |
+| Unreachable code warnings | Not started | Detect dead branches after return/exit |
+
+**Goal:** Python 3.10-style "the compiler is teaching you" error messages. Example:
+
+```
+error[E0201]: type mismatch — expected 'string', got 'ptr'
+  --> src/main.ae:12:11
+   |
+12 |     print(result)
+   |           ^^^^^^ this is a 'ptr' (raw pointer), not a 'string'
+   |
+   help: use string.to_cstr(result) to convert to a printable string
+```

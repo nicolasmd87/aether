@@ -52,7 +52,7 @@ add(int a, int b): int {
 }
 
 greet(string name): void {
-    print("Hello, " + name)
+    println("Hello, ${name}")
 }
 
 find_user(int id): User {
@@ -221,7 +221,7 @@ fibonacci(n) {
 
 main() {
     result = fibonacci(10)
-    print("Fib(10) = " + result)
+    println("Fib(10) = ${result}")
 }
 ```
 
@@ -253,9 +253,8 @@ export midpoint(Point p1, Point p2): Point {
 ```aether
 // Explicit where it matters, inference elsewhere
 import std.file
-import std.string
 
-process_data(string filename): int {
+process_file(string filename): int {
     int count = 0
 
     // Inference for simple local variables
@@ -263,10 +262,8 @@ process_data(string filename): int {
     content = file.read_all(f)
     file.close(f)
 
-    // Process content
-    parts = string.split(content, ",")
-    count = string.array_size(parts)
-    string.array_free(parts)
+    println("Read file: ${filename}")
+    println(content)
 
     return count
 }

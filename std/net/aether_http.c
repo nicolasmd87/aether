@@ -29,9 +29,11 @@ static void http_init() {
     http_initialized = 1;
 }
 
-static int parse_url(const char* url, char* host, int* port, char* path) {
+static int parse_url(const char* url, char* host, size_t host_size, int* port, char* path, size_t path_size) {
+    if (!url || !host || !port || !path || host_size == 0 || path_size == 0) return 0;
+
     const char* start = url;
-    
+
     if (strncmp(url, "http://", 7) == 0) {
         start = url + 7;
         *port = 80;
@@ -41,30 +43,32 @@ static int parse_url(const char* url, char* host, int* port, char* path) {
         start = url;
         *port = 80;
     }
-    
+
     const char* slash = strchr(start, '/');
     const char* colon = strchr(start, ':');
-    
+
     if (colon && (!slash || colon < slash)) {
-        int host_len = colon - start;
-        strncpy(host, start, host_len);
+        size_t host_len = colon - start;
+        if (host_len >= host_size) host_len = host_size - 1;
+        memcpy(host, start, host_len);
         host[host_len] = '\0';
         *port = atoi(colon + 1);
         if (slash) {
-            strcpy(path, slash);
+            snprintf(path, path_size, "%s", slash);
         } else {
-            strcpy(path, "/");
+            snprintf(path, path_size, "/");
         }
     } else if (slash) {
-        int host_len = slash - start;
-        strncpy(host, start, host_len);
+        size_t host_len = slash - start;
+        if (host_len >= host_size) host_len = host_size - 1;
+        memcpy(host, start, host_len);
         host[host_len] = '\0';
-        strcpy(path, slash);
+        snprintf(path, path_size, "%s", slash);
     } else {
-        strcpy(host, start);
-        strcpy(path, "/");
+        snprintf(host, host_size, "%s", start);
+        snprintf(path, path_size, "/");
     }
-    
+
     return 1;
 }
 
@@ -72,6 +76,7 @@ static HttpResponse* http_request(const char* method, const char* url, const cha
     http_init();
 
     HttpResponse* response = (HttpResponse*)malloc(sizeof(HttpResponse));
+    if (!response) return NULL;
     response->status_code = 0;
     response->body = NULL;
     response->headers = NULL;
@@ -81,7 +86,7 @@ static HttpResponse* http_request(const char* method, const char* url, const cha
     char path[1024];
     int port;
 
-    if (!parse_url(url, host, &port, path)) {
+    if (!parse_url(url, host, sizeof(host), &port, path, sizeof(path))) {
         response->error = string_new("HTTPS not supported in basic implementation");
         return response;
     }
@@ -143,6 +148,11 @@ static HttpResponse* http_request(const char* method, const char* url, const cha
     
     char buffer[8192];
     char* full_response = (char*)malloc(1);
+    if (!full_response) {
+        close(sockfd);
+        response->error = string_new("Out of memory");
+        return response;
+    }
     full_response[0] = '\0';
     size_t total_len = 0;
     int n;

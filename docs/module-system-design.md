@@ -66,6 +66,7 @@ cached ASTs — each module file is read and parsed exactly once.
 | `import std.map` | `map` | `map.new()`, `map.put()`, `map.get()` |
 | `import std.math` | `math` | `math.sqrt()`, `math.sin()`, `math.cos()` |
 | `import std.log` | `log` | `log.init()`, `log.write()`, `log.shutdown()` |
+| `import std.io` | `io` | `io.print()`, `io.read_file()`, `io.getenv()` |
 
 ---
 
@@ -117,20 +118,11 @@ main() {
     d = geometry.distance(p1, p2)
 }
 
-// Import specific items
-import math.geometry (Point, distance)
+// Planned: Import specific items (not yet implemented)
+// import math.geometry (Point, distance)
 
-main() {
-    p1 = Point{ x: 0, y: 0 }
-    d = distance(p1, p2)
-}
-
-// Import with alias
-import math.geometry as geo
-
-main() {
-    p = geo.Point{ x: 0, y: 0 }
-}
+// Planned: Import with alias (not yet implemented)
+// import math.geometry as geo
 ```
 
 ## Module Resolution
@@ -165,13 +157,19 @@ project/
 
 ```
 std/
-  core/      - Basic types and operations
-  io/        - Input/output
-  math/      - Mathematical functions
   string/    - String operations
-  actors/    - Actor utilities
-  collections/ - Data structures (future)
-  net/       - Networking (future)
+  file/      - File operations
+  dir/       - Directory operations
+  path/      - Path utilities
+  list/      - Dynamic array (ArrayList)
+  map/       - Hash map (HashMap)
+  json/      - JSON parsing and creation
+  http/      - HTTP client and server
+  tcp/       - TCP sockets
+  net/       - Consolidated networking (HTTP + TCP)
+  math/      - Mathematical functions
+  log/       - Structured logging
+  io/        - Console I/O, environment variables, file helpers
 ```
 
 ### Usage Example

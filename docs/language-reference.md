@@ -815,14 +815,20 @@ result = string.new("hello");
 if (file.exists("config.txt") == 1) { }
 ```
 
-### Import with Alias
+### Import with Alias (Planned)
+
+> **Note:** Import aliasing is parsed but not yet fully functional. Use the default namespace for now.
 
 ```aether
-import std.collections as col;
-import std.string as str;
+// Planned syntax:
+// import std.string as str;
+// s = str.new("hello")
 
-list = col.list.new();
-s = str.new("hello");
+// Current workaround: use the module name directly
+import std.string
+s = string.new("hello")
+len = string.length(s)
+string.release(s)
 ```
 
 ### Local Module Imports
@@ -882,6 +888,7 @@ Externs are useful for:
 |----------|-------------|
 | `print(value)` | Print to stdout (no newline) |
 | `println(value)` | Print to stdout followed by a newline |
+| `print_char(code)` | Print a single character by ASCII/Unicode code point |
 
 String interpolation is supported inside double-quoted strings using `${expr}`:
 

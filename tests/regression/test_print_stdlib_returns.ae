@@ -1,0 +1,71 @@
+// Regression test: printing stdlib return values
+// Covers: file.read_all, io.read_file, io.getenv, string interpolation with all
+// Ensures no garbage output from ptr/string type confusion
+
+import std.file
+import std.io
+
+main() {
+    println("=== Print Stdlib Returns ===")
+
+    // Setup: write a known file
+    f = file.open("/tmp/_aether_regression_print.txt", "w")
+    file.write(f, "test-content", 12)
+    file.close(f)
+
+    // Test 1: print(file.read_all) — was printing garbage before fix
+    f = file.open("/tmp/_aether_regression_print.txt", "r")
+    content = file.read_all(f)
+    file.close(f)
+    print("T1: ")
+    print(content)
+    print("\n")
+
+    // Test 2: println(file.read_all)
+    print("T2: ")
+    println(content)
+
+    // Test 3: string interpolation with file content
+    println("T3: ${content}")
+
+    // Test 4: io.read_file + print
+    io_content = io.read_file("/tmp/_aether_regression_print.txt")
+    print("T4: ")
+    println(io_content)
+
+    // Test 5: io.read_file + interpolation
+    println("T5: ${io_content}")
+
+    // Test 6: io.getenv + print
+    home = io.getenv("HOME")
+    print("T6: ")
+    println(home)
+
+    // Test 7: io.getenv + interpolation
+    println("T7: ${home}")
+
+    // Test 8: mixed types in interpolation (int + float + string from stdlib)
+    x = 42
+    pi = 3.14
+    println("T8: x=${x} pi=${pi} content=${content}")
+
+    // Test 9: file.exists + file.size return ints — should print as numbers
+    exists = file.exists("/tmp/_aether_regression_print.txt")
+    size = file.size("/tmp/_aether_regression_print.txt")
+    println("T9: exists=${exists} size=${size}")
+
+    // Test 10: write, read back, verify roundtrip
+    f = file.open("/tmp/_aether_regression_print2.txt", "w")
+    file.write(f, "ABCDEF", 6)
+    file.close(f)
+    f = file.open("/tmp/_aether_regression_print2.txt", "r")
+    rt = file.read_all(f)
+    file.close(f)
+    println("T10: ${rt}")
+
+    // Cleanup
+    file.delete("/tmp/_aether_regression_print.txt")
+    file.delete("/tmp/_aether_regression_print2.txt")
+
+    println("=== Done ===")
+}

@@ -6,29 +6,42 @@ import std.string
 main() {
     print("=== Import Example ===\n\n")
 
-    // Use imported string module
+    // std.string works with plain strings — no string.new() needed
+    name = "Aether"
+    print("Plain string length: ")
+    println(string.length(name))
+
+    if string.contains("Hello, Aether!", "Aether") == 1 {
+        println("Contains 'Aether'")
+    }
+
+    if string.starts_with(name, "Ae") == 1 {
+        println("Starts with 'Ae'")
+    }
+
+    // Operations that return new strings give you managed AetherString*
+    upper = string.to_upper(name)
+    defer string.release(upper)
+    print("Upper: ")
+    println(string.to_cstr(upper))
+
+    // You can also use string.new() for managed strings
     s = string.new("Hello, Aether!")
     defer string.release(s)
+    print("Managed string length: ")
+    println(string.length(s))
 
-    print("Created string with length: ")
-    print(string.length(s))
-    print("\n")
-
-    // String operations
-    if string.contains(s, "Aether") == 1 {
-        print("String contains 'Aether'\n")
-    }
-
-    if string.starts_with(s, "Hello") == 1 {
-        print("String starts with 'Hello'\n")
-    }
+    // Mix plain and managed freely
+    joined = string.concat("Hello, ", name)
+    defer string.release(joined)
+    print("Concat: ")
+    println(string.to_cstr(joined))
 
     // Conversion
     num = string.from_int(42)
     defer string.release(num)
-    print("Number as string, length: ")
-    print(string.length(num))
-    print("\n")
+    print("Number as string: ")
+    println(string.to_cstr(num))
 
-    print("\nImport example done\n")
+    println("\nImport example done")
 }

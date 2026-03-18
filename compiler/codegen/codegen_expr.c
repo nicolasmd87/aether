@@ -611,6 +611,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             case TYPE_FLOAT:  fprintf(gen->output, "%%g");  break; \
                             case TYPE_BOOL:   fprintf(gen->output, "%%s");  break; \
                             case TYPE_STRING: fprintf(gen->output, "%%s");  break; \
+                            case TYPE_PTR:    fprintf(gen->output, "%%s");  break; \
                             default:          fprintf(gen->output, "%%d");  break; \
                         } \
                     } \
@@ -628,6 +629,16 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     if (tk == TYPE_BOOL) { \
                         generate_expression(gen, ch); \
                         fprintf(gen->output, " ? \"true\" : \"false\""); \
+                    } else if (tk == TYPE_STRING || tk == TYPE_PTR) { \
+                        fprintf(gen->output, "_aether_safe_str("); \
+                        generate_expression(gen, ch); \
+                        fprintf(gen->output, ")"); \
+                    } else if (tk == TYPE_INT64) { \
+                        fprintf(gen->output, "(long long)"); \
+                        generate_expression(gen, ch); \
+                    } else if (tk == TYPE_UINT64) { \
+                        fprintf(gen->output, "(unsigned long long)"); \
+                        generate_expression(gen, ch); \
                     } else { \
                         generate_expression(gen, ch); \
                     } \

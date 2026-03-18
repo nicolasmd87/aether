@@ -1,54 +1,72 @@
 // File I/O - Demonstrates file operations using namespace calls
 // Run with: ae run examples/stdlib/file-io.ae
 //
-// Uses namespace-style calls: file.exists(), dir.exists(), etc.
+// file.read_all() returns a plain string — print it directly.
 
 import std.file
 import std.dir
 
 main() {
-    print("=== Aether File I/O Demo ===\n\n");
+    print("=== Aether File I/O Demo ===\n\n")
 
-    // Check if a file exists
-    print("Checking if files exist:\n");
+    // Write a file
+    print("Writing test file:\n")
+    f = file.open("aether_test_output.txt", "w")
+    file.write(f, "Hello from Aether!\nLine two.\nLine three.", 41)
+    file.close(f)
+    println("  Wrote aether_test_output.txt")
 
-    if (file.exists("Makefile") == 1) {
-        print("  Makefile exists\n");
-        size = file.size("Makefile");
-        print("  Size: ");
-        print(size);
-        print(" bytes\n");
+    // Check existence and size
+    print("\nChecking files:\n")
+    if (file.exists("aether_test_output.txt") == 1) {
+        size = file.size("aether_test_output.txt")
+        println("  aether_test_output.txt: ${size} bytes")
     }
 
     if (file.exists("nonexistent.txt") == 0) {
-        print("  nonexistent.txt does not exist (as expected)\n");
+        println("  nonexistent.txt: does not exist (expected)")
     }
 
-    print("\n");
+    // Read the file back and print it
+    print("\nReading file:\n")
+    f = file.open("aether_test_output.txt", "r")
+    if (f != 0) {
+        content = file.read_all(f)
+        file.close(f)
+        println("  Content:")
+        println(content)
+        println("  Interpolated: ${content}")
+    }
+
+    // Overwrite with new content
+    print("\nOverwriting file:\n")
+    f = file.open("aether_test_output.txt", "w")
+    file.write(f, "Updated content", 15)
+    file.close(f)
+
+    // Read back to verify
+    f = file.open("aether_test_output.txt", "r")
+    if (f != 0) {
+        content2 = file.read_all(f)
+        file.close(f)
+        println("  New content: ${content2}")
+    }
 
     // Check directories
-    print("Checking directories:\n");
-
-    if (dir.exists("src") == 1) {
-        print("  src/ directory exists\n");
-    }
-
-    if (dir.exists("build") == 1) {
-        print("  build/ directory exists\n");
-    }
-
+    print("\nChecking directories:\n")
     if (dir.exists("examples") == 1) {
-        print("  examples/ directory exists\n");
+        println("  examples/ directory exists")
     }
 
-    print("\n");
-
-    // Try to create a test directory
-    print("Creating test directory:\n");
-    result = dir.create("test_output");
+    // Create and clean up test directory
+    result = dir.create("aether_test_dir")
     if (result == 0) {
-        print("  Created test_output/ directory\n");
+        println("  Created aether_test_dir/")
+        dir.delete("aether_test_dir")
+        println("  Deleted aether_test_dir/")
     }
 
-    print("\nFile I/O demo complete!\n");
+    // Clean up test file
+    file.delete("aether_test_output.txt")
+    println("\nCleaned up. File I/O demo complete!")
 }

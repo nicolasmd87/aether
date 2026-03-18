@@ -138,8 +138,8 @@ process(data, threshold: int) {
 }
 
 // Explicit return, inferred parameters
-format_message(user, message): string {
-    return user + ": " + message  // parameters inferred as string
+format_name(first, last): string {
+    return "${first} ${last}"  // parameters inferred as string
 }
 ```
 

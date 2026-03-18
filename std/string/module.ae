@@ -43,4 +43,6 @@ extern string_from_float(value: float) -> ptr
 
 // Parsing
 extern string_to_int(str: ptr, out_value: ptr) -> int
+extern string_to_long(str: ptr, out_value: ptr) -> int
 extern string_to_float(str: ptr, out_value: ptr) -> int
+extern string_to_double(str: ptr, out_value: ptr) -> int
