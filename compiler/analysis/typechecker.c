@@ -1003,6 +1003,7 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
     if (!stmt) return 0;
     
     switch (stmt->type) {
+        case AST_CONST_DECLARATION:
         case AST_VARIABLE_DECLARATION: {
             if (stmt->child_count > 0) {
                 // Has initializer

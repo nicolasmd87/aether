@@ -826,6 +826,26 @@ ASTNode* parse_statement(Parser* parser) {
             // Optional 'let' or 'var' - skip it and parse as Python-style
             advance_token(parser);
             return parse_python_style_declaration(parser);
+
+        case TOKEN_CONST: {
+            // Local constant: const x = 5
+            int cline = token->line, ccol = token->column;
+            advance_token(parser); // consume 'const'
+            Token* cname = expect_token(parser, TOKEN_IDENTIFIER);
+            if (!cname) return NULL;
+            if (!expect_token(parser, TOKEN_ASSIGN)) return NULL;
+            ASTNode* cval = parse_expression(parser);
+            if (!cval) return NULL;
+            match_token(parser, TOKEN_SEMICOLON);
+            ASTNode* node = create_ast_node(AST_CONST_DECLARATION, cname->value, cline, ccol);
+            add_child(node, cval);
+            if (cval->node_type) {
+                node->node_type = clone_type(cval->node_type);
+            } else {
+                node->node_type = create_type(TYPE_UNKNOWN);
+            }
+            return node;
+        }
             
         case TOKEN_INT:
         case TOKEN_INT64:
