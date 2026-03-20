@@ -505,6 +505,21 @@ static void discover_toolchain(void) {
             if (path_exists(candidate)) is_installed = true;
         }
         if (is_installed) {
+            // If a 'current' symlink exists (from ae version use), prefer it
+            // so that version-managed stdlib files take priority over stale
+            // files left by a previous install.sh in the parent directory.
+            char current_root[1024];
+            snprintf(current_root, sizeof(current_root), "%s/../current", exe_dir);
+            if (dir_exists(current_root)) {
+                char cs[1024], cl[1024];
+                snprintf(cs, sizeof(cs), "%s/../current/share/aether", exe_dir);
+                snprintf(cl, sizeof(cl), "%s/../current/lib/libaether.a", exe_dir);
+                if (dir_exists(cs) || path_exists(cl)) {
+                    snprintf(tc.root, sizeof(tc.root), "%s/../current", exe_dir);
+                    snprintf(tc.compiler, sizeof(tc.compiler), "%s/aetherc" EXE_EXT, exe_dir);
+                    if (path_exists(tc.compiler)) goto found_root;
+                }
+            }
             snprintf(tc.root, sizeof(tc.root), "%s/..", exe_dir);
             snprintf(tc.compiler, sizeof(tc.compiler), "%s/aetherc" EXE_EXT, exe_dir);
             if (path_exists(tc.compiler)) goto found_root;
@@ -2320,6 +2335,26 @@ static int cmd_version_use(const char* version) {
         "mkdir -p \"%s\" && cp -f \"%s\"/* \"%s/\" 2>/dev/null; true",
         dest_bin, src_bin, dest_bin);
     system(cmd);
+
+    // Sync lib/, include/, and share/ from the version directory to ~/.aether/
+    // so that stale files left by a previous install.sh don't shadow the
+    // version-managed files.  The 'current' symlink alone is not enough
+    // because toolchain discovery may resolve the parent directory first.
+    {
+        char dest[512];
+        const char* subdirs[] = {"lib", "include", "share"};
+        for (int i = 0; i < 3; i++) {
+            char src_sub[1024];
+            snprintf(src_sub, sizeof(src_sub), "%s/%s", ver_dir, subdirs[i]);
+            if (dir_exists(src_sub)) {
+                snprintf(dest, sizeof(dest), "%s/.aether/%s", home, subdirs[i]);
+                snprintf(cmd, sizeof(cmd),
+                    "rm -rf \"%s\" && cp -r \"%s\" \"%s\"",
+                    dest, src_sub, dest);
+                system(cmd);
+            }
+        }
+    }
 #endif
 
     // Update active_version file so 'ae version list' shows the correct current
