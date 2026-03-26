@@ -1,0 +1,41 @@
+// Test: for-in range loops
+
+main() {
+    // Basic range
+    sum = 0
+    for i in 0..5 {
+        sum = sum + i
+    }
+    if sum == 10 {
+        println("PASS: 0..5 sum = 10")
+    } else {
+        println("FAIL: expected 10, got ${sum}")
+    }
+
+    // Variable bound
+    n = 4
+    count = 0
+    for i in 0..n {
+        count = count + 1
+    }
+    if count == 4 {
+        println("PASS: variable bound n=4")
+    } else {
+        println("FAIL: expected 4, got ${count}")
+    }
+
+    // Nested loops
+    total = 0
+    for i in 0..3 {
+        for j in 0..3 {
+            total = total + 1
+        }
+    }
+    if total == 9 {
+        println("PASS: nested 3x3 = 9")
+    } else {
+        println("FAIL: expected 9, got ${total}")
+    }
+
+    println("For-in loop tests passed!")
+}

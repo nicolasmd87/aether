@@ -1012,12 +1012,21 @@ ASTNode* parse_python_style_declaration(Parser* parser) {
     decl->node_type = create_type(TYPE_UNKNOWN);
     
     if (match_token(parser, TOKEN_ASSIGN)) {
-        ASTNode* value = parse_expression(parser);
-        if (value) {
-            add_child(decl, value);
+        // Check for match-as-expression: x = match val { ... }
+        Token* next_tok = peek_token(parser);
+        if (next_tok && next_tok->type == TOKEN_MATCH) {
+            ASTNode* match_node = parse_match_statement(parser);
+            if (match_node) {
+                add_child(decl, match_node);
+            }
+        } else {
+            ASTNode* value = parse_expression(parser);
+            if (value) {
+                add_child(decl, value);
+            }
         }
     }
-    
+
     match_token(parser, TOKEN_SEMICOLON);
     return decl;
 }

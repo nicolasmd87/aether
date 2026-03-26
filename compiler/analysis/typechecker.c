@@ -326,6 +326,19 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
         case AST_STRING_INTERP:
             return create_type(TYPE_STRING);
 
+        case AST_MATCH_STATEMENT:
+            // Return type of first arm's result expression
+            if (expr->node_type && expr->node_type->kind != TYPE_UNKNOWN) {
+                return clone_type(expr->node_type);
+            }
+            if (expr->child_count >= 2) {
+                ASTNode* first_arm = expr->children[1];
+                if (first_arm && first_arm->child_count >= 2) {
+                    return infer_type(first_arm->children[1], table);
+                }
+            }
+            return create_type(TYPE_UNKNOWN);
+
         case AST_ARRAY_LITERAL:
             // Return the inferred array type
             return expr->node_type ? clone_type(expr->node_type) : create_type(TYPE_UNKNOWN);
@@ -1272,7 +1285,12 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
             if (stmt->child_count > 0) {
                 // Has initializer
                 ASTNode* init = stmt->children[0];
-                typecheck_expression(init, table);
+                // Match-as-expression: typecheck as statement, then use its type
+                if (init->type == AST_MATCH_STATEMENT) {
+                    typecheck_statement(init, table);
+                } else {
+                    typecheck_expression(init, table);
+                }
                 Type* init_type = infer_type(init, table);
 
                 // If variable has no explicit type (TYPE_UNKNOWN), use initializer's type
@@ -1602,6 +1620,13 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
 
                 // Type check the arm body in the new scope
                 typecheck_statement(body, arm_table);
+
+                // Propagate arm result type to the match node (for match-as-expression)
+                if (!stmt->node_type || stmt->node_type->kind == TYPE_UNKNOWN) {
+                    if (body->node_type && body->node_type->kind != TYPE_UNKNOWN) {
+                        stmt->node_type = clone_type(body->node_type);
+                    }
+                }
 
                 free_symbol_table(arm_table);
             }

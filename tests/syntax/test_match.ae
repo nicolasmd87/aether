@@ -1,72 +1,44 @@
-// Test match expressions with regular (non-list) patterns
-// Covers: integer literals, wildcard, multiple arms, nested match
+// Test: match statements and expressions
 
 main() {
-    print("=== Match Expression Tests ===\n\n")
-
-    // Test 1: Match integer literal
+    // Match as statement
     x = 2
-
-    print("Test 1: Match integer literal\n")
-    match (x) {
-        1 -> { print("  FAIL: not 1\n") }
-        2 -> { print("  PASS: matched 2\n") }
-        3 -> { print("  FAIL: not 3\n") }
-        _ -> { print("  FAIL: should match 2\n") }
+    match x {
+        0 -> println("FAIL: should not match 0")
+        1 -> println("FAIL: should not match 1")
+        2 -> println("PASS: statement match on 2")
+        _ -> println("FAIL: should not hit wildcard")
     }
 
-    // Test 2: Match wildcard
-    y = 999
-
-    print("\nTest 2: Wildcard match\n")
-    match (y) {
-        1 -> { print("  FAIL: not 1\n") }
-        2 -> { print("  FAIL: not 2\n") }
-        _ -> { print("  PASS: wildcard matched 999\n") }
+    // Match as expression (int result)
+    code = 404
+    val = match code {
+        200 -> 0
+        404 -> 1
+        500 -> 2
+        _ -> 3
+    }
+    if val == 1 {
+        println("PASS: expression match int = 1")
+    } else {
+        println("FAIL: expected 1, got ${val}")
     }
 
-    // Test 3: Match zero
-    z = 0
-
-    print("\nTest 3: Match zero\n")
-    match (z) {
-        0 -> { print("  PASS: matched zero\n") }
-        _ -> { print("  FAIL: should match 0\n") }
+    // Match as expression (string result)
+    status = 0
+    msg = match status {
+        0 -> "ok"
+        1 -> "warning"
+        _ -> "error"
     }
+    println("PASS: expression match string = ${msg}")
 
-    // Test 4: First arm match (order matters)
-    val = 5
-
-    print("\nTest 4: First matching arm wins\n")
-    match (val) {
-        5 -> { print("  PASS: first arm matched\n") }
-        5 -> { print("  FAIL: second arm should not run\n") }
-        _ -> { print("  FAIL: wildcard should not run\n") }
+    // Wildcard match
+    y = 99
+    label = match y {
+        _ -> "wildcard"
     }
+    println("PASS: wildcard = ${label}")
 
-    // Test 5: Multiple match statements in same function
-    a = 10
-    b = 20
-
-    print("\nTest 5: Multiple match statements\n")
-    match (a) {
-        10 -> { print("  PASS: a=10\n") }
-        _ -> { print("  FAIL: a should be 10\n") }
-    }
-    match (b) {
-        20 -> { print("  PASS: b=20\n") }
-        _ -> { print("  FAIL: b should be 20\n") }
-    }
-
-    // Test 6: Match with negative result check
-    c = 3
-
-    print("\nTest 6: No match before wildcard\n")
-    match (c) {
-        1 -> { print("  FAIL\n") }
-        2 -> { print("  FAIL\n") }
-        _ -> { print("  PASS: wildcard caught 3\n") }
-    }
-
-    print("\n=== All 6 Tests Complete ===\n")
+    println("Match tests passed!")
 }

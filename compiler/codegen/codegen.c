@@ -60,6 +60,7 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->extern_registry_capacity = 0;
     // MSVC compat: counter for ask-operator temp variables
     gen->ask_temp_counter = 0;
+    gen->match_result_var = NULL;
     // Ask/reply type map
     gen->reply_type_map = NULL;
     gen->reply_type_count = 0;

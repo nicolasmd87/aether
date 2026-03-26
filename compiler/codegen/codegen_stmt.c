@@ -435,6 +435,32 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                 }
                 fprintf(gen->output, ";\n");
             } else {
+                // Match-as-expression: x = match val { ... }
+                if (stmt->child_count > 0 && stmt->children[0] &&
+                    stmt->children[0]->type == AST_MATCH_STATEMENT) {
+                    if (!is_var_declared(gen, stmt->value)) {
+                        mark_var_declared(gen, stmt->value);
+                        // Infer type from first match arm result
+                        const char* c_type = get_c_type(stmt->node_type);
+                        ASTNode* match_node = stmt->children[0];
+                        if ((!stmt->node_type || stmt->node_type->kind == TYPE_UNKNOWN) &&
+                            match_node->child_count >= 2) {
+                            ASTNode* first_arm = match_node->children[1];
+                            if (first_arm && first_arm->child_count >= 2 && first_arm->children[1]) {
+                                Type* arm_type = first_arm->children[1]->node_type;
+                                if (arm_type) c_type = get_c_type(arm_type);
+                            }
+                        }
+                        print_indent(gen);
+                        fprintf(gen->output, "%s %s;\n", c_type, stmt->value);
+                    }
+                    // Generate match with result assignment
+                    gen->match_result_var = stmt->value;
+                    generate_statement(gen, stmt->children[0]);
+                    gen->match_result_var = NULL;
+                    break;
+                }
+
                 // Check if this is a reassignment (Python-style)
                 if (is_var_declared(gen, stmt->value)) {
                     // Already declared - generate assignment only
@@ -815,8 +841,11 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         // Statement-level node (e.g. print, return)
                         generate_statement(gen, result);
                     } else {
-                        // Single expression, make it a statement
+                        // Single expression — assign to result var or emit as statement
                         print_indent(gen);
+                        if (gen->match_result_var) {
+                            fprintf(gen->output, "%s = ", gen->match_result_var);
+                        }
                         generate_expression(gen, result);
                         fprintf(gen->output, ";\n");
                     }

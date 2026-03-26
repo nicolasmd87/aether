@@ -56,6 +56,9 @@ typedef struct {
     // MSVC compat: counter for ask-operator temp variables (_ask_result_N)
     int ask_temp_counter;
 
+    // Match-as-expression: when non-NULL, match arms assign to this variable
+    const char* match_result_var;
+
     // Ask/reply type map: request message name -> reply message name.
     // Built by scanning actor receive handlers for reply statements.
     struct ReplyTypeEntry {

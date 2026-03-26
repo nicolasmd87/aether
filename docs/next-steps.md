@@ -2,13 +2,6 @@
 
 Planned features and improvements for upcoming Aether releases.
 
-**Design principles guiding this roadmap:**
-- Lock as little as possible — minimal ceremony, actors can't share state
-- Zero-cost when not used — opt-in features add no overhead when disabled
-- Compile to clean C — generated code stays readable and debuggable
-- Actors are the native abstraction — everything else serves them
-- Manual memory, no GC — `defer` is the tool, arenas for actors
-- Practical over academic — ship what programs need
 
 > See [CHANGELOG.md](../CHANGELOG.md) for what shipped in each release.
 
@@ -83,71 +76,6 @@ main() {
 
 **Design constraint:** Capture by value (copy into closure struct) is the default. No hidden heap allocation. This keeps closures predictable and compatible with manual memory management.
 
-### Match Expressions
-
-Pattern matching currently only works in function definitions and receive blocks. A general `match` expression enables cleaner control flow without `if`/`else` chains.
-
-**Planned syntax (tentative):**
-
-```aether
-main() {
-    status = 2
-    msg = match status {
-        0 -> "ok"
-        1 -> "warning"
-        2 -> "error"
-        _ -> "unknown"
-    }
-    println(msg)
-}
-```
-
-**What's needed:**
-- New `AST_MATCH_EXPRESSION` node
-- Parser support for `match expr { pattern -> expr, ... }`
-- Codegen emits a chain of `if`/`else if` comparisons (or a switch for integer patterns)
-- Type inference: all arms must return the same type
-
-### For-In Loops
-
-`while` loops with manual indexing are verbose for iteration. A `for-in` loop reduces boilerplate.
-
-**Planned syntax (tentative):**
-
-```aether
-main() {
-    // Range iteration
-    for i in 0..10 {
-        println(i)
-    }
-
-    // Collection iteration (requires iterator protocol)
-    for item in list {
-        println(item)
-    }
-}
-```
-
-**What's needed:**
-- Range syntax `0..n` generating `for(int i=0; i<n; i++)` in C
-- Optional: iterator protocol for collections (requires closures or function pointers)
-
-### Type Aliases
-
-Type aliases improve readability with zero runtime cost (erased at compile time).
-
-**Planned syntax:**
-
-```aether
-type ID = int
-type Callback = (int) -> bool
-```
-
-**What's needed:**
-- Parser: `type Name = Type` declaration
-- Typechecker: alias resolution (replace alias with underlying type)
-- No codegen changes — aliases are purely a compile-time convenience
-
 ### Optional Cooperative Preemption
 
 Aether's scheduler is cooperative — each message handler runs to completion before the scheduler moves to the next actor. A handler that enters an infinite loop will block that core's scheduler thread. This is the same model as Go goroutines and Pony behaviours. BEAM is unique in having reduction-based preemption that prevents this.
@@ -200,21 +128,6 @@ Major features that require significant architectural work.
 
 Aether compiles to C, and C compiles to WASM via Emscripten, so the path exists. The platform portability layer addresses the core blockers: pthreads, filesystem, and networking dependencies are now conditionally compiled via `AETHER_HAS_*` flags.
 
-**Incremental approach:**
-- **Phase 1 (infrastructure done):** The cooperative scheduler (`aether_scheduler_coop.c`) provides a single-threaded backend that implements the same API as the multi-core scheduler. `PLATFORM=wasm` in the Makefile selects this scheduler and sets `-DAETHER_NO_THREADING -DAETHER_NO_FILESYSTEM -DAETHER_NO_NETWORKING`. Multi-actor programs work cooperatively — all actors run on core 0 via `aether_scheduler_poll()`. Timing uses `emscripten_get_now()` instead of `rdtsc`/`clock_gettime`.
-- **Phase 2 (future):** Multi-actor programs using Web Workers as scheduler threads, with message passing over `postMessage`.
-
-**What's done:**
-- `AETHER_HAS_*` compile-time flags with auto-detection and `-DAETHER_NO_*` overrides
-- Cooperative scheduler (`runtime/scheduler/aether_scheduler_coop.c`) — same API, single-threaded
-- Stdlib stubs for filesystem, networking, OS operations when features unavailable
-- Emscripten timing fallback in generated code (`emscripten_get_now()`)
-- `PLATFORM=wasm` Makefile target (selects cooperative scheduler, disables pthreads/fs/net)
-- Atomics fallback (`atomic_int` → `volatile int`) for single-threaded builds
-- Docker CI images (`docker/Dockerfile.wasm`, `docker/Dockerfile.embedded`) for cross-platform verification
-- `make ci-wasm` (Emscripten compile + Node.js execution), `make ci-embedded` (ARM syntax-check)
-- `make ci-coop` for testing cooperative mode on native
-- Cooperative scheduler tests: multi-actor state, message chains, 10-actor stress, ask/reply
 
 **What's remaining:**
 - `ae build --target wasm` CLI integration

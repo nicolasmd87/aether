@@ -16,10 +16,13 @@ number before tagging the release.
 - **`ae check` command**: Type-check without compiling. Runs lexer → parser → typechecker → type inference, then exits. No C code generated, no gcc invoked. ~30x faster than `ae build`. Also available as `aetherc --check`
 - **Unused variable warnings `[W1001]`**: Warns on declared-but-never-referenced local variables. Prefix with `_` to suppress (e.g., `_unused = 42`). Excludes function parameters and pattern bindings
 - **Unreachable code warnings `[W1002]`**: Detects code after `return`, `exit()`, or exhaustive `if`/`else` blocks where all branches terminate. Recurses into nested blocks
+- **Match expressions**: `msg = match x { 0 -> "ok", 1 -> "err", _ -> "unknown" }` — match can now be used as an expression on the right side of an assignment. Type is inferred from the first arm's result
+- **For-in loop and match tests**: `test_for_in.ae` (range loops, variable bounds, nested), `test_match.ae` (statement match, expression match, wildcard, string/int patterns)
 
 ### Fixed
 
 - **Selective imports**: `import std.math (sqrt, abs_int)` now works correctly. The prefix-stripping comparison was comparing user-facing names (`sqrt`) against C-level names (`math_sqrt`). Fixed in typechecker, codegen, and module merge. Non-selected symbols are properly rejected at both type-check and code generation time
+- **Match-as-expression codegen**: Parser now attaches match as child of variable declaration. Codegen declares variable, then generates match with `var = arm_result;` in each arm. Type inference propagates arm result type to variable
 
 ## [0.30.0]
 
