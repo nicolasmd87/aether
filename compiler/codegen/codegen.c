@@ -848,8 +848,7 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "    return (int64_t)_ts.tv_sec * 1000000000LL + _ts.tv_nsec;");
     print_line(gen, "}");
     print_line(gen, "#endif");
-    /* String interpolation helper — MSVC can't use ({ ... }) statement expressions */
-    print_line(gen, "#if !AETHER_GCC_COMPAT");
+    /* String interpolation helper — portable, always available */
     print_line(gen, "#include <stdarg.h>");
     print_line(gen, "static void* _aether_interp(const char* fmt, ...) {");
     print_line(gen, "    va_list args, args2;");
@@ -862,7 +861,6 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "    va_end(args2);");
     print_line(gen, "    return (void*)str;");
     print_line(gen, "}");
-    print_line(gen, "#endif");
     /* NULL-safe string helper for print/println — avoids double-evaluating the expression */
     print_line(gen, "static inline const char* _aether_safe_str(const void* s) {");
     print_line(gen, "    return s ? (const char*)s : \"(null)\";");

@@ -658,26 +658,12 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 EMIT_INTERP_ARGS();
                 fprintf(gen->output, ")");
             } else {
-                // Mode 2: heap-allocated C string (void*)
-                fprintf(gen->output, "\n#if AETHER_GCC_COMPAT\n");
-                // GCC/Clang: statement expression
-                fprintf(gen->output, "({ int _interp_len = snprintf(NULL, 0, \"");
-                EMIT_INTERP_FMT();
-                fprintf(gen->output, "\"");
-                EMIT_INTERP_ARGS();
-                fprintf(gen->output, "); char* _interp_str = malloc(_interp_len + 1); snprintf(_interp_str, _interp_len + 1, \"");
-                EMIT_INTERP_FMT();
-                fprintf(gen->output, "\"");
-                EMIT_INTERP_ARGS();
-                fprintf(gen->output, "); (void*)_interp_str; })");
-                fprintf(gen->output, "\n#else\n");
-                // MSVC: helper function call (no statement expressions)
+                // Mode 2: heap-allocated C string — always use portable helper function
                 fprintf(gen->output, "_aether_interp(\"");
                 EMIT_INTERP_FMT();
                 fprintf(gen->output, "\"");
                 EMIT_INTERP_ARGS();
                 fprintf(gen->output, ")");
-                fprintf(gen->output, "\n#endif\n");
             }
 
             #undef EMIT_INTERP_FMT

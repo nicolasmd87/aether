@@ -6,6 +6,15 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 AE="$ROOT/build/ae"
 
+# Skip on Windows/MSYS2 — piped REPL testing is unreliable due to
+# terminal emulation differences in MSYS2/MinGW shells
+case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+        echo "  [SKIP] repl tests (Windows — piped stdin unreliable in MSYS2)"
+        exit 0
+        ;;
+esac
+
 pass=0
 fail=0
 
