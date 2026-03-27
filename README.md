@@ -46,10 +46,13 @@ The Aether runtime implements a native actor system with optimized message passi
 - **Compile-time platform detection** via `AETHER_HAS_*` flags (threads, atomics, filesystem, networking, NUMA, SIMD, affinity)
 - **Cooperative scheduler** for single-threaded platforms (WebAssembly, embedded, bare-metal)
 - **Graceful degradation** — stdlib stubs return errors when features are unavailable
+- **`ae build --target wasm`** compiles to WebAssembly via Emscripten
 - **`PLATFORM=wasm|embedded`** Makefile targets for cross-compilation
 - **Docker CI images** for Emscripten (WASM) and ARM (embedded) verification
 
 ### Advanced Features
+- **Actor timeouts** — `receive { ... } after N -> { ... }` fires handler if no message arrives within N ms
+- **Cooperative preemption** (opt-in) — `AETHER_PREEMPT=1` breaks long handlers, `--preempt` yields at loop back-edges
 - **SIMD batch processing** with AVX2 support
 - **NUMA-aware allocation** for multi-socket systems
 - **CPU feature detection** for runtime optimization selection

@@ -672,12 +672,15 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             fprintf(gen->output, ") {\n");
             
             indent(gen);
+            if (gen->preempt_loops) {
+                print_line(gen, "if (--_aether_reductions <= 0) { _aether_reductions = 10000; sched_yield(); }");
+            }
             if (stmt->child_count > 3 && stmt->children[3]) {
                 // Body is always a statement (could be a block or single statement)
                 generate_statement(gen, stmt->children[3]); // body
             }
             unindent(gen);
-            
+
             print_line(gen, "}");
             break;
             
@@ -705,6 +708,10 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             fprintf(gen->output, ") {\n");
 
             indent(gen);
+            // Cooperative preemption: yield to OS at loop back-edges
+            if (gen->preempt_loops) {
+                print_line(gen, "if (--_aether_reductions <= 0) { _aether_reductions = 10000; sched_yield(); }");
+            }
             if (stmt->child_count > 1) {
                 generate_statement(gen, stmt->children[1]);
             }

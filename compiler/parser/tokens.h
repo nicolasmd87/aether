@@ -41,6 +41,7 @@ typedef enum {
     TOKEN_NULL,             // 'null' keyword for null pointer literal
     TOKEN_CONST,            // 'const' keyword for top-level constants
     TOKEN_IN,               // 'in' keyword for range-based for loops
+    TOKEN_AFTER,            // 'after' keyword for receive timeouts
 
     // Types
     TOKEN_INT,

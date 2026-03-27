@@ -59,6 +59,9 @@ typedef struct {
     // Match-as-expression: when non-NULL, match arms assign to this variable
     const char* match_result_var;
 
+    // Cooperative preemption: insert sched_yield() at loop back-edges
+    int preempt_loops;
+
     // Ask/reply type map: request message name -> reply message name.
     // Built by scanning actor receive handlers for reply statements.
     struct ReplyTypeEntry {

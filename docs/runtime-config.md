@@ -259,6 +259,8 @@ if (pool->is_thread_local) {
 | `AETHER_MSG_POOL_SIZE` | Override message pool size (default from profile) |
 | `AETHER_ACTOR_POOL_SIZE` | Override actor pool size (default from profile) |
 | `AETHER_VERBOSE` | Print optimization configuration at startup |
+| `AETHER_PREEMPT` | Enable cooperative preemption (time-based drain loop break, default 1ms) |
+| `AETHER_PREEMPT_MS` | Override preemption threshold in milliseconds (default 1) |
 | `BENCHMARK_MESSAGES` | Sets message count for benchmark programs |
 
 ---

@@ -69,6 +69,9 @@ typedef struct {
     // Set (TAS) by the thread about to call step(); cleared (release) after.
     // Work-stealing threads that find this set will retry next outer iteration.
     atomic_flag step_lock;
+    // Timeout support: fire handler if no message within timeout_ns nanoseconds
+    uint64_t timeout_ns;        // 0 = no timeout
+    uint64_t last_activity_ns;  // timestamp when idle started; 0 = not idle
 } ActorBase;
 
 typedef struct {

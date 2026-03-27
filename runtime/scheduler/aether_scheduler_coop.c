@@ -13,6 +13,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 // ============================================================================
 // Globals — same names as multicore_scheduler.c so generated code links
@@ -128,6 +131,8 @@ ActorBase* scheduler_spawn_pooled(int preferred_core, void (*step)(void*), size_
     atomic_store_explicit(&actor->main_thread_only, 1, memory_order_relaxed);  // Always main-thread
     atomic_store_explicit(&actor->reply_slot, NULL, memory_order_relaxed);
     atomic_flag_clear_explicit(&actor->step_lock, memory_order_relaxed);
+    actor->timeout_ns = 0;
+    actor->last_activity_ns = 0;
 
     // Track actor count for inline mode
     int prev_count = atomic_load_explicit(&g_aether_config.actor_count, memory_order_relaxed);
@@ -194,10 +199,34 @@ void scheduler_send_batch_flush(void) {
 
 void scheduler_wait() {
     // Drain all pending messages cooperatively
-    int max_rounds = 100000;  // Safety limit to prevent infinite loops
-    while (max_rounds-- > 0) {
+    // Also wait for active timeouts to fire
+    int idle_rounds = 0;
+    while (idle_rounds < 100) {
         int processed = aether_scheduler_poll(0);
-        if (processed == 0) break;
+        if (processed == 0) {
+            // Check if any actor has a pending timeout
+            int has_pending_timeout = 0;
+            Scheduler* sched = &schedulers[0];
+            for (int i = 0; i < sched->actor_count; i++) {
+                ActorBase* a = sched->actors[i];
+                if (a && a->timeout_ns > 0) {
+                    has_pending_timeout = 1;
+                    break;
+                }
+            }
+            if (!has_pending_timeout) break;
+            // Sleep briefly to avoid spinning while waiting for timeout
+            #ifdef _WIN32
+            Sleep(1);
+            #elif defined(__EMSCRIPTEN__)
+            // No sleep in WASM — just spin
+            #else
+            usleep(1000);  // 1ms
+            #endif
+            idle_rounds++;
+        } else {
+            idle_rounds = 0;  // Reset on progress
+        }
     }
 }
 
@@ -215,9 +244,17 @@ int aether_scheduler_poll(int max_per_actor) {
         if (!actor || !actor->step) continue;
 
         int processed = 0;
-        while (processed < limit) {
-            if (atomic_load_explicit(&actor->mailbox.count, memory_order_acquire) == 0) break;
+        int has_messages = atomic_load_explicit(&actor->mailbox.count, memory_order_acquire) > 0;
+        int has_timeout = actor->timeout_ns > 0 && actor->last_activity_ns > 0;
 
+        if (has_messages) {
+            while (processed < limit) {
+                if (atomic_load_explicit(&actor->mailbox.count, memory_order_acquire) == 0) break;
+                actor->step(actor);
+                processed++;
+            }
+        } else if (has_timeout) {
+            // No messages but timeout is ticking — call step to check timeout
             actor->step(actor);
             processed++;
         }

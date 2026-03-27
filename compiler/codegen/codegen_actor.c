@@ -45,6 +45,8 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
     print_line(gen, "SPSCQueue* spsc_queue;   // Lock-free same-core messaging (lazy alloc)");
     print_line(gen, "_Atomic(ActorReplySlot*) reply_slot; // Non-NULL only during ask/reply");
     print_line(gen, "atomic_flag step_lock;   // Prevents concurrent step() during work-steal handoff");
+    print_line(gen, "uint64_t timeout_ns;     // Receive timeout (0 = none)");
+    print_line(gen, "uint64_t last_activity_ns; // Idle start timestamp (0 = not idle)");
     print_line(gen, "");
 
     // State fields (user-defined)
@@ -212,16 +214,73 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
         print_line(gen, "");
     }
     
+    // Check if any receive block has a timeout arm
+    ASTNode* timeout_arm = NULL;
+    for (int i = 0; i < actor->child_count && !timeout_arm; i++) {
+        ASTNode* child = actor->children[i];
+        if (child->type == AST_RECEIVE_STATEMENT) {
+            for (int j = 0; j < child->child_count; j++) {
+                if (child->children[j]->type == AST_TIMEOUT_ARM) {
+                    timeout_arm = child->children[j];
+                    break;
+                }
+            }
+        }
+    }
+
     print_line(gen, "void %s_step(%s* self) {", actor->value, actor->value);
     indent(gen);
+
+    // Timeout check — fires if idle longer than timeout_ns
+    if (timeout_arm) {
+        print_line(gen, "// Timeout check");
+        print_line(gen, "if (self->timeout_ns > 0 && self->last_activity_ns > 0) {");
+        indent(gen);
+        print_line(gen, "uint64_t _now = (uint64_t)_aether_clock_ns();");
+        print_line(gen, "if ((_now - self->last_activity_ns) >= self->timeout_ns) {");
+        indent(gen);
+        print_line(gen, "self->timeout_ns = 0;  // one-shot");
+        print_line(gen, "self->last_activity_ns = 0;");
+        // Generate the timeout body
+        if (timeout_arm->child_count >= 2 && timeout_arm->children[1]) {
+            ASTNode* tbody = timeout_arm->children[1];
+            if (tbody->type == AST_BLOCK) {
+                for (int j = 0; j < tbody->child_count; j++) {
+                    generate_statement(gen, tbody->children[j]);
+                }
+            } else {
+                generate_statement(gen, tbody);
+            }
+        }
+        print_line(gen, "return;");
+        unindent(gen);
+        print_line(gen, "}");
+        unindent(gen);
+        print_line(gen, "}");
+        print_line(gen, "");
+    }
+
     print_line(gen, "Message msg;");
     print_line(gen, "");
     print_line(gen, "if (unlikely(!mailbox_receive(&self->mailbox, &msg))) {");
     indent(gen);
+    if (timeout_arm) {
+        // Start timeout countdown when mailbox is empty
+        print_line(gen, "if (self->timeout_ns > 0 && self->last_activity_ns == 0) {");
+        indent(gen);
+        print_line(gen, "self->last_activity_ns = (uint64_t)_aether_clock_ns();");
+        unindent(gen);
+        print_line(gen, "}");
+    }
     print_line(gen, "atomic_store_explicit(&self->active, 0, memory_order_relaxed);");
     print_line(gen, "return;");
     unindent(gen);
     print_line(gen, "}");
+    if (timeout_arm) {
+        // Message received — cancel timeout (one-shot: fire only if no messages ever arrive)
+        print_line(gen, "self->timeout_ns = 0;");
+        print_line(gen, "self->last_activity_ns = 0;");
+    }
     print_line(gen, "g_current_reply_slot = msg._reply_slot;");
     print_line(gen, "");
     
@@ -432,12 +491,24 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
     unindent(gen);
     print_line(gen, "}");
     print_line(gen, "#endif");
+
+    // Set timeout if actor has a receive ... after N clause
+    if (timeout_arm && timeout_arm->child_count >= 1) {
+        print_line(gen, "// Receive timeout (milliseconds -> nanoseconds)");
+        print_indent(gen);
+        fprintf(gen->output, "actor->timeout_ns = (uint64_t)(");
+        generate_expression(gen, timeout_arm->children[0]);
+        fprintf(gen->output, ") * 1000000ULL;\n");
+        print_line(gen, "actor->last_activity_ns = (uint64_t)_aether_clock_ns();  // Start timeout countdown at spawn");
+        print_line(gen, "atomic_store_explicit(&actor->active, 1, memory_order_release);  // Activate for timeout polling");
+    }
+
     print_line(gen, "");
     print_line(gen, "return actor;");
     unindent(gen);
     print_line(gen, "}");
     print_line(gen, "");
-    
+
     print_line(gen, "void send_%s(%s* actor, int type, int payload) {", actor->value, actor->value);
     indent(gen);
     print_line(gen, "Message msg = {type, 0, payload, NULL};");

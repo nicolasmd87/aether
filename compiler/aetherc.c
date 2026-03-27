@@ -45,6 +45,7 @@ static bool verbose_mode = false;
 static bool dump_ast_mode = false;
 static bool emit_c_mode = false;
 static bool check_only_mode = false;
+static bool preempt_mode = false;
 static const char* emit_header_path = NULL;
 
 #ifdef _WIN32
@@ -290,6 +291,7 @@ int compile_source(const char* input_path, const char* output_path) {
     } else {
         codegen = create_code_generator(output);
     }
+    if (preempt_mode) codegen->preempt_loops = 1;
     generate_program(codegen, program);
     fclose(output);
     if (header_output) {
@@ -393,6 +395,9 @@ int main(int argc, char *argv[]) {
             arg_offset++;
         } else if (strcmp(argv[arg_offset], "--check") == 0) {
             check_only_mode = true;
+            arg_offset++;
+        } else if (strcmp(argv[arg_offset], "--preempt") == 0) {
+            preempt_mode = true;
             arg_offset++;
         } else if (strcmp(argv[arg_offset], "--emit-header") == 0) {
             // Check for optional explicit path argument (must end in .h)

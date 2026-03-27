@@ -158,6 +158,10 @@ make stdlib PLATFORM=native
 # WebAssembly — cooperative scheduler, no pthreads/fs/net
 make stdlib PLATFORM=wasm    # CC=emcc, -DAETHER_NO_THREADING/FILESYSTEM/NETWORKING
 
+# Or use the ae CLI directly:
+ae build --target wasm hello.ae    # Produces hello.js + hello.wasm
+node hello.js                       # Run with Node.js
+
 # Embedded — cooperative scheduler, no pthreads/fs/net/getenv
 make stdlib PLATFORM=embedded    # -DAETHER_NO_THREADING/FILESYSTEM/NETWORKING/GETENV
 

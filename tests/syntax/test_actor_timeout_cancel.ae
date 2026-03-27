@@ -1,0 +1,24 @@
+// Test: timeout is cancelled when messages arrive
+
+message Ping { }
+
+actor Waiter {
+    state count = 0
+
+    receive {
+        Ping -> {
+            count = count + 1
+            println("Got ping ${count}")
+        }
+    } after 500 -> {
+        println("FAIL: timeout should not fire when messages arrive")
+    }
+}
+
+main() {
+    w = spawn(Waiter())
+    w ! Ping {}
+    w ! Ping {}
+    wait_for_idle()
+    println("PASS: timeout cancelled by messages")
+}

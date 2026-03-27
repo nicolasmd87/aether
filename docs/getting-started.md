@@ -145,6 +145,21 @@ ae build hello.ae -o hello
 ./hello
 ```
 
+**Build for WebAssembly:**
+
+```bash
+ae build --target wasm hello.ae
+node hello.js
+```
+
+Requires [Emscripten](https://emscripten.org/) (`emcc` on PATH).
+
+**Type-check without compiling:**
+
+```bash
+ae check hello.ae
+```
+
 ## Interactive REPL
 
 Experiment with Aether interactively:

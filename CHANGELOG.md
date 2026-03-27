@@ -18,6 +18,10 @@ number before tagging the release.
 - **Unreachable code warnings `[W1002]`**: Detects code after `return`, `exit()`, or exhaustive `if`/`else` blocks where all branches terminate. Recurses into nested blocks
 - **Match expressions**: `msg = match x { 0 -> "ok", 1 -> "err", _ -> "unknown" }` — match can now be used as an expression on the right side of an assignment. Type is inferred from the first arm's result
 - **For-in loop and match tests**: `test_for_in.ae` (range loops, variable bounds, nested), `test_match.ae` (statement match, expression match, wildcard, string/int patterns)
+- **`ae build --target wasm`**: Compiles Aether to WebAssembly via Emscripten. Detects `emcc` on PATH, uses cooperative scheduler, sets `AETHER_NO_*` flags automatically. Produces `.js` + `.wasm` pair. Also reads `[build].target` from `aether.toml`
+- **Actor timeouts**: `receive { Pattern -> body } after N -> { timeout_body }` fires timeout handler if no message arrives within N milliseconds. One-shot: cancelled when a message is received. `TOKEN_AFTER` keyword, `AST_TIMEOUT_ARM` node, `timeout_ns`/`last_activity_ns` fields in `ActorBase`, scheduler awareness for timeout polling
+- **Cooperative preemption (opt-in)**: Two levels, both zero-cost when disabled. Scheduler-side: `AETHER_PREEMPT=1` env var enables time-based drain loop break after 1ms (configurable via `AETHER_PREEMPT_MS`). Codegen-side: `aetherc --preempt` inserts `sched_yield()` at loop back-edges with reduction counter (10000 iterations per yield). Prevents tight loops from starving other actors
+- **`_aether_clock_ns` always available**: Moved nanosecond clock helper out of `#if !AETHER_GCC_COMPAT` guard so it's available on all platforms (needed by timeout checks)
 
 ### Fixed
 

@@ -2,7 +2,6 @@
 
 Planned features and improvements for upcoming Aether releases.
 
-
 > See [CHANGELOG.md](../CHANGELOG.md) for what shipped in each release.
 
 ## Language Features
@@ -43,10 +42,6 @@ main() {
 - Error type convention: empty string `""` = no error, non-empty = error message
 - Optional: `or` keyword for inline defaults on error
 
-**Why not now:** Aether currently supports only single return values. Adding multiple returns touches the parser (tuple destructuring), type inference (propagating paired types), and codegen (struct returns or out-params). The `1`/`0` int convention is consistent across the stdlib today and works for v0.x. Multiple returns is the natural next step once the core language stabilizes.
-
-**Origin:** Observed during stdlib hardening — `file.delete()`, `file.write()`, `dir.create()` were returning raw POSIX values (`0`/`-1`) instead of Aether's `1`/`0` convention. Even after fixing the convention, the underlying problem remains: int return values can't carry error context and are easy to ignore.
-
 ### Closures and First-Class Functions
 
 Arrow functions exist but are named functions, not values. There are no anonymous functions and no way to capture variables from an enclosing scope. This blocks higher-order patterns like `list.map()`, `list.filter()`, and callbacks.
@@ -76,45 +71,9 @@ main() {
 
 **Design constraint:** Capture by value (copy into closure struct) is the default. No hidden heap allocation. This keeps closures predictable and compatible with manual memory management.
 
-### Optional Cooperative Preemption
-
-Aether's scheduler is cooperative — each message handler runs to completion before the scheduler moves to the next actor. A handler that enters an infinite loop will block that core's scheduler thread. This is the same model as Go goroutines and Pony behaviours. BEAM is unique in having reduction-based preemption that prevents this.
-
-The scheduler already enforces fairness *between* actors (caps at 64 messages per actor per batch, yields for cross-core messages), but within a single handler there is no preemption.
-
-> **Note:** The cooperative scheduler (`aether_scheduler_coop.c`) is a different concept — it's the single-threaded backend for threadless platforms (WASM, embedded), not a fairness mechanism. Cooperative preemption is about interrupting long-running handlers within the existing multi-threaded scheduler.
-
-**Planned approach (opt-in, zero cost when disabled):**
-
-- **Scheduler-side:** After each `actor->step()` call in the drain loop, check a cycle counter. If a handler exceeded a time threshold (e.g., ~1ms), break out and re-queue the actor. Cost: ~1 `rdtsc` read per step call, only when enabled.
-- **Codegen-side (advanced):** A compiler flag inserts `aether_check_preempt()` calls at loop back-edges in generated C code. This decrements a reduction counter and yields when it hits zero. Cost: 2-3 cycles per loop iteration. Default off.
-
-**Design constraint:** Default off, zero overhead when disabled. Fits the "lock as little as possible" philosophy. Programs that keep handlers short (which is best practice in any actor system) pay nothing.
-
 ## Quick Wins
 
 Near-term improvements that build on existing infrastructure.
-
-### Actor Timeouts
-
-Actors can currently wait forever for messages that never arrive. A timeout mechanism enables health checks, retries, and deadlock detection.
-
-**Planned syntax (tentative):**
-
-```aether
-actor Worker {
-    receive {
-        Task(data) -> { process(data) }
-    } after 5000 -> {
-        println("No tasks for 5 seconds, shutting down")
-    }
-}
-```
-
-**What's needed:**
-- `after` clause in receive blocks (parser + codegen)
-- Timer infrastructure in scheduler (rdtsc-based deadline per actor)
-- Timeout message delivered as a special reserved message type
 
 ### Package Registry
 
@@ -124,16 +83,14 @@ actor Worker {
 
 Major features that require significant architectural work.
 
-### WebAssembly Target
+### WebAssembly Target — Phase 2
 
-Aether compiles to C, and C compiles to WASM via Emscripten, so the path exists. The platform portability layer addresses the core blockers: pthreads, filesystem, and networking dependencies are now conditionally compiled via `AETHER_HAS_*` flags.
+Phase 1 is complete: `ae build --target wasm` compiles Aether to WebAssembly via Emscripten. Multi-actor programs work cooperatively.
 
-
-**What's remaining:**
-- `ae build --target wasm` CLI integration
-- Emscripten-specific output (`.wasm` + `.js` glue, HTML template)
+**What's remaining (Phase 2):**
+- Multi-actor programs using Web Workers as scheduler threads with `postMessage`
+- Emscripten-specific output (HTML template for browser)
 - WASI support for non-browser environments
-- End-to-end testing with real Emscripten toolchain in Docker
 
 ### Async I/O Integration
 
@@ -152,5 +109,4 @@ All I/O in Aether is currently blocking. There is no io_uring (Linux), kqueue (m
 | Feature | Status | Notes |
 |---------|--------|-------|
 | `ae fmt` | Not started | Source code formatter (deferred until syntax stabilizes) |
-| `ae build --target wasm` | Not started | CLI integration for WebAssembly builds |
 | Package registry v1 | Not started | Version constraints, lock files, dependency resolution |

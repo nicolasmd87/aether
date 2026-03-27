@@ -1199,6 +1199,10 @@ int typecheck_actor_definition(ASTNode* actor, SymbolTable* table) {
 
                     // Type check arm body
                     typecheck_statement(arm_body, receive_table);
+                } else if (arm->type == AST_TIMEOUT_ARM && arm->child_count >= 2) {
+                    // Timeout arm: after N -> { body }
+                    typecheck_expression(arm->children[0], receive_table);  // timeout expr
+                    typecheck_statement(arm->children[1], receive_table);   // body
                 } else {
                     typecheck_statement(arm, receive_table);
                 }

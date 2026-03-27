@@ -61,6 +61,7 @@ CodeGenerator* create_code_generator(FILE* output) {
     // MSVC compat: counter for ask-operator temp variables
     gen->ask_temp_counter = 0;
     gen->match_result_var = NULL;
+    gen->preempt_loops = 0;
     // Ask/reply type map
     gen->reply_type_map = NULL;
     gen->reply_type_count = 0;
@@ -748,6 +749,7 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "#include <emscripten.h>");
     print_line(gen, "#else");
     print_line(gen, "#include <unistd.h>");
+    print_line(gen, "#include <sched.h>");
     print_line(gen, "#endif");
     /* aligned_alloc: C11 POSIX; Windows uses _aligned_malloc with swapped args */
     print_line(gen, "#ifdef _WIN32");
@@ -764,6 +766,15 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "#    define unlikely(x) (x)");
     print_line(gen, "#  endif");
     print_line(gen, "#endif");
+    // Cooperative preemption: reduction counter for loop yield points
+    if (gen->preempt_loops) {
+        print_line(gen, "static int _aether_reductions = 10000;");
+        print_line(gen, "#ifdef _WIN32");
+        print_line(gen, "#define sched_yield() SwitchToThread()");
+        print_line(gen, "#elif defined(__EMSCRIPTEN__)");
+        print_line(gen, "#define sched_yield() ((void)0)");
+        print_line(gen, "#endif");
+    }
     /* GCC/Clang vs MSVC: guards for statement expressions ({...}) and computed goto */
     print_line(gen, "#ifndef AETHER_GCC_COMPAT");
     print_line(gen, "#  if (defined(__GNUC__) || defined(__clang__)) && !defined(__EMSCRIPTEN__)");
@@ -772,8 +783,7 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "#    define AETHER_GCC_COMPAT 0");
     print_line(gen, "#  endif");
     print_line(gen, "#endif");
-    /* clock_ns helper — statement-expression on GCC, helper function on MSVC */
-    print_line(gen, "#if !AETHER_GCC_COMPAT");
+    /* clock_ns helper — always available (used by timeout checks + clock_ns() builtin) */
     print_line(gen, "#ifdef _WIN32");
     print_line(gen, "static int64_t _aether_clock_ns(void) {");
     print_line(gen, "    LARGE_INTEGER freq, now;");
@@ -791,7 +801,6 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "    clock_gettime(CLOCK_MONOTONIC, &_ts);");
     print_line(gen, "    return (int64_t)_ts.tv_sec * 1000000000LL + _ts.tv_nsec;");
     print_line(gen, "}");
-    print_line(gen, "#endif");
     print_line(gen, "#endif");
     /* String interpolation helper — MSVC can't use ({ ... }) statement expressions */
     print_line(gen, "#if !AETHER_GCC_COMPAT");

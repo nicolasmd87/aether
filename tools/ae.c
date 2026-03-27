@@ -1059,6 +1059,80 @@ static void build_gcc_cmd(char* cmd, size_t size,
 #endif
 }
 
+static int build_wasm_cmd(char* cmd, size_t size,
+                          const char* c_file, const char* out_file) {
+    // Build include paths from toolchain root
+    char includes[2048];
+    if (tc.include_flags[0]) {
+        strncpy(includes, tc.include_flags, sizeof(includes) - 1);
+        includes[sizeof(includes) - 1] = '\0';
+    } else {
+        snprintf(includes, sizeof(includes),
+            "-I%s/runtime -I%s/runtime/actors -I%s/runtime/scheduler "
+            "-I%s/runtime/utils -I%s/runtime/memory -I%s/runtime/config "
+            "-I%s/std -I%s/std/string -I%s/std/io -I%s/std/math "
+            "-I%s/std/net -I%s/std/collections -I%s/std/json",
+            tc.root, tc.root, tc.root, tc.root, tc.root, tc.root,
+            tc.root, tc.root, tc.root, tc.root, tc.root, tc.root, tc.root);
+    }
+
+    // Runtime source files (cooperative scheduler, not multicore)
+    static const char* wasm_runtime_files[] = {
+        "runtime/scheduler/aether_scheduler_coop.c",
+        "runtime/scheduler/scheduler_optimizations.c",
+        "runtime/config/aether_optimization_config.c",
+        "runtime/memory/memory.c",
+        "runtime/memory/aether_arena.c",
+        "runtime/memory/aether_pool.c",
+        "runtime/memory/aether_memory_stats.c",
+        "runtime/utils/aether_tracing.c",
+        "runtime/utils/aether_bounds_check.c",
+        "runtime/utils/aether_test.c",
+        "runtime/memory/aether_arena_optimized.c",
+        "runtime/aether_runtime_types.c",
+        "runtime/utils/aether_cpu_detect.c",
+        "runtime/memory/aether_batch.c",
+        "runtime/utils/aether_simd_vectorized.c",
+        "runtime/aether_runtime.c",
+        "runtime/aether_numa.c",
+        "runtime/actors/aether_send_buffer.c",
+        "runtime/actors/aether_send_message.c",
+        "runtime/actors/aether_actor_thread.c",
+        "std/string/aether_string.c",
+        "std/math/aether_math.c",
+        "std/net/aether_http.c",
+        "std/net/aether_http_server.c",
+        "std/net/aether_net.c",
+        "std/collections/aether_collections.c",
+        "std/json/aether_json.c",
+        "std/fs/aether_fs.c",
+        "std/log/aether_log.c",
+        "std/io/aether_io.c",
+        "std/os/aether_os.c",
+        "std/collections/aether_hashmap.c",
+        "std/collections/aether_set.c",
+        "std/collections/aether_vector.c",
+        "std/collections/aether_pqueue.c",
+        NULL
+    };
+    char runtime[8192];
+    runtime[0] = '\0';
+    for (int i = 0; wasm_runtime_files[i]; i++) {
+        char path[512];
+        snprintf(path, sizeof(path), "%s/%s ", tc.root, wasm_runtime_files[i]);
+        strncat(runtime, path, sizeof(runtime) - strlen(runtime) - 1);
+    }
+
+    snprintf(cmd, size,
+        "emcc -O2 -DAETHER_NO_THREADING -DAETHER_NO_FILESYSTEM -DAETHER_NO_NETWORKING "
+        "%s \"%s\" %s -o \"%s\" -lm "
+        "-Wall -Wextra -Wno-unused-parameter -Wno-unused-function "
+        "-Wno-unused-variable -Wno-missing-field-initializers -Wno-unused-label",
+        includes, c_file, runtime, out_file);
+
+    return 1;
+}
+
 // --------------------------------------------------------------------------
 // Commands
 // --------------------------------------------------------------------------
@@ -1256,9 +1330,13 @@ static int cmd_build(int argc, char** argv) {
     const char* output_name = NULL;
     char extra_files[2048] = "";
 
+    const char* target = NULL;
+
     for (int i = 0; i < argc; i++) {
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             output_name = argv[++i];
+        } else if (strcmp(argv[i], "--target") == 0 && i + 1 < argc) {
+            target = argv[++i];
         } else if (strcmp(argv[i], "--extra") == 0 && i + 1 < argc) {
             if (extra_files[0]) strncat(extra_files, " ", sizeof(extra_files) - strlen(extra_files) - 1);
             strncat(extra_files, argv[++i], sizeof(extra_files) - strlen(extra_files) - 1);
@@ -1266,6 +1344,28 @@ static int cmd_build(int argc, char** argv) {
             file = argv[i];
         }
     }
+
+    // Read target from aether.toml if not specified on CLI
+    if (!target && path_exists("aether.toml")) {
+        static char toml_target[64];
+        TomlDocument* doc = toml_parse_file("aether.toml");
+        if (doc) {
+            const char* val = toml_get_value(doc, "build", "target");
+            if (val && strcmp(val, "native") != 0) {
+                strncpy(toml_target, val, sizeof(toml_target) - 1);
+                toml_target[sizeof(toml_target) - 1] = '\0';
+                target = toml_target;
+            }
+            toml_free_document(doc);
+        }
+    }
+
+    // Validate target
+    if (target && strcmp(target, "wasm") != 0 && strcmp(target, "native") != 0) {
+        fprintf(stderr, "Error: Unknown target '%s'. Valid targets: native, wasm\n", target);
+        return 1;
+    }
+    int is_wasm = target && strcmp(target, "wasm") == 0;
 
     // Resolve directory argument (e.g. "." or "myproject/") to src/main.ae
     if (file && dir_exists(file)) {
@@ -1326,7 +1426,28 @@ static int cmd_build(int argc, char** argv) {
         snprintf(exe_file, sizeof(exe_file), "%s" EXE_EXT, base);
     }
 
-    printf("Building %s...\n", file);
+    // Override output extension for wasm target
+    if (is_wasm) {
+        // Replace .exe or binary with .js (emcc produces .js + .wasm pair)
+        char* dot = strrchr(exe_file, '.');
+        if (dot && strcmp(dot, EXE_EXT) == 0) {
+            strcpy(dot, ".js");
+        } else {
+            strncat(exe_file, ".js", sizeof(exe_file) - strlen(exe_file) - 1);
+        }
+    }
+
+    // Pre-flight: verify emcc for wasm target before starting compilation
+    if (is_wasm && run_cmd_quiet("emcc --version") != 0) {
+        fprintf(stderr, "Error: Emscripten (emcc) not found on PATH.\n");
+        fprintf(stderr, "Install: https://emscripten.org/docs/getting_started/downloads.html\n");
+        fprintf(stderr, "  git clone https://github.com/emscripten-core/emsdk.git\n");
+        fprintf(stderr, "  cd emsdk && ./emsdk install latest && ./emsdk activate latest\n");
+        fprintf(stderr, "  source ./emsdk_env.sh\n");
+        return 1;
+    }
+
+    printf("Building %s%s...\n", file, is_wasm ? " (wasm)" : "");
 
     // Step 1: .ae to .c
     snprintf(cmd, sizeof(cmd), "\"%s\" \"%s\" \"%s\"", tc.compiler, file, c_file);
@@ -1339,27 +1460,49 @@ static int cmd_build(int argc, char** argv) {
         return 1;
     }
 
-    // Step 2: .c to executable with runtime (-O2 for release builds)
-    // Merge extra_sources from aether.toml [[bin]] with any --extra CLI args
-    {
-        char toml_extra[2048] = "";
-        get_extra_sources_for_bin(file, toml_extra, sizeof(toml_extra));
-        if (toml_extra[0]) {
-            if (extra_files[0]) strncat(extra_files, " ", sizeof(extra_files) - strlen(extra_files) - 1);
-            strncat(extra_files, toml_extra, sizeof(extra_files) - strlen(extra_files) - 1);
+    // Step 2: .c to executable (or wasm) with runtime
+    if (is_wasm) {
+        if (!build_wasm_cmd(cmd, sizeof(cmd), c_file, exe_file)) {
+            return 1;
         }
-    }
-    const char* extra = extra_files[0] ? extra_files : NULL;
-    build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, true, extra);
-    int gcc_ret = tc.verbose ? run_cmd(cmd) : run_cmd_quiet(cmd);
-    if (gcc_ret != 0) {
+    } else {
+        // Merge extra_sources from aether.toml [[bin]] with any --extra CLI args
+        {
+            char toml_extra[2048] = "";
+            get_extra_sources_for_bin(file, toml_extra, sizeof(toml_extra));
+            if (toml_extra[0]) {
+                if (extra_files[0]) strncat(extra_files, " ", sizeof(extra_files) - strlen(extra_files) - 1);
+                strncat(extra_files, toml_extra, sizeof(extra_files) - strlen(extra_files) - 1);
+            }
+        }
+        const char* extra = extra_files[0] ? extra_files : NULL;
         build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, true, extra);
+    }
+
+    int build_ret = tc.verbose ? run_cmd(cmd) : run_cmd_quiet(cmd);
+    if (build_ret != 0) {
+        // Retry with visible output for error messages
+        if (is_wasm) {
+            build_wasm_cmd(cmd, sizeof(cmd), c_file, exe_file);
+        } else {
+            const char* extra = extra_files[0] ? extra_files : NULL;
+            build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, true, extra);
+        }
         run_cmd(cmd);
         fprintf(stderr, "Build failed.\n");
         return 1;
     }
 
     printf("Built: %s\n", exe_file);
+    if (is_wasm) {
+        // .wasm file is co-located with .js
+        char wasm_file[2048];
+        strncpy(wasm_file, exe_file, sizeof(wasm_file) - 1);
+        char* js_ext = strrchr(wasm_file, '.');
+        if (js_ext) strcpy(js_ext, ".wasm");
+        printf("       %s\n", wasm_file);
+        printf("Run with: node %s\n", exe_file);
+    }
     return 0;
 }
 
@@ -2758,6 +2901,7 @@ static void print_usage(void) {
     printf("  init <name>          Create a new Aether project\n");
     printf("  run [file.ae]        Compile and run a program\n");
     printf("  build [file.ae]      Compile to executable\n");
+    printf("  build --target wasm  Compile to WebAssembly (.js + .wasm)\n");
     printf("  check [file.ae]      Type-check without compiling\n");
     printf("  test [file|dir]      Discover and run tests\n");
     printf("  add <package>        Add a dependency\n");

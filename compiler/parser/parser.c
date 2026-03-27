@@ -2005,6 +2005,39 @@ ASTNode* parse_receive_statement(Parser* parser) {
         }
     }
     
+    // Check for timeout clause: } after N -> { body }
+    Token* after_tok = peek_token(parser);
+    if (after_tok && after_tok->type == TOKEN_AFTER) {
+        advance_token(parser);  // consume 'after'
+
+        ASTNode* timeout_expr = parse_expression(parser);
+        if (!timeout_expr) {
+            parser_error(parser, "Expected timeout expression after 'after'");
+            return receive_stmt;
+        }
+
+        expect_token(parser, TOKEN_ARROW);
+
+        ASTNode* timeout_body = NULL;
+        Token* tbody_start = peek_token(parser);
+        if (tbody_start && tbody_start->type == TOKEN_LEFT_BRACE) {
+            timeout_body = parse_block(parser);
+        } else {
+            ASTNode* stmt = parse_statement(parser);
+            if (stmt) {
+                timeout_body = create_ast_node(AST_BLOCK, NULL, tbody_start->line, tbody_start->column);
+                add_child(timeout_body, stmt);
+            }
+        }
+
+        if (timeout_body) {
+            ASTNode* timeout_arm = create_ast_node(AST_TIMEOUT_ARM, NULL, after_tok->line, after_tok->column);
+            add_child(timeout_arm, timeout_expr);
+            add_child(timeout_arm, timeout_body);
+            add_child(receive_stmt, timeout_arm);
+        }
+    }
+
     return receive_stmt;
 }
 

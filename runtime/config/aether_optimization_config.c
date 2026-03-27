@@ -20,6 +20,8 @@ AetherRuntimeConfig g_aether_config = {
     .main_thread_mode = false,      // Sync processing on main thread
     .main_actor = NULL,
     .actor_count = 0,
+    .preempt_enabled = false,       // Opt-in: AETHER_PREEMPT=1
+    .preempt_threshold_ns = 1000000, // 1ms default
     .profile = AETHER_PROFILE_MEDIUM,
     .msg_pool_size = AETHER_PROFILE_MEDIUM_MSG_POOL,
     .actor_pool_size = AETHER_PROFILE_MEDIUM_ACTOR_POOL,
@@ -135,6 +137,15 @@ void aether_init_from_env(void) {
     // Check verbose mode
     if (getenv("AETHER_VERBOSE")) {
         atomic_store(&g_aether_config.verbose, true);
+    }
+
+    // Cooperative preemption (opt-in)
+    if (getenv("AETHER_PREEMPT")) {
+        atomic_store(&g_aether_config.preempt_enabled, true);
+        int threshold = aether_env_int("AETHER_PREEMPT_MS", 0);
+        if (threshold > 0) {
+            g_aether_config.preempt_threshold_ns = (uint64_t)threshold * 1000000ULL;
+        }
     }
 #else
     // No getenv: use defaults

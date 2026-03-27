@@ -23,6 +23,20 @@
 #include "../aether_numa.h"
 #include "../actors/aether_send_buffer.h"
 
+// Portable nanosecond clock for preemption timing
+static inline uint64_t aether_now_ns(void) {
+#ifdef _WIN32
+    LARGE_INTEGER freq, now;
+    QueryPerformanceFrequency(&freq);
+    QueryPerformanceCounter(&now);
+    return (uint64_t)((double)now.QuadPart / freq.QuadPart * 1000000000.0);
+#else
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+#endif
+}
+
 // Forward declaration to avoid header cycle with aether_send_message.h
 extern void aether_send_message(void* actor_ptr, void* message_data, size_t message_size);
 
@@ -467,11 +481,15 @@ void* AETHER_HOT scheduler_thread(void* arg) {
             if (atomic_load_explicit(&actor->mailbox.count, memory_order_relaxed) > MAILBOX_SIZE / 2) {
                 int drained = 0;
                 if (actor->step && !atomic_flag_test_and_set_explicit(&actor->step_lock, memory_order_acquire)) {
+                    uint64_t _drain_start = atomic_load_explicit(&g_aether_config.preempt_enabled, memory_order_relaxed) ? aether_now_ns() : 0;
                     while (atomic_load_explicit(&actor->mailbox.count, memory_order_relaxed) > 0 && drained < 128) {
                         if (unlikely(atomic_load_explicit(&actor->assigned_core, memory_order_relaxed) != sched->core_id))
                             break;
                         actor->step(actor);
                         drained++;
+                        // Preemption: yield if handler batch exceeds threshold
+                        if (_drain_start && (aether_now_ns() - _drain_start) >= g_aether_config.preempt_threshold_ns)
+                            break;
                     }
                     atomic_flag_clear_explicit(&actor->step_lock, memory_order_release);
                 }
@@ -986,11 +1004,42 @@ static inline int count_pending_messages(void) {
 // Does NOT stop or join scheduler threads — they keep running and can
 // process new messages sent after this function returns.
 // Safe to call multiple times in a program (e.g. between test phases).
+// Check if any actor has a pending timeout
+static int has_pending_actor_timeout(void) {
+    for (int c = 0; c < num_cores; c++) {
+        for (int i = 0; i < schedulers[c].actor_count; i++) {
+            ActorBase* a = schedulers[c].actors[i];
+            if (a && a->timeout_ns > 0) return 1;
+        }
+    }
+    return 0;
+}
+
 void scheduler_wait() {
     // MAIN THREAD MODE: All messages processed synchronously, nothing to wait for
     // This is the fastest path for single-actor programs (counting benchmark)
     if (aether_main_thread_mode_active()) {
-        return;  // No scheduler threads, no waiting needed
+        // But if any actor has a pending timeout, poll until it fires
+        if (has_pending_actor_timeout()) {
+            int rounds = 0;
+            while (has_pending_actor_timeout() && rounds < 100000) {
+                for (int c = 0; c < num_cores; c++) {
+                    for (int i = 0; i < schedulers[c].actor_count; i++) {
+                        ActorBase* a = schedulers[c].actors[i];
+                        if (a && a->timeout_ns > 0 && a->step) {
+                            a->step(a);
+                        }
+                    }
+                }
+                #ifdef _WIN32
+                Sleep(1);
+                #else
+                usleep(1000);
+                #endif
+                rounds++;
+            }
+        }
+        return;
     }
 
     // Check if scheduler is still running
@@ -1506,6 +1555,8 @@ ActorBase* scheduler_spawn_pooled(int preferred_core, void (*step)(void*), size_
     atomic_init(&actor->main_thread_only, 0);
     atomic_init(&actor->reply_slot, NULL);
     atomic_flag_clear_explicit(&actor->step_lock, memory_order_relaxed);
+    actor->timeout_ns = 0;
+    actor->last_activity_ns = 0;
 
     // Track actor count for inline mode auto-detection
     // Get previous count and main_actor BEFORE aether_on_actor_spawn modifies them

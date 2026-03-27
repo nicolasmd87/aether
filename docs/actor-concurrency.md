@@ -173,6 +173,31 @@ void ActorName_step(ActorName* self) {
 }
 ```
 
+## Actor Timeouts
+
+The `after` clause on a `receive` block fires a handler if no message arrives within a given number of milliseconds:
+
+```aether
+actor Monitor {
+    receive {
+        Heartbeat -> { println("alive") }
+    } after 5000 -> {
+        println("no heartbeat for 5s")
+    }
+}
+```
+
+The timeout is one-shot: it is cancelled when any message is received. The countdown starts when the actor's mailbox becomes empty. Internally, the generated step function checks `_aether_clock_ns()` against a deadline before each `mailbox_receive()` call.
+
+## Cooperative Preemption
+
+By default, message handlers run to completion. A tight compute loop inside a handler will block that core's scheduler thread. For programs where this is a concern, cooperative preemption can be enabled:
+
+- **Scheduler-side**: `AETHER_PREEMPT=1` enables time-based drain loop breaks. After each `actor->step()` call, the scheduler checks elapsed time and yields if the threshold (default 1ms, configurable via `AETHER_PREEMPT_MS`) is exceeded. Cost when disabled: zero.
+- **Codegen-side**: `aetherc --preempt` inserts `sched_yield()` calls at loop back-edges in generated C code. A reduction counter (10000 iterations) triggers the yield. Cost when not compiled with `--preempt`: zero (code not generated).
+
+Both levels are independent and can be used alone or together.
+
 ## Single-Core Runtime
 
 In single-core mode, actors run cooperatively. The scheduler processes actors in a loop, calling each actor's step function when its mailbox contains messages.
