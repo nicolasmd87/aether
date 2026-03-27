@@ -1062,18 +1062,23 @@ static void build_gcc_cmd(char* cmd, size_t size,
 static int build_wasm_cmd(char* cmd, size_t size,
                           const char* c_file, const char* out_file) {
     // Build include paths from toolchain root
-    char includes[2048];
+    char includes[8192];
     if (tc.include_flags[0]) {
         strncpy(includes, tc.include_flags, sizeof(includes) - 1);
         includes[sizeof(includes) - 1] = '\0';
     } else {
-        snprintf(includes, sizeof(includes),
-            "-I%s/runtime -I%s/runtime/actors -I%s/runtime/scheduler "
-            "-I%s/runtime/utils -I%s/runtime/memory -I%s/runtime/config "
-            "-I%s/std -I%s/std/string -I%s/std/io -I%s/std/math "
-            "-I%s/std/net -I%s/std/collections -I%s/std/json",
-            tc.root, tc.root, tc.root, tc.root, tc.root, tc.root,
-            tc.root, tc.root, tc.root, tc.root, tc.root, tc.root, tc.root);
+        static const char* include_dirs[] = {
+            "runtime", "runtime/actors", "runtime/scheduler",
+            "runtime/utils", "runtime/memory", "runtime/config",
+            "std", "std/string", "std/io", "std/math",
+            "std/net", "std/collections", "std/json", NULL
+        };
+        includes[0] = '\0';
+        for (int i = 0; include_dirs[i]; i++) {
+            char flag[2048];
+            snprintf(flag, sizeof(flag), "-I%s/%s ", tc.root, include_dirs[i]);
+            strncat(includes, flag, sizeof(includes) - strlen(includes) - 1);
+        }
     }
 
     // Runtime source files (cooperative scheduler, not multicore)
@@ -1118,7 +1123,7 @@ static int build_wasm_cmd(char* cmd, size_t size,
     char runtime[8192];
     runtime[0] = '\0';
     for (int i = 0; wasm_runtime_files[i]; i++) {
-        char path[512];
+        char path[2048];
         snprintf(path, sizeof(path), "%s/%s ", tc.root, wasm_runtime_files[i]);
         strncat(runtime, path, sizeof(runtime) - strlen(runtime) - 1);
     }
@@ -1719,12 +1724,24 @@ static int cmd_test(int argc, char** argv) {
 
 static int cmd_add(int argc, char** argv) {
     if (argc < 1 || argv[0][0] == '-') {
-        fprintf(stderr, "Usage: ae add <package>\n");
+        fprintf(stderr, "Usage: ae add <package>[@version]\n");
         fprintf(stderr, "Example: ae add github.com/user/repo\n");
+        fprintf(stderr, "         ae add github.com/user/repo@v1.2.0\n");
         return 1;
     }
 
-    const char* package = argv[0];
+    // Parse package@version
+    char pkg_buf[1024];
+    strncpy(pkg_buf, argv[0], sizeof(pkg_buf) - 1);
+    pkg_buf[sizeof(pkg_buf) - 1] = '\0';
+
+    const char* version = NULL;
+    char* at = strchr(pkg_buf, '@');
+    if (at) {
+        *at = '\0';
+        version = at + 1;
+    }
+    const char* package = pkg_buf;
 
     if (!path_exists("aether.toml")) {
         fprintf(stderr, "Error: No aether.toml found. Run 'ae init <name>' first.\n");
@@ -1733,7 +1750,7 @@ static int cmd_add(int argc, char** argv) {
 
     if (strncmp(package, "github.com/", 11) != 0) {
         fprintf(stderr, "Error: Only GitHub packages supported.\n");
-        fprintf(stderr, "Format: ae add github.com/user/repo\n");
+        fprintf(stderr, "Format: ae add github.com/user/repo[@version]\n");
         return 1;
     }
 
@@ -1743,7 +1760,7 @@ static int cmd_add(int argc, char** argv) {
         return 1;
     }
 
-    printf("Adding %s...\n", package);
+    printf("Adding %s%s%s...\n", package, version ? "@" : "", version ? version : "");
 
     // Cache directory
     char cache_dir[1024];
@@ -1760,20 +1777,45 @@ static int cmd_add(int argc, char** argv) {
         char* slash = strrchr(parent, '/');
         if (slash) { *slash = '\0'; mkdirs(parent); }
 
-        // GCC conservatively assumes package (argv string) may be PATH_MAX-sized;
-        // package names are short in practice (< 256 bytes).
 #if defined(__GNUC__) && !defined(__clang__)
 #  pragma GCC diagnostic push
 #  pragma GCC diagnostic ignored "-Wformat-truncation"
 #endif
         char cmd[2048];
-        snprintf(cmd, sizeof(cmd), "git clone --depth 1 https://%s %s", package, pkg_dir);
+        if (version) {
+            // Clone full repo to checkout specific tag
+            snprintf(cmd, sizeof(cmd), "git clone https://%s %s", package, pkg_dir);
+        } else {
+            snprintf(cmd, sizeof(cmd), "git clone --depth 1 https://%s %s", package, pkg_dir);
+        }
 #if defined(__GNUC__) && !defined(__clang__)
 #  pragma GCC diagnostic pop
 #endif
         if (run_cmd(cmd) != 0) {
             fprintf(stderr, "Failed to download package.\n");
+            fprintf(stderr, "Check that the repository exists: https://%s\n", package);
             return 1;
+        }
+
+        // Checkout specific version tag if requested
+        if (version) {
+            char tag[128];
+            if (version[0] == 'v') {
+                snprintf(tag, sizeof(tag), "%s", version);
+            } else {
+                snprintf(tag, sizeof(tag), "v%s", version);
+            }
+            snprintf(cmd, sizeof(cmd), "cd \"%s\" && git checkout %s 2>/dev/null || git checkout v%s 2>/dev/null",
+                     pkg_dir, tag, version);
+            if (run_cmd_quiet(cmd) != 0) {
+                fprintf(stderr, "Error: Version '%s' not found.\n", version);
+                // List available tags
+                snprintf(cmd, sizeof(cmd), "cd \"%s\" && git tag -l 'v*' | sort -V | tail -10", pkg_dir);
+                fprintf(stderr, "Available versions:\n");
+                (void)run_cmd(cmd);
+                return 1;
+            }
+            printf("Checked out %s\n", tag);
         }
     }
 
@@ -1818,11 +1860,11 @@ static int cmd_add(int argc, char** argv) {
         }
         if (next_sect) {
             fwrite(content, 1, next_sect - content, f);
-            fprintf(f, "%s = \"latest\"\n", package);
+            fprintf(f, "%s = \"%s\"\n", package, version ? version : "latest");
             fputs(next_sect, f);
         } else {
             fputs(content, f);
-            fprintf(f, "%s = \"latest\"\n", package);
+            fprintf(f, "%s = \"%s\"\n", package, version ? version : "latest");
         }
         fclose(f);
     } else {
@@ -1834,7 +1876,7 @@ static int cmd_add(int argc, char** argv) {
             return 1;
         }
         fprintf(f, "\n[dependencies]\n");
-        fprintf(f, "%s = \"latest\"\n", package);
+        fprintf(f, "%s = \"%s\"\n", package, version ? version : "latest");
         fclose(f);
     }
 
@@ -2636,6 +2678,41 @@ static int cmd_version_use(const char* version) {
     resolve_version_bin_dir(ver_dir, src_bin, sizeof(src_bin));
 
 #ifdef _WIN32
+    // Backup the currently active version to versions/ before overwriting.
+    // This preserves the initial install (e.g., v0.30.0 installed via install.sh
+    // lives in ~/.aether/ directly, not in versions/).
+    {
+        char avpath_bak[512];
+        snprintf(avpath_bak, sizeof(avpath_bak), "%s\\.aether\\active_version", home);
+        FILE* avf_bak = fopen(avpath_bak, "r");
+        if (avf_bak) {
+            char cur_ver[64] = "";
+            if (fgets(cur_ver, sizeof(cur_ver), avf_bak)) {
+                char* nl = strchr(cur_ver, '\n');
+                if (nl) *nl = '\0';
+            }
+            fclose(avf_bak);
+            if (cur_ver[0]) {
+                char cur_vtag[64];
+                if (cur_ver[0] != 'v') snprintf(cur_vtag, sizeof(cur_vtag), "v%s", cur_ver);
+                else { strncpy(cur_vtag, cur_ver, sizeof(cur_vtag) - 1); cur_vtag[sizeof(cur_vtag)-1] = '\0'; }
+                char cur_ver_dir[512];
+                snprintf(cur_ver_dir, sizeof(cur_ver_dir), "%s\\.aether\\versions\\%s", home, cur_vtag);
+                if (!dir_exists(cur_ver_dir)) {
+                    // Current version not in versions/ — back it up
+                    char bak_cmd[2048];
+                    char dest_root_bak[512];
+                    snprintf(dest_root_bak, sizeof(dest_root_bak), "%s\\.aether", home);
+                    mkdirs(cur_ver_dir);
+                    snprintf(bak_cmd, sizeof(bak_cmd),
+                        "robocopy \"%s\" \"%s\" /E /NFL /NDL /NJH /NJS /IS /IT /XD versions cache >nul 2>&1",
+                        dest_root_bak, cur_ver_dir);
+                    (void)system(bak_cmd);
+                }
+            }
+        }
+    }
+
     // Copy the entire version directory to ~/.aether/ so lib/, include/,
     // share/ are available alongside bin/.
     char dest_root[512];
@@ -2741,9 +2818,33 @@ static int cmd_version_use(const char* version) {
 }
 
 // "ae version [list|install|use]"
+// Read the active version from ~/.aether/active_version, fall back to compiled-in
+static const char* get_active_version(void) {
+    static char active[64];
+    const char* home = get_home_dir();
+    char avpath[512];
+#ifdef _WIN32
+    snprintf(avpath, sizeof(avpath), "%s\\.aether\\active_version", home);
+#else
+    snprintf(avpath, sizeof(avpath), "%s/.aether/active_version", home);
+#endif
+    FILE* f = fopen(avpath, "r");
+    if (f) {
+        if (fgets(active, sizeof(active), f)) {
+            // Trim newline
+            char* nl = strchr(active, '\n');
+            if (nl) *nl = '\0';
+            fclose(f);
+            if (active[0]) return active;
+        }
+        fclose(f);
+    }
+    return AE_VERSION;
+}
+
 static int cmd_version(int argc, char** argv) {
     if (argc == 0) {
-        printf("ae %s (Aether Language)\n", AE_VERSION);
+        printf("ae %s (Aether Language)\n", get_active_version());
         printf("Platform: " AE_PLATFORM "\n");
         printf("\nSubcommands:\n");
         printf("  ae version list              List all available releases\n");

@@ -62,6 +62,10 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->ask_temp_counter = 0;
     gen->match_result_var = NULL;
     gen->preempt_loops = 0;
+    gen->current_func_return_type = NULL;
+    gen->tuple_type_names = NULL;
+    gen->tuple_type_count = 0;
+    gen->tuple_type_capacity = 0;
     // Ask/reply type map
     gen->reply_type_map = NULL;
     gen->reply_type_count = 0;
@@ -531,6 +535,20 @@ const char* get_c_type(Type* type) {
             }
             return buffer;
         }
+        case TYPE_TUPLE: {
+            static char buffers[4][256];
+            static int buf_idx = 0;
+            char* buffer = buffers[buf_idx++ & 3];
+            int pos = snprintf(buffer, 256, "_tuple");
+            for (int i = 0; i < type->tuple_count && pos < 240; i++) {
+                const char* elem = get_c_type(type->tuple_types[i]);
+                // Sanitize: "const char*" -> "string", "void*" -> "ptr"
+                if (strcmp(elem, "const char*") == 0) elem = "string";
+                else if (strcmp(elem, "void*") == 0) elem = "ptr";
+                pos += snprintf(buffer + pos, 256 - pos, "_%s", elem);
+            }
+            return buffer;
+        }
         case TYPE_UNKNOWN: {
             AetherError w = {NULL, NULL, 0, 0,
                              "unresolved type in codegen, defaulting to int",
@@ -548,6 +566,31 @@ const char* get_c_type(Type* type) {
             return "void";
         }
     }
+}
+
+// Emit a typedef for a tuple type if not already emitted
+void ensure_tuple_typedef(CodeGenerator* gen, Type* type) {
+    if (!type || type->kind != TYPE_TUPLE) return;
+    const char* name = get_c_type(type);
+
+    // Check if already emitted
+    for (int i = 0; i < gen->tuple_type_count; i++) {
+        if (strcmp(gen->tuple_type_names[i], name) == 0) return;
+    }
+
+    // Emit typedef
+    fprintf(gen->output, "typedef struct { ");
+    for (int i = 0; i < type->tuple_count; i++) {
+        fprintf(gen->output, "%s _%d; ", get_c_type(type->tuple_types[i]), i);
+    }
+    fprintf(gen->output, "} %s;\n", name);
+
+    // Register
+    if (gen->tuple_type_count >= gen->tuple_type_capacity) {
+        gen->tuple_type_capacity = gen->tuple_type_capacity ? gen->tuple_type_capacity * 2 : 8;
+        gen->tuple_type_names = realloc(gen->tuple_type_names, gen->tuple_type_capacity * sizeof(char*));
+    }
+    gen->tuple_type_names[gen->tuple_type_count++] = strdup(name);
 }
 
 const char* get_c_operator(const char* aether_op) {
@@ -883,6 +926,32 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         print_line(gen, "    return val;");
         print_line(gen, "}");
         print_line(gen, "#endif");
+    }
+    print_line(gen, "");
+
+    // Pre-scan: merge tuple return types across all returns in each function,
+    // then emit tuple typedefs. Must happen before forward declarations.
+    extern void merge_return_tuple_types(ASTNode* node, Type* merged);
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* child = program->children[i];
+        if (child && child->type == AST_FUNCTION_DEFINITION && child->node_type &&
+            child->node_type->kind == TYPE_TUPLE) {
+            merge_return_tuple_types(child, child->node_type);
+            ensure_tuple_typedef(gen, child->node_type);
+        }
+    }
+    // Propagate merged return types to all function call sites in the program
+    // (call node_types may have UNKNOWN elements from before the merge)
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* child = program->children[i];
+        if (!child) continue;
+        // For each function with a tuple return type, update matching call sites
+        if (child->type == AST_FUNCTION_DEFINITION && child->node_type &&
+            child->node_type->kind == TYPE_TUPLE && child->value) {
+            // Find all calls to this function in the program and update their node_type
+            extern void propagate_tuple_type_to_calls(ASTNode* node, const char* func_name, Type* type);
+            propagate_tuple_type_to_calls(program, child->value, child->node_type);
+        }
     }
     print_line(gen, "");
 

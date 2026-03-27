@@ -6,42 +6,6 @@ Planned features and improvements for upcoming Aether releases.
 
 ## Language Features
 
-### Result Type — Structured Error Handling
-
-Currently all stdlib functions return `int` where `1` = success and `0` = failure. This works but has drawbacks: the caller can silently ignore errors, there's no way to carry error details, and it's easy to confuse success/failure when mixing with C conventions.
-
-Go-style multiple return values would fit Aether's inferred-type philosophy — no generics or sum types needed. The compiler already knows types through inference, so a `(value, err)` pair just works.
-
-**Planned syntax (tentative):**
-
-```aether
-import std.file
-import std.io
-
-main() {
-    // Multiple return values — err is a string (or empty "" on success)
-    f, err = file.open("data.txt", "r")
-    if err {
-        println("Failed: ${err}")
-        exit(1)
-    }
-    content = file.read_all(f)
-    file.close(f)
-
-    // Ignore the error (explicit _ discard)
-    data, _ = io.read_file("config.txt")
-
-    // Or default on failure
-    content = io.read_file("config.txt") or "default config"
-}
-```
-
-**What's needed:**
-- Multiple return values from functions (codegen emits a C struct or out-parameter)
-- Tuple destructuring in assignment (`a, b = func()`)
-- Error type convention: empty string `""` = no error, non-empty = error message
-- Optional: `or` keyword for inline defaults on error
-
 ### Closures and First-Class Functions
 
 Arrow functions exist but are named functions, not values. There are no anonymous functions and no way to capture variables from an enclosing scope. This blocks higher-order patterns like `list.map()`, `list.filter()`, and callbacks.
@@ -71,13 +35,19 @@ main() {
 
 **Design constraint:** Capture by value (copy into closure struct) is the default. No hidden heap allocation. This keeps closures predictable and compatible with manual memory management.
 
+### Stdlib Migration to Result Types
+
+Result types (`a, err = func()`) are implemented in the language. The stdlib I/O functions (`file.open`, `io.read_file`, `file.write`, etc.) still use the old `int` return convention. Migrating them to `(value, error)` returns is a breaking change planned for a future release.
+
 ## Quick Wins
 
-Near-term improvements that build on existing infrastructure.
+### Package Registry — Transitive Dependencies
 
-### Package Registry
+`ae add` supports versioned packages (`ae add github.com/user/repo@v1.0.0`) and the module resolver finds installed packages. Next: transitive dependency resolution, lock file integrity, and `ae update`.
 
-`ae add` can clone GitHub repos today but there's no versioned registry, no dependency resolution, and no lock files. Starting with a GitHub-based package index (similar to early Cargo), version constraints in `aether.toml`, and a lock file format.
+### `or` Keyword for Error Defaults
+
+Sugar for defaulting on error: `content = io.read_file("config.txt") or "default"`. Requires result types to be fully adopted in stdlib first.
 
 ## Future
 
@@ -109,4 +79,3 @@ All I/O in Aether is currently blocking. There is no io_uring (Linux), kqueue (m
 | Feature | Status | Notes |
 |---------|--------|-------|
 | `ae fmt` | Not started | Source code formatter (deferred until syntax stabilizes) |
-| Package registry v1 | Not started | Version constraints, lock files, dependency resolution |

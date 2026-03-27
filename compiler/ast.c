@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include "ast.h"
 
 // Type functions
@@ -10,6 +11,8 @@ Type* create_type(TypeKind kind) {
     type->element_type = NULL;
     type->array_size = -1;
     type->struct_name = NULL;
+    type->tuple_types = NULL;
+    type->tuple_count = 0;
     return type;
 }
 
@@ -26,6 +29,19 @@ Type* create_actor_ref_type(Type* actor_type) {
     return type;
 }
 
+Type* create_tuple_type(int count, ...) {
+    Type* type = create_type(TYPE_TUPLE);
+    type->tuple_count = count;
+    type->tuple_types = malloc(count * sizeof(Type*));
+    va_list args;
+    va_start(args, count);
+    for (int i = 0; i < count; i++) {
+        type->tuple_types[i] = va_arg(args, Type*);
+    }
+    va_end(args);
+    return type;
+}
+
 void free_type(Type* type) {
     if (type) {
         if (type->element_type) {
@@ -33,6 +49,12 @@ void free_type(Type* type) {
         }
         if (type->struct_name) {
             free(type->struct_name);
+        }
+        if (type->tuple_types) {
+            for (int i = 0; i < type->tuple_count; i++) {
+                free_type(type->tuple_types[i]);
+            }
+            free(type->tuple_types);
         }
         free(type);
     }
@@ -67,6 +89,17 @@ const char* type_to_string(Type* type) {
                     type_to_string(type->element_type));
             return buffer;
         }
+        case TYPE_TUPLE: {
+            static char buffer[512];
+            int pos = snprintf(buffer, sizeof(buffer), "(");
+            for (int i = 0; i < type->tuple_count && pos < (int)sizeof(buffer) - 10; i++) {
+                if (i > 0) pos += snprintf(buffer + pos, sizeof(buffer) - pos, ", ");
+                pos += snprintf(buffer + pos, sizeof(buffer) - pos, "%s",
+                               type_to_string(type->tuple_types[i]));
+            }
+            snprintf(buffer + pos, sizeof(buffer) - pos, ")");
+            return buffer;
+        }
         default: return "UNKNOWN";
     }
 }
@@ -98,7 +131,15 @@ Type* clone_type(Type* type) {
     if (type->struct_name) {
         new_type->struct_name = strdup(type->struct_name);
     }
-    
+
+    if (type->tuple_types && type->tuple_count > 0) {
+        new_type->tuple_count = type->tuple_count;
+        new_type->tuple_types = malloc(type->tuple_count * sizeof(Type*));
+        for (int i = 0; i < type->tuple_count; i++) {
+            new_type->tuple_types[i] = clone_type(type->tuple_types[i]);
+        }
+    }
+
     return new_type;
 }
 
@@ -201,6 +242,7 @@ const char* ast_node_type_to_string(ASTNodeType type) {
         case AST_STRUCT_FIELD: return "STRUCT_FIELD";
         case AST_BLOCK: return "BLOCK";
         case AST_VARIABLE_DECLARATION: return "VARIABLE_DECLARATION";
+        case AST_TUPLE_DESTRUCTURE: return "TUPLE_DESTRUCTURE";
         case AST_ASSIGNMENT: return "ASSIGNMENT";
         case AST_COMPOUND_ASSIGNMENT: return "COMPOUND_ASSIGNMENT";
         case AST_IF_STATEMENT: return "IF_STATEMENT";

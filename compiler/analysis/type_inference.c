@@ -426,6 +426,56 @@ static Type* infer_return_type_impl(ASTNode* body, SymbolTable* symbols, bool is
     if (!body) return NULL;
 
     if (body->type == AST_RETURN_STATEMENT && body->child_count > 0) {
+        // Multi-value return: return a, b → TYPE_TUPLE
+        if (body->child_count > 1) {
+            Type* tuple = create_type(TYPE_TUPLE);
+            tuple->tuple_count = body->child_count;
+            tuple->tuple_types = malloc(body->child_count * sizeof(Type*));
+            int has_unknown = 0;
+            for (int i = 0; i < body->child_count; i++) {
+                ASTNode* val = body->children[i];
+                if (val->node_type && val->node_type->kind != TYPE_UNKNOWN) {
+                    tuple->tuple_types[i] = clone_type(val->node_type);
+                } else if (val->type == AST_IDENTIFIER && val->value && symbols) {
+                    Symbol* sym = lookup_symbol(symbols, val->value);
+                    if (sym && sym->type && sym->type->kind != TYPE_UNKNOWN) {
+                        tuple->tuple_types[i] = clone_type(sym->type);
+                    } else {
+                        tuple->tuple_types[i] = create_type(TYPE_UNKNOWN);
+                        has_unknown = 1;
+                    }
+                } else if (val->type == AST_LITERAL && val->value) {
+                    // Infer literal type from value
+                    if (strcmp(val->value, "true") == 0 || strcmp(val->value, "false") == 0) {
+                        tuple->tuple_types[i] = create_type(TYPE_BOOL);
+                    } else {
+                        // Check if numeric
+                        int is_num = 1;
+                        for (const char* p = val->value; *p; p++) {
+                            if (*p != '-' && *p != '.' && (*p < '0' || *p > '9')) { is_num = 0; break; }
+                        }
+                        tuple->tuple_types[i] = create_type(is_num ? TYPE_INT : TYPE_STRING);
+                    }
+                } else {
+                    tuple->tuple_types[i] = create_type(TYPE_UNKNOWN);
+                    has_unknown = 1;
+                }
+            }
+            // If all elements have UNKNOWN type, return NULL
+            // If partially resolved, still return it — codegen will use function return type
+            if (has_unknown) {
+                int all_unknown = 1;
+                for (int i2 = 0; i2 < tuple->tuple_count; i2++) {
+                    if (tuple->tuple_types[i2]->kind != TYPE_UNKNOWN) { all_unknown = 0; break; }
+                }
+                if (all_unknown) {
+                    free_type(tuple);
+                    return NULL;
+                }
+            }
+            return tuple;
+        }
+
         ASTNode* return_expr = body->children[0];
         // Unwrap AST_EXPRESSION_STATEMENT (created by implicit return wrapping)
         if (return_expr->type == AST_EXPRESSION_STATEMENT && return_expr->child_count > 0) {
@@ -755,13 +805,41 @@ int propagate_function_call_types(ASTNode* program, SymbolTable* table) {
 }
 
 // Infer return types for all functions
+// Scan AST for multi-return statements and fill UNKNOWN tuple elements
+static void merge_tuple_returns(ASTNode* node, Type* merged) {
+    if (!node || !merged || merged->kind != TYPE_TUPLE) return;
+    if (node->type == AST_RETURN_STATEMENT && node->child_count > 1 &&
+        node->child_count == merged->tuple_count) {
+        for (int i = 0; i < node->child_count; i++) {
+            ASTNode* val = node->children[i];
+            if (merged->tuple_types[i]->kind == TYPE_UNKNOWN) {
+                if (val->node_type && val->node_type->kind != TYPE_UNKNOWN) {
+                    free_type(merged->tuple_types[i]);
+                    merged->tuple_types[i] = clone_type(val->node_type);
+                } else if (val->type == AST_LITERAL && val->value) {
+                    // Infer literal type
+                    int is_num = 1;
+                    for (const char* p = val->value; *p; p++) {
+                        if (*p != '-' && *p != '.' && (*p < '0' || *p > '9')) { is_num = 0; break; }
+                    }
+                    free_type(merged->tuple_types[i]);
+                    merged->tuple_types[i] = create_type(is_num ? TYPE_INT : TYPE_STRING);
+                }
+            }
+        }
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        merge_tuple_returns(node->children[i], merged);
+    }
+}
+
 void infer_function_return_types(ASTNode* program, SymbolTable* table) {
     if (!program) return;
-    
+
     for (int i = 0; i < program->child_count; i++) {
         ASTNode* node = program->children[i];
         if (!node || node->type != AST_FUNCTION_DEFINITION) continue;
-        
+
         // Infer return type from return statements
         int body_index = node->child_count - 1;
         if (body_index >= 0 && body_index < node->child_count) {
@@ -773,6 +851,10 @@ void infer_function_return_types(ASTNode* program, SymbolTable* table) {
                     // No explicit return, assume void
                     node->node_type = create_type(TYPE_VOID);
                 }
+            }
+            // If return type is a tuple with UNKNOWN elements, merge from all returns
+            if (node->node_type && node->node_type->kind == TYPE_TUPLE) {
+                merge_tuple_returns(node, node->node_type);
             }
         }
     }

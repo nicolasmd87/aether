@@ -16,6 +16,8 @@ Aether is a compiled language that brings actor-based concurrency to systems pro
 - Type inference with optional annotations
 - Compiles to readable C for portability and C library interop
 - Lock-free message passing with adaptive optimizations
+- Go-style result types: `a, err = func()` with `_` discard
+- Package management: `ae add github.com/user/repo[@version]`
 
 ## Runtime Features
 

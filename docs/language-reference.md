@@ -528,6 +528,48 @@ main() {
 
 See [Memory Management Guide](memory-management.md) for the full reference.
 
+### Multiple Return Values (Result Types)
+
+Functions can return multiple values using comma-separated returns:
+
+```aether
+safe_divide(a: int, b: int) -> {
+    if b == 0 {
+        return 0, "division by zero"
+    }
+    return a / b, ""
+}
+
+main() {
+    result, err = safe_divide(10, 3)
+    if err != "" {
+        println("Error: ${err}")
+    } else {
+        println("Result: ${result}")
+    }
+
+    // Discard unwanted values with _
+    val, _ = safe_divide(42, 7)
+    println(val)
+}
+```
+
+The error convention: empty string `""` means no error, non-empty string is the error message. Use `!= ""` to check for errors.
+
+Tuple destructuring creates typed local variables. The compiler generates C structs for each unique tuple type (`_tuple_int_string`, etc.).
+
+Error propagation across function boundaries works correctly:
+
+```aether
+checked_op(x: int) -> {
+    val, err = safe_divide(x, 2)
+    if err != "" {
+        return 0, err    // propagate the error
+    }
+    return val, ""
+}
+```
+
 ---
 
 ## Structs

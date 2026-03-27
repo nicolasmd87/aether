@@ -22,6 +22,12 @@ number before tagging the release.
 - **Actor timeouts**: `receive { Pattern -> body } after N -> { timeout_body }` fires timeout handler if no message arrives within N milliseconds. One-shot: cancelled when a message is received. `TOKEN_AFTER` keyword, `AST_TIMEOUT_ARM` node, `timeout_ns`/`last_activity_ns` fields in `ActorBase`, scheduler awareness for timeout polling
 - **Cooperative preemption (opt-in)**: Two levels, both zero-cost when disabled. Scheduler-side: `AETHER_PREEMPT=1` env var enables time-based drain loop break after 1ms (configurable via `AETHER_PREEMPT_MS`). Codegen-side: `aetherc --preempt` inserts `sched_yield()` at loop back-edges with reduction counter (10000 iterations per yield). Prevents tight loops from starving other actors
 - **`_aether_clock_ns` always available**: Moved nanosecond clock helper out of `#if !AETHER_GCC_COMPAT` guard so it's available on all platforms (needed by timeout checks)
+- **Result types (multiple return values)**: Go-style `a, err = func()` tuple destructuring. Functions return multiple values with `return val, err`. `_` discards unwanted values. TYPE_TUPLE in type system, AST_TUPLE_DESTRUCTURE in parser, tuple struct generation in codegen. Chained error propagation works correctly across function boundaries
+- **Package registry v1**: `ae add github.com/user/repo[@version]` downloads packages with optional version tags. Module resolver searches `~/.aether/packages/` for installed packages. Version stored in `aether.toml` `[dependencies]`
+
+### Breaking Changes
+
+- **Stdlib I/O functions** will migrate to `(value, error)` return types in a future release. Current `int` returns still work. The `error-handling.ae` example demonstrates the new pattern.
 
 ### Fixed
 

@@ -21,6 +21,7 @@ typedef enum {
     // Statements
     AST_BLOCK,
     AST_VARIABLE_DECLARATION,
+    AST_TUPLE_DESTRUCTURE,      // a, b = func() — multiple lvalues
     AST_ASSIGNMENT,
     AST_COMPOUND_ASSIGNMENT,  // x += expr, x -= expr, etc.
     AST_IF_STATEMENT,
@@ -98,6 +99,7 @@ typedef enum {
     TYPE_VOID,
     TYPE_PTR,           // void* for C interop
     TYPE_WILDCARD,
+    TYPE_TUPLE,         // (T1, T2, ...) for multiple return values
     TYPE_UNKNOWN
 } TypeKind;
 
@@ -106,6 +108,9 @@ typedef struct Type {
     struct Type* element_type; // For arrays and actor refs
     int array_size; // For fixed-size arrays
     char* struct_name; // For struct types
+    // Tuple support (multiple return values)
+    struct Type** tuple_types;  // Array of element types (NULL if not tuple)
+    int tuple_count;            // Number of tuple elements (0 if not tuple)
 } Type;
 
 typedef struct ASTNode {
@@ -122,6 +127,7 @@ typedef struct ASTNode {
 Type* create_type(TypeKind kind);
 Type* create_array_type(Type* element_type, int size);
 Type* create_actor_ref_type(Type* actor_type);
+Type* create_tuple_type(int count, ...);  // create_tuple_type(2, type_a, type_b)
 void free_type(Type* type);
 const char* type_to_string(Type* type);
 int types_equal(Type* a, Type* b);

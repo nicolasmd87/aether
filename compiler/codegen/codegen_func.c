@@ -145,8 +145,64 @@ void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext) {
     fprintf(gen->output, ");\n\n");
 }
 
+// Scan AST for multi-return statements and merge their tuple types
+void merge_return_tuple_types(ASTNode* node, Type* merged) {
+    if (!node || !merged) return;
+    if (node->type == AST_RETURN_STATEMENT && node->child_count > 1 &&
+        node->child_count == merged->tuple_count) {
+        for (int i = 0; i < node->child_count; i++) {
+            ASTNode* val = node->children[i];
+            if (merged->tuple_types[i]->kind == TYPE_UNKNOWN && val->node_type &&
+                val->node_type->kind != TYPE_UNKNOWN) {
+                free_type(merged->tuple_types[i]);
+                merged->tuple_types[i] = clone_type(val->node_type);
+            }
+        }
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        merge_return_tuple_types(node->children[i], merged);
+    }
+}
+
+// Propagate a function's merged tuple return type to all call sites
+// and to tuple destructuring variables
+void propagate_tuple_type_to_calls(ASTNode* node, const char* func_name, Type* type) {
+    if (!node) return;
+    if (node->type == AST_FUNCTION_CALL && node->value &&
+        strcmp(node->value, func_name) == 0) {
+        if (node->node_type) free_type(node->node_type);
+        node->node_type = clone_type(type);
+    }
+    // Also update tuple destructure variables whose RHS is this function
+    if (node->type == AST_TUPLE_DESTRUCTURE && node->child_count >= 2) {
+        ASTNode* rhs = node->children[node->child_count - 1];
+        if (rhs && rhs->type == AST_FUNCTION_CALL && rhs->value &&
+            strcmp(rhs->value, func_name) == 0) {
+            int var_count = node->child_count - 1;
+            for (int i = 0; i < var_count && i < type->tuple_count; i++) {
+                ASTNode* var = node->children[i];
+                if (var && (!var->node_type || var->node_type->kind == TYPE_UNKNOWN)) {
+                    if (var->node_type) free_type(var->node_type);
+                    var->node_type = clone_type(type->tuple_types[i]);
+                }
+            }
+        }
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        propagate_tuple_type_to_calls(node->children[i], func_name, type);
+    }
+}
+
 void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
     if (!func || func->type != AST_FUNCTION_DEFINITION) return;
+
+    // If function returns a tuple with UNKNOWN elements, scan all returns and merge
+    if (func->node_type && func->node_type->kind == TYPE_TUPLE) {
+        merge_return_tuple_types(func, func->node_type);
+    }
+
+    // Track current function's return type for multi-return codegen
+    gen->current_func_return_type = func->node_type;
 
     // Determine return type: if type is void but function has return-with-value, use int
     Type* ret_type = func->node_type;

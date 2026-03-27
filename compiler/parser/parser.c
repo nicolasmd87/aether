@@ -914,9 +914,9 @@ ASTNode* parse_statement(Parser* parser) {
             // fall through
         case TOKEN_IDENTIFIER: {
             // Check if this is: identifier = expression (Python-style)
+            // or tuple destructuring: identifier, identifier = expression
             Token* next = peek_ahead(parser, 1);
-            if (next && next->type == TOKEN_ASSIGN) {
-                // This is: x = value (could be declaration or assignment)
+            if (next && (next->type == TOKEN_ASSIGN || next->type == TOKEN_COMMA)) {
                 return parse_python_style_declaration(parser);
             }
             // Check for compound assignment: identifier op= expression
@@ -1006,11 +1006,59 @@ ASTNode* parse_python_style_declaration(Parser* parser) {
         return NULL;
     }
     advance_token(parser);
-    
-    // Create declaration node with TYPE_UNKNOWN (will be inferred)
+
+    // Check for tuple destructuring: a, b = func()
+    Token* after_name = peek_token(parser);
+    if (after_name && after_name->type == TOKEN_COMMA) {
+        // Tuple destructuring mode
+        ASTNode* destructure = create_ast_node(AST_TUPLE_DESTRUCTURE, NULL, name->line, name->column);
+
+        // First lvalue
+        ASTNode* first = create_ast_node(AST_VARIABLE_DECLARATION, name->value, name->line, name->column);
+        first->node_type = create_type(TYPE_UNKNOWN);
+        add_child(destructure, first);
+
+        // Parse remaining lvalues
+        while (match_token(parser, TOKEN_COMMA)) {
+            Token* next_name = peek_token(parser);
+            if (!next_name) break;
+
+            if (next_name->type == TOKEN_IDENTIFIER && strcmp(next_name->value, "_") == 0) {
+                // Discard: _ — create a placeholder
+                advance_token(parser);
+                ASTNode* discard = create_ast_node(AST_VARIABLE_DECLARATION, "_", next_name->line, next_name->column);
+                discard->node_type = create_type(TYPE_UNKNOWN);
+                add_child(destructure, discard);
+            } else if (next_name->type == TOKEN_IDENTIFIER || next_name->type == TOKEN_STATE) {
+                advance_token(parser);
+                ASTNode* var = create_ast_node(AST_VARIABLE_DECLARATION, next_name->value, next_name->line, next_name->column);
+                var->node_type = create_type(TYPE_UNKNOWN);
+                add_child(destructure, var);
+            } else {
+                parser_error(parser, "Expected identifier in tuple destructuring");
+                break;
+            }
+        }
+
+        if (!expect_token(parser, TOKEN_ASSIGN)) {
+            free_ast_node(destructure);
+            return NULL;
+        }
+
+        // Parse RHS expression
+        ASTNode* rhs = parse_expression(parser);
+        if (rhs) {
+            add_child(destructure, rhs);  // Last child is the RHS
+        }
+
+        match_token(parser, TOKEN_SEMICOLON);
+        return destructure;
+    }
+
+    // Single variable declaration (existing path)
     ASTNode* decl = create_ast_node(AST_VARIABLE_DECLARATION, name->value, name->line, name->column);
     decl->node_type = create_type(TYPE_UNKNOWN);
-    
+
     if (match_token(parser, TOKEN_ASSIGN)) {
         // Check for match-as-expression: x = match val { ... }
         Token* next_tok = peek_token(parser);
@@ -1552,18 +1600,30 @@ ASTNode* parse_export_statement(Parser* parser) {
 }
 
 ASTNode* parse_return_statement(Parser* parser) {
+    Token* ret_tok = peek_token(parser);
     advance_token(parser); // return
-    ASTNode* value = NULL;
+    ASTNode* return_stmt = create_ast_node(AST_RETURN_STATEMENT, NULL,
+                                           ret_tok ? ret_tok->line : 0,
+                                           ret_tok ? ret_tok->column : 0);
+
     if (!match_token(parser, TOKEN_SEMICOLON)) {
-        value = parse_expression(parser);
+        ASTNode* value = parse_expression(parser);
+        if (value) {
+            add_child(return_stmt, value);
+        }
+
+        // Multiple return values: return a, b
+        while (peek_token(parser) && peek_token(parser)->type == TOKEN_COMMA) {
+            advance_token(parser);  // consume comma
+            ASTNode* next_val = parse_expression(parser);
+            if (next_val) {
+                add_child(return_stmt, next_val);
+            }
+        }
+
         match_token(parser, TOKEN_SEMICOLON);
     }
-    
-    ASTNode* return_stmt = create_ast_node(AST_RETURN_STATEMENT, NULL, 0, 0);
-    if (value) {
-        add_child(return_stmt, value);
-    }
-    
+
     return return_stmt;
 }
 

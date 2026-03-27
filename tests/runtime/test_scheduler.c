@@ -363,8 +363,8 @@ void test_scheduler_exit_clean(void) {
     long end = get_time_ms();
     long elapsed = end - start;
     
-    // Should exit within 100ms
-    ASSERT_TRUE(elapsed < 100);
+    // Should exit within 2000ms (generous for Valgrind which runs ~10x slower)
+    ASSERT_TRUE(elapsed < 2000);
     
     // Freed by scheduler_cleanup()
     // Freed by scheduler_cleanup()

@@ -1,112 +1,60 @@
-// Error Handling - idiomatic patterns for handling failure
+// Error Handling with Result Types
 //
-// Aether uses return values and pattern matching for error handling,
-// similar to Go and C. Functions return sentinel values (0, -1, "")
-// to signal errors, and callers use match or if/else to handle them.
+// Aether uses Go-style multiple return values for error handling.
+// Functions that can fail return (value, error) tuples.
+// The error is a string: "" means no error, non-empty means failure.
 
-// Return 0 on failure, result on success
-safe_divide(x, y) {
-    if (y == 0) {
-        return 0;
+safe_divide(a: int, b: int) -> {
+    if b == 0 {
+        return 0, "cannot divide by zero"
     }
-    return x / y;
+    return a / b, ""
 }
 
-// Validate input and return status code: 1 = ok, 0 = error
-validate_age(age) {
-    if (age < 0) {
-        println("  error: age cannot be negative (got ${age})");
-        return 0;
+// Chain: propagate errors from inner calls
+checked_divide(input: int, divisor: int) -> {
+    if input < 0 {
+        return 0, "input must be non-negative"
     }
-    if (age > 150) {
-        println("  error: age unreasonably large (got ${age})");
-        return 0;
+    result, err = safe_divide(input, divisor)
+    if err != "" {
+        return 0, err
     }
-    return 1;
-}
-
-// Chain validations: early return on first failure
-validate_user(name_len, age) {
-    if (name_len == 0) {
-        println("  error: name cannot be empty");
-        return 0;
-    }
-    if (validate_age(age) == 0) {
-        return 0;
-    }
-    return 1;
-}
-
-// Guard clause pattern: check preconditions up front
-process_order(quantity, price) {
-    if (quantity <= 0) {
-        println("  rejected: quantity must be positive");
-        return -1;
-    }
-    if (price <= 0) {
-        println("  rejected: price must be positive");
-        return -1;
-    }
-    total = quantity * price;
-    println("  order total: ${total}");
-    return total;
+    return result, ""
 }
 
 main() {
-    println("=== Error Handling Patterns ===\n");
+    println("=== Error Handling Demo ===")
+    println("")
 
-    // 1. Check return value with if/else
-    println("1. Return value checking:");
-    result = safe_divide(10, 3);
-    println("  10 / 3 = ${result}");
-
-    result = safe_divide(10, 0);
-    if (result == 0) {
-        println("  10 / 0 = division by zero");
+    // Handle the error
+    result, err = safe_divide(10, 3)
+    if err != "" {
+        println("Error: ${err}")
+    } else {
+        println("10 / 3 = ${result}")
     }
 
-    // 2. Match on sentinel values
-    println("\n2. Match on results:");
-    status = safe_divide(100, 5);
-    match (status) {
-        0 -> { println("  100 / 5 = failed"); }
-        _ -> { println("  100 / 5 = ${status}"); }
+    // Trigger an error
+    result2, err2 = safe_divide(10, 0)
+    if err2 != "" {
+        println("Caught: ${err2}")
     }
 
-    status = safe_divide(42, 0);
-    match (status) {
-        0 -> { println("  42 / 0 = division error"); }
-        _ -> { println("  42 / 0 = ${status}"); }
-    }
+    // Discard the error with _
+    val, _ = safe_divide(42, 7)
+    println("42 / 7 = ${val}")
 
-    // 3. Validation with early return
-    println("\n3. Validation chains:");
-    print("  validate_user(3, 25): ");
-    if (validate_user(3, 25) == 1) {
-        println("valid");
-    }
+    // Chained error propagation
+    v1, e1 = checked_divide(100, 5)
+    println("checked 100/5 = ${v1}")
 
-    print("  validate_user(0, 25): ");
-    if (validate_user(0, 25) == 0) {
-        println("invalid");
-    }
+    v2, e2 = checked_divide(10, 0)
+    println("checked 10/0 err: ${e2}")
 
-    print("  validate_user(3, -5): ");
-    if (validate_user(3, -5) == 0) {
-        println("invalid");
-    }
+    v3, e3 = checked_divide(0 - 1, 5)
+    println("checked -1/5 err: ${e3}")
 
-    // 4. Guard clauses
-    println("\n4. Guard clauses:");
-    process_order(5, 20);
-    process_order(0, 20);
-    process_order(3, -10);
-
-    // 5. Defer for cleanup on any exit path
-    println("\n5. Defer for cleanup:");
-    defer println("  [cleanup] resources released");
-    println("  doing work...");
-    println("  work complete");
-
-    println("\n=== Error Handling Complete ===");
+    println("")
+    println("Done.")
 }

@@ -1284,6 +1284,60 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
     if (!stmt) return 0;
     
     switch (stmt->type) {
+        case AST_TUPLE_DESTRUCTURE: {
+            // a, b = func() — last child is RHS, others are variable declarations
+            if (stmt->child_count < 2) {
+                type_error("Invalid tuple destructuring", stmt->line, stmt->column);
+                return 0;
+            }
+            int var_count = stmt->child_count - 1;
+            ASTNode* rhs = stmt->children[var_count];  // Last child is RHS
+
+            // Typecheck the RHS
+            typecheck_expression(rhs, table);
+            Type* rhs_type = infer_type(rhs, table);
+
+            // Verify RHS is a tuple with matching element count
+            if (!rhs_type || rhs_type->kind != TYPE_TUPLE) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                    "cannot destructure — '%s' returns '%s', not a tuple",
+                    rhs->value ? rhs->value : "expression",
+                    type_to_string(rhs_type));
+                aether_error_with_suggestion(msg, stmt->line, stmt->column,
+                    "use single assignment instead, or ensure the function returns multiple values");
+                error_count++;
+                if (rhs_type) free_type(rhs_type);
+                return 0;
+            }
+
+            if (rhs_type->tuple_count != var_count) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                    "tuple destructuring count mismatch — %d variables, but expression returns %d values",
+                    var_count, rhs_type->tuple_count);
+                aether_error_with_suggestion(msg, stmt->line, stmt->column,
+                    "match the number of variables to the number of returned values");
+                error_count++;
+                free_type(rhs_type);
+                return 0;
+            }
+
+            // Assign types to each variable and add to symbol table
+            for (int j = 0; j < var_count; j++) {
+                ASTNode* var = stmt->children[j];
+                if (var->node_type) free_type(var->node_type);
+                var->node_type = clone_type(rhs_type->tuple_types[j]);
+                // Don't register _ (discard) in symbol table
+                if (var->value && strcmp(var->value, "_") != 0) {
+                    add_symbol(table, var->value, clone_type(var->node_type), 0, 0, 0);
+                }
+            }
+
+            free_type(rhs_type);
+            return 1;
+        }
+
         case AST_CONST_DECLARATION:
         case AST_VARIABLE_DECLARATION: {
             if (stmt->child_count > 0) {

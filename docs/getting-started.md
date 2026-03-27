@@ -160,6 +160,13 @@ Requires [Emscripten](https://emscripten.org/) (`emcc` on PATH).
 ae check hello.ae
 ```
 
+**Add a package:**
+
+```bash
+ae add github.com/user/repo          # latest
+ae add github.com/user/repo@v1.0.0   # specific version
+```
+
 ## Interactive REPL
 
 Experiment with Aether interactively:

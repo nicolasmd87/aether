@@ -1,0 +1,55 @@
+// Test: result types — Go-style multiple return values
+
+// Function returning two values
+divide(a: int, b: int) -> {
+    if b == 0 {
+        return 0, "division by zero"
+    }
+    return a / b, ""
+}
+
+// Function returning int pair
+swap(a: int, b: int) -> {
+    return b, a
+}
+
+main() {
+    // Basic destructuring
+    result, err = divide(10, 2)
+    if err != "" {
+        println("FAIL: unexpected error")
+    } else {
+        if result == 5 {
+            println("PASS: 10/2 = 5")
+        } else {
+            println("FAIL: expected 5")
+        }
+    }
+
+    // Error case
+    result2, err2 = divide(10, 0)
+    if err2 != "" {
+        println("PASS: division by zero caught")
+    } else {
+        println("FAIL: expected error")
+    }
+
+    // Discard with _
+    val, _ = divide(42, 7)
+    if val == 6 {
+        println("PASS: discard works")
+    } else {
+        println("FAIL: expected 6")
+    }
+
+    // Swap
+    x, y = swap(1, 2)
+    if x == 2 {
+        println("PASS: swap x=2")
+    }
+    if y == 1 {
+        println("PASS: swap y=1")
+    }
+
+    println("Result type tests passed!")
+}
