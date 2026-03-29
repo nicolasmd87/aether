@@ -303,9 +303,18 @@ test-ae: compiler ae stdlib
 	passed=$$(ls "$$tmpdir"/PASS_* 2>/dev/null | wc -l | tr -d ' '); \
 	failed=$$(ls "$$tmpdir"/FAIL_* 2>/dev/null | wc -l | tr -d ' '); \
 	total=$$((passed + failed)); \
-	rm -rf "$$tmpdir"; \
 	echo ""; \
+	if [ "$$failed" -gt 0 ]; then \
+		echo "=== FAILURE DETAILS ==="; \
+		for fail_file in "$$tmpdir"/FAIL_*; do \
+			fname=$$(basename "$$fail_file" | sed 's/^FAIL_//'); \
+			echo "--- $$fname ---"; \
+			cat "$$tmpdir/err_$$fname.txt" 2>/dev/null || echo "(no error output)"; \
+			echo ""; \
+		done; \
+	fi; \
 	echo "Aether Tests: $$passed passed, $$failed failed, $$total total"; \
+	rm -rf "$$tmpdir"; \
 	if [ "$$failed" -gt 0 ]; then exit 1; fi
 endif
 
