@@ -229,13 +229,6 @@ static int run_cmd(const char* cmd) {
     return posix_run(cmd, 0);
 #else
     if (tc.verbose) fprintf(stderr, "[cmd] %s\n", cmd);
-    // cmd.exe quirk: when the command line starts with '"', it strips the outer
-    // quote pair, mangling paths. Use "cmd /c "..." " to preserve inner quotes.
-    if (cmd[0] == '"') {
-        char full[16384 + 16];
-        snprintf(full, sizeof(full), "cmd /c \"%s\"", cmd);
-        return system(full);
-    }
     return system(cmd);
 #endif
 }
@@ -245,11 +238,10 @@ static int run_cmd_quiet(const char* cmd) {
 #ifndef _WIN32
     return posix_run(cmd, 1);
 #else
-    char full[16384 + 32];
-    if (cmd[0] == '"')
-        snprintf(full, sizeof(full), "cmd /c \"%s\" >nul 2>&1", cmd);
-    else
-        snprintf(full, sizeof(full), "%s >nul 2>&1", cmd);
+    char full[16384 + 64];
+    // Redirect stdout+stderr to nul. No cmd /c wrapping — system() already
+    // invokes the shell, and cmd /c mangles double-quoted arguments.
+    snprintf(full, sizeof(full), "%s >nul 2>&1", cmd);
     return system(full);
 #endif
 }
@@ -260,10 +252,7 @@ static int run_cmd_show_warnings(const char* cmd) {
     return posix_run(cmd, 2);
 #else
     char full[16384 + 32];
-    if (cmd[0] == '"')
-        snprintf(full, sizeof(full), "cmd /c \"%s\" >nul", cmd);
-    else
-        snprintf(full, sizeof(full), "%s >nul", cmd);
+    snprintf(full, sizeof(full), "%s >nul", cmd);
     return system(full);
 #endif
 }
