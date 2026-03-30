@@ -41,6 +41,7 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->declared_vars = NULL;
     gen->declared_var_count = 0;
     gen->generating_lvalue = 0;  // Not generating lvalue by default
+    gen->interp_as_printf = 0;  // Default: interp generates _aether_interp() not printf()
     gen->in_condition = 0;  // Not in condition by default
     gen->in_main_loop = 0;  // Not in main loop by default
     gen->in_main_function = 0;
