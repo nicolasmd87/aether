@@ -2395,32 +2395,13 @@ static int cmd_version_list(void) {
     const char* home = get_home_dir();
 
     // Determine which version is actually active.
-    // Priority: 1) ~/.aether/current symlink (set by `ae version use`)
-    //           2) ~/.aether/active_version file (set by install.sh)
+    // Priority: 1) ~/.aether/active_version file (authoritative — written by install.sh and ae version use)
+    //           2) ~/.aether/current symlink (legacy fallback)
     //           3) compiled-in AE_VERSION (fallback)
     char active_ver[64] = "";
 
-#ifndef _WIN32
-    // POSIX: resolve ~/.aether/current symlink → ~/.aether/versions/vX.Y.Z
+    // Check active_version file first (always authoritative)
     {
-        char current_link[512], target[1024];
-        snprintf(current_link, sizeof(current_link), "%s/.aether/current", home);
-        ssize_t rlen = readlink(current_link, target, sizeof(target) - 1);
-        if (rlen > 0) {
-            target[rlen] = '\0';
-            // Extract version tag from path: last component is e.g. "v0.21.0"
-            const char* last = strrchr(target, '/');
-            if (last) last++; else last = target;
-            // Strip 'v' prefix for comparison
-            if (last[0] == 'v') last++;
-            strncpy(active_ver, last, sizeof(active_ver) - 1);
-            active_ver[sizeof(active_ver) - 1] = '\0';
-        }
-    }
-#endif
-
-    // Check active_version file (written by install.sh)
-    if (active_ver[0] == '\0') {
         char avpath[512];
 #ifdef _WIN32
         snprintf(avpath, sizeof(avpath), "%s\\.aether\\active_version", home);
@@ -2436,6 +2417,23 @@ static int cmd_version_list(void) {
             fclose(avf);
         }
     }
+
+#ifndef _WIN32
+    // Legacy fallback: resolve ~/.aether/current symlink
+    if (active_ver[0] == '\0') {
+        char current_link[512], target[1024];
+        snprintf(current_link, sizeof(current_link), "%s/.aether/current", home);
+        ssize_t rlen = readlink(current_link, target, sizeof(target) - 1);
+        if (rlen > 0) {
+            target[rlen] = '\0';
+            const char* last = strrchr(target, '/');
+            if (last) last++; else last = target;
+            if (last[0] == 'v') last++;
+            strncpy(active_ver, last, sizeof(active_ver) - 1);
+            active_ver[sizeof(active_ver) - 1] = '\0';
+        }
+    }
+#endif
 
     // Fallback: use compiled-in version
     if (active_ver[0] == '\0') {
