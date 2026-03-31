@@ -886,19 +886,42 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "static inline const char* _aether_safe_str(const void* s) {");
     print_line(gen, "    return s ? (const char*)s : \"(null)\";");
     print_line(gen, "}");
-    print_line(gen, "#if defined(__GNUC__) || defined(__clang__)");
-    print_line(gen, "#pragma GCC diagnostic pop");
+    // Ref cells: heap-allocated mutable values for shared state in closures
+    print_line(gen, "#if !AETHER_GCC_COMPAT");
+    print_line(gen, "static void* _aether_ref_new(intptr_t val) { intptr_t* r = malloc(sizeof(intptr_t)); *r = val; return (void*)r; }");
     print_line(gen, "#endif");
-    print_line(gen, "");
     // Closure support: generic closure struct (function pointer + captured environment)
     print_line(gen, "typedef struct { void (*fn)(void); void* env; } _AeClosure;");
+    // Box a closure onto the heap so it can be stored in a list (void*)
+    print_line(gen, "static inline void* _aether_box_closure(_AeClosure c) { _AeClosure* p = malloc(sizeof(_AeClosure)); *p = c; return (void*)p; }");
+    print_line(gen, "static inline _AeClosure _aether_unbox_closure(void* p) { return *(_AeClosure*)p; }");
+    // Terminal raw mode helpers for interactive input
+    print_line(gen, "#ifndef _WIN32");
+    print_line(gen, "#include <termios.h>");
+    print_line(gen, "static struct termios _aether_orig_termios;");
+    print_line(gen, "static void _aether_raw_mode(void) {");
+    print_line(gen, "    tcgetattr(0, &_aether_orig_termios);");
+    print_line(gen, "    struct termios raw = _aether_orig_termios;");
+    print_line(gen, "    raw.c_lflag &= ~(ICANON | ECHO);");
+    print_line(gen, "    tcsetattr(0, TCSANOW, &raw);");
+    print_line(gen, "}");
+    print_line(gen, "static void _aether_cooked_mode(void) {");
+    print_line(gen, "    tcsetattr(0, TCSANOW, &_aether_orig_termios);");
+    print_line(gen, "}");
+    print_line(gen, "#else");
+    print_line(gen, "static void _aether_raw_mode(void) {}");
+    print_line(gen, "static void _aether_cooked_mode(void) {}");
+    print_line(gen, "#endif");
     // Builder context stack: trailing blocks push/pop the return value
-    // Library functions can call _aether_builder_ctx() to find their parent
     print_line(gen, "static void* _aether_ctx_stack[64];");
     print_line(gen, "static int _aether_ctx_depth = 0;");
     print_line(gen, "static inline void _aether_ctx_push(void* ctx) { if (_aether_ctx_depth < 64) _aether_ctx_stack[_aether_ctx_depth++] = ctx; }");
     print_line(gen, "static inline void _aether_ctx_pop(void) { if (_aether_ctx_depth > 0) _aether_ctx_depth--; }");
     print_line(gen, "static inline void* _aether_ctx_get(void) { return _aether_ctx_depth > 0 ? _aether_ctx_stack[_aether_ctx_depth-1] : (void*)0; }");
+    // End of static helper definitions — close the warning suppression
+    print_line(gen, "#if defined(__GNUC__) || defined(__clang__)");
+    print_line(gen, "#pragma GCC diagnostic pop");
+    print_line(gen, "#endif");
     print_line(gen, "");
     // Declare runtime args function (avoid full header to prevent conflicts with actor runtime)
     print_line(gen, "void aether_args_init(int argc, char** argv);");

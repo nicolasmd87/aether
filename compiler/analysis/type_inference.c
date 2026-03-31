@@ -109,6 +109,11 @@ Type* infer_from_binary_op(Type* left, Type* right, const char* operator) {
         if (left->kind == TYPE_INT64 || right->kind == TYPE_INT64) {
             return create_type(TYPE_INT64);
         }
+        // ptr arithmetic: ptr +-*/ int → int (common in Aether's C interop)
+        if ((left->kind == TYPE_PTR && right->kind == TYPE_INT) ||
+            (left->kind == TYPE_INT && right->kind == TYPE_PTR)) {
+            return create_type(TYPE_INT);
+        }
         // If both are int, result is int
         if (left->kind == TYPE_INT && right->kind == TYPE_INT) {
             return create_type(TYPE_INT);

@@ -497,6 +497,12 @@ Type* infer_binary_type(ASTNode* left, ASTNode* right, AeTokenType operator) {
             if (left_type->kind == TYPE_INT && right_type->kind == TYPE_INT) {
                 return create_type(TYPE_INT);
             }
+            // ptr arithmetic: ptr +-*/ int → int (Aether C interop: list.get returns ptr holding int)
+            if ((left_type->kind == TYPE_PTR && right_type->kind == TYPE_INT) ||
+                (left_type->kind == TYPE_INT && right_type->kind == TYPE_PTR) ||
+                (left_type->kind == TYPE_PTR && right_type->kind == TYPE_PTR)) {
+                return create_type(TYPE_INT);
+            }
             // Promote to int64 if either operand is long/int64
             if ((left_type->kind == TYPE_INT64 || left_type->kind == TYPE_INT) &&
                 (right_type->kind == TYPE_INT64 || right_type->kind == TYPE_INT)) {
@@ -840,6 +846,28 @@ int typecheck_program(ASTNode* program) {
     add_symbol(global_table, "each", each_type, 0, 1, 0);
     Type* call_type = create_type(TYPE_INT);  // return type depends on closure
     add_symbol(global_table, "call", call_type, 0, 1, 0);
+    Type* read_char_type = create_type(TYPE_INT);
+    add_symbol(global_table, "read_char", read_char_type, 0, 1, 0);
+    Type* char_at_type = create_type(TYPE_INT);
+    add_symbol(global_table, "char_at", char_at_type, 0, 1, 0);
+    Type* box_closure_type = create_type(TYPE_PTR);
+    add_symbol(global_table, "box_closure", box_closure_type, 0, 1, 0);
+    Type* unbox_closure_type = create_type(TYPE_FUNCTION);
+    add_symbol(global_table, "unbox_closure", unbox_closure_type, 0, 1, 0);
+    Type* ref_type = create_type(TYPE_PTR);
+    add_symbol(global_table, "ref", ref_type, 0, 1, 0);
+    Type* ref_get_type = create_type(TYPE_INT);
+    add_symbol(global_table, "ref_get", ref_get_type, 0, 1, 0);
+    Type* ref_set_type = create_type(TYPE_VOID);
+    add_symbol(global_table, "ref_set", ref_set_type, 0, 1, 0);
+    Type* ref_free_type = create_type(TYPE_VOID);
+    add_symbol(global_table, "ref_free", ref_free_type, 0, 1, 0);
+    Type* str_eq_type = create_type(TYPE_INT);
+    add_symbol(global_table, "str_eq", str_eq_type, 0, 1, 0);
+    Type* raw_mode_type = create_type(TYPE_VOID);
+    add_symbol(global_table, "raw_mode", raw_mode_type, 0, 1, 0);
+    Type* cooked_mode_type = create_type(TYPE_VOID);
+    add_symbol(global_table, "cooked_mode", cooked_mode_type, 0, 1, 0);
     Type* builder_ctx_type = create_type(TYPE_PTR);
     add_symbol(global_table, "builder_context", builder_ctx_type, 0, 1, 0);
     Type* builder_depth_type = create_type(TYPE_INT);
@@ -1822,11 +1850,25 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
             }
 
             // Type check the body block in the closure scope
+            // Also register variable declarations so later statements can see them
             for (int i = 0; i < expr->child_count; i++) {
                 ASTNode* child = expr->children[i];
                 if (child && child->type == AST_BLOCK) {
                     for (int j = 0; j < child->child_count; j++) {
-                        typecheck_expression(child->children[j], closure_scope);
+                        ASTNode* stmt = child->children[j];
+                        typecheck_expression(stmt, closure_scope);
+                        // Register variable declarations in the closure scope
+                        if (stmt && stmt->type == AST_VARIABLE_DECLARATION && stmt->value) {
+                            Type* vtype = stmt->node_type ? clone_type(stmt->node_type)
+                                                          : create_type(TYPE_INT);
+                            // Try to infer from initializer
+                            if (vtype->kind == TYPE_UNKNOWN && stmt->child_count > 0 &&
+                                stmt->children[0] && stmt->children[0]->node_type) {
+                                free_type(vtype);
+                                vtype = clone_type(stmt->children[0]->node_type);
+                            }
+                            add_symbol(closure_scope, stmt->value, vtype, 0, 0, 0);
+                        }
                     }
                 }
             }

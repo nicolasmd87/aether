@@ -185,13 +185,6 @@ void emit_closure_definitions(CodeGenerator* gen) {
         }
         fprintf(gen->output, "} _closure_env_%d;\n\n", id);
 
-        // Determine params
-        int param_count = 0;
-        for (int i = 0; i < closure->child_count; i++) {
-            if (closure->children[i] && closure->children[i]->type == AST_CLOSURE_PARAM)
-                param_count++;
-        }
-
         // Determine return type: check if body has return statements
         int has_return = 0;
         ASTNode* body_check = NULL;
@@ -238,13 +231,37 @@ void emit_closure_definitions(CodeGenerator* gen) {
 
         if (body) {
             gen->indent_level = 1;
+            // Closures called from trailing blocks need builder context injection
+            // for _ctx: ptr functions. Set the flag so codegen injects _aether_ctx_get().
+            gen->in_trailing_block++;
             for (int i = 0; i < body->child_count; i++) {
                 generate_statement(gen, body->children[i]);
             }
+            gen->in_trailing_block--;
             gen->indent_level = 0;
         }
 
         fprintf(gen->output, "}\n\n");
+
+        // Emit MSVC-compatible closure constructor function (avoids statement expressions)
+        if (cap_count > 0) {
+            fprintf(gen->output, "#if !AETHER_GCC_COMPAT\n");
+            fprintf(gen->output, "static _AeClosure _aether_make_closure_%d(", id);
+            for (int i = 0; i < cap_count; i++) {
+                if (i > 0) fprintf(gen->output, ", ");
+                const char* ctype = lookup_var_c_type(gen, captures[i]);
+                fprintf(gen->output, "%s %s", ctype, safe_c_name(captures[i]));
+            }
+            fprintf(gen->output, ") {\n");
+            fprintf(gen->output, "    _closure_env_%d* _e = malloc(sizeof(_closure_env_%d));\n", id, id);
+            for (int i = 0; i < cap_count; i++) {
+                fprintf(gen->output, "    _e->%s = %s;\n", safe_c_name(captures[i]), safe_c_name(captures[i]));
+            }
+            fprintf(gen->output, "    _AeClosure _c = { (void(*)(void))_closure_fn_%d, _e };\n", id);
+            fprintf(gen->output, "    return _c;\n");
+            fprintf(gen->output, "}\n");
+            fprintf(gen->output, "#endif\n\n");
+        }
     }
 }
 
@@ -755,6 +772,38 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     generate_expression(gen, expr->children[0]);
                     fprintf(gen->output, ")");
                 }
+                // ref(value) — create a heap-allocated mutable cell
+                else if (strcmp(func_name, "ref") == 0 && expr->child_count == 1) {
+                    fprintf(gen->output, "\n#if AETHER_GCC_COMPAT\n");
+                    fprintf(gen->output, "({ intptr_t* _r = malloc(sizeof(intptr_t)); *_r = (intptr_t)(");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, "); (void*)_r; })");
+                    fprintf(gen->output, "\n#else\n");
+                    fprintf(gen->output, "_aether_ref_new((intptr_t)(");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, "))");
+                    fprintf(gen->output, "\n#endif\n");
+                }
+                // ref_get(r) — read from a ref cell
+                else if (strcmp(func_name, "ref_get") == 0 && expr->child_count == 1) {
+                    fprintf(gen->output, "(int)(*(intptr_t*)");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, ")");
+                }
+                // ref_set(r, value) — write to a ref cell
+                else if (strcmp(func_name, "ref_set") == 0 && expr->child_count == 2) {
+                    fprintf(gen->output, "(*(intptr_t*)");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, " = (intptr_t)(");
+                    generate_expression(gen, expr->children[1]);
+                    fprintf(gen->output, "))");
+                }
+                // ref_free(r) — free a ref cell
+                else if (strcmp(func_name, "ref_free") == 0 && expr->child_count == 1) {
+                    fprintf(gen->output, "free(");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, ")");
+                }
                 else if (strcmp(func_name, "clock_ns") == 0 && expr->child_count == 0) {
                     fprintf(gen->output, "\n#if AETHER_GCC_COMPAT\n");
                     fprintf(gen->output, "({ struct timespec _ts; clock_gettime(CLOCK_MONOTONIC, &_ts); (int64_t)_ts.tv_sec * 1000000000LL + _ts.tv_nsec; })");
@@ -770,6 +819,49 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 // each(array, count, closure) — iterate array calling closure for each element
                 // Usage: each(items, count) |item| { ... }
                 // The trailing block becomes the last child (a closure)
+                // box_closure(closure) — heap-allocate a closure so it can be stored in a list
+                else if (strcmp(func_name, "box_closure") == 0 && expr->child_count == 1) {
+                    fprintf(gen->output, "_aether_box_closure(");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, ")");
+                }
+                // unbox_closure(ptr) — retrieve a closure from a heap pointer
+                else if (strcmp(func_name, "unbox_closure") == 0 && expr->child_count == 1) {
+                    fprintf(gen->output, "_aether_unbox_closure(");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, ")");
+                }
+                // read_char() — read a single character from stdin (blocking)
+                else if (strcmp(func_name, "read_char") == 0 && expr->child_count == 0) {
+                    fprintf(gen->output, "getchar()");
+                }
+                // char_at(str, index) — ASCII value of character at position
+                else if (strcmp(func_name, "char_at") == 0 && expr->child_count >= 1) {
+                    fprintf(gen->output, "((int)((const char*)");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, ")[");
+                    if (expr->child_count >= 2) {
+                        generate_expression(gen, expr->children[1]);
+                    } else {
+                        fprintf(gen->output, "0");
+                    }
+                    fprintf(gen->output, "])");
+                }
+                // str_eq(a, b) — string equality (returns 1 or 0)
+                else if (strcmp(func_name, "str_eq") == 0 && expr->child_count == 2) {
+                    fprintf(gen->output, "(strcmp((const char*)");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, ", ");
+                    generate_expression(gen, expr->children[1]);
+                    fprintf(gen->output, ") == 0)");
+                }
+                // raw_mode() / cooked_mode() — terminal mode control
+                else if (strcmp(func_name, "raw_mode") == 0 && expr->child_count == 0) {
+                    fprintf(gen->output, "_aether_raw_mode()");
+                }
+                else if (strcmp(func_name, "cooked_mode") == 0 && expr->child_count == 0) {
+                    fprintf(gen->output, "_aether_cooked_mode()");
+                }
                 // builder_context() — returns the current builder context from the stack
                 else if (strcmp(func_name, "builder_context") == 0) {
                     fprintf(gen->output, "_aether_ctx_get()");
@@ -1279,8 +1371,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 fprintf(gen->output, "(_AeClosure){ .fn = (void(*)(void))_closure_fn_%d, .env = NULL }",
                         id);
             } else {
-                // Heap-allocate the environment to ensure it outlives the closure
-                // Use GCC statement expression or MSVC-compatible temp variable
+                // Heap-allocate the environment (portable, no use-after-free)
                 fprintf(gen->output, "\n#if AETHER_GCC_COMPAT\n");
                 fprintf(gen->output, "({ _closure_env_%d* _e = malloc(sizeof(_closure_env_%d)); ", id, id);
                 for (int i = 0; i < cap_count; i++) {
@@ -1288,14 +1379,13 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 }
                 fprintf(gen->output, "(_AeClosure){ .fn = (void(*)(void))_closure_fn_%d, .env = _e }; })", id);
                 fprintf(gen->output, "\n#else\n");
-                // MSVC fallback: use a block-scoped variable (caller must ensure lifetime)
-                fprintf(gen->output, "(_AeClosure){ .fn = (void(*)(void))_closure_fn_%d, .env = &(_closure_env_%d){",
-                        id, id);
+                // MSVC: use _aether_make_closure helper (emitted in preamble)
+                fprintf(gen->output, "_aether_make_closure_%d(", id);
                 for (int i = 0; i < cap_count; i++) {
                     if (i > 0) fprintf(gen->output, ", ");
-                    fprintf(gen->output, " .%s = %s", safe_c_name(captures[i]), safe_c_name(captures[i]));
+                    fprintf(gen->output, "%s", safe_c_name(captures[i]));
                 }
-                fprintf(gen->output, " } }");
+                fprintf(gen->output, ")");
                 fprintf(gen->output, "\n#endif\n");
             }
             break;

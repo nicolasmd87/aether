@@ -1,0 +1,34 @@
+// Test: box_closure/unbox_closure and string builtins
+
+import std.list
+
+main() {
+    // box_closure: store a closure in a list, retrieve and invoke it
+    actions = list.new()
+    defer list.free(actions)
+
+    add_five = |x: int| -> x + 5
+    mul_two  = |x: int| -> x * 2
+
+    list.add(actions, box_closure(add_five))
+    list.add(actions, box_closure(mul_two))
+
+    // unbox and call
+    fn0 = unbox_closure(list.get(actions, 0))
+    fn1 = unbox_closure(list.get(actions, 1))
+    println(call(fn0, 10))
+    println(call(fn1, 10))
+
+    // char_at: ASCII value of first character
+    ch = char_at("A")
+    println(ch)
+
+    ch2 = char_at("hello")
+    println(ch2)
+
+    // str_eq: string equality
+    if str_eq("abc", "abc") == 1 { println("match") }
+    if str_eq("abc", "xyz") == 0 { println("no match") }
+
+    println("box and builtins ok")
+}

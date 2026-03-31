@@ -250,15 +250,93 @@ _aether_ctx_push(frame_result);
 _aether_ctx_pop();
 ```
 
+## Ref Cells — Shared Mutable State for Closures
+
+Aether closures capture variables by value. This means a closure that does
+`count = count + 1` modifies its own copy, not the original. For callbacks
+that need shared mutable state (like UI event handlers), use **ref cells**:
+
+```aether
+count = ref(0)           // heap-allocated mutable cell
+defer ref_free(count)
+
+inc = |r: ptr| { ref_set(r, ref_get(r) + 1) }
+
+call(inc, count)         // mutates shared state
+call(inc, count)
+println(ref_get(count))  // 2
+```
+
+Ref cells work because closures capture the pointer by value — all closures
+holding the same pointer see the same heap location.
+
+**API:**
+- `ref(value)` — create a ref cell (heap-allocated `intptr_t`)
+- `ref_get(r)` — read the value
+- `ref_set(r, value)` — write a new value
+- `ref_free(r)` — free the cell (or use `defer ref_free(r)`)
+
+### Storing Closures in Collections
+
+Closures are structs (not pointers), so they can't be stored directly in
+`std.list`. Use `box_closure()` / `unbox_closure()` to heap-allocate:
+
+```aether
+import std.list
+
+handlers = list.new()
+action = |x: ptr| { ref_set(x, ref_get(x) + 1) }
+list.add(handlers, box_closure(action))
+
+// Later: retrieve and invoke
+boxed = list.get(handlers, 0)
+handler = unbox_closure(boxed)
+call(handler, some_ref)
+```
+
+### Interactive Calculator Example
+
+Combining ref cells, boxed closures, and the builder DSL:
+
+```aether
+num  = ref(0)
+prev = ref(0)
+op   = ref(0)
+
+digit  = |n: ptr, d: int| { ref_set(n, ref_get(n) * 10 + d) }
+set_op = |n: ptr, p: ptr, o: ptr, v: int| {
+    ref_set(p, ref_get(n)); ref_set(n, 0); ref_set(o, v)
+}
+
+g = grid() {
+    btn("7") |n: ptr, p: ptr, o: ptr| { call(digit, n, 7) }
+    btn("+") |n: ptr, p: ptr, o: ptr| { call(set_op, n, p, o, PLUS) }
+    btn("=") |n: ptr, p: ptr, o: ptr| {
+        v = ref_get(n); pv = ref_get(p); ov = ref_get(o)
+        if ov == PLUS  { v = pv + v }
+        if ov == MINUS { v = pv - v }
+        ref_set(n, v); ref_set(p, 0); ref_set(o, 0)
+    }
+}
+
+// Event loop: press button → invoke its callback
+handler = unbox_closure(list.get(list.get(g, 1), cur))
+call(handler, num, prev, op)
+```
+
+Each button's behavior is declared alongside the button — not in a separate
+dispatch table. The ref cells provide shared mutable state across all callbacks.
+
 ## Comparison with Other Languages
 
 | Feature | Smalltalk | Ruby | Groovy | Aether |
 |---------|-----------|------|--------|--------|
-| Block/closure syntax | `[:x | x * 2]` | `{|x| x * 2}` | `{x -> x * 2}` | `|x| -> x * 2` |
+| Block/closure syntax | `[:x | x * 2]` | `{|x| x * 2}` | `{x -> x * 2}` | `\|x\| -> x * 2` |
 | Trailing block | `do: [...]` | `method do ... end` | `method { ... }` | `method() { ... }` |
 | Implicit receiver | `self` in block | `instance_eval` | Delegate | `_ctx: ptr` convention |
 | Builder pattern | Cascades | Shoes, Sinatra | SwingBuilder | Trailing blocks + context stack |
 | Callback storage | Block variables | Procs/lambdas | Closures | `fn` type + `call()` |
+| Shared mutable state | Instance vars | `@variables` | Delegate fields | `ref()` cells |
 
 ## Implementation Notes
 
@@ -276,3 +354,19 @@ The builder context stack is a simple C array:
 Trailing blocks (parameterless `{ }`) are inlined at the call site — no closure
 allocation, no function pointer overhead. They are pure syntactic sugar for
 sequential code with automatic context management.
+
+Ref cells compile to:
+- `ref(val)` → `malloc(sizeof(intptr_t))` + store
+- `ref_get(r)` → `*(intptr_t*)r`
+- `ref_set(r, val)` → `*(intptr_t*)r = val`
+- `ref_free(r)` → `free(r)`
+
+Closure boxing:
+- `box_closure(c)` → heap-allocates an `_AeClosure` struct, returns `void*`
+- `unbox_closure(p)` → dereferences back to `_AeClosure`
+
+Additional builtins for interactive programs:
+- `read_char()` → `getchar()` (blocking single-character input)
+- `raw_mode()` / `cooked_mode()` → terminal mode switching (Unix `termios`)
+- `char_at(str)` → ASCII value of first character
+- `str_eq(a, b)` → string equality (returns 0 or 1)
