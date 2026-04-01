@@ -1,0 +1,10 @@
+// Test: basic closure and trailing block syntax
+
+main() {
+    // Block closure (no params, no return)
+    greeter = || {
+        println("hello from closure")
+    }
+
+    println("closures parsed ok")
+}

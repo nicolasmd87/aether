@@ -70,6 +70,34 @@ typedef struct {
     int tuple_type_count;
     int tuple_type_capacity;
 
+    // Builder function registry: functions with _ctx: ptr as first param
+    // get builder_context() auto-injected at call sites inside trailing blocks
+    char** builder_funcs;
+    int builder_func_count;
+    int builder_func_capacity;
+    int in_trailing_block;  // >0 when generating code inside a trailing block
+
+    // Closure support: track closures for hoisted C function generation
+    int closure_counter;    // unique ID for closure env structs and functions
+    // Map variable names to closure IDs (set during variable declaration codegen)
+    struct ClosureVarMap {
+        char* var_name;
+        int closure_id;
+    }* closure_var_map;
+    int closure_var_count;
+    int closure_var_capacity;
+    // Pending closures: discovered during expression codegen, emitted at file scope
+    struct ClosureInfo {
+        int id;                  // unique closure ID
+        ASTNode* closure_node;   // AST_CLOSURE node
+        char** captures;         // captured variable names
+        Type** capture_types;    // captured variable types
+        int capture_count;
+        char* parent_func;       // enclosing function name (for nested context)
+    }* closures;
+    int closure_count;
+    int closure_capacity;
+
     // Ask/reply type map: request message name -> reply message name.
     // Built by scanning actor receive handlers for reply statements.
     struct ReplyTypeEntry {

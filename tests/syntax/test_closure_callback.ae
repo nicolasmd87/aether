@@ -1,0 +1,69 @@
+// Test: builder DSL with deferred callbacks
+// Immediate blocks { } run now (structure).
+// Closure blocks || { } are stored and invoked later (events).
+
+import std.list
+
+frame(title: string) {
+    children = list.new()
+    println("frame: ${title}")
+    return children
+}
+
+panel(_ctx: ptr, title: string) {
+    children = list.new()
+    println("  panel: ${title}")
+    if _ctx != null { list.add(_ctx, children) }
+    return children
+}
+
+label(_ctx: ptr, text: string) {
+    println("    label: ${text}")
+    if _ctx != null { list.add(_ctx, 1) }
+}
+
+// button stores a callback closure, returns it
+make_button(_ctx: ptr, text: string, on_click: fn) {
+    println("    button: ${text}")
+    if _ctx != null { list.add(_ctx, 1) }
+    return on_click
+}
+
+// simulate_click invokes a stored callback
+simulate_click(handler: fn) {
+    call(handler)
+}
+
+main() {
+    name = "Springfield"
+
+    // Create a closure for the save action
+    save_action = || {
+        println("  [click] Saving: ${name}")
+    }
+    cancel_action = || {
+        println("  [click] Cancelled")
+    }
+
+    // Build the UI — closures are passed to buttons
+    root = frame("Address") {
+        panel("Form") {
+            label("City:")
+            label(name)
+        }
+        panel("Actions") {
+            make_button("Save", save_action)
+            make_button("Cancel", cancel_action)
+        }
+    }
+
+    // Simulate user clicks — closures execute NOW, deferred from construction
+    println("")
+    println("Simulating clicks:")
+    simulate_click(save_action)
+    simulate_click(cancel_action)
+    simulate_click(save_action)
+
+    list.free(root)
+    println("callback ok")
+}

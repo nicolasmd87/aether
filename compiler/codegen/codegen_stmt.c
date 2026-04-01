@@ -597,11 +597,82 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     }
 
                     fprintf(gen->output, ";\n");
+                    // Record variable→closure mapping for closure invocation
+                    if (stmt->child_count > 0 && stmt->children[0] &&
+                        stmt->children[0]->type == AST_CLOSURE &&
+                        stmt->children[0]->value && stmt->value) {
+                        int cid = atoi(stmt->children[0]->value);
+                        if (gen->closure_var_count >= gen->closure_var_capacity) {
+                            gen->closure_var_capacity = gen->closure_var_capacity ? gen->closure_var_capacity * 2 : 16;
+                            gen->closure_var_map = realloc(gen->closure_var_map,
+                                gen->closure_var_capacity * sizeof(gen->closure_var_map[0]));
+                        }
+                        gen->closure_var_map[gen->closure_var_count].var_name = strdup(stmt->value);
+                        gen->closure_var_map[gen->closure_var_count].closure_id = cid;
+                        gen->closure_var_count++;
+
+                        // Emit deferred free for heap-allocated closure environments
+                        for (int ci = 0; ci < gen->closure_count; ci++) {
+                            if (gen->closures[ci].id == cid && gen->closures[ci].capture_count > 0) {
+                                // Create a synthetic defer: free(var.env)
+                                ASTNode* free_call = create_ast_node(AST_FUNCTION_CALL, "free",
+                                    stmt->line, stmt->column);
+                                char env_access[256];
+                                snprintf(env_access, sizeof(env_access), "%s.env", safe_c_name(stmt->value));
+                                ASTNode* env_arg = create_ast_node(AST_IDENTIFIER, env_access,
+                                    stmt->line, stmt->column);
+                                add_child(free_call, env_arg);
+                                // Wrap in expression statement so generate_statement handles it
+                                ASTNode* expr_stmt = create_ast_node(AST_EXPRESSION_STATEMENT, NULL,
+                                    stmt->line, stmt->column);
+                                add_child(expr_stmt, free_call);
+                                push_defer(gen, expr_stmt);
+                                break;
+                            }
+                        }
+                    }
                     // Suppress unused-variable warning for arrays used with list
                     // pattern matching — the paired _len variable may be the only
                     // one used when patterns only check size ([], [_], wildcard).
                     if (is_array_init || (stmt->node_type && stmt->node_type->kind == TYPE_ARRAY)) {
                         print_line(gen, "(void)%s;", stmt->value);
+                    }
+
+                    // Handle trailing blocks on function calls used as initializers
+                    // e.g., root = make_container("root") { ... }
+                    if (stmt->child_count > 0 && stmt->children[0] &&
+                        stmt->children[0]->type == AST_FUNCTION_CALL) {
+                        ASTNode* init_call = stmt->children[0];
+                        for (int tc = 0; tc < init_call->child_count; tc++) {
+                            ASTNode* trailing = init_call->children[tc];
+                            if (trailing && trailing->type == AST_CLOSURE &&
+                                trailing->value && strcmp(trailing->value, "trailing") == 0) {
+                                for (int bi = 0; bi < trailing->child_count; bi++) {
+                                    if (trailing->children[bi] &&
+                                        trailing->children[bi]->type == AST_BLOCK) {
+                                        // Push the variable's value as builder context
+                                        print_indent(gen);
+                                        fprintf(gen->output, "_aether_ctx_push((void*)(intptr_t)%s);\n",
+                                                safe_c_name(stmt->value));
+                                        print_indent(gen);
+                                        fprintf(gen->output, "{\n");
+                                        gen->indent_level++;
+                                        gen->in_trailing_block++;
+                                        ASTNode* body = trailing->children[bi];
+                                        for (int si = 0; si < body->child_count; si++) {
+                                            generate_statement(gen, body->children[si]);
+                                        }
+                                        gen->in_trailing_block--;
+                                        gen->indent_level--;
+                                        print_indent(gen);
+                                        fprintf(gen->output, "}\n");
+                                        print_indent(gen);
+                                        fprintf(gen->output, "_aether_ctx_pop();\n");
+                                        break;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -1064,8 +1135,92 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             
         case AST_EXPRESSION_STATEMENT:
             if (stmt->child_count > 0) {
-                generate_expression(gen, stmt->children[0]);
-                fprintf(gen->output, ";\n");
+                ASTNode* inner = stmt->children[0];
+
+                // Check if this function call has a trailing block
+                int has_trailing = 0;
+                if (inner && inner->type == AST_FUNCTION_CALL) {
+                    for (int tc = 0; tc < inner->child_count; tc++) {
+                        if (inner->children[tc] && inner->children[tc]->type == AST_CLOSURE &&
+                            inner->children[tc]->value &&
+                            strcmp(inner->children[tc]->value, "trailing") == 0) {
+                            has_trailing = 1;
+                            break;
+                        }
+                    }
+                }
+
+                if (has_trailing) {
+                    // Capture function return value and push as builder context
+                    // Check if function returns void (no return value to capture)
+                    int returns_void = 1;
+                    if (inner->node_type && inner->node_type->kind != TYPE_VOID &&
+                        inner->node_type->kind != TYPE_UNKNOWN) {
+                        returns_void = 0;
+                    }
+                    // Also check if function has return statements
+                    if (inner->value) {
+                        for (int fi = 0; fi < gen->program->child_count; fi++) {
+                            ASTNode* fdef = gen->program->children[fi];
+                            if (fdef && fdef->type == AST_FUNCTION_DEFINITION &&
+                                fdef->value && strcmp(fdef->value, inner->value) == 0) {
+                                if (has_return_value(fdef)) returns_void = 0;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (!returns_void) {
+                        // Capture return value and push as context
+                        print_indent(gen);
+                        fprintf(gen->output, "_aether_ctx_push((void*)(intptr_t)");
+                        generate_expression(gen, inner);
+                        fprintf(gen->output, ");\n");
+                    } else {
+                        // Void function — just call it, push NULL context
+                        generate_expression(gen, inner);
+                        fprintf(gen->output, ";\n");
+                        print_indent(gen);
+                        fprintf(gen->output, "_aether_ctx_push((void*)0);\n");
+                    }
+                } else {
+                    generate_expression(gen, inner);
+                    fprintf(gen->output, ";\n");
+                }
+
+                // Trailing blocks: emit closure body as inline statements after the call
+                if (inner && inner->type == AST_FUNCTION_CALL) {
+                    for (int tc = 0; tc < inner->child_count; tc++) {
+                        ASTNode* trailing = inner->children[tc];
+                        if (trailing && trailing->type == AST_CLOSURE &&
+                            trailing->value && strcmp(trailing->value, "trailing") == 0) {
+                            for (int bi = 0; bi < trailing->child_count; bi++) {
+                                if (trailing->children[bi] &&
+                                    trailing->children[bi]->type == AST_BLOCK) {
+                                    print_indent(gen);
+                                    fprintf(gen->output, "{\n");
+                                    gen->indent_level++;
+                                    gen->in_trailing_block++;
+                                    ASTNode* body = trailing->children[bi];
+                                    for (int si = 0; si < body->child_count; si++) {
+                                        generate_statement(gen, body->children[si]);
+                                    }
+                                    gen->in_trailing_block--;
+                                    gen->indent_level--;
+                                    print_indent(gen);
+                                    fprintf(gen->output, "}\n");
+
+                                    // Pop the builder context
+                                    if (has_trailing) {
+                                        print_indent(gen);
+                                        fprintf(gen->output, "_aether_ctx_pop();\n");
+                                    }
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
             }
             break;
             

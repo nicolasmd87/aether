@@ -1,0 +1,19 @@
+// Test: trailing block on user-defined function call
+
+setup(label: string) {
+    println(label)
+}
+
+main() {
+    // Trailing block syntax: function call followed by { ... }
+    // The trailing block body executes inline after the function call
+    setup("initializing") {
+        println("in trailing block")
+    }
+
+    setup("processing") {
+        println("in second trailing block")
+    }
+
+    println("trailing blocks ok")
+}

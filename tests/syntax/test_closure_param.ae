@@ -1,0 +1,37 @@
+// Test: closures passed as function parameters using fn type
+
+// Higher-order function: applies a closure to a value
+apply(x: int, f: fn) {
+    return call(f, x)
+}
+
+// Applies a closure twice
+apply_twice(x: int, f: fn) {
+    first = call(f, x)
+    return call(f, first)
+}
+
+// Accepts two closures
+combine(x: int, f: fn, g: fn) {
+    mid = call(f, x)
+    return call(g, mid)
+}
+
+main() {
+    doubler = |x: int| -> x * 2
+    add_ten = |x: int| -> x + 10
+
+    // Pass closure to function
+    result = apply(21, doubler)
+    println(result)
+
+    // Apply closure twice: 3 -> 6 -> 12
+    result2 = apply_twice(3, doubler)
+    println(result2)
+
+    // Combine two closures: 5 -> 10 -> 20
+    result3 = combine(5, doubler, add_ten)
+    println(result3)
+
+    println("closure params ok")
+}

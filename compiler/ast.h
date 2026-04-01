@@ -76,6 +76,10 @@ typedef enum {
     AST_NULL_LITERAL,       // null pointer literal
     AST_IF_EXPRESSION,      // if cond { expr } else { expr } — value-producing
 
+    // Closures
+    AST_CLOSURE,            // |params| -> expr  OR  |params| { block }
+    AST_CLOSURE_PARAM,      // parameter in a closure: name [: type]
+
     // Types
     AST_TYPE_ANNOTATION,
     AST_ACTOR_REF_TYPE,
@@ -100,6 +104,7 @@ typedef enum {
     TYPE_PTR,           // void* for C interop
     TYPE_WILDCARD,
     TYPE_TUPLE,         // (T1, T2, ...) for multiple return values
+    TYPE_FUNCTION,      // |param_types| -> return_type (closures)
     TYPE_UNKNOWN
 } TypeKind;
 
@@ -111,6 +116,10 @@ typedef struct Type {
     // Tuple support (multiple return values)
     struct Type** tuple_types;  // Array of element types (NULL if not tuple)
     int tuple_count;            // Number of tuple elements (0 if not tuple)
+    // Function/closure type support
+    struct Type** param_types;  // Parameter types (NULL if not function type)
+    int param_count;            // Number of parameters (0 if not function type)
+    struct Type* return_type;   // Return type (NULL if not function type)
 } Type;
 
 typedef struct ASTNode {
@@ -128,6 +137,7 @@ Type* create_type(TypeKind kind);
 Type* create_array_type(Type* element_type, int size);
 Type* create_actor_ref_type(Type* actor_type);
 Type* create_tuple_type(int count, ...);  // create_tuple_type(2, type_a, type_b)
+Type* create_function_type(int param_count, Type** param_types, Type* return_type);
 void free_type(Type* type);
 const char* type_to_string(Type* type);
 int types_equal(Type* a, Type* b);

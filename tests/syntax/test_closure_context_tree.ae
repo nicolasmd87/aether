@@ -1,0 +1,49 @@
+// Test: builder context creates a real tree structure
+
+import std.list
+
+// Container that holds children
+make_container(name: string) {
+    children = list.new()
+    // Add self to parent container if inside a builder block
+    parent = builder_context()
+    if parent != null {
+        list.add(parent, children)
+    }
+    return children
+}
+
+// Leaf node — adds itself to parent
+make_leaf(label: string) {
+    parent = builder_context()
+    if parent != null {
+        list.add(parent, 1)
+    }
+}
+
+main() {
+    root = make_container("root") {
+        make_container("row1") {
+            make_leaf("a")
+            make_leaf("b")
+        }
+        make_container("row2") {
+            make_leaf("c")
+        }
+        make_leaf("d")
+    }
+
+    // root should have 3 children: row1_container, row2_container, leaf_d
+    println(list.size(root))
+
+    // row1 is first child of root
+    row1 = list.get(root, 0)
+    println(list.size(row1))
+
+    // row2 is second child of root
+    row2 = list.get(root, 1)
+    println(list.size(row2))
+
+    list.free(root)
+    println("tree ok")
+}

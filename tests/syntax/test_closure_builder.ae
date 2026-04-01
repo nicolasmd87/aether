@@ -1,0 +1,34 @@
+// Test: builder-style DSL with nested trailing blocks
+// This is "that Ruby and Groovy language feature" — pseudo-declarative DSL
+// using closures/blocks for nesting, resembling the Shoes/SwingBuilder pattern
+
+panel(title: string) {
+    println(title)
+}
+
+button(label: string) {
+    println(label)
+}
+
+flow(width: int, height: int) {
+    println("flow")
+}
+
+main() {
+    // Builder-style nested blocks — like Ruby's Shoes or Groovy's SwingBuilder
+    panel("Calculator") {
+        flow(200, 48) {
+            button("7")
+            button("8")
+            button("9")
+        }
+        flow(200, 48) {
+            button("4")
+            button("5")
+            button("6")
+        }
+        button("=")
+    }
+
+    println("builder DSL ok")
+}

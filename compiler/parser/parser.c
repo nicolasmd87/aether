@@ -131,10 +131,15 @@ Type* parse_type(Parser* parser) {
             type = create_type(TYPE_PTR);
             break;
         case TOKEN_IDENTIFIER: {
-            // Could be a struct type
             advance_token(parser);
-            type = create_type(TYPE_STRUCT);
-            type->struct_name = strdup(token->value);
+            // "fn" is the closure/function type
+            if (strcmp(token->value, "fn") == 0) {
+                type = create_type(TYPE_FUNCTION);
+            } else {
+                // Could be a struct type
+                type = create_type(TYPE_STRUCT);
+                type->struct_name = strdup(token->value);
+            }
             break;
         }
         case TOKEN_ACTOR_REF:
@@ -292,6 +297,91 @@ static ASTNode* parse_interp_string_expr(const char* raw) {
 
     free(lit_buf);
     return interp;
+}
+
+// Parse closure expression: |params| -> expr  OR  |params| { block }
+// Also handles: || { block } (no params, double-pipe)
+ASTNode* parse_closure_expression(Parser* parser) {
+    Token* start = peek_token(parser);
+    int line = start->line, col = start->column;
+
+    ASTNode* closure = create_ast_node(AST_CLOSURE, NULL, line, col);
+
+    if (start->type == TOKEN_OR) {
+        // || means empty parameter list
+        advance_token(parser); // consume '||'
+    } else {
+        // TOKEN_PIPE: |param1, param2, ...|
+        advance_token(parser); // consume opening '|'
+
+        // Check for empty |  |
+        if (!match_token(parser, TOKEN_PIPE)) {
+            // Parse parameters
+            do {
+                Token* param_name = expect_token(parser, TOKEN_IDENTIFIER);
+                if (!param_name) {
+                    free_ast_node(closure);
+                    return NULL;
+                }
+                ASTNode* param = create_ast_node(AST_CLOSURE_PARAM, param_name->value,
+                                                  param_name->line, param_name->column);
+                // Optional type annotation: |x: int|
+                if (match_token(parser, TOKEN_COLON)) {
+                    Type* ptype = parse_type(parser);
+                    if (ptype) {
+                        param->node_type = ptype;
+                    }
+                }
+                add_child(closure, param);
+            } while (match_token(parser, TOKEN_COMMA));
+
+            if (!expect_token(parser, TOKEN_PIPE)) {
+                free_ast_node(closure);
+                return NULL;
+            }
+        }
+    }
+
+    // Parse body: either -> expr  or  { block }
+    Token* next = peek_token(parser);
+    if (!next) {
+        free_ast_node(closure);
+        return NULL;
+    }
+
+    if (next->type == TOKEN_ARROW) {
+        // Arrow body: |x| -> x * 2
+        advance_token(parser); // consume '->'
+        if (peek_token(parser) && peek_token(parser)->type == TOKEN_LEFT_BRACE) {
+            // |x| -> { multi-statement block }
+            ASTNode* body = parse_block(parser);
+            add_child(closure, body);
+        } else {
+            // |x| -> single_expression
+            ASTNode* expr = parse_expression(parser);
+            if (!expr) {
+                free_ast_node(closure);
+                return NULL;
+            }
+            // Wrap in a block with implicit return
+            ASTNode* ret = create_ast_node(AST_RETURN_STATEMENT, NULL, expr->line, expr->column);
+            add_child(ret, expr);
+            ASTNode* body = create_ast_node(AST_BLOCK, NULL, expr->line, expr->column);
+            add_child(body, ret);
+            add_child(closure, body);
+        }
+    } else if (next->type == TOKEN_LEFT_BRACE) {
+        // Block body: |x| { statements }
+        ASTNode* body = parse_block(parser);
+        add_child(closure, body);
+    } else {
+        parser_error(parser, "Expected '->' or '{' after closure parameters");
+        free_ast_node(closure);
+        return NULL;
+    }
+
+    closure->node_type = create_type(TYPE_FUNCTION);
+    return closure;
 }
 
 ASTNode* parse_primary_expression(Parser* parser) {
@@ -578,6 +668,11 @@ ASTNode* parse_primary_expression(Parser* parser) {
             // Outside actor bodies, 'state' is treated as a regular identifier
             return create_identifier_node(advance_token(parser));
 
+        case TOKEN_PIPE:
+        case TOKEN_OR:
+            // Closure expression: |params| -> expr  OR  || { block }
+            return parse_closure_expression(parser);
+
         default:
             return NULL;
     }
@@ -704,13 +799,35 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
                 }
             }
             
+            // Check for trailing closure/block after function call
+            // func(args) { body }  or  func(args) |x| { body }
+            {
+                Token* next_tok = peek_token(parser);
+                if (next_tok && (next_tok->type == TOKEN_PIPE || next_tok->type == TOKEN_OR)) {
+                    // Trailing closure with params: func(args) |x| { ... }
+                    // These are real closures (not DSL blocks) — they get hoisted
+                    ASTNode* trailing = parse_closure_expression(parser);
+                    if (trailing) {
+                        add_child(func_call, trailing);
+                    }
+                } else if (next_tok && next_tok->type == TOKEN_LEFT_BRACE) {
+                    // Trailing block without params: func(args) { body }
+                    ASTNode* trailing = create_ast_node(AST_CLOSURE, "trailing",
+                                                         next_tok->line, next_tok->column);
+                    trailing->node_type = create_type(TYPE_FUNCTION);
+                    ASTNode* body = parse_block(parser);
+                    add_child(trailing, body);
+                    add_child(func_call, trailing);
+                }
+            }
+
             // Free the original identifier node since we've copied its name
             if (expr) free_ast_node(expr);
-            
+
             expr = func_call;
             continue;
         }
-        
+
         // Actor V2 - Fire-and-forget operator: actor ! Message { ... }
         if (op->type == TOKEN_EXCLAIM) {
             advance_token(parser); // consume '!'

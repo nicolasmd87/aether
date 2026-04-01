@@ -1,5 +1,270 @@
 #include "codegen_internal.h"
 
+// ---- Closure support ----
+
+// Collect identifiers referenced in an AST subtree
+static void collect_identifiers(ASTNode* node, char*** names, int* count, int* cap) {
+    if (!node) return;
+    if (node->type == AST_IDENTIFIER && node->value) {
+        // Check if already in list
+        for (int i = 0; i < *count; i++) {
+            if (strcmp((*names)[i], node->value) == 0) return;
+        }
+        if (*count >= *cap) {
+            *cap = *cap ? *cap * 2 : 16;
+            *names = realloc(*names, *cap * sizeof(char*));
+        }
+        (*names)[(*count)++] = strdup(node->value);
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        collect_identifiers(node->children[i], names, count, cap);
+    }
+}
+
+// Check if a name is a closure parameter
+static int is_closure_param(ASTNode* closure, const char* name) {
+    for (int i = 0; i < closure->child_count; i++) {
+        ASTNode* child = closure->children[i];
+        if (child && child->type == AST_CLOSURE_PARAM && child->value &&
+            strcmp(child->value, name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Check if a name is declared locally inside a block
+static int is_local_var(ASTNode* block, const char* name) {
+    if (!block) return 0;
+    for (int i = 0; i < block->child_count; i++) {
+        ASTNode* s = block->children[i];
+        if (!s) continue;
+        if ((s->type == AST_VARIABLE_DECLARATION || s->type == AST_CONST_DECLARATION) &&
+            s->value && strcmp(s->value, name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Built-in function names that should not be treated as captures
+static int is_builtin_name(const char* name) {
+    static const char* builtins[] = {
+        "print", "println", "make", "spawn", "exit", "sleep", "free",
+        "getenv", "atoi", "clock_ns", "typeof", "is_type", "convert_type",
+        "print_char", "wait_for_idle", "each", "map", "filter",
+        NULL
+    };
+    for (int i = 0; builtins[i]; i++) {
+        if (strcmp(name, builtins[i]) == 0) return 1;
+    }
+    return 0;
+}
+
+// Discover closures in an AST subtree and register them with the codegen
+void discover_closures(CodeGenerator* gen, ASTNode* node) {
+    if (!node) return;
+    if (node->type == AST_CLOSURE) {
+        // Skip trailing blocks — they are inlined at the call site, not hoisted
+        if (node->value && strcmp(node->value, "trailing") == 0) {
+            // Still recurse into children to find nested non-trailing closures
+            for (int i = 0; i < node->child_count; i++) {
+                discover_closures(gen, node->children[i]);
+            }
+            return;
+        }
+        int id = gen->closure_counter++;
+        // Store ID in closure node's value field for later reference
+        char id_str[32];
+        snprintf(id_str, sizeof(id_str), "%d", id);
+        if (node->value) free(node->value);
+        node->value = strdup(id_str);
+
+        // Find the body (last child, should be AST_BLOCK)
+        ASTNode* body = NULL;
+        for (int i = node->child_count - 1; i >= 0; i--) {
+            if (node->children[i] && node->children[i]->type == AST_BLOCK) {
+                body = node->children[i];
+                break;
+            }
+        }
+
+        // Collect all identifiers in the body
+        char** all_ids = NULL;
+        int id_count = 0, id_cap = 0;
+        collect_identifiers(body, &all_ids, &id_count, &id_cap);
+
+        // Filter to captures: not a param, not a local, not a builtin
+        char** captures = NULL;
+        int cap_count = 0, cap_cap = 0;
+        for (int i = 0; i < id_count; i++) {
+            if (!is_closure_param(node, all_ids[i]) &&
+                !is_local_var(body, all_ids[i]) &&
+                !is_builtin_name(all_ids[i])) {
+                if (cap_count >= cap_cap) {
+                    cap_cap = cap_cap ? cap_cap * 2 : 8;
+                    captures = realloc(captures, cap_cap * sizeof(char*));
+                }
+                captures[cap_count++] = strdup(all_ids[i]);
+            }
+            free(all_ids[i]);
+        }
+        free(all_ids);
+
+        // Register closure
+        if (gen->closure_count >= gen->closure_capacity) {
+            gen->closure_capacity = gen->closure_capacity ? gen->closure_capacity * 2 : 16;
+            gen->closures = realloc(gen->closures, gen->closure_capacity * sizeof(gen->closures[0]));
+        }
+        gen->closures[gen->closure_count].id = id;
+        gen->closures[gen->closure_count].closure_node = node;
+        gen->closures[gen->closure_count].captures = captures;
+        gen->closures[gen->closure_count].capture_types = NULL; // resolved during emit
+        gen->closures[gen->closure_count].capture_count = cap_count;
+        gen->closures[gen->closure_count].parent_func = NULL;
+        gen->closure_count++;
+    }
+
+    // Recurse into children (including nested closures)
+    for (int i = 0; i < node->child_count; i++) {
+        discover_closures(gen, node->children[i]);
+    }
+}
+
+// Look up a variable's C type by searching the program AST
+static const char* lookup_var_c_type(CodeGenerator* gen, const char* var_name) {
+    if (!gen->program || !var_name) return "int";
+    // Search through all function bodies for variable declarations
+    for (int i = 0; i < gen->program->child_count; i++) {
+        ASTNode* top = gen->program->children[i];
+        if (!top) continue;
+        // Look in function bodies and main
+        if (top->type == AST_FUNCTION_DEFINITION || top->type == AST_MAIN_FUNCTION) {
+            for (int j = 0; j < top->child_count; j++) {
+                ASTNode* body = top->children[j];
+                if (!body || body->type != AST_BLOCK) continue;
+                for (int k = 0; k < body->child_count; k++) {
+                    ASTNode* stmt = body->children[k];
+                    if (stmt && (stmt->type == AST_VARIABLE_DECLARATION ||
+                                 stmt->type == AST_CONST_DECLARATION) &&
+                        stmt->value && strcmp(stmt->value, var_name) == 0) {
+                        if (stmt->node_type && stmt->node_type->kind != TYPE_UNKNOWN) {
+                            return get_c_type(stmt->node_type);
+                        }
+                        // Try to infer from initializer
+                        if (stmt->child_count > 0 && stmt->children[0] &&
+                            stmt->children[0]->node_type &&
+                            stmt->children[0]->node_type->kind != TYPE_UNKNOWN) {
+                            return get_c_type(stmt->children[0]->node_type);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return "int"; // fallback
+}
+
+// Emit all hoisted closure environment structs and static functions
+void emit_closure_definitions(CodeGenerator* gen) {
+    for (int ci = 0; ci < gen->closure_count; ci++) {
+        int id = gen->closures[ci].id;
+        ASTNode* closure = gen->closures[ci].closure_node;
+        char** captures = gen->closures[ci].captures;
+        int cap_count = gen->closures[ci].capture_count;
+
+        // Emit environment struct (even if empty, for uniform calling convention)
+        fprintf(gen->output, "typedef struct {\n");
+        if (cap_count == 0) {
+            fprintf(gen->output, "    int _dummy;\n");
+        } else {
+            for (int i = 0; i < cap_count; i++) {
+                const char* ctype = lookup_var_c_type(gen, captures[i]);
+                fprintf(gen->output, "    %s %s;\n", ctype, safe_c_name(captures[i]));
+            }
+        }
+        fprintf(gen->output, "} _closure_env_%d;\n\n", id);
+
+        // Determine return type: check if body has return statements
+        int has_return = 0;
+        ASTNode* body_check = NULL;
+        for (int i = closure->child_count - 1; i >= 0; i--) {
+            if (closure->children[i] && closure->children[i]->type == AST_BLOCK) {
+                body_check = closure->children[i];
+                break;
+            }
+        }
+        if (body_check) {
+            has_return = has_return_value(body_check);
+        }
+        const char* ret_type = has_return ? "int" : "void";
+
+        // Emit static function
+        fprintf(gen->output, "static %s _closure_fn_%d(_closure_env_%d* _env", ret_type, id, id);
+        for (int i = 0; i < closure->child_count; i++) {
+            ASTNode* p = closure->children[i];
+            if (p && p->type == AST_CLOSURE_PARAM) {
+                const char* ptype = "int"; // default
+                if (p->node_type) {
+                    ptype = get_c_type(p->node_type);
+                }
+                fprintf(gen->output, ", %s %s", ptype, safe_c_name(p->value));
+            }
+        }
+        fprintf(gen->output, ") {\n");
+
+        // Emit capture aliases (local vars that reference env fields)
+        for (int i = 0; i < cap_count; i++) {
+            const char* ctype = lookup_var_c_type(gen, captures[i]);
+            fprintf(gen->output, "    %s %s = _env->%s;\n",
+                    ctype, safe_c_name(captures[i]), safe_c_name(captures[i]));
+        }
+
+        // Find and emit body
+        ASTNode* body = NULL;
+        for (int i = closure->child_count - 1; i >= 0; i--) {
+            if (closure->children[i] && closure->children[i]->type == AST_BLOCK) {
+                body = closure->children[i];
+                break;
+            }
+        }
+
+        if (body) {
+            gen->indent_level = 1;
+            // Closures called from trailing blocks need builder context injection
+            // for _ctx: ptr functions. Set the flag so codegen injects _aether_ctx_get().
+            gen->in_trailing_block++;
+            for (int i = 0; i < body->child_count; i++) {
+                generate_statement(gen, body->children[i]);
+            }
+            gen->in_trailing_block--;
+            gen->indent_level = 0;
+        }
+
+        fprintf(gen->output, "}\n\n");
+
+        // Emit MSVC-compatible closure constructor function (avoids statement expressions)
+        if (cap_count > 0) {
+            fprintf(gen->output, "#if !AETHER_GCC_COMPAT\n");
+            fprintf(gen->output, "static _AeClosure _aether_make_closure_%d(", id);
+            for (int i = 0; i < cap_count; i++) {
+                if (i > 0) fprintf(gen->output, ", ");
+                const char* ctype = lookup_var_c_type(gen, captures[i]);
+                fprintf(gen->output, "%s %s", ctype, safe_c_name(captures[i]));
+            }
+            fprintf(gen->output, ") {\n");
+            fprintf(gen->output, "    _closure_env_%d* _e = malloc(sizeof(_closure_env_%d));\n", id, id);
+            for (int i = 0; i < cap_count; i++) {
+                fprintf(gen->output, "    _e->%s = %s;\n", safe_c_name(captures[i]), safe_c_name(captures[i]));
+            }
+            fprintf(gen->output, "    _AeClosure _c = { (void(*)(void))_closure_fn_%d, _e };\n", id);
+            fprintf(gen->output, "    return _c;\n");
+            fprintf(gen->output, "}\n");
+            fprintf(gen->output, "#endif\n\n");
+        }
+    }
+}
+
 // Emit a send target expression with the correct C cast.
 // Actor refs produce (ActorBase*)(expr) directly.
 // Int/int64 values (actor refs stored in int message fields or state) need
@@ -507,6 +772,38 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     generate_expression(gen, expr->children[0]);
                     fprintf(gen->output, ")");
                 }
+                // ref(value) — create a heap-allocated mutable cell
+                else if (strcmp(func_name, "ref") == 0 && expr->child_count == 1) {
+                    fprintf(gen->output, "\n#if AETHER_GCC_COMPAT\n");
+                    fprintf(gen->output, "({ intptr_t* _r = malloc(sizeof(intptr_t)); *_r = (intptr_t)(");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, "); (void*)_r; })");
+                    fprintf(gen->output, "\n#else\n");
+                    fprintf(gen->output, "_aether_ref_new((intptr_t)(");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, "))");
+                    fprintf(gen->output, "\n#endif\n");
+                }
+                // ref_get(r) — read from a ref cell
+                else if (strcmp(func_name, "ref_get") == 0 && expr->child_count == 1) {
+                    fprintf(gen->output, "(int)(*(intptr_t*)");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, ")");
+                }
+                // ref_set(r, value) — write to a ref cell
+                else if (strcmp(func_name, "ref_set") == 0 && expr->child_count == 2) {
+                    fprintf(gen->output, "(*(intptr_t*)");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, " = (intptr_t)(");
+                    generate_expression(gen, expr->children[1]);
+                    fprintf(gen->output, "))");
+                }
+                // ref_free(r) — free a ref cell
+                else if (strcmp(func_name, "ref_free") == 0 && expr->child_count == 1) {
+                    fprintf(gen->output, "free(");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, ")");
+                }
                 else if (strcmp(func_name, "clock_ns") == 0 && expr->child_count == 0) {
                     fprintf(gen->output, "\n#if AETHER_GCC_COMPAT\n");
                     fprintf(gen->output, "({ struct timespec _ts; clock_gettime(CLOCK_MONOTONIC, &_ts); (int64_t)_ts.tv_sec * 1000000000LL + _ts.tv_nsec; })");
@@ -519,6 +816,120 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     generate_expression(gen, expr->children[0]);
                     fprintf(gen->output, ")");
                 }
+                // each(array, count, closure) — iterate array calling closure for each element
+                // Usage: each(items, count) |item| { ... }
+                // The trailing block becomes the last child (a closure)
+                // box_closure(closure) — heap-allocate a closure so it can be stored in a list
+                else if (strcmp(func_name, "box_closure") == 0 && expr->child_count == 1) {
+                    fprintf(gen->output, "_aether_box_closure(");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, ")");
+                }
+                // unbox_closure(ptr) — retrieve a closure from a heap pointer
+                else if (strcmp(func_name, "unbox_closure") == 0 && expr->child_count == 1) {
+                    fprintf(gen->output, "_aether_unbox_closure(");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, ")");
+                }
+                // read_char() — read a single character from stdin (blocking)
+                else if (strcmp(func_name, "read_char") == 0 && expr->child_count == 0) {
+                    fprintf(gen->output, "getchar()");
+                }
+                // char_at(str, index) — ASCII value of character at position
+                else if (strcmp(func_name, "char_at") == 0 && expr->child_count >= 1) {
+                    fprintf(gen->output, "((int)((const char*)");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, ")[");
+                    if (expr->child_count >= 2) {
+                        generate_expression(gen, expr->children[1]);
+                    } else {
+                        fprintf(gen->output, "0");
+                    }
+                    fprintf(gen->output, "])");
+                }
+                // str_eq(a, b) — string equality (returns 1 or 0)
+                else if (strcmp(func_name, "str_eq") == 0 && expr->child_count == 2) {
+                    fprintf(gen->output, "(strcmp((const char*)");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, ", ");
+                    generate_expression(gen, expr->children[1]);
+                    fprintf(gen->output, ") == 0)");
+                }
+                // raw_mode() / cooked_mode() — terminal mode control
+                else if (strcmp(func_name, "raw_mode") == 0 && expr->child_count == 0) {
+                    fprintf(gen->output, "_aether_raw_mode()");
+                }
+                else if (strcmp(func_name, "cooked_mode") == 0 && expr->child_count == 0) {
+                    fprintf(gen->output, "_aether_cooked_mode()");
+                }
+                // builder_context() — returns the current builder context from the stack
+                else if (strcmp(func_name, "builder_context") == 0) {
+                    fprintf(gen->output, "_aether_ctx_get()");
+                }
+                // builder_depth() — returns the current builder nesting depth
+                else if (strcmp(func_name, "builder_depth") == 0) {
+                    fprintf(gen->output, "_aether_ctx_depth");
+                }
+                // call(closure_var, args...) — invoke a closure stored in a variable
+                // Looks up the closure's hoisted function signature and calls through it
+                else if (strcmp(func_name, "call") == 0 && expr->child_count >= 1) {
+                    ASTNode* closure_arg = expr->children[0];
+                    // Look up the closure ID from the variable name
+                    int found_id = -1;
+                    if (closure_arg && closure_arg->type == AST_IDENTIFIER && closure_arg->value) {
+                        for (int ci = 0; ci < gen->closure_var_count; ci++) {
+                            if (strcmp(gen->closure_var_map[ci].var_name, closure_arg->value) == 0) {
+                                found_id = gen->closure_var_map[ci].closure_id;
+                                break;
+                            }
+                        }
+                    }
+
+                    if (found_id >= 0) {
+                        // Generate typed call: _closure_fn_N((_closure_env_N*)closure.env, args...)
+                        fprintf(gen->output, "_closure_fn_%d((_closure_env_%d*)",
+                                found_id, found_id);
+                        generate_expression(gen, closure_arg);
+                        fprintf(gen->output, ".env");
+                        for (int i = 1; i < expr->child_count; i++) {
+                            ASTNode* arg = expr->children[i];
+                            if (arg && arg->type == AST_CLOSURE) continue;
+                            fprintf(gen->output, ", ");
+                            generate_expression(gen, arg);
+                        }
+                        fprintf(gen->output, ")");
+                    } else {
+                        // Fallback: generic closure invocation via function pointer cast
+                        // Determine return type — if call() result is used, assume int
+                        const char* ret = (expr->node_type &&
+                            expr->node_type->kind != TYPE_VOID &&
+                            expr->node_type->kind != TYPE_UNKNOWN) ?
+                            get_c_type(expr->node_type) : "int";
+                        fprintf(gen->output, "((%s(*)(void*", ret);
+                        for (int i = 1; i < expr->child_count; i++) {
+                            ASTNode* arg = expr->children[i];
+                            if (arg && arg->type == AST_CLOSURE) continue;
+                            // Infer arg type
+                            const char* atype = "int";
+                            if (arg && arg->node_type) {
+                                atype = get_c_type(arg->node_type);
+                            }
+                            fprintf(gen->output, ", %s", atype);
+                        }
+                        fprintf(gen->output, "))");
+                        generate_expression(gen, closure_arg);
+                        fprintf(gen->output, ".fn)(");
+                        generate_expression(gen, closure_arg);
+                        fprintf(gen->output, ".env");
+                        for (int i = 1; i < expr->child_count; i++) {
+                            ASTNode* arg = expr->children[i];
+                            if (arg && arg->type == AST_CLOSURE) continue;
+                            fprintf(gen->output, ", ");
+                            generate_expression(gen, arg);
+                        }
+                        fprintf(gen->output, ")");
+                    }
+                }
                 else {
                     char c_func_name[256];
                     // Don't mangle extern functions — they refer to real C symbols
@@ -529,12 +940,69 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         if (*p == '.') *p = '_';
                     }
                     fprintf(gen->output, "%s(", c_func_name);
+                    int arg_printed = 0;
+                    // Auto-inject builder context for builder functions
+                    // (functions with _ctx: ptr as first param)
+                    if (gen->in_trailing_block > 0) {
+                        for (int bi = 0; bi < gen->builder_func_count; bi++) {
+                            if (strcmp(gen->builder_funcs[bi], func_name) == 0) {
+                                fprintf(gen->output, "_aether_ctx_get()");
+                                arg_printed++;
+                                break;
+                            }
+                        }
+                    }
                     for (int i = 0; i < expr->child_count; i++) {
-                        if (i > 0) fprintf(gen->output, ", ");
                         ASTNode* arg = expr->children[i];
-                        // Cast int→void* when the extern param expects void* (TYPE_PTR).
-                        // Uses (void*)(intptr_t) which is the well-defined C idiom.
-                        TypeKind expected = lookup_extern_param_kind(gen, c_func_name, i);
+                        // Skip trailing DSL blocks that are just inline syntax sugar
+                        // (value == "trailing" AND function doesn't expect fn param)
+                        if (arg && arg->type == AST_CLOSURE &&
+                            arg->value && strcmp(arg->value, "trailing") == 0) {
+                            // Check if function expects this arg as fn type
+                            // by looking up the function definition
+                            int func_wants_fn = 0;
+                            for (int fi = 0; fi < gen->program->child_count; fi++) {
+                                ASTNode* fdef = gen->program->children[fi];
+                                if (fdef && fdef->type == AST_FUNCTION_DEFINITION &&
+                                    fdef->value && strcmp(fdef->value, func_name) == 0) {
+                                    int pi = 0;
+                                    for (int fj = 0; fj < fdef->child_count; fj++) {
+                                        ASTNode* p = fdef->children[fj];
+                                        if (p->type == AST_GUARD_CLAUSE || p->type == AST_BLOCK) continue;
+                                        if (pi == i && p->node_type &&
+                                            p->node_type->kind == TYPE_FUNCTION) {
+                                            func_wants_fn = 1;
+                                        }
+                                        pi++;
+                                    }
+                                    break;
+                                }
+                            }
+                            if (!func_wants_fn) continue; // skip DSL trailing block
+                        }
+                        if (arg_printed > 0) fprintf(gen->output, ", ");
+                        // Cast int→void* when param expects void* (TYPE_PTR).
+                        // Check extern registry first, then user-defined function params.
+                        TypeKind expected = lookup_extern_param_kind(gen, c_func_name, arg_printed);
+                        if (expected == TYPE_UNKNOWN) {
+                            // Look up user-defined function's param type
+                            for (int fi = 0; fi < gen->program->child_count; fi++) {
+                                ASTNode* fdef = gen->program->children[fi];
+                                if (fdef && fdef->type == AST_FUNCTION_DEFINITION &&
+                                    fdef->value && strcmp(fdef->value, func_name) == 0) {
+                                    int pi = 0;
+                                    for (int fj = 0; fj < fdef->child_count; fj++) {
+                                        ASTNode* fp = fdef->children[fj];
+                                        if (fp->type == AST_GUARD_CLAUSE || fp->type == AST_BLOCK) continue;
+                                        if (pi == arg_printed && fp->node_type) {
+                                            expected = fp->node_type->kind;
+                                        }
+                                        pi++;
+                                    }
+                                    break;
+                                }
+                            }
+                        }
                         if (expected == TYPE_PTR && arg->node_type &&
                             (arg->node_type->kind == TYPE_INT || arg->node_type->kind == TYPE_BOOL)) {
                             fprintf(gen->output, "(void*)(intptr_t)(");
@@ -543,6 +1011,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         } else {
                             generate_expression(gen, arg);
                         }
+                        arg_printed++;
                     }
                     fprintf(gen->output, ")");
                 }
@@ -901,6 +1370,49 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     }
                 }
             }
+            break;
+
+        case AST_CLOSURE: {
+            // Emit inline closure construction
+            // The closure's value field was set to its ID by discover_closures
+            int id = expr->value ? atoi(expr->value) : 0;
+            int cap_count = 0;
+            char** captures = NULL;
+            // Find this closure's info
+            for (int ci = 0; ci < gen->closure_count; ci++) {
+                if (gen->closures[ci].id == id) {
+                    cap_count = gen->closures[ci].capture_count;
+                    captures = gen->closures[ci].captures;
+                    break;
+                }
+            }
+            if (cap_count == 0) {
+                // Zero-capture closure: NULL env is safe
+                fprintf(gen->output, "(_AeClosure){ .fn = (void(*)(void))_closure_fn_%d, .env = NULL }",
+                        id);
+            } else {
+                // Heap-allocate the environment (portable, no use-after-free)
+                fprintf(gen->output, "\n#if AETHER_GCC_COMPAT\n");
+                fprintf(gen->output, "({ _closure_env_%d* _e = malloc(sizeof(_closure_env_%d)); ", id, id);
+                for (int i = 0; i < cap_count; i++) {
+                    fprintf(gen->output, "_e->%s = %s; ", safe_c_name(captures[i]), safe_c_name(captures[i]));
+                }
+                fprintf(gen->output, "(_AeClosure){ .fn = (void(*)(void))_closure_fn_%d, .env = _e }; })", id);
+                fprintf(gen->output, "\n#else\n");
+                // MSVC: use _aether_make_closure helper (emitted in preamble)
+                fprintf(gen->output, "_aether_make_closure_%d(", id);
+                for (int i = 0; i < cap_count; i++) {
+                    if (i > 0) fprintf(gen->output, ", ");
+                    fprintf(gen->output, "%s", safe_c_name(captures[i]));
+                }
+                fprintf(gen->output, ")");
+                fprintf(gen->output, "\n#endif\n");
+            }
+            break;
+        }
+
+        case AST_CLOSURE_PARAM:
+            // Should not be generated directly
             break;
 
         default:

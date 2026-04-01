@@ -67,6 +67,19 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->tuple_type_names = NULL;
     gen->tuple_type_count = 0;
     gen->tuple_type_capacity = 0;
+    // Builder function registry
+    gen->builder_funcs = NULL;
+    gen->builder_func_count = 0;
+    gen->builder_func_capacity = 0;
+    gen->in_trailing_block = 0;
+    // Closure support
+    gen->closure_counter = 0;
+    gen->closures = NULL;
+    gen->closure_count = 0;
+    gen->closure_capacity = 0;
+    gen->closure_var_map = NULL;
+    gen->closure_var_count = 0;
+    gen->closure_var_capacity = 0;
     // Ask/reply type map
     gen->reply_type_map = NULL;
     gen->reply_type_count = 0;
@@ -550,6 +563,8 @@ const char* get_c_type(Type* type) {
             }
             return buffer;
         }
+        case TYPE_FUNCTION:
+            return "_AeClosure";
         case TYPE_UNKNOWN: {
             AetherError w = {NULL, NULL, 0, 0,
                              "unresolved type in codegen, defaulting to int",
@@ -871,6 +886,40 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "static inline const char* _aether_safe_str(const void* s) {");
     print_line(gen, "    return s ? (const char*)s : \"(null)\";");
     print_line(gen, "}");
+    // Ref cells: heap-allocated mutable values for shared state in closures
+    print_line(gen, "#if !AETHER_GCC_COMPAT");
+    print_line(gen, "static void* _aether_ref_new(intptr_t val) { intptr_t* r = malloc(sizeof(intptr_t)); *r = val; return (void*)r; }");
+    print_line(gen, "#endif");
+    // Closure support: generic closure struct (function pointer + captured environment)
+    print_line(gen, "typedef struct { void (*fn)(void); void* env; } _AeClosure;");
+    // Box a closure onto the heap so it can be stored in a list (void*)
+    print_line(gen, "static inline void* _aether_box_closure(_AeClosure c) { _AeClosure* p = malloc(sizeof(_AeClosure)); *p = c; return (void*)p; }");
+    print_line(gen, "static inline _AeClosure _aether_unbox_closure(void* p) { return *(_AeClosure*)p; }");
+    // Terminal raw mode helpers for interactive input
+    // Only available on hosted POSIX systems (not embedded/bare-metal or Windows)
+    print_line(gen, "#if !defined(_WIN32) && !defined(__EMSCRIPTEN__) && defined(__STDC_HOSTED__) && (__STDC_HOSTED__ == 1) && !defined(__arm__) && !defined(__thumb__)");
+    print_line(gen, "#include <termios.h>");
+    print_line(gen, "static struct termios _aether_orig_termios;");
+    print_line(gen, "static void _aether_raw_mode(void) {");
+    print_line(gen, "    tcgetattr(0, &_aether_orig_termios);");
+    print_line(gen, "    struct termios raw = _aether_orig_termios;");
+    print_line(gen, "    raw.c_lflag &= ~(ICANON | ECHO);");
+    print_line(gen, "    tcsetattr(0, TCSANOW, &raw);");
+    print_line(gen, "}");
+    print_line(gen, "static void _aether_cooked_mode(void) {");
+    print_line(gen, "    tcsetattr(0, TCSANOW, &_aether_orig_termios);");
+    print_line(gen, "}");
+    print_line(gen, "#else");
+    print_line(gen, "static void _aether_raw_mode(void) {}");
+    print_line(gen, "static void _aether_cooked_mode(void) {}");
+    print_line(gen, "#endif");
+    // Builder context stack: trailing blocks push/pop the return value
+    print_line(gen, "static void* _aether_ctx_stack[64];");
+    print_line(gen, "static int _aether_ctx_depth = 0;");
+    print_line(gen, "static inline void _aether_ctx_push(void* ctx) { if (_aether_ctx_depth < 64) _aether_ctx_stack[_aether_ctx_depth++] = ctx; }");
+    print_line(gen, "static inline void _aether_ctx_pop(void) { if (_aether_ctx_depth > 0) _aether_ctx_depth--; }");
+    print_line(gen, "static inline void* _aether_ctx_get(void) { return _aether_ctx_depth > 0 ? _aether_ctx_stack[_aether_ctx_depth-1] : (void*)0; }");
+    // End of static helper definitions — close the warning suppression
     print_line(gen, "#if defined(__GNUC__) || defined(__clang__)");
     print_line(gen, "#pragma GCC diagnostic pop");
     print_line(gen, "#endif");
@@ -964,6 +1013,38 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         }
     }
     print_line(gen, "");
+
+    // Pre-pass: identify builder functions (first param is _ctx: ptr)
+    // These get builder_context() auto-injected at call sites inside trailing blocks
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* child = program->children[i];
+        if (!child || child->type != AST_FUNCTION_DEFINITION || !child->value) continue;
+        // Check if first non-guard, non-block child is _ctx: ptr
+        for (int j = 0; j < child->child_count; j++) {
+            ASTNode* param = child->children[j];
+            if (param->type == AST_GUARD_CLAUSE || param->type == AST_BLOCK) continue;
+            if ((param->type == AST_PATTERN_VARIABLE || param->type == AST_VARIABLE_DECLARATION) &&
+                param->value && strcmp(param->value, "_ctx") == 0 &&
+                param->node_type && param->node_type->kind == TYPE_PTR) {
+                // Register as builder function
+                if (gen->builder_func_count >= gen->builder_func_capacity) {
+                    gen->builder_func_capacity = gen->builder_func_capacity ? gen->builder_func_capacity * 2 : 16;
+                    gen->builder_funcs = realloc(gen->builder_funcs,
+                        gen->builder_func_capacity * sizeof(char*));
+                }
+                gen->builder_funcs[gen->builder_func_count++] = strdup(child->value);
+            }
+            break; // only check first param
+        }
+    }
+
+    // Pre-pass: discover closures in the entire program and emit their
+    // environment structs + static functions before any user code.
+    discover_closures(gen, program);
+    if (gen->closure_count > 0) {
+        print_line(gen, "// Closure definitions");
+        emit_closure_definitions(gen);
+    }
 
     // Generate forward declarations for all functions (handles mutual recursion)
     print_line(gen, "// Forward declarations");

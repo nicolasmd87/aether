@@ -1,0 +1,372 @@
+# Closures and Builder-Style DSL in Aether
+
+Aether supports closures, trailing blocks, and a builder-style DSL pattern inspired by
+Smalltalk's blocks, Ruby's blocks/procs, and Groovy's closures. This document covers the
+syntax, semantics, and the builder context mechanism that enables pseudo-declarative DSLs.
+
+## Background
+
+The builder-style DSL pattern — where nested blocks of code describe structure
+declaratively while retaining full imperative power — originated in Smalltalk's
+block-based APIs, was popularized by Ruby (Shoes, Sinatra, RSpec), and refined by
+Groovy (SwingBuilder, MarkupBuilder). Kotlin (Compose, TornadoFX) and Swift (SwiftUI)
+carry the tradition forward.
+
+The defining characteristic: **functions accept trailing blocks that execute in the
+context of the caller**, creating a nested, readable structure without explicit
+parent-child wiring.
+
+## Closure Syntax
+
+Aether closures use pipe-delimited parameters with arrow or block bodies:
+
+```aether
+// Arrow closure (single expression, returns value)
+doubler = |x: int| -> x * 2
+
+// Block closure (multiple statements)
+greeter = |name: string| {
+    println("Hello ${name}")
+}
+
+// No-parameter closure
+action = || {
+    println("done")
+}
+```
+
+Closures capture variables from their enclosing scope:
+
+```aether
+base = 100
+adder = |x: int| -> x + base    // captures 'base'
+result = call(adder, 42)         // 142
+```
+
+## Invoking Closures
+
+Use the `call()` builtin:
+
+```aether
+doubler = |x: int| -> x * 2
+result = call(doubler, 21)    // 42
+```
+
+## Closures as Function Parameters
+
+Functions declare closure parameters with the `fn` type:
+
+```aether
+apply(x: int, f: fn) {
+    return call(f, x)
+}
+
+apply_twice(x: int, f: fn) {
+    return call(f, call(f, x))
+}
+
+main() {
+    doubler = |x: int| -> x * 2
+    println(apply(21, doubler))         // 42
+    println(apply_twice(3, doubler))    // 12
+}
+```
+
+## Trailing Blocks
+
+Any function call can be followed by a block `{ ... }`. This is the foundation of
+the builder DSL pattern:
+
+```aether
+setup("config") {
+    println("initializing")
+    // arbitrary code here
+}
+```
+
+There are two forms with different semantics:
+
+### Immediate blocks (DSL structure)
+
+A bare `{ }` after a function call runs immediately, inline:
+
+```aether
+panel("title") {
+    button("OK")       // runs now, during construction
+    button("Cancel")
+}
+```
+
+### Closure blocks (callbacks)
+
+A `|| { }` or `|params| { }` after a function call creates a real closure that is
+passed as an argument — it runs later when invoked:
+
+```aether
+save_handler = || { println("saved!") }
+button("Save", save_handler)
+
+// Later...
+call(save_handler)    // prints "saved!"
+```
+
+This mirrors Groovy's `actionPerformed: { ... }` pattern.
+
+## Higher-Order Functions
+
+Closures enable functional patterns with standard library collections:
+
+```aether
+import std.list
+
+// User-defined each, map, filter
+each(l: ptr, f: fn) {
+    n = list.size(l)
+    for (i = 0; i < n; i++) {
+        call(f, list.get(l, i))
+    }
+}
+
+map(l: ptr, f: fn) {
+    result = list.new()
+    n = list.size(l)
+    for (i = 0; i < n; i++) {
+        list.add(result, call(f, list.get(l, i)))
+    }
+    return result
+}
+
+filter(l: ptr, f: fn) {
+    result = list.new()
+    n = list.size(l)
+    for (i = 0; i < n; i++) {
+        val = list.get(l, i)
+        if call(f, val) != 0 { list.add(result, val) }
+    }
+    return result
+}
+
+main() {
+    nums = list.new()
+    list.add(nums, 1)
+    list.add(nums, 2)
+    list.add(nums, 3)
+    list.add(nums, 4)
+    list.add(nums, 5)
+
+    each(nums) |x: int| { print("${x} ") }
+    // 1 2 3 4 5
+
+    doubled = map(nums) |x: int| -> x * 2
+    // [2, 4, 6, 8, 10]
+
+    big = filter(nums) |x: int| -> x > 2
+    // [3, 4, 5]
+}
+```
+
+## Builder Context Stack
+
+When a function call has a trailing block, Aether automatically pushes the function's
+return value onto a **builder context stack** before executing the block, and pops it
+after. Library functions can access the current context via `builder_context()`.
+
+This enables automatic parent-child wiring without the caller specifying parents:
+
+```aether
+import std.list
+
+frame(title: string) {
+    children = list.new()
+    return children
+}
+
+// _ctx: ptr as first param means "auto-inject builder context"
+panel(_ctx: ptr, title: string) {
+    children = list.new()
+    if _ctx != null { list.add(_ctx, children) }
+    return children
+}
+
+button(_ctx: ptr, label: string) {
+    if _ctx != null { list.add(_ctx, 1) }
+}
+
+main() {
+    root = frame("App") {
+        panel("Controls") {
+            button("OK")
+            button("Cancel")
+        }
+    }
+    // root -> [panel_children -> [button, button]]
+}
+```
+
+## Invisible Context Injection
+
+The `_ctx: ptr` convention is the key to making builder DSLs feel declarative.
+When a function's first parameter is named `_ctx` with type `ptr`:
+
+1. **The parameter is hidden from callers** — it doesn't count toward arity
+2. **Inside trailing blocks**, the compiler auto-injects `builder_context()` as the
+   first argument
+3. **Outside trailing blocks**, the function can still be called explicitly with a
+   context value
+
+This means the user writes:
+
+```aether
+frame("Address") {
+    panel("Enter your address:") {
+        label("Street:")
+        textfield("Evergreen Terrace", 20)
+        label("Number:")
+        textfield("742", 5)
+    }
+    panel("Actions") {
+        button("Save")
+        button("Cancel")
+    }
+}
+```
+
+And the compiler generates:
+
+```c
+frame("Address");
+_aether_ctx_push(frame_result);
+{
+    panel(_aether_ctx_get(), "Enter your address:");
+    _aether_ctx_push(panel_result);
+    {
+        label(_aether_ctx_get(), "Street:");
+        textfield(_aether_ctx_get(), "Evergreen Terrace", 20);
+        // ...
+    }
+    _aether_ctx_pop();
+    // ...
+}
+_aether_ctx_pop();
+```
+
+## Ref Cells — Shared Mutable State for Closures
+
+Aether closures capture variables by value. This means a closure that does
+`count = count + 1` modifies its own copy, not the original. For callbacks
+that need shared mutable state (like UI event handlers), use **ref cells**:
+
+```aether
+count = ref(0)           // heap-allocated mutable cell
+defer ref_free(count)
+
+inc = |r: ptr| { ref_set(r, ref_get(r) + 1) }
+
+call(inc, count)         // mutates shared state
+call(inc, count)
+println(ref_get(count))  // 2
+```
+
+Ref cells work because closures capture the pointer by value — all closures
+holding the same pointer see the same heap location.
+
+**API:**
+- `ref(value)` — create a ref cell (heap-allocated `intptr_t`)
+- `ref_get(r)` — read the value
+- `ref_set(r, value)` — write a new value
+- `ref_free(r)` — free the cell (or use `defer ref_free(r)`)
+
+### Storing Closures in Collections
+
+Closures are structs (not pointers), so they can't be stored directly in
+`std.list`. Use `box_closure()` / `unbox_closure()` to heap-allocate:
+
+```aether
+import std.list
+
+handlers = list.new()
+action = |x: ptr| { ref_set(x, ref_get(x) + 1) }
+list.add(handlers, box_closure(action))
+
+// Later: retrieve and invoke
+boxed = list.get(handlers, 0)
+handler = unbox_closure(boxed)
+call(handler, some_ref)
+```
+
+### Interactive Calculator Example
+
+Combining ref cells, boxed closures, and the builder DSL:
+
+```aether
+num  = ref(0)
+prev = ref(0)
+op   = ref(0)
+
+digit  = |n: ptr, d: int| { ref_set(n, ref_get(n) * 10 + d) }
+set_op = |n: ptr, p: ptr, o: ptr, v: int| {
+    ref_set(p, ref_get(n)); ref_set(n, 0); ref_set(o, v)
+}
+
+g = grid() {
+    btn("7") |n: ptr, p: ptr, o: ptr| { call(digit, n, 7) }
+    btn("+") |n: ptr, p: ptr, o: ptr| { call(set_op, n, p, o, PLUS) }
+    btn("=") |n: ptr, p: ptr, o: ptr| {
+        v = ref_get(n); pv = ref_get(p); ov = ref_get(o)
+        if ov == PLUS  { v = pv + v }
+        if ov == MINUS { v = pv - v }
+        ref_set(n, v); ref_set(p, 0); ref_set(o, 0)
+    }
+}
+
+// Event loop: press button → invoke its callback
+handler = unbox_closure(list.get(list.get(g, 1), cur))
+call(handler, num, prev, op)
+```
+
+Each button's behavior is declared alongside the button — not in a separate
+dispatch table. The ref cells provide shared mutable state across all callbacks.
+
+## Comparison with Other Languages
+
+| Feature | Smalltalk | Ruby | Groovy | Aether |
+|---------|-----------|------|--------|--------|
+| Block/closure syntax | `[:x | x * 2]` | `{|x| x * 2}` | `{x -> x * 2}` | `\|x\| -> x * 2` |
+| Trailing block | `do: [...]` | `method do ... end` | `method { ... }` | `method() { ... }` |
+| Implicit receiver | `self` in block | `instance_eval` | Delegate | `_ctx: ptr` convention |
+| Builder pattern | Cascades | Shoes, Sinatra | SwingBuilder | Trailing blocks + context stack |
+| Callback storage | Block variables | Procs/lambdas | Closures | `fn` type + `call()` |
+| Shared mutable state | Instance vars | `@variables` | Delegate fields | `ref()` cells |
+
+## Implementation Notes
+
+Closures compile to C as:
+- A `_AeClosure` struct: `{ void (*fn)(void); void* env; }`
+- Hoisted static functions: `_closure_fn_N(_closure_env_N* _env, params...)`
+- Heap-allocated environment structs for captured variables
+- NULL environment for zero-capture closures
+
+The builder context stack is a simple C array:
+- `_aether_ctx_push(void*)` / `_aether_ctx_pop()` / `_aether_ctx_get()`
+- Maximum nesting depth: 64 levels
+- Zero overhead when not used (the stack is static, no allocation)
+
+Trailing blocks (parameterless `{ }`) are inlined at the call site — no closure
+allocation, no function pointer overhead. They are pure syntactic sugar for
+sequential code with automatic context management.
+
+Ref cells compile to:
+- `ref(val)` → `malloc(sizeof(intptr_t))` + store
+- `ref_get(r)` → `*(intptr_t*)r`
+- `ref_set(r, val)` → `*(intptr_t*)r = val`
+- `ref_free(r)` → `free(r)`
+
+Closure boxing:
+- `box_closure(c)` → heap-allocates an `_AeClosure` struct, returns `void*`
+- `unbox_closure(p)` → dereferences back to `_AeClosure`
+
+Additional builtins for interactive programs:
+- `read_char()` → `getchar()` (blocking single-character input)
+- `raw_mode()` / `cooked_mode()` → terminal mode switching (Unix `termios`)
+- `char_at(str)` → ASCII value of first character
+- `str_eq(a, b)` → string equality (returns 0 or 1)

@@ -1,0 +1,15 @@
+// Test: closure capturing string variables
+
+main() {
+    prefix = "Hello"
+
+    // Closure that captures a string
+    greeter = |name: string| {
+        println(prefix)
+        println(name)
+    }
+
+    call(greeter, "World")
+
+    println("string capture ok")
+}

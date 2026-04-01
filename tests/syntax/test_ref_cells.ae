@@ -1,0 +1,28 @@
+// Test: ref cells — shared mutable state for closures
+
+main() {
+    // Create a ref cell
+    count = ref(0)
+    defer ref_free(count)
+
+    // Closure captures the ref pointer (by value), mutates through it
+    inc = |r: ptr| { ref_set(r, ref_get(r) + 1) }
+    add = |r: ptr, n: int| { ref_set(r, ref_get(r) + n) }
+
+    call(inc, count)
+    call(inc, count)
+    call(inc, count)
+    call(add, count, 10)
+
+    println(ref_get(count))
+
+    // Multiple closures sharing the same ref
+    a = ref(100)
+    defer ref_free(a)
+
+    double_it = |r: ptr| { ref_set(r, ref_get(r) * 2) }
+    call(double_it, a)
+    println(ref_get(a))
+
+    println("ref cells ok")
+}

@@ -1,0 +1,78 @@
+// Test: invisible builder context injection
+// Functions with _ctx: ptr as first param get builder_context() auto-injected
+// when called from within a trailing block. The caller never writes _ctx.
+
+import std.list
+
+// ---- UI Library (uses _ctx for auto-parenting) ----
+
+// frame creates a root container
+frame(title: string) {
+    children = list.new()
+    println("frame: ${title}")
+    return children
+}
+
+// panel: _ctx is auto-injected — caller just writes panel("title")
+panel(_ctx: ptr, title: string) {
+    children = list.new()
+    println("  panel: ${title}")
+    if _ctx != null {
+        list.add(_ctx, children)
+    }
+    return children
+}
+
+// label: _ctx is auto-injected
+label(_ctx: ptr, text: string) {
+    println("    label: ${text}")
+    if _ctx != null {
+        list.add(_ctx, 1)
+    }
+}
+
+// textfield: _ctx is auto-injected
+textfield(_ctx: ptr, text: string, columns: int) {
+    println("    textfield: ${text} cols=${columns}")
+    if _ctx != null {
+        list.add(_ctx, 1)
+    }
+}
+
+// button: _ctx is auto-injected
+button(_ctx: ptr, text: string) {
+    println("    button: ${text}")
+    if _ctx != null {
+        list.add(_ctx, 1)
+    }
+}
+
+// ---- User code: looks like Groovy SwingBuilder ----
+
+main() {
+    root = frame("Address") {
+        panel("Enter your address:") {
+            label("Street:")
+            textfield("Evergreen Terrace", 20)
+            label("Number:")
+            textfield("742", 5)
+            label("City:")
+            textfield("Springfield", 20)
+        }
+
+        panel("Actions") {
+            button("Save")
+            button("Cancel")
+        }
+    }
+
+    // Verify the tree structure
+    println("root children: ${list.size(root)}")
+    p1 = list.get(root, 0)
+    println("panel1 children: ${list.size(p1)}")
+    p2 = list.get(root, 1)
+    println("panel2 children: ${list.size(p2)}")
+
+    list.free(root)
+    println("invisible ctx ok")
+}

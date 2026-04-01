@@ -1,0 +1,161 @@
+// Interactive TUI Calculator
+// Arrow keys navigate, Space presses, q quits
+// Buttons have real callbacks — shared state via ref cells
+
+import std.list
+
+// ---- Widget library (inside main to avoid top-level vars) ----
+
+// btn: adds label to ctx[0], boxed handler to ctx[1]
+btn(_ctx: ptr, label: string, action: fn) {
+    list.add(list.get(_ctx, 0), label)
+    list.add(list.get(_ctx, 1), box_closure(action))
+}
+
+grid() {
+    g = list.new()
+    list.add(g, list.new())  // labels
+    list.add(g, list.new())  // handlers
+    return g
+}
+
+render(g: ptr, val: int, cursor: int, op: int, prev: int) {
+    labs = list.get(g, 0)
+    print("\x1b[H\x1b[2J  \x1b[1;36mCalculator\x1b[0m\n\n")
+    println("  \x1b[44;97;1m  ${val}                \x1b[0m\n")
+    n = list.size(labs)
+    for (i = 0; i < n; i++) {
+        b = list.get(labs, i)
+        col = i - (i / 4) * 4
+        if col == 0 { print("  ") }
+        ch = char_at(b)
+        if i == cursor {
+            print("\x1b[46;97;1m ${b} \x1b[0m ")
+        } else {
+            if ch >= 48 && ch <= 57 { print("\x1b[47;30m ${b} \x1b[0m ") }
+            else { print("\x1b[43;30m ${b} \x1b[0m ") }
+        }
+        if col == 3 { println("") }
+    }
+    println("")
+    if op != 0 { print("  \x1b[90m${prev} "); print_char(op); println(" ...\x1b[0m") }
+    println("  \x1b[90marrows move  space press  q quit\x1b[0m")
+}
+
+main() {
+    // Shared mutable state
+    // Key constants
+    const ESC   = 27
+    const UP    = 65
+    const DOWN  = 66
+    const RIGHT = 67
+    const LEFT  = 68
+    const SPACE = 32
+    const ENTER = 10
+    const PLUS  = 43
+    const MINUS = 45
+    const STAR  = 42
+    const SLASH = 47
+    const EQUAL = 61
+    const KEY_C = 99
+    const KEY_Q = 113
+
+    // Shared mutable state
+    num  = ref(0)
+    prev = ref(0)
+    op   = ref(0)
+    defer ref_free(num)
+    defer ref_free(prev)
+    defer ref_free(op)
+
+    // Reusable actions
+    digit = |n: ptr, d: int| { ref_set(n, ref_get(n) * 10 + d) }
+    set_op = |n: ptr, p: ptr, o: ptr, v: int| {
+        ref_set(p, ref_get(n))
+        ref_set(n, 0)
+        ref_set(o, v)
+    }
+
+    // ---- THE DSL: button layout with callbacks right here ----
+    g = grid() {
+        btn("7") |n: ptr, p: ptr, o: ptr| { call(digit, n, 7) }
+        btn("8") |n: ptr, p: ptr, o: ptr| { call(digit, n, 8) }
+        btn("9") |n: ptr, p: ptr, o: ptr| { call(digit, n, 9) }
+        btn("+") |n: ptr, p: ptr, o: ptr| { call(set_op, n, p, o, PLUS) }
+
+        btn("4") |n: ptr, p: ptr, o: ptr| { call(digit, n, 4) }
+        btn("5") |n: ptr, p: ptr, o: ptr| { call(digit, n, 5) }
+        btn("6") |n: ptr, p: ptr, o: ptr| { call(digit, n, 6) }
+        btn("-") |n: ptr, p: ptr, o: ptr| { call(set_op, n, p, o, MINUS) }
+
+        btn("1") |n: ptr, p: ptr, o: ptr| { call(digit, n, 1) }
+        btn("2") |n: ptr, p: ptr, o: ptr| { call(digit, n, 2) }
+        btn("3") |n: ptr, p: ptr, o: ptr| { call(digit, n, 3) }
+        btn("*") |n: ptr, p: ptr, o: ptr| { call(set_op, n, p, o, STAR) }
+
+        btn("0") |n: ptr, p: ptr, o: ptr| { call(digit, n, 0) }
+        btn(".") |n: ptr, p: ptr, o: ptr| { }
+        btn("=") |n: ptr, p: ptr, o: ptr| {
+            v = ref_get(n)
+            pv = ref_get(p)
+            ov = ref_get(o)
+            if ov == PLUS  { v = pv + v }
+            if ov == MINUS { v = pv - v }
+            if ov == STAR  { v = pv * v }
+            if ov == SLASH && v != 0 { v = pv / v }
+            ref_set(n, v)
+            ref_set(p, 0)
+            ref_set(o, 0)
+        }
+        btn("/") |n: ptr, p: ptr, o: ptr| { call(set_op, n, p, o, SLASH) }
+    }
+    defer list.free(g)
+
+    // ---- Event loop ----
+    cur = 0
+    raw_mode()
+    render(g, ref_get(num), cur, ref_get(op), ref_get(prev))
+
+    running = 1
+    for (running == 1; running == 1; running = running) {
+        key = read_char()
+        if key == KEY_Q { running = 0 }
+
+        if key == ESC { read_char(); d = read_char()
+            if d == UP    { cur = cur - 4 }
+            if d == DOWN  { cur = cur + 4 }
+            if d == RIGHT { cur = cur + 1 }
+            if d == LEFT  { cur = cur - 1 }
+        }
+        if cur < 0 { cur = 0 }
+        if cur > 15 { cur = 15 }
+
+        // Space/Enter = invoke button callback
+        if key == SPACE || key == ENTER {
+            boxed = list.get(list.get(g, 1), cur)
+            handler = unbox_closure(boxed)
+            call(handler, num, prev, op)
+        }
+
+        // Also support direct key input (digits/operators)
+        if key >= 48 && key <= 57 { ref_set(num, ref_get(num) * 10 + key - 48) }
+        if key == PLUS || key == MINUS || key == STAR || key == SLASH {
+            ref_set(prev, ref_get(num)); ref_set(num, 0); ref_set(op, key)
+        }
+        if key == EQUAL {
+            v = ref_get(num); pv = ref_get(prev); ov = ref_get(op)
+            if ov == PLUS  { v = pv + v }
+            if ov == MINUS { v = pv - v }
+            if ov == STAR  { v = pv * v }
+            if ov == SLASH && v != 0 { v = pv / v }
+            ref_set(num, v); ref_set(prev, 0); ref_set(op, 0)
+        }
+        if key == KEY_C { ref_set(num, 0); ref_set(prev, 0); ref_set(op, 0) }
+
+        if running == 1 { render(g, ref_get(num), cur, ref_get(op), ref_get(prev)) }
+    }
+
+    cooked_mode()
+    print("\x1b[2J\x1b[H\x1b[0m")
+    println("Bye!")
+}

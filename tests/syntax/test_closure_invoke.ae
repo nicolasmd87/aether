@@ -1,0 +1,19 @@
+// Test: closure invocation via call() builtin
+
+main() {
+    // Arrow closure with return value
+    doubler = |x: int| -> x * 2
+
+    // Invoke the closure
+    result = call(doubler, 21)
+    println(result)
+
+    // Closure with capture
+    base = 100
+    adder = |x: int| -> x + base
+
+    sum = call(adder, 42)
+    println(sum)
+
+    println("invoke ok")
+}

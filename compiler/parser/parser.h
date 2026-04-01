@@ -59,6 +59,9 @@ ASTNode* parse_message_pattern(Parser* parser);
 ASTNode* parse_reply_statement(Parser* parser);
 ASTNode* parse_message_constructor(Parser* parser);
 
+// Closure parsing
+ASTNode* parse_closure_expression(Parser* parser);
+
 // Utility functions
 Token* peek_token(Parser* parser);
 Token* peek_ahead(Parser* parser, int offset);

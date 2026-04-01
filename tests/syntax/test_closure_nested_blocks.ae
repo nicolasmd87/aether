@@ -1,0 +1,75 @@
+// Test: trailing blocks on any function in the builder DSL
+// Every function call can have { code } after it, nested arbitrarily
+
+import std.list
+
+frame(title: string) {
+    children = list.new()
+    println("frame: ${title}")
+    return children
+}
+
+panel(_ctx: ptr, title: string) {
+    children = list.new()
+    println("  panel: ${title}")
+    if _ctx != null { list.add(_ctx, children) }
+    return children
+}
+
+label(_ctx: ptr, text: string) {
+    println("    label: ${text}")
+    if _ctx != null { list.add(_ctx, 1) }
+}
+
+textfield(_ctx: ptr, text: string, columns: int) {
+    println("    textfield: ${text}")
+    if _ctx != null { list.add(_ctx, 1) }
+    return 1
+}
+
+button(_ctx: ptr, text: string) {
+    println("    button: ${text}")
+    if _ctx != null { list.add(_ctx, 1) }
+    return 1
+}
+
+main() {
+    number = 0
+    op = ""
+    previous = 0
+
+    root = frame("Calculator") {
+        panel("Display") {
+            label("0")
+        }
+
+        panel("Buttons") {
+            button("7") {
+                number = number * 10 + 7
+                println("      -> number is now ${number}")
+            }
+            button("8") {
+                number = number * 10 + 8
+                println("      -> number is now ${number}")
+            }
+            button("+") {
+                previous = number
+                number = 0
+                op = "+"
+                println("      -> op set to +")
+            }
+            button("=") {
+                if op == "+" {
+                    number = previous + number
+                }
+                println("      -> result: ${number}")
+            }
+        }
+    }
+
+    // Simulate pressing: 7, 8, +, 7, =
+    // The trailing blocks ran inline, so let's just verify structure
+    println("root children: ${list.size(root)}")
+    list.free(root)
+    println("nested blocks ok")
+}

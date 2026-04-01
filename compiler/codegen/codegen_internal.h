@@ -56,6 +56,10 @@ void generate_combined_function(CodeGenerator* gen, ASTNode** clauses, int claus
 /* Main/program (codegen.c) */
 void generate_main_function(CodeGenerator* gen, ASTNode* main);
 
+/* Closure support (codegen_expr.c) */
+void discover_closures(CodeGenerator* gen, ASTNode* node);
+void emit_closure_definitions(CodeGenerator* gen);
+
 /* Internal helpers shared across files */
 int contains_send_expression(ASTNode* node);
 const char* get_single_int_field(MessageDef* msg_def);

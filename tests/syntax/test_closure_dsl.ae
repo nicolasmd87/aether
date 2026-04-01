@@ -1,0 +1,55 @@
+// Test: builder-style DSL with nested blocks and string interpolation
+// This demonstrates "that Ruby and Groovy language feature"
+
+app(title: string, width: int, height: int) {
+    println("app: ${title} ${width}x${height}")
+}
+
+flow(w: int, h: int) {
+    println("  flow: ${w}x${h}")
+}
+
+button(label: string, w: int, h: int) {
+    println("    button: ${label} ${w}x${h}")
+}
+
+background(r: int, g: int, b: int) {
+    println("    bg: rgb(${r},${g},${b})")
+}
+
+para(text: string) {
+    println("    para: ${text}")
+}
+
+main() {
+    app("My Calculator", 200, 240) {
+        flow(140, 48) {
+            background(0, 157, 228)
+            para("0")
+        }
+        flow(60, 48) {
+            button("Clr", 60, 48)
+        }
+        flow(200, 192) {
+            background(139, 206, 236)
+            button("7", 50, 50)
+            button("8", 50, 50)
+            button("9", 50, 50)
+            button("+", 50, 50)
+            button("4", 50, 50)
+            button("5", 50, 50)
+            button("6", 50, 50)
+            button("-", 50, 50)
+            button("1", 50, 50)
+            button("2", 50, 50)
+            button("3", 50, 50)
+            button("/", 50, 50)
+            button("0", 50, 50)
+            button(".", 50, 50)
+            button("=", 50, 50)
+            button("*", 50, 50)
+        }
+    }
+
+    println("dsl ok")
+}

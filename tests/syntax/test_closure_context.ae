@@ -1,0 +1,64 @@
+// Test: builder context stack for nested trailing blocks
+// Functions can call builder_context() to find their parent
+
+import std.list
+
+// Widget types (simulated as ints: 1=panel, 2=flow, 3=button)
+
+// create_panel returns a list to hold children
+create_panel(title: string) {
+    children = list.new()
+    println("panel: ${title}")
+    return children
+}
+
+// add_child adds to the current builder context
+add_child(child: ptr) {
+    parent = builder_context()
+    if parent != null {
+        list.add(parent, child)
+    }
+}
+
+// flow creates a flow container, adds it to parent
+flow(w: int, h: int) {
+    children = list.new()
+    depth = builder_depth()
+    // Indent based on nesting
+    if depth > 0 { print("  ") }
+    if depth > 1 { print("  ") }
+    println("flow: ${w}x${h}")
+    add_child(children)
+    return children
+}
+
+// button creates a button, adds it to parent
+button(label: string) {
+    depth = builder_depth()
+    if depth > 0 { print("  ") }
+    if depth > 1 { print("  ") }
+    if depth > 2 { print("  ") }
+    println("button: ${label}")
+    add_child(1)
+}
+
+main() {
+    // Builder DSL with context stack!
+    // Each trailing block pushes the function's return value as context.
+    // Child functions call builder_context() to find their parent.
+    create_panel("Calculator") {
+        flow(200, 48) {
+            button("7")
+            button("8")
+            button("9")
+        }
+        flow(200, 48) {
+            button("4")
+            button("5")
+            button("6")
+        }
+        button("=")
+    }
+
+    println("context ok")
+}
