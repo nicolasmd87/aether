@@ -1,0 +1,43 @@
+// Test: lazy evaluation — deferred computation with memoization
+
+main() {
+    // Create closures first, then wrap in lazy
+    compute_a = || { return 111 }
+    compute_b = || { return 222 }
+
+    a = lazy(compute_a)
+    b = lazy(compute_b)
+    defer thunk_free(a)
+    defer thunk_free(b)
+
+    // First force evaluates
+    println(force(a))
+    println(force(b))
+
+    // Second force returns cached
+    println(force(a))
+
+    // Lazy with side effect tracking
+    count = ref(0)
+    defer ref_free(count)
+
+    compute_c = || {
+        ref_set(count, ref_get(count) + 1)
+        return 42
+    }
+    c = lazy(compute_c)
+    defer thunk_free(c)
+
+    // Not yet evaluated
+    println(ref_get(count))
+
+    // First force
+    println(force(c))
+    println(ref_get(count))
+
+    // Second force — count should NOT increase
+    println(force(c))
+    println(ref_get(count))
+
+    println("lazy ok")
+}
