@@ -352,21 +352,50 @@ make test-all
 make examples
 ```
 
-### Portability Testing
+### Testing
 
 ```bash
-# Test cooperative scheduler on native (no Docker needed)
+# Full CI suite (8 steps, -Werror) — runs on your current platform
+make ci
+
+# Unit tests only (166 tests)
+make test
+
+# Integration tests only (108 .ae tests)
+make test-ae
+
+# Build all examples (61 programs)
+make examples
+
+# Full CI + Valgrind + ASan in Docker (Linux)
+make docker-ci
+```
+
+### Cross-Platform Testing
+
+**CI runs automatically on:** Linux (GCC + Clang), macOS (ARM64 + x86_64), Windows (MinGW/MSYS2)
+
+```bash
+# Cooperative scheduler (no Docker needed)
 make ci-coop
 
-# Test WASM cross-compilation (requires Docker)
+# Windows cross-compile syntax check (requires mingw-w64 or Docker)
+make ci-windows              # needs: brew install mingw-w64
+make docker-ci-windows       # or use Docker
+
+# WebAssembly (requires Docker with Emscripten)
 make docker-ci-wasm
 
-# Test ARM embedded cross-compilation (requires Docker)
+# ARM embedded syntax check (requires Docker with arm-none-eabi-gcc)
 make docker-ci-embedded
 
-# Run all portability checks
+# All portability checks (coop + WASM + embedded)
 make ci-portability
 ```
+
+**`make ci` tests your current OS only.** No OS can locally test another OS natively — macOS cannot be virtualized on Linux/Windows, Windows build+run requires MSYS2. GitHub Actions CI automatically tests all 5 platform targets (Linux GCC, Linux Clang, macOS ARM64, macOS x86_64, Windows MinGW) on every PR. Docker targets (`docker-ci-windows`, `docker-ci-wasm`, `docker-ci-embedded`) provide cross-compilation syntax checking from any host.
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the full pre-PR checklist.
 
 ### Running Benchmarks
 

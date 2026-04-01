@@ -2602,10 +2602,46 @@ static int cmd_version_install(const char* version) {
     snprintf(archive, sizeof(archive), "%s/.aether/%s", home, filename);
 
     printf("Downloading Aether %s for " AE_PLATFORM "...\n", vtag);
+    fflush(stdout);
     if (ae_download(url, archive) != 0) {
-        fprintf(stderr, "Download failed. Check the version name and your connection.\n");
-        fprintf(stderr, "URL: %s\n", url);
+        fprintf(stderr, "Error: Version %s not found for " AE_PLATFORM ".\n", vtag);
+        fprintf(stderr, "Run 'ae version list' to see available versions.\n");
         return 1;
+    }
+
+    // Verify the downloaded file is a real archive, not a 404 HTML page.
+    // Valid archives are at least 10KB; GitHub 404 pages are ~10-20KB HTML
+    // but tar.gz/zip archives for Aether are always >100KB.
+    {
+        FILE* af = fopen(archive, "rb");
+        if (!af) {
+            fprintf(stderr, "Error: Downloaded file not found.\n");
+            return 1;
+        }
+        fseek(af, 0, SEEK_END);
+        long asize = ftell(af);
+        // Also check the first bytes for archive magic
+        fseek(af, 0, SEEK_SET);
+        unsigned char magic[4] = {0};
+        fread(magic, 1, 4, af);
+        fclose(af);
+
+        int is_gzip = (magic[0] == 0x1f && magic[1] == 0x8b);  // .tar.gz
+        int is_zip  = (magic[0] == 'P' && magic[1] == 'K');     // .zip
+        int is_xz   = (magic[0] == 0xFD && magic[1] == '7');    // .tar.xz
+
+        if (!is_gzip && !is_zip && !is_xz) {
+            remove(archive);
+            fprintf(stderr, "Error: Version %s not found for platform " AE_PLATFORM ".\n", vtag);
+            fprintf(stderr, "The download returned an error page, not a release archive.\n");
+            fprintf(stderr, "Available versions: ae version list\n");
+            return 1;
+        }
+        if (asize < 1024) {
+            remove(archive);
+            fprintf(stderr, "Error: Downloaded archive is too small (%ld bytes) — likely corrupt.\n", asize);
+            return 1;
+        }
     }
 
     mkdirs(ver_dir);
@@ -2673,8 +2709,17 @@ static int cmd_version_install(const char* version) {
         snprintf(probe, sizeof(probe), "%s/share/aether", ver_dir);
         if (dir_exists(probe)) has_structure = 1;
         if (!has_structure) {
-            fprintf(stderr, "Warning: Installation may be incomplete — no bin/, lib/, or share/ found in %s\n", ver_dir);
-            fprintf(stderr, "Try: ae version install %s --force  or  ./install.sh\n", vtag);
+            // Clean up the empty/broken install directory
+#ifdef _WIN32
+            snprintf(probe, sizeof(probe), "rmdir /S /Q \"%s\"", ver_dir);
+#else
+            snprintf(probe, sizeof(probe), "rm -rf '%s'", ver_dir);
+#endif
+            (void)system(probe);
+            fprintf(stderr, "Error: Installation of %s failed — no bin/, lib/, or share/ found.\n", vtag);
+            fprintf(stderr, "This version may not have a release for " AE_PLATFORM ".\n");
+            fprintf(stderr, "Available versions: ae version list\n");
+            return 1;
         }
     }
 
