@@ -455,6 +455,56 @@ Token* next_token() {
                     advance();
                     return create_token(TOKEN_LSHIFT_ASSIGN, "<<=", current_line, current_column);
                 }
+                // Heredoc: <<MARKER ... MARKER
+                if (isalpha(peek()) || peek() == '_') {
+                    // Read the marker name
+                    char marker[MAX_IDENTIFIER_LENGTH];
+                    int mlen = 0;
+                    while ((isalnum(peek()) || peek() == '_') && mlen < MAX_IDENTIFIER_LENGTH - 1) {
+                        marker[mlen++] = advance();
+                    }
+                    marker[mlen] = '\0';
+
+                    // Skip to end of current line (past the marker)
+                    while (peek() != '\n' && peek() != '\0') advance();
+                    if (peek() == '\n') advance();
+
+                    // Collect everything until a line that is exactly the marker
+                    int start_line = current_line;
+                    char* buf = malloc(65536);
+                    int blen = 0;
+                    while (current_pos < source_length) {
+                        // Check if current line starts with the marker
+                        int match = 1;
+                        for (int mi = 0; mi < mlen; mi++) {
+                            if (current_pos + mi >= source_length || source[current_pos + mi] != marker[mi]) {
+                                match = 0;
+                                break;
+                            }
+                        }
+                        // Marker must be followed by newline or EOF (exact line match)
+                        if (match && (current_pos + mlen >= source_length ||
+                                      source[current_pos + mlen] == '\n' ||
+                                      source[current_pos + mlen] == '\r')) {
+                            // Skip past the marker
+                            for (int mi = 0; mi < mlen; mi++) advance();
+                            if (peek() == '\n') advance();
+                            break;
+                        }
+                        // Not the marker — copy this char to buffer
+                        if (blen < 65535) {
+                            buf[blen++] = peek();
+                        }
+                        advance();
+                    }
+                    // Strip trailing newline if present
+                    if (blen > 0 && buf[blen-1] == '\n') blen--;
+                    buf[blen] = '\0';
+
+                    Token* tok = create_token(TOKEN_STRING_LITERAL, buf, start_line, current_column);
+                    free(buf);
+                    return tok;
+                }
                 return create_token(TOKEN_LSHIFT, "<<", current_line, current_column);
             }
             return create_token(TOKEN_LESS, "<", current_line, current_column);

@@ -1,0 +1,46 @@
+// Test: heredoc multiline strings
+
+main() {
+    // Basic heredoc
+    poem = <<END
+'Twas brillig, and the slithy toves
+Did gyre and gimble in the wabe:
+All mimsy were the borogoves,
+And the mome raths outgrabe.
+END
+
+    println(poem)
+
+    // Heredoc preserves blank lines and indentation
+    formatted = <<BLOCK
+line one
+  indented
+    more indented
+
+after blank line
+BLOCK
+
+    println(formatted)
+
+    // Heredoc as function argument
+    println(<<MSG
+heredoc passed directly
+to a function call
+MSG
+)
+
+    // Heredoc with underscore marker
+    data = <<CONFIG_DATA
+host: localhost
+port: 5432
+database: myapp
+CONFIG_DATA
+
+    println(data)
+
+    // Left shift still works (not confused with heredoc)
+    x = 1 << 4
+    println(x)
+
+    println("heredoc ok")
+}
