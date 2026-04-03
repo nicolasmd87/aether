@@ -895,6 +895,15 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     // Box a closure onto the heap so it can be stored in a list (void*)
     print_line(gen, "static inline void* _aether_box_closure(_AeClosure c) { _AeClosure* p = malloc(sizeof(_AeClosure)); *p = c; return (void*)p; }");
     print_line(gen, "static inline _AeClosure _aether_unbox_closure(void* p) { return *(_AeClosure*)p; }");
+    // Lazy evaluation: thunks (deferred computation with memoization)
+    print_line(gen, "typedef struct { _AeClosure compute; intptr_t value; int evaluated; } _AeThunk;");
+    print_line(gen, "static inline void* _aether_thunk_new(_AeClosure c) { _AeThunk* t = malloc(sizeof(_AeThunk)); t->compute = c; t->value = 0; t->evaluated = 0; return (void*)t; }");
+    print_line(gen, "static inline intptr_t _aether_thunk_force(void* p) { _AeThunk* t = (_AeThunk*)p; if (!t->evaluated) { t->value = (intptr_t)((intptr_t(*)(void*))t->compute.fn)(t->compute.env); t->evaluated = 1; } return t->value; }");
+    // thunk_free: free the thunk struct. The closure env is owned by
+    // the closure variable (auto-deferred), not the thunk. The thunk
+    // borrows the env pointer — freeing it here would double-free
+    // when the closure variable's defer runs.
+    print_line(gen, "static inline void _aether_thunk_free(void* p) { if (p) free(p); }");
     // Terminal raw mode helpers for interactive input
     // Only available on hosted POSIX systems (not embedded/bare-metal or Windows)
     print_line(gen, "#if !defined(_WIN32) && !defined(__EMSCRIPTEN__) && defined(__STDC_HOSTED__) && (__STDC_HOSTED__ == 1) && !defined(__arm__) && !defined(__thumb__)");
