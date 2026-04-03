@@ -804,6 +804,25 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     generate_expression(gen, expr->children[0]);
                     fprintf(gen->output, ")");
                 }
+                // lazy(closure) — create a thunk (deferred computation)
+                else if (strcmp(func_name, "lazy") == 0 && expr->child_count == 1) {
+                    fprintf(gen->output, "_aether_thunk_new(");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, ")");
+                }
+                // force(thunk) — evaluate if needed, return cached value
+                // Returns intptr_t — the assignment context determines the C type
+                else if (strcmp(func_name, "force") == 0 && expr->child_count == 1) {
+                    fprintf(gen->output, "_aether_thunk_force(");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, ")");
+                }
+                // thunk_free(t) — free a thunk and its closure environment
+                else if (strcmp(func_name, "thunk_free") == 0 && expr->child_count == 1) {
+                    fprintf(gen->output, "_aether_thunk_free(");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, ")");
+                }
                 else if (strcmp(func_name, "clock_ns") == 0 && expr->child_count == 0) {
                     fprintf(gen->output, "\n#if AETHER_GCC_COMPAT\n");
                     fprintf(gen->output, "({ struct timespec _ts; clock_gettime(CLOCK_MONOTONIC, &_ts); (int64_t)_ts.tv_sec * 1000000000LL + _ts.tv_nsec; })");

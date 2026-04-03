@@ -862,6 +862,13 @@ int typecheck_program(ASTNode* program) {
     add_symbol(global_table, "ref_set", ref_set_type, 0, 1, 0);
     Type* ref_free_type = create_type(TYPE_VOID);
     add_symbol(global_table, "ref_free", ref_free_type, 0, 1, 0);
+    // Lazy evaluation builtins
+    Type* lazy_type = create_type(TYPE_PTR);
+    add_symbol(global_table, "lazy", lazy_type, 0, 1, 0);
+    Type* force_type = create_type(TYPE_INT);  // default int; C returns intptr_t, implicit conversion
+    add_symbol(global_table, "force", force_type, 0, 1, 0);
+    Type* thunk_free_type = create_type(TYPE_VOID);
+    add_symbol(global_table, "thunk_free", thunk_free_type, 0, 1, 0);
     Type* str_eq_type = create_type(TYPE_INT);
     add_symbol(global_table, "str_eq", str_eq_type, 0, 1, 0);
     Type* raw_mode_type = create_type(TYPE_VOID);

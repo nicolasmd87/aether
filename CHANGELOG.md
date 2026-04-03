@@ -16,6 +16,7 @@ number before tagging the release.
 - **`fs_glob(pattern)`**: Match files by pattern with `*`, `?`, and `**/` (recursive). Returns `DirList*` iterable via `dir_list_count`/`dir_list_get`/`dir_list_free`. Uses POSIX `glob()` for simple patterns and recursive directory walk for `**` patterns.
 - **`dir_list_count(list)`** and **`dir_list_get(list, index)`**: Iterate `DirList` results from `dir_list()` and `fs_glob()`.
 - **`aether_args_count()`** and **`aether_args_get(index)`**: Access command-line arguments via `std.os`. Exposes the runtime's existing `argc`/`argv` to Aether code. Returns `NULL` for out-of-bounds or negative indices.
+- **Lazy evaluation**: `lazy(closure)`, `force(thunk)`, `thunk_free(thunk)` builtins for deferred computation with memoization. Explicit forcing, eager by default.
 
 ## [0.32.0]
 
