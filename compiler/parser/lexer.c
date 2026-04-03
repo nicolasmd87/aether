@@ -456,6 +456,9 @@ Token* next_token() {
                     return create_token(TOKEN_LSHIFT_ASSIGN, "<<=", current_line, current_column);
                 }
                 // Heredoc: <<MARKER ... MARKER
+                // Content is a literal string (no interpolation).
+                // Preserves all whitespace and newlines exactly.
+                // Use regular "..." strings for interpolation.
                 if (isalpha(peek()) || peek() == '_') {
                     // Read the marker name
                     char marker[MAX_IDENTIFIER_LENGTH];
@@ -471,34 +474,56 @@ Token* next_token() {
 
                     // Collect everything until a line that is exactly the marker
                     int start_line = current_line;
-                    char* buf = malloc(65536);  // max heredoc size: 64KB
+                    int buf_capacity = 4096;
+                    char* buf = malloc(buf_capacity);
                     if (!buf) return create_token(TOKEN_ERROR, "out of memory", current_line, current_column);
                     int blen = 0;
                     while (current_pos < source_length) {
                         // Check if current line starts with the marker
+                        // Skip optional \r before checking (Windows CRLF)
+                        int check_pos = current_pos;
                         int match = 1;
                         for (int mi = 0; mi < mlen; mi++) {
-                            if (current_pos + mi >= source_length || source[current_pos + mi] != marker[mi]) {
+                            if (check_pos + mi >= source_length || source[check_pos + mi] != marker[mi]) {
                                 match = 0;
                                 break;
                             }
                         }
-                        // Marker must be followed by newline or EOF (exact line match)
-                        if (match && (current_pos + mlen >= source_length ||
-                                      source[current_pos + mlen] == '\n' ||
-                                      source[current_pos + mlen] == '\r')) {
-                            // Skip past the marker
-                            for (int mi = 0; mi < mlen; mi++) advance();
-                            if (peek() == '\n') advance();
-                            break;
+                        // Marker must be followed by newline, \r\n, or EOF
+                        if (match) {
+                            int after = check_pos + mlen;
+                            if (after >= source_length ||
+                                source[after] == '\n' ||
+                                (source[after] == '\r' && after + 1 < source_length && source[after + 1] == '\n')) {
+                                // Skip past the marker and line ending
+                                for (int mi = 0; mi < mlen; mi++) advance();
+                                if (peek() == '\r') advance();
+                                if (peek() == '\n') advance();
+                                break;
+                            }
                         }
                         // Not the marker — copy this char to buffer
-                        if (blen < 65535) {
-                            buf[blen++] = peek();
+                        // Skip \r in \r\n sequences (normalize to \n)
+                        char ch = peek();
+                        if (ch != '\r' || (current_pos + 1 < source_length && source[current_pos + 1] != '\n')) {
+                            // Grow buffer if needed
+                            if (blen >= buf_capacity - 1) {
+                                buf_capacity *= 2;
+                                char* new_buf = realloc(buf, buf_capacity);
+                                if (!new_buf) {
+                                    free(buf);
+                                    return create_token(TOKEN_ERROR, "heredoc too large", current_line, current_column);
+                                }
+                                buf = new_buf;
+                            }
+                            buf[blen++] = ch;
                         }
                         advance();
                     }
-                    // Strip trailing newline if present
+                    // Strip the final newline before the marker line.
+                    // Content between the markers is preserved exactly,
+                    // but the newline immediately before the closing
+                    // marker is an artifact of the syntax, not content.
                     if (blen > 0 && buf[blen-1] == '\n') blen--;
                     buf[blen] = '\0';
 
