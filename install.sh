@@ -227,7 +227,12 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
     # Register installed version in ~/.aether/versions/ so that:
     # - 'ae version list' shows it as "installed"
     # - 'ae version use vX.Y.Z' can switch back after trying another version
-    INSTALLED_VER=$("$BIN_DIR/ae" version 2>&1 | head -1 | awk '{print $2}')
+    # Get version from the VERSION file (not from ae binary, which may read stale active_version)
+    if [ -f VERSION ]; then
+        INSTALLED_VER=$(cat VERSION | tr -d '[:space:]')
+    else
+        INSTALLED_VER=$("$BIN_DIR/ae" --help 2>&1 | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1)
+    fi
     if [ -n "$INSTALLED_VER" ] && [ "$INSTALLED_VER" != "0.0.0-dev" ]; then
         VTAG="v$INSTALLED_VER"
         VER_ENTRY="$INSTALL_DIR/versions/$VTAG"

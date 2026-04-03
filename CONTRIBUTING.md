@@ -164,31 +164,60 @@ make test-asan
 
 ### Before Submitting
 
-1. **Code compiles without warnings**
-   ```bash
-   make clean
-   make compiler
-   ```
+Run the full CI suite locally — this is the same suite that GitHub Actions runs:
 
-2. **All tests pass**
-   ```bash
-   make test
-   ```
+```bash
+make ci        # Full 8-step suite with -Werror (compiler, tests, examples, smoke tests)
+```
 
-3. **No memory leaks**
+This covers your current platform. To verify cross-platform compatibility:
+
+```bash
+# Cooperative scheduler (all platforms, no Docker)
+make ci-coop
+
+# Windows cross-compilation (requires Docker or mingw-w64)
+make docker-ci-windows       # Docker (recommended)
+make ci-windows              # or: brew install mingw-w64 (macOS) / apt install mingw-w64 (Linux)
+
+# WebAssembly (requires Docker)
+make docker-ci-wasm
+
+# ARM embedded (requires Docker)
+make docker-ci-embedded
+
+# All portability checks at once
+make ci-portability
+```
+
+**Platform coverage:**
+
+| Your platform | `make ci` covers | Cross-platform via Docker |
+|--------------|-----------------|--------------------------|
+| macOS | macOS Clang | `docker-ci-windows`, `docker-ci-wasm`, `docker-ci-embedded` |
+| Linux | Linux GCC | `docker-ci-windows`, `docker-ci-wasm`, `docker-ci-embedded` |
+| Windows (MSYS2) | Windows MinGW | `docker-ci-wasm`, `docker-ci-embedded` (Docker on WSL2) |
+
+**No OS can locally test another OS natively.** macOS cannot be virtualized on Linux/Windows. Windows build+run requires MSYS2. Docker targets provide cross-compilation syntax checking only. GitHub Actions CI automatically tests all 5 targets (Linux GCC, Linux Clang, macOS ARM64, macOS x86_64, Windows MinGW) on every PR — this is the definitive cross-platform test. If your changes touch platform-specific code (`_WIN32`, `__APPLE__`, `system()`, file paths), wait for CI results before merging.
+
+### Additional Checks
+
+1. **No memory leaks**
    ```bash
+   make docker-ci              # Includes Valgrind + ASan in Docker
+   # Or locally if valgrind is installed:
    valgrind ./build/test_runner
-   # Should report: "definitely lost: 0 bytes"
    ```
 
-4. **Add tests for new features**
+2. **Add tests for new features**
    - New feature = new test
    - Bug fix = regression test
 
-5. **Update documentation**
+3. **Update documentation**
    - Add/update comments in code
    - Update README.md if adding user-facing features
    - Update docs/ if changing language behavior
+   - Update CHANGELOG.md under `[current]`
 
 ### PR Template
 
