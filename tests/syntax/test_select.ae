@@ -1,0 +1,32 @@
+// Test: select() compile-time platform conditional
+
+main() {
+    // Integer select — primary use case for build systems
+    port = select(linux: 8080, windows: 80, macos: 8080)
+    println(port)
+
+    // Select result used in arithmetic
+    base = select(linux: 100, windows: 200, macos: 300)
+    result = base + 1
+    println(result)
+
+    // Select with fallback
+    timeout = select(windows: 5000, other: 3000)
+    println(timeout)
+
+    // Select in conditional
+    max_threads = select(linux: 16, windows: 8, macos: 12)
+    if max_threads > 4 {
+        println("multicore")
+    }
+
+    // Platform-specific build flag count
+    extra_flags = select(linux: 2, windows: 1, macos: 3)
+    println(extra_flags)
+
+    // Note: string select works for variable declaration (const char*)
+    // but println type inference for strings from select is a known
+    // gap — use string interpolation with explicit typing when needed.
+
+    println("select ok")
+}

@@ -835,6 +835,54 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     generate_expression(gen, expr->children[0]);
                     fprintf(gen->output, ")");
                 }
+                // select(linux: val, windows: val, macos: val, default: val)
+                // Compile-time platform selection via #ifdef chain
+                else if (strcmp(func_name, "select") == 0 && expr->child_count >= 1) {
+                    // Find the matching platform and default
+                    ASTNode* linux_val = NULL;
+                    ASTNode* windows_val = NULL;
+                    ASTNode* macos_val = NULL;
+                    ASTNode* default_val = NULL;
+                    for (int i = 0; i < expr->child_count; i++) {
+                        ASTNode* arg = expr->children[i];
+                        if (arg && arg->type == AST_NAMED_ARG && arg->value) {
+                            if (strcmp(arg->value, "linux") == 0)
+                                linux_val = arg->children[0];
+                            else if (strcmp(arg->value, "windows") == 0)
+                                windows_val = arg->children[0];
+                            else if (strcmp(arg->value, "macos") == 0)
+                                macos_val = arg->children[0];
+                            else if (strcmp(arg->value, "other") == 0)
+                                default_val = arg->children[0];
+                        }
+                    }
+                    // Emit #ifdef chain
+                    fprintf(gen->output, "\n#ifdef _WIN32\n");
+                    if (windows_val) {
+                        generate_expression(gen, windows_val);
+                    } else if (default_val) {
+                        generate_expression(gen, default_val);
+                    } else {
+                        fprintf(gen->output, "0");
+                    }
+                    fprintf(gen->output, "\n#elif defined(__APPLE__)\n");
+                    if (macos_val) {
+                        generate_expression(gen, macos_val);
+                    } else if (default_val) {
+                        generate_expression(gen, default_val);
+                    } else {
+                        fprintf(gen->output, "0");
+                    }
+                    fprintf(gen->output, "\n#else\n");
+                    if (linux_val) {
+                        generate_expression(gen, linux_val);
+                    } else if (default_val) {
+                        generate_expression(gen, default_val);
+                    } else {
+                        fprintf(gen->output, "0");
+                    }
+                    fprintf(gen->output, "\n#endif\n");
+                }
                 // each(array, count, closure) — iterate array calling closure for each element
                 // Usage: each(items, count) |item| { ... }
                 // The trailing block becomes the last child (a closure)
@@ -1173,6 +1221,13 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             }
             break;
         
+        case AST_NAMED_ARG:
+            // Named argument: emit just the value (name is for readability)
+            if (expr->child_count > 0) {
+                generate_expression(gen, expr->children[0]);
+            }
+            break;
+
         case AST_ARRAY_LITERAL:
             fprintf(gen->output, "{");
             for (int i = 0; i < expr->child_count; i++) {

@@ -785,14 +785,34 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
             // Parse arguments
             if (!match_token(parser, TOKEN_RIGHT_PAREN)) {
                 do {
-                    ASTNode* arg = parse_expression(parser);
-                    if (!arg) {
-                        free_ast_node(func_call);
-                        return NULL;
+                    // Check for named argument: IDENTIFIER : expr
+                    Token* maybe_name = peek_token(parser);
+                    Token* maybe_colon = peek_ahead(parser, 1);
+                    if (maybe_name && maybe_name->type == TOKEN_IDENTIFIER &&
+                        maybe_colon && maybe_colon->type == TOKEN_COLON) {
+                        // Named argument
+                        Token* name_tok = advance_token(parser); // consume name
+                        advance_token(parser); // consume ':'
+                        ASTNode* value = parse_expression(parser);
+                        if (!value) {
+                            free_ast_node(func_call);
+                            return NULL;
+                        }
+                        ASTNode* named = create_ast_node(AST_NAMED_ARG,
+                            name_tok->value, name_tok->line, name_tok->column);
+                        add_child(named, value);
+                        add_child(func_call, named);
+                    } else {
+                        // Positional argument
+                        ASTNode* arg = parse_expression(parser);
+                        if (!arg) {
+                            free_ast_node(func_call);
+                            return NULL;
+                        }
+                        add_child(func_call, arg);
                     }
-                    add_child(func_call, arg);
                 } while (match_token(parser, TOKEN_COMMA));
-                
+
                 if (!expect_token(parser, TOKEN_RIGHT_PAREN)) {
                     free_ast_node(func_call);
                     return NULL;
