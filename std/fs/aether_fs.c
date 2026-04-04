@@ -11,6 +11,7 @@ int file_close(File* f) { (void)f; return 0; }
 int file_exists(const char* p) { (void)p; return 0; }
 int file_delete(const char* p) { (void)p; return 0; }
 int file_size(const char* p) { (void)p; return -1; }
+int file_mtime(const char* p) { (void)p; return 0; }
 int dir_exists(const char* p) { (void)p; return 0; }
 int dir_create(const char* p) { (void)p; return 0; }
 int dir_delete(const char* p) { (void)p; return 0; }
@@ -114,6 +115,14 @@ int file_size(const char* path) {
     struct stat st;
     if (stat(path, &st) != 0) return 0;
     return (int)st.st_size;
+}
+
+int file_mtime(const char* path) {
+    if (!path) return 0;
+
+    struct stat st;
+    if (stat(path, &st) != 0) return 0;
+    return (int)st.st_mtime;
 }
 
 // Directory operations

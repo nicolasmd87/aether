@@ -9,6 +9,7 @@ extern file_write(file: ptr, data: string, length: int) -> int
 extern file_exists(path: string) -> int
 extern file_delete(path: string) -> int
 extern file_size(path: string) -> int
+extern file_mtime(path: string) -> int
 
 // Directory operations
 extern dir_exists(path: string) -> int

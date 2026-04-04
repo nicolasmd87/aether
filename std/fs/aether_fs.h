@@ -17,6 +17,7 @@ int file_close(File* file);
 int file_exists(const char* path);
 int file_delete(const char* path);
 int file_size(const char* path);
+int file_mtime(const char* path);
 
 // Directory operations
 int dir_exists(const char* path);
