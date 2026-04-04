@@ -1,0 +1,30 @@
+// std.host.python — Embedded Python Language Host Module
+//
+// Runs Python code inside an Aether sandbox. Python's libc calls
+// (connect, open, getenv, execve) are intercepted and checked against
+// the sandbox grant list. Python has no idea it's contained.
+//
+// Usage:
+//   import std.host.python
+//
+//   worker = sandbox("worker") {
+//       grant_env("HOME")
+//       grant_fs_read("/etc/*")
+//   }
+//   python.run_sandboxed(worker, "print('hello')")
+//   python.run_sandboxed(worker, script, "arg1", "arg2")
+
+// Run Python code string within a sandbox
+// Returns: 0 on success, -1 on error
+extern python_run_sandboxed(perms: ptr, code: string) -> int
+extern python_run_sandboxed_with_map(perms: ptr, code: string, map_token: int) -> int
+
+// Run Python code string without sandbox (full access)
+// Returns: 0 on success, -1 on error
+extern python_run(code: string) -> int
+
+// Initialize Python runtime (called automatically on first use)
+extern python_init() -> int
+
+// Finalize Python runtime (optional cleanup)
+extern python_finalize()

@@ -885,6 +885,37 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 else if (strcmp(func_name, "builder_context") == 0) {
                     fprintf(gen->output, "_aether_ctx_get()");
                 }
+                // spawn_sandboxed(grants, program, arg) — launch sandboxed child process
+                else if (strcmp(func_name, "spawn_sandboxed") == 0 && expr->child_count >= 2) {
+                    fprintf(gen->output, "aether_spawn_sandboxed(");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, ", ");
+                    generate_expression(gen, expr->children[1]);
+                    if (expr->child_count >= 3) {
+                        fprintf(gen->output, ", ");
+                        generate_expression(gen, expr->children[2]);
+                    } else {
+                        fprintf(gen->output, ", NULL");
+                    }
+                    fprintf(gen->output, ")");
+                }
+                // ctx_push(ptr) / ctx_pop() — explicit context stack manipulation
+                else if (strcmp(func_name, "_aether_push") == 0 && expr->child_count == 1) {
+                    fprintf(gen->output, "_aether_ctx_push((void*)(intptr_t)");
+                    generate_expression(gen, expr->children[0]);
+                    fprintf(gen->output, ")");
+                }
+                else if (strcmp(func_name, "_aether_pop") == 0 && expr->child_count == 0) {
+                    fprintf(gen->output, "_aether_ctx_pop()");
+                }
+                // sandbox_install() — activate runtime sandbox checking
+                else if (strcmp(func_name, "sandbox_install") == 0 && expr->child_count == 0) {
+                    fprintf(gen->output, "_aether_sandbox_install()");
+                }
+                // sandbox_uninstall() — deactivate runtime sandbox checking
+                else if (strcmp(func_name, "sandbox_uninstall") == 0 && expr->child_count == 0) {
+                    fprintf(gen->output, "_aether_sandbox_uninstall()");
+                }
                 // builder_depth() — returns the current builder nesting depth
                 else if (strcmp(func_name, "builder_depth") == 0) {
                     fprintf(gen->output, "_aether_ctx_depth");

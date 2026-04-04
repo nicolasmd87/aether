@@ -1,6 +1,7 @@
 #include "aether_fs.h"
 #include "../../runtime/config/aether_optimization_config.h"
 #include "../../runtime/utils/aether_compiler.h"
+#include "../../runtime/aether_sandbox.h"
 
 #if !AETHER_HAS_FILESYSTEM
 // Stubs when filesystem is unavailable (WASM, embedded)
@@ -43,6 +44,13 @@ void dir_list_free(DirList* l) { (void)l; }
 // File operations
 File* file_open(const char* path, const char* mode) {
     if (!path || !mode) return NULL;
+
+    // Sandbox check: determine read vs write from mode
+    if (mode[0] == 'r') {
+        if (!aether_sandbox_check("fs_read", path)) return NULL;
+    } else {
+        if (!aether_sandbox_check("fs_write", path)) return NULL;
+    }
 
     FILE* fp = fopen(path, mode);
     if (!fp) return NULL;
@@ -95,6 +103,7 @@ int file_close(File* file) {
 
 int file_exists(const char* path) {
     if (!path) return 0;
+    if (!aether_sandbox_check("fs_read", path)) return 0;
 
     struct stat st;
     return (stat(path, &st) == 0 && !S_ISDIR(st.st_mode));
@@ -102,11 +111,13 @@ int file_exists(const char* path) {
 
 int file_delete(const char* path) {
     if (!path) return 0;
+    if (!aether_sandbox_check("fs_write", path)) return 0;
     return remove(path) == 0 ? 1 : 0;
 }
 
 int file_size(const char* path) {
     if (!path) return 0;
+    if (!aether_sandbox_check("fs_read", path)) return 0;
 
     struct stat st;
     if (stat(path, &st) != 0) return 0;

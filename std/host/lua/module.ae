@@ -1,0 +1,18 @@
+// std.host.lua — Embedded Lua Language Host Module
+//
+// Runs Lua code inside an Aether sandbox. Lua's io/os calls are
+// intercepted via the LD_PRELOAD libc interception layer.
+//
+// Usage:
+//   import std.host.lua
+//
+//   worker = sandbox("worker") {
+//       grant_env("HOME")
+//       grant_fs_read("/etc/*")
+//   }
+//   lua.run_sandboxed(worker, "print(os.getenv('HOME'))")
+
+extern lua_run_sandboxed(perms: ptr, code: string) -> int
+extern lua_run(code: string) -> int
+extern lua_init() -> int
+extern lua_finalize()

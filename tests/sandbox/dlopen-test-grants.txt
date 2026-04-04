@@ -1,0 +1,20 @@
+# Minimal grants — env HOME only, no native, no exec, no fs_write
+env:HOME
+# Runtime needs
+fs_read:/usr/*
+fs_read:/lib/*
+fs_read:/home/*
+fs_read:/etc/localtime
+fs_read:/etc/ssl/*
+fs_read:/etc/nsswitch.conf
+fs_read:/etc/resolv.conf
+fs_read:/etc/hosts
+fs_read:/etc/ld.so.*
+fs_read:/proc/*
+fs_read:/sys/*
+fs_read:/tmp/*
+env:PATH
+env:LANG
+env:GEM_HOME
+env:GEM_PATH
+env:RUBYLIB
