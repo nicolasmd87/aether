@@ -150,13 +150,11 @@ char* path_join(const char* path1, const char* path2) {
     size_t len1 = strlen(path1);
     size_t len2 = strlen(path2);
 
-    #ifdef _WIN32
-    char sep = '\\';
-    #else
+    // Always use '/' — it works on all platforms (Windows C stdlib accepts '/')
+    // and keeps paths consistent with Aether's module system.
     char sep = '/';
-    #endif
 
-    int needs_sep = (len1 > 0 && path1[len1-1] != sep && path1[len1-1] != '/');
+    int needs_sep = (len1 > 0 && path1[len1-1] != '/' && path1[len1-1] != '\\');
     size_t total = len1 + len2 + (needs_sep ? 1 : 0);
 
     char* result = (char*)malloc(total + 1);
@@ -230,17 +228,17 @@ char* path_extension(const char* path) {
 int path_is_absolute(const char* path) {
     if (!path || path[0] == '\0') return 0;
 
+    // Unix-style absolute: /path (works on all platforms)
+    if (path[0] == '/') return 1;
+
     #ifdef _WIN32
-    // Windows: C:\ or \\server\share
+    // Windows: C:\ or C:/ or \\server\share
     if ((path[0] >= 'A' && path[0] <= 'Z') || (path[0] >= 'a' && path[0] <= 'z')) {
         if (path[1] && path[1] == ':' && path[2] && (path[2] == '\\' || path[2] == '/')) {
             return 1;
         }
     }
     if (path[0] == '\\' && path[1] && path[1] == '\\') return 1;
-    #else
-    // Unix: /path
-    if (path[0] == '/') return 1;
     #endif
 
     return 0;
@@ -335,7 +333,8 @@ static void dirlist_add(DirList* list, const char* path) {
     list->count++;
 }
 
-// Recursive walk for ** patterns
+#ifndef _WIN32
+// Recursive walk for ** patterns (POSIX only)
 static void walk_recursive(const char* dir, const char* suffix_pattern, DirList* result) {
     DIR* d = opendir(dir);
     if (!d) return;
@@ -362,6 +361,7 @@ static void walk_recursive(const char* dir, const char* suffix_pattern, DirList*
     }
     closedir(d);
 }
+#endif // !_WIN32
 
 DirList* fs_glob(const char* pattern) {
     if (!pattern) return NULL;

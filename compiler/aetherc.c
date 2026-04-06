@@ -199,6 +199,7 @@ int compile_source(const char* input_path, const char* output_path) {
 
     // Step 2.5: Module Orchestration
     if (verbose_mode) printf("[Phase 2.5/5] Module resolution...\n");
+    module_set_source_dir(input_path);
     if (!module_orchestrate(program)) {
         report_compilation_failure();
         free_ast_node(program);

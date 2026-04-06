@@ -9,10 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 the release pipeline automatically replaces `[current]` with the next version
 number before tagging the release.
 
-## [current]
+## [0.35.0]
 
 ### Added
 
+- **Heredoc strings**: `<<MARKER ... MARKER` syntax for multiline string literals. Preserves newlines, indentation, and special characters. Literal only (no `${expr}` interpolation — use regular strings for that). Left-shift operator `<<` is unaffected (heredoc only triggers when followed by an identifier). Dynamic buffer (no 64KB limit). Windows CRLF line endings handled.
 - **`fs_glob(pattern)`**: Match files by pattern with `*`, `?`, and `**/` (recursive). Returns `DirList*` iterable via `dir_list_count`/`dir_list_get`/`dir_list_free`. Uses POSIX `glob()` for simple patterns and recursive directory walk for `**` patterns.
 - **`dir_list_count(list)`** and **`dir_list_get(list, index)`**: Iterate `DirList` results from `dir_list()` and `fs_glob()`.
 - **`aether_args_count()`** and **`aether_args_get(index)`**: Access command-line arguments via `std.os`. Exposes the runtime's existing `argc`/`argv` to Aether code. Returns `NULL` for out-of-bounds or negative indices.

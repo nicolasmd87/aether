@@ -6,9 +6,18 @@ import std.io
 main() {
     print("=== IO Edge Case Tests ===\n\n")
 
+    // Use platform temp dir
+    tmp = io.getenv("TEMP")
+    if tmp == 0 {
+        tmp = io.getenv("TMPDIR")
+    }
+    if tmp == 0 {
+        tmp = "/tmp"
+    }
+
     // Test 1: read non-existent file returns NULL
     print("Test 1: read non-existent file\n")
-    content = io.read_file("/tmp/aether_nonexistent_xyz_987")
+    content = io.read_file("${tmp}/aether_nonexistent_xyz_987")
     if content == 0 {
         print("  PASS: read_file returns NULL for missing file\n")
     } else {
@@ -18,7 +27,7 @@ main() {
 
     // Test 2: write + read round-trip
     print("\nTest 2: write + read round-trip\n")
-    test_path = "/tmp/aether_io_test.txt"
+    test_path = "${tmp}/aether_io_test.txt"
     ok = io.write_file(test_path, "hello io")
     if ok == 1 {
         content2 = io.read_file(test_path)
@@ -74,7 +83,7 @@ main() {
 
     // Test 6: delete non-existent file
     print("\nTest 6: delete non-existent file\n")
-    r = io.delete_file("/tmp/aether_nonexistent_xyz_987")
+    r = io.delete_file("${tmp}/aether_nonexistent_xyz_987")
     if r == 0 {
         print("  PASS: delete non-existent returns 0\n")
     } else {
@@ -84,7 +93,7 @@ main() {
 
     // Test 7: write empty content
     print("\nTest 7: write empty content\n")
-    test_path2 = "/tmp/aether_io_empty_test.txt"
+    test_path2 = "${tmp}/aether_io_empty_test.txt"
     ok3 = io.write_file(test_path2, "")
     if ok3 == 1 {
         content4 = io.read_file(test_path2)
@@ -122,7 +131,7 @@ main() {
 
     // Test 10: file_info
     print("\nTest 10: file_info on non-existent\n")
-    info = io.file_info("/tmp/aether_nonexistent_xyz_987")
+    info = io.file_info("${tmp}/aether_nonexistent_xyz_987")
     if info == 0 {
         print("  PASS: file_info returns NULL for missing file\n")
     } else {
