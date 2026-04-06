@@ -1097,15 +1097,8 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         }
     }
 
-    // Pre-pass: discover closures in the entire program and emit their
-    // environment structs + static functions before any user code.
-    discover_closures(gen, program);
-    if (gen->closure_count > 0) {
-        print_line(gen, "// Closure definitions");
-        emit_closure_definitions(gen);
-    }
-
-    // Generate forward declarations for all functions (handles mutual recursion)
+    // Generate forward declarations for all functions FIRST so that
+    // hoisted closure functions can call them without implicit declarations.
     print_line(gen, "// Forward declarations");
     for (int i = 0; i < program->child_count; i++) {
         ASTNode* child = program->children[i];
@@ -1164,6 +1157,15 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         fprintf(gen->output, "struct %s* spawn_%s();\n", child->value, child->value);
     }
     print_line(gen, "");
+
+    // Discover and emit closures AFTER forward declarations so hoisted
+    // closure functions can call user-defined functions without
+    // implicit function declaration errors (C99+).
+    discover_closures(gen, program);
+    if (gen->closure_count > 0) {
+        print_line(gen, "// Closure definitions");
+        emit_closure_definitions(gen);
+    }
 
     // Pre-pass: build request->reply type map from actor receive handlers.
     // This lets the ? operator know the reply message type at codegen time.
