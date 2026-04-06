@@ -856,6 +856,16 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                 default_val = arg->children[0];
                         }
                     }
+                    // Validate: every platform must have a value or other: must be set
+                    if (!default_val) {
+                        if (!linux_val || !windows_val || !macos_val) {
+                            fprintf(stderr,
+                                "error: select() at line %d: missing platform without 'other:' fallback.\n"
+                                "  Provide all platforms (linux:, windows:, macos:) or add other: for the default.\n",
+                                expr->line);
+                            // Still emit code so compilation continues and shows all errors
+                        }
+                    }
                     // Emit #ifdef chain
                     fprintf(gen->output, "\n#ifdef _WIN32\n");
                     if (windows_val) {
@@ -863,7 +873,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     } else if (default_val) {
                         generate_expression(gen, default_val);
                     } else {
-                        fprintf(gen->output, "0");
+                        fprintf(gen->output, "#error \"select() has no value for windows and no other: fallback\"");
                     }
                     fprintf(gen->output, "\n#elif defined(__APPLE__)\n");
                     if (macos_val) {
@@ -871,7 +881,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     } else if (default_val) {
                         generate_expression(gen, default_val);
                     } else {
-                        fprintf(gen->output, "0");
+                        fprintf(gen->output, "#error \"select() has no value for macos and no other: fallback\"");
                     }
                     fprintf(gen->output, "\n#else\n");
                     if (linux_val) {
@@ -879,7 +889,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     } else if (default_val) {
                         generate_expression(gen, default_val);
                     } else {
-                        fprintf(gen->output, "0");
+                        fprintf(gen->output, "#error \"select() has no value for linux and no other: fallback\"");
                     }
                     fprintf(gen->output, "\n#endif\n");
                 }
