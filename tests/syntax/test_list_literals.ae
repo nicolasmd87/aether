@@ -1,0 +1,37 @@
+// Test: list/array literal syntax
+
+main() {
+    // Integer array
+    nums = [10, 20, 30]
+    println(nums[0])
+    println(nums[1])
+    println(nums[2])
+
+    // String array
+    names = ["alice", "bob", "charlie"]
+    println(names[0])
+    println(names[1])
+    println(names[2])
+
+    // Single element
+    one = [42]
+    println(one[0])
+
+    // Array of expressions
+    a = 5
+    computed = [a, a * 2, a * 3]
+    println(computed[0])
+    println(computed[1])
+    println(computed[2])
+
+    // Nested access — array element used in expression
+    prices = [100, 200, 300]
+    total = prices[0] + prices[1] + prices[2]
+    println(total)
+
+    // Array passed to a function
+    first = [99, 88, 77]
+    println(first[0])
+
+    println("list literals ok")
+}

@@ -1,0 +1,51 @@
+// Test: named arguments in function calls
+
+greet(name: string, count: int) {
+    for (i = 0; i < count; i++) {
+        println(name)
+    }
+}
+
+add(a: int, b: int) {
+    return a + b
+}
+
+describe(label: string, value: int) {
+    println("${label}=${value}")
+}
+
+main() {
+    // All positional (unchanged behaviour)
+    greet("alice", 1)
+
+    // All named
+    greet(name: "bob", count: 2)
+
+    // Named with expression values
+    result = add(a: 10, b: 20)
+    println(result)
+
+    // Mix: positional first, named last
+    greet("charlie", count: 1)
+
+    // Named args preserve order — b before a still works positionally
+    // (names are documentation, C receives positional)
+    result2 = add(a: 3, b: 7)
+    println(result2)
+
+    // Named args with string values
+    describe(label: "score", value: 42)
+
+    // Named args with computed expressions
+    x = 5
+    describe(label: "doubled", value: x * 2)
+
+    // All positional still works (no regression)
+    describe("plain", 99)
+
+    // Single named arg
+    println("single named")
+    greet(name: "dana", count: 1)
+
+    println("named args ok")
+}
