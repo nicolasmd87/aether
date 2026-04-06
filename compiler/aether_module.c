@@ -20,6 +20,25 @@
 
 ModuleRegistry* global_module_registry = NULL;
 
+// Source file directory for resolving lib/ imports relative to the source file.
+static char g_source_dir[2048] = "";
+
+void module_set_source_dir(const char* source_path) {
+    if (!source_path) { g_source_dir[0] = '\0'; return; }
+    strncpy(g_source_dir, source_path, sizeof(g_source_dir) - 1);
+    g_source_dir[sizeof(g_source_dir) - 1] = '\0';
+    // Strip filename to get directory
+    char* last_sep = NULL;
+    for (char* p = g_source_dir; *p; p++) {
+        if (*p == '/' || *p == '\\') last_sep = p;
+    }
+    if (last_sep) {
+        *(last_sep + 1) = '\0';  // keep trailing slash
+    } else {
+        g_source_dir[0] = '\0';  // no directory component
+    }
+}
+
 // Module management
 void module_registry_init() {
     if (!global_module_registry) {
@@ -449,7 +468,7 @@ char* module_resolve_stdlib_path(const char* module_name) {
 // Resolve a local module path (e.g., "mypackage.utils") to a file path.
 char* module_resolve_local_path(const char* module_path) {
     char converted[512];
-    char path[2048];
+    char path[4096];
 
     // Convert dots to slashes
     strncpy(converted, module_path, sizeof(converted) - 1);
@@ -458,7 +477,7 @@ char* module_resolve_local_path(const char* module_path) {
         if (*p == '.') *p = '/';
     }
 
-    // Try 1: lib/module_path/module.ae
+    // Try 1: lib/module_path/module.ae (CWD-relative)
     snprintf(path, sizeof(path), "lib/%s/module.ae", converted);
     if (access(path, F_OK) == 0) return strdup(path);
 
@@ -481,6 +500,22 @@ char* module_resolve_local_path(const char* module_path) {
     // Try 6: module_path.ae (single file in root)
     snprintf(path, sizeof(path), "%s.ae", converted);
     if (access(path, F_OK) == 0) return strdup(path);
+
+    // Try 6b: Search relative to source file directory (e.g. tests/integration/pure_module/lib/)
+    if (g_source_dir[0]) {
+        snprintf(path, sizeof(path), "%slib/%s/module.ae", g_source_dir, converted);
+        if (access(path, F_OK) == 0) return strdup(path);
+        snprintf(path, sizeof(path), "%slib/%s.ae", g_source_dir, converted);
+        if (access(path, F_OK) == 0) return strdup(path);
+        snprintf(path, sizeof(path), "%ssrc/%s/module.ae", g_source_dir, converted);
+        if (access(path, F_OK) == 0) return strdup(path);
+        snprintf(path, sizeof(path), "%ssrc/%s.ae", g_source_dir, converted);
+        if (access(path, F_OK) == 0) return strdup(path);
+        snprintf(path, sizeof(path), "%s%s/module.ae", g_source_dir, converted);
+        if (access(path, F_OK) == 0) return strdup(path);
+        snprintf(path, sizeof(path), "%s%s.ae", g_source_dir, converted);
+        if (access(path, F_OK) == 0) return strdup(path);
+    }
 
     // Try 7-9: Search installed packages at ~/.aether/packages/
     // import mylib.utils → search ~/.aether/packages/*/mylib/src/utils/module.ae

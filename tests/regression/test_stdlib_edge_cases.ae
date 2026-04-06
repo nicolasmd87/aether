@@ -6,9 +6,19 @@ import std.fs
 import std.file
 import std.path
 import std.json
+import std.io
 
 main() {
     print("=== Stdlib Edge Case Tests ===\n\n")
+
+    // Use platform temp dir
+    tmp = io.getenv("TEMP")
+    if tmp == 0 {
+        tmp = io.getenv("TMPDIR")
+    }
+    if tmp == 0 {
+        tmp = "/tmp"
+    }
 
     // === PATH MODULE: return types should be string, not ptr ===
     print("Test 1: path.join returns usable string\n")
@@ -94,7 +104,7 @@ main() {
 
     // === FILE SIZE ===
     print("\nTest 8: file.size on non-existent file\n")
-    sz = file.size("/tmp/nonexistent_aether_test_file_xyz")
+    sz = file.size("${tmp}/nonexistent_aether_test_file_xyz")
     if sz == 0 {
         print("  PASS: file.size returns 0 for missing file\n")
     } else {
@@ -104,7 +114,7 @@ main() {
 
     // === FILE EXISTS ===
     print("\nTest 9: file.exists on non-existent file\n")
-    ex = file.exists("/tmp/nonexistent_aether_test_file_xyz")
+    ex = file.exists("${tmp}/nonexistent_aether_test_file_xyz")
     if ex == 0 {
         print("  PASS: file.exists returns 0 for missing file\n")
     } else {
@@ -238,7 +248,7 @@ main() {
 
     // === FILE WRITE / READ ROUND-TRIP ===
     print("\nTest 21: file write + read round-trip\n")
-    test_path = "/tmp/aether_edge_test.txt"
+    test_path = "${tmp}/aether_edge_test.txt"
     f = file.open(test_path, "w")
     file.write(f, "edge case test", 14)
     file.close(f)
