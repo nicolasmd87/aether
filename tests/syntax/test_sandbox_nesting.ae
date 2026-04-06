@@ -1,0 +1,82 @@
+// Test: nested sandboxes can only narrow, never escalate
+
+import std.list
+import std.os
+
+main() {
+    // Outer: allows HOME and USER only
+    outer = list.new()
+    defer list.free(outer)
+    list.add(outer, "env")
+    list.add(outer, "HOME")
+    list.add(outer, "env")
+    list.add(outer, "USER")
+
+    // Test outer alone
+    println("--- outer (HOME, USER) ---")
+    sandbox_push(outer)
+    sandbox_install()
+
+    r1 = os_getenv("HOME")
+    if r1 != null { println("  HOME: allow"); free(r1) }
+    else { println("  HOME: deny") }
+
+    r2 = os_getenv("TERM")
+    if r2 != null { println("  TERM: allow"); free(r2) }
+    else { println("  TERM: deny") }
+
+    sandbox_uninstall()
+    sandbox_pop()
+
+    // Inner tries to grant everything — outer should block
+    println("--- inner(*) inside outer(HOME,USER) ---")
+    inner = list.new()
+    defer list.free(inner)
+    list.add(inner, "env")
+    list.add(inner, "*")
+
+    sandbox_push(outer)
+    sandbox_push(inner)
+    sandbox_install()
+
+    r3 = os_getenv("HOME")
+    if r3 != null { println("  HOME: allow"); free(r3) }
+    else { println("  HOME: deny") }
+
+    r4 = os_getenv("TERM")
+    if r4 != null { println("  TERM: allow"); free(r4) }
+    else { println("  TERM: deny") }
+
+    r5 = os_getenv("AWS_SECRET_KEY")
+    if r5 != null { println("  AWS_SECRET_KEY: allow"); free(r5) }
+    else { println("  AWS_SECRET_KEY: deny") }
+
+    sandbox_uninstall()
+    sandbox_pop()
+    sandbox_pop()
+
+    // Inner narrows to HOME only
+    println("--- inner(HOME) inside outer(HOME,USER) ---")
+    narrow = list.new()
+    defer list.free(narrow)
+    list.add(narrow, "env")
+    list.add(narrow, "HOME")
+
+    sandbox_push(outer)
+    sandbox_push(narrow)
+    sandbox_install()
+
+    r6 = os_getenv("HOME")
+    if r6 != null { println("  HOME: allow"); free(r6) }
+    else { println("  HOME: deny") }
+
+    r7 = os_getenv("USER")
+    if r7 != null { println("  USER: allow"); free(r7) }
+    else { println("  USER: deny") }
+
+    sandbox_uninstall()
+    sandbox_pop()
+    sandbox_pop()
+
+    println("nesting ok")
+}

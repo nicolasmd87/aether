@@ -1,0 +1,19 @@
+// std.host.perl — Embedded Perl Language Host Module
+//
+// Runs Perl code inside an Aether sandbox. Perl's open(), getenv(),
+// socket calls are intercepted via LD_PRELOAD libc interception.
+//
+// Usage:
+//   import std.host.perl
+//
+//   worker = sandbox("worker") {
+//       grant_env("HOME")
+//       grant_fs_read("/etc/*")
+//   }
+//   perl.run_sandboxed(worker, "print $ENV{HOME}")
+
+extern aether_perl_run_sandboxed(perms: ptr, code: string) -> int
+extern aether_perl_run_sandboxed_with_map(perms: ptr, code: string, map_token: int) -> int
+extern aether_perl_run(code: string) -> int
+extern aether_perl_init() -> int
+extern aether_perl_finalize()

@@ -93,7 +93,7 @@ else
     endif
 endif
 
-CFLAGS = -O2 -Icompiler -Iruntime -Iruntime/actors -Iruntime/scheduler -Iruntime/utils -Iruntime/memory -Iruntime/config -Istd -Istd/string -Istd/io -Istd/math -Istd/net -Istd/collections -Istd/json -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -MMD -MP -DAETHER_VERSION=\"$(VERSION)\" $(EXTRA_CFLAGS)
+CFLAGS = -O2 -Icompiler -Iruntime -Iruntime/actors -Iruntime/scheduler -Iruntime/utils -Iruntime/memory -Iruntime/config -Istd -Istd/string -Istd/io -Istd/math -Istd/net -Istd/collections -Istd/json -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -MMD -MP -DAETHER_VERSION=\"$(VERSION)\" -DAETHER_HAS_SANDBOX $(EXTRA_CFLAGS)
 LDFLAGS = -lm
 ifneq ($(PLATFORM),wasm)
 ifneq ($(PLATFORM),embedded)
@@ -120,7 +120,7 @@ endif
 
 COMPILER_SRC = compiler/aetherc.c compiler/parser/lexer.c compiler/parser/parser.c compiler/ast.c compiler/analysis/typechecker.c compiler/codegen/codegen.c compiler/codegen/codegen_expr.c compiler/codegen/codegen_stmt.c compiler/codegen/codegen_actor.c compiler/codegen/codegen_func.c compiler/aether_error.c compiler/aether_module.c compiler/analysis/type_inference.c compiler/codegen/optimizer.c compiler/aether_diagnostics.c runtime/actors/aether_message_registry.c
 COMPILER_LIB_SRC = compiler/parser/lexer.c compiler/parser/parser.c compiler/ast.c compiler/analysis/typechecker.c compiler/codegen/codegen.c compiler/codegen/codegen_expr.c compiler/codegen/codegen_stmt.c compiler/codegen/codegen_actor.c compiler/codegen/codegen_func.c compiler/aether_error.c compiler/aether_module.c compiler/analysis/type_inference.c compiler/codegen/optimizer.c compiler/aether_diagnostics.c runtime/actors/aether_message_registry.c
-RUNTIME_SRC = $(SCHEDULER_SRC) runtime/scheduler/scheduler_optimizations.c runtime/config/aether_optimization_config.c runtime/memory/memory.c runtime/memory/aether_arena.c runtime/memory/aether_pool.c runtime/memory/aether_memory_stats.c runtime/utils/aether_tracing.c runtime/utils/aether_bounds_check.c runtime/utils/aether_test.c runtime/memory/aether_arena_optimized.c runtime/aether_runtime_types.c runtime/utils/aether_cpu_detect.c runtime/memory/aether_batch.c runtime/utils/aether_simd_vectorized.c runtime/aether_runtime.c runtime/aether_numa.c runtime/actors/aether_send_buffer.c runtime/actors/aether_send_message.c runtime/actors/aether_actor_thread.c
+RUNTIME_SRC = $(SCHEDULER_SRC) runtime/scheduler/scheduler_optimizations.c runtime/config/aether_optimization_config.c runtime/memory/memory.c runtime/memory/aether_arena.c runtime/memory/aether_pool.c runtime/memory/aether_memory_stats.c runtime/utils/aether_tracing.c runtime/utils/aether_bounds_check.c runtime/utils/aether_test.c runtime/memory/aether_arena_optimized.c runtime/aether_runtime_types.c runtime/utils/aether_cpu_detect.c runtime/memory/aether_batch.c runtime/utils/aether_simd_vectorized.c runtime/aether_runtime.c runtime/aether_numa.c runtime/aether_sandbox.c runtime/aether_spawn_sandboxed.c runtime/aether_shared_map.c runtime/actors/aether_send_buffer.c runtime/actors/aether_send_message.c runtime/actors/aether_actor_thread.c
 STD_SRC = std/string/aether_string.c std/math/aether_math.c std/net/aether_http.c std/net/aether_http_server.c std/net/aether_net.c std/collections/aether_collections.c std/json/aether_json.c std/fs/aether_fs.c std/log/aether_log.c std/io/aether_io.c std/os/aether_os.c
 COLLECTIONS_SRC = std/collections/aether_hashmap.c std/collections/aether_set.c std/collections/aether_vector.c std/collections/aether_pqueue.c
 
@@ -182,9 +182,9 @@ $(OBJ_DIR)/%.o: %.c | $(OBJ_DIR)/compiler $(OBJ_DIR)/compiler/parser $(OBJ_DIR)/
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 # Compiler target (incremental build with object files)
-compiler: $(COMPILER_OBJS) $(STD_OBJS) $(COLLECTIONS_OBJS)
+compiler: $(COMPILER_OBJS) $(STD_OBJS) $(COLLECTIONS_OBJS) $(OBJ_DIR)/runtime/aether_sandbox.o
 	@echo "Linking compiler..."
-	@$(CC) $(COMPILER_OBJS) $(STD_OBJS) $(COLLECTIONS_OBJS) -o build/aetherc$(EXE_EXT) $(LDFLAGS)
+	@$(CC) $(COMPILER_OBJS) $(STD_OBJS) $(COLLECTIONS_OBJS) $(OBJ_DIR)/runtime/aether_sandbox.o -o build/aetherc$(EXE_EXT) $(LDFLAGS)
 	@echo "Compiler built successfully"
 
 # Fast compiler target (monolithic, for clean builds)
@@ -540,6 +540,11 @@ stdlib: $(STD_OBJS) $(COLLECTIONS_OBJS) $(RUNTIME_OBJS)
 	@echo "Creating precompiled stdlib archive..."
 	@ar rcs build/libaether.a $(STD_OBJS) $(COLLECTIONS_OBJS) $(RUNTIME_OBJS)
 	@echo "✓ Stdlib archive created: build/libaether.a"
+ifeq ($(shell uname -s),Linux)
+	@echo "Building sandbox preload library..."
+	@$(CC) -shared -fPIC -o build/libaether_sandbox.so runtime/libaether_sandbox_preload.c -ldl -lrt 2>/dev/null || true
+	@test -f build/libaether_sandbox.so && echo "✓ Sandbox preload: build/libaether_sandbox.so" || true
+endif
 
 # Self-test: compiler on itself
 self-test: compiler

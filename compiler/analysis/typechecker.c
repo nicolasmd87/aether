@@ -879,6 +879,16 @@ int typecheck_program(ASTNode* program) {
     add_symbol(global_table, "raw_mode", raw_mode_type, 0, 1, 0);
     Type* cooked_mode_type = create_type(TYPE_VOID);
     add_symbol(global_table, "cooked_mode", cooked_mode_type, 0, 1, 0);
+    Type* spawn_sandboxed_type = create_type(TYPE_INT);
+    add_symbol(global_table, "spawn_sandboxed", spawn_sandboxed_type, 0, 1, 0);
+    Type* aether_push_type = create_type(TYPE_VOID);
+    add_symbol(global_table, "sandbox_push", aether_push_type, 0, 1, 0);
+    Type* aether_pop_type = create_type(TYPE_VOID);
+    add_symbol(global_table, "sandbox_pop", aether_pop_type, 0, 1, 0);
+    Type* sandbox_install_type = create_type(TYPE_VOID);
+    add_symbol(global_table, "sandbox_install", sandbox_install_type, 0, 1, 0);
+    Type* sandbox_uninstall_type = create_type(TYPE_VOID);
+    add_symbol(global_table, "sandbox_uninstall", sandbox_uninstall_type, 0, 1, 0);
     Type* builder_ctx_type = create_type(TYPE_PTR);
     add_symbol(global_table, "builder_context", builder_ctx_type, 0, 1, 0);
     Type* builder_depth_type = create_type(TYPE_INT);

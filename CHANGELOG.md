@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 the release pipeline automatically replaces `[current]` with the next version
 number before tagging the release.
 
+## [current]
+
+### Added
+
+- **Runtime containment sandbox**: Deny-by-default grant system for filesystem, network, process, and environment access. Stdlib functions (`tcp_connect`, `file_open`, `os_exec`, `os_getenv`) check grants transparently — contained code has no idea it's sandboxed.
+- **Sandbox DSL**: `sandbox("name") { grant_tcp("host"); grant_fs_read("/path/*"); ... }` with builder-style trailing blocks and invisible `_ctx` injection.
+- **Grant pattern matching**: Prefix (`/etc/*`), suffix (`*.example.com`), exact, and wildcard (`*`) patterns for all grant types.
+- **Nested sandbox restriction**: Inner sandboxes can only narrow, never escalate past outer sandbox grants.
+- **`spawn_sandboxed(perms, program, arg)`**: Cross-process sandbox enforcement via POSIX shared memory and LD_PRELOAD. No temp files.
+- **`libaether_sandbox.so`**: LD_PRELOAD library intercepting `open`, `connect`, `getenv`, `execve`, `dlopen`, `mmap(PROT_EXEC)`, `mprotect(PROT_EXEC)`, `fork`, `vfork`, `clone3`, `bind`, `listen`, `accept`. Built as part of `make stdlib`.
+- **Denial logging**: File (default, `./aether-sandbox.log`), stderr (`AETHER_DENIED:` prefix), or silent. Controlled via `AETHER_SANDBOX_LOG` env var.
+- **Six language host modules** (`contrib/host/`): Python, Lua, JS (Duktape), Perl, Ruby, Java. Each runs hosted code inside an Aether sandbox.
+- **Token-guarded shared map**: `string:string` data exchange between Aether and hosted languages with frozen inputs, one-time token, and revoke-on-return. Native bindings (`aether_map_get`/`aether_map_put`) for all six languages.
+- **Escape prevention**: `dlopen("libc.so.6")` blocked, `syscall()` blocked, `mmap(PROT_EXEC)` anonymous blocked, `mprotect(PROT_EXEC)` blocked, `fork`/`vfork`/`clone3` blocked by default (grant with `fork:*`).
 ## [0.39.0]
 
 ### Added

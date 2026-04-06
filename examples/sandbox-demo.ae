@@ -1,0 +1,128 @@
+// Containment Sandbox Demo — Runtime Enforcement
+//
+// The contained code uses NORMAL stdlib functions: os_getenv, os_exec, file_exists.
+// It doesn't know it's sandboxed. The stdlib checks permissions transparently.
+// "The contained should not know for sure it is contained."
+
+import std.list
+import std.fs
+import std.os
+
+// ---- Sandbox library ----
+
+add_perm(target: ptr, cat: string, pat: string) {
+    list.add(target, cat)
+    list.add(target, pat)
+}
+
+grant_all(_ctx: ptr)                       { add_perm(_ctx, "*", "*") }
+grant_tcp(_ctx: ptr, host: string)         { add_perm(_ctx, "tcp", host) }
+grant_fs_read(_ctx: ptr, path: string)     { add_perm(_ctx, "fs_read", path) }
+grant_fs_write(_ctx: ptr, path: string)    { add_perm(_ctx, "fs_write", path) }
+grant_exec(_ctx: ptr, cmd: string)         { add_perm(_ctx, "exec", cmd) }
+grant_env(_ctx: ptr, var_name: string)     { add_perm(_ctx, "env", var_name) }
+
+sandbox(name: string) {
+    perms = list.new()
+    println("sandbox: ${name}")
+    return perms
+}
+
+run_sandboxed(perms: ptr, code: fn) {
+    sandbox_push(perms)
+    sandbox_install()
+    call(code, perms)
+    sandbox_uninstall()
+    sandbox_pop()
+}
+
+// ---- Contained code: uses NORMAL stdlib ----
+
+try_env(name: string) {
+    result = os_getenv(name)
+    if result != null {
+        println("    \x1b[32m[ALLOW]\x1b[0m env ${name} = ${result}")
+        free(result)
+    } else {
+        println("    \x1b[31m[DENY]\x1b[0m  env ${name}")
+    }
+}
+
+try_read(path: string) {
+    // file_exists returns 0 for both "sandbox denied" and "file not found"
+    // — that's the point: the contained can't tell the difference
+    if file_exists(path) == 1 {
+        println("    \x1b[32m[EXISTS]\x1b[0m  ${path}")
+    } else {
+        println("    \x1b[31m[HIDDEN]\x1b[0m  ${path}")
+    }
+}
+
+try_exec(cmd: string) {
+    result = os_exec(cmd)
+    if result != null {
+        println("    \x1b[32m[ALLOW]\x1b[0m exec ${cmd}")
+        free(result)
+    } else {
+        println("    \x1b[31m[DENY]\x1b[0m  exec ${cmd}")
+    }
+}
+
+// ---- Demo ----
+
+main() {
+    println("\x1b[1m=== Containment Demo ===\x1b[0m")
+    println("\x1b[90mContained code calls normal os_getenv(), file_exists(), os_exec().\x1b[0m")
+    println("\x1b[90mIt has no idea it's sandboxed.\x1b[0m\n")
+
+    // Define sandboxes — like Docker --cap-add / --cap-drop
+    worker = sandbox("db-worker") {
+        grant_env("HOME")
+        grant_env("USER")
+        grant_tcp("*.internal")           // suffix: any *.internal host
+        grant_fs_read("/etc/*")           // prefix: any file in /etc/
+        grant_fs_write("/tmp/worker/*")   // prefix: write only under /tmp/worker/
+        grant_exec("echo *")             // prefix: echo anything
+    }
+
+    plugin = sandbox("untrusted-plugin") {
+        grant_env("TERM")
+        grant_tcp("api.example.com")      // exact: one host only
+    }
+
+    app = sandbox("app") {
+        grant_all()
+    }
+
+    // Run contained code — closures use normal stdlib functions
+    println("\n\x1b[1m--- db-worker (glob patterns) ---\x1b[0m")
+    run_sandboxed(worker) |ctx: ptr| {
+        try_env("HOME")
+        try_env("AWS_SECRET_KEY")
+        try_read("/etc/hostname")         // /etc/* — allowed
+        try_read("/etc/passwd")           // /etc/* — allowed (sandbox permits, file exists)
+        try_read("/usr/bin/env")          // not under /etc/* — sandbox hides it
+        try_exec("echo hello")            // echo * — allowed
+        try_exec("rm -rf /")              // not echo — denied
+    }
+
+    println("\n\x1b[1m--- untrusted-plugin (restricted) ---\x1b[0m")
+    run_sandboxed(plugin) |ctx: ptr| {
+        try_env("TERM")
+        try_env("HOME")
+        try_read("/etc/hostname")         // no fs_read grant — hidden
+        try_read("/etc/passwd")           // no fs_read grant — hidden
+        try_exec("echo hello")            // no exec grant — denied
+    }
+
+    println("\n\x1b[1m--- app (grant_all) ---\x1b[0m")
+    run_sandboxed(app) |ctx: ptr| {
+        try_env("HOME")
+        try_exec("echo hello")
+        try_read("/etc/hostname")
+    }
+
+    list.free(worker)
+    list.free(plugin)
+    list.free(app)
+}

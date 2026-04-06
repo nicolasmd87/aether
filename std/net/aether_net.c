@@ -1,5 +1,6 @@
 #include "aether_net.h"
 #include "../../runtime/config/aether_optimization_config.h"
+#include "../../runtime/aether_sandbox.h"
 
 #if !AETHER_HAS_NETWORKING
 TcpSocket* tcp_connect(const char* h, int p) { (void)h; (void)p; return NULL; }
@@ -52,6 +53,9 @@ static void net_init() {
 }
 
 TcpSocket* tcp_connect(const char* host, int port) {
+    // Sandbox check: is TCP connect to this host allowed?
+    if (!aether_sandbox_check("tcp", host)) return NULL;
+
     net_init();
 
     struct hostent* server = gethostbyname(host);
@@ -119,6 +123,9 @@ int tcp_close(TcpSocket* sock) {
 }
 
 TcpServer* tcp_listen(int port) {
+    // Sandbox check: is listening on this port allowed?
+    if (!aether_sandbox_check("tcp_listen", "*")) return NULL;
+
     net_init();
 
     // Validate port range (1-65535)

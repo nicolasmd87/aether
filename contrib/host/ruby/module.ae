@@ -1,0 +1,20 @@
+// std.host.ruby — Embedded Ruby Language Host Module
+//
+// Runs Ruby code inside an Aether sandbox. Ruby's File.open,
+// ENV[], system() etc. go through libc and are intercepted
+// via LD_PRELOAD.
+//
+// Usage:
+//   import std.host.ruby
+//
+//   worker = sandbox("worker") {
+//       grant_env("HOME")
+//       grant_fs_read("/etc/*")
+//   }
+//   ruby.run_sandboxed(worker, "puts ENV['HOME']")
+
+extern ruby_run_sandboxed(perms: ptr, code: string) -> int
+extern ruby_run_sandboxed_with_map(perms: ptr, code: string, map_token: int) -> int
+extern ruby_run(code: string) -> int
+extern ruby_init_host() -> int
+extern ruby_finalize_host()
