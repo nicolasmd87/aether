@@ -79,6 +79,9 @@ void package_manifest_free(PackageManifest* manifest);
 // Module orchestration — call between parsing and type checking
 #define MAX_MODULE_TOKENS 2000
 
+// Set the source file directory so module resolution can search lib/ relative to it.
+void module_set_source_dir(const char* source_path);
+
 // Orchestrate all module loading: scan imports, resolve, parse, cache, detect cycles.
 // Returns 1 on success, 0 on circular dependency error.
 int module_orchestrate(ASTNode* program);

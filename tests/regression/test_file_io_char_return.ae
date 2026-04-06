@@ -7,7 +7,15 @@ import std.io
 import std.fs
 
 main() {
-    test_file = "/tmp/_aether_test_file_io_char.txt"
+    // Use platform temp dir: TEMP (Windows) or TMPDIR (Unix), fallback /tmp
+    tmp = io.getenv("TEMP")
+    if tmp == 0 {
+        tmp = io.getenv("TMPDIR")
+    }
+    if tmp == 0 {
+        tmp = "/tmp"
+    }
+    test_file = "${tmp}/_aether_test_file_io_char.txt"
 
     // Test 1: Write and read back
     io.write_file(test_file, "hello aether")
