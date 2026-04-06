@@ -23,6 +23,13 @@ number before tagging the release.
 - **Six language host modules** (`std/host/`): Python, Lua, JS (Duktape), Perl, Ruby, Java. Each runs hosted code inside an Aether sandbox.
 - **Token-guarded shared map**: `string:string` data exchange between Aether and hosted languages with frozen inputs, one-time token, and revoke-on-return. Native bindings (`aether_map_get`/`aether_map_put`) for all six languages.
 - **Escape prevention**: `dlopen("libc.so.6")` blocked, `syscall()` blocked, `mmap(PROT_EXEC)` anonymous blocked, `mprotect(PROT_EXEC)` blocked, `fork`/`vfork`/`clone3` blocked by default (grant with `fork:*`).
+## [0.39.0]
+
+### Added
+
+- **Named arguments**: `func(name: "alice", count: 3)` syntax in function calls. Names are documentation at the call site — consistent with Aether's `param: type` definition syntax. Positional and named can be mixed.
+- **List literal tests**: Confirmed `[1, 2, 3]` and `["a", "b", "c"]` array literal syntax works (already existed in parser/codegen, now tested).
+- **`select()` platform conditional**: Compile-time platform selection via named args. `select(linux: 8080, windows: 80, macos: 8080)` emits `#ifdef` chain in generated C. Supports `other:` fallback. Integer values work; string values require interpolation workaround pending type inference improvement.
 
 ## [0.35.0]
 

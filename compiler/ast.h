@@ -80,6 +80,9 @@ typedef enum {
     AST_CLOSURE,            // |params| -> expr  OR  |params| { block }
     AST_CLOSURE_PARAM,      // parameter in a closure: name [: type]
 
+    // Named arguments
+    AST_NAMED_ARG,          // name: expr in function call arguments
+
     // Types
     AST_TYPE_ANNOTATION,
     AST_ACTOR_REF_TYPE,

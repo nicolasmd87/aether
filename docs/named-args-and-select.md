@@ -1,0 +1,154 @@
+# Named Arguments and select()
+
+## Named Arguments
+
+Function calls can use named arguments with colon syntax, consistent
+with Aether's parameter definition style:
+
+```aether
+// Definition
+greet(name: string, count: int) {
+    for (i = 0; i < count; i++) { println(name) }
+}
+
+// Call with named args
+greet(name: "alice", count: 3)
+
+// Positional still works
+greet("alice", 3)
+
+// Mixed: positional first, named after
+greet("alice", count: 3)
+```
+
+Named arguments are documentation at the call site — they make code
+more readable but don't change semantics. The C compiler receives
+positional arguments regardless.
+
+### Rules
+
+- Names use colon: `name: value` (not `name = value`)
+- Positional and named can be mixed in the same call
+- Names are not validated against parameter names (they're comments)
+- The colon syntax is consistent with parameter definitions: `func(name: type)`
+
+## List Literals
+
+Array literals with square bracket syntax:
+
+```aether
+nums = [10, 20, 30]
+println(nums[0])         // 10
+
+names = ["alice", "bob", "charlie"]
+println(names[1])        // bob
+
+// Expressions in array literals
+a = 5
+computed = [a, a * 2, a * 3]     // [5, 10, 15]
+
+// Empty array
+empty = []
+
+// Single element
+one = [42]
+```
+
+Arrays are fixed-size C arrays. Element access uses `[]` subscript.
+
+## select() — Platform Conditional
+
+Compile-time platform selection using named arguments:
+
+```aether
+port = select(linux: 8080, windows: 80, macos: 8080)
+timeout = select(windows: 5000, other: 3000)
+flags = select(linux: "-lpthread", windows: "-lws2_32", macos: "-framework Security")
+```
+
+### How it works
+
+`select()` emits a C `#ifdef` chain at compile time. Only the matching
+platform's value is compiled into the binary:
+
+```c
+// select(linux: 8080, windows: 80, macos: 8080) compiles to:
+#ifdef _WIN32
+80
+#elif defined(__APPLE__)
+8080
+#else
+8080
+#endif
+```
+
+### Platform names
+
+| Name | C condition | Matches |
+|------|-----------|---------|
+| `linux:` | `#else` (default) | Linux, FreeBSD, other POSIX |
+| `windows:` | `#ifdef _WIN32` | Windows, MinGW, MSYS2 |
+| `macos:` | `#elif defined(__APPLE__)` | macOS, iOS |
+| `other:` | fallback | Any platform not explicitly listed |
+
+### Fallback with `other:`
+
+`other:` provides a default value for platforms not explicitly named:
+
+```aether
+// Only need to specify the exception
+separator = select(windows: "\\", other: "/")
+```
+
+### Missing platform is a compile error
+
+If a platform is missing and there's no `other:` fallback, the Aether
+compiler emits an error and the C compiler emits `#error`:
+
+```aether
+// ERROR: no value for windows or macos, no other: fallback
+port = select(linux: 8080)
+```
+
+This prevents silent bugs where a platform gets `0` or empty string.
+Either list all platforms or provide `other:`.
+
+### Use cases
+
+**Build system flags:**
+```aether
+linker_flags = select(
+    linux: "-lpthread -lrt",
+    windows: "-lws2_32",
+    macos: "-framework Security"
+)
+```
+
+**Default paths:**
+```aether
+config_dir = select(
+    linux: "/etc/myapp",
+    macos: "/Library/Application Support/myapp",
+    windows: "C:\\ProgramData\\myapp"
+)
+```
+
+**Feature availability:**
+```aether
+max_threads = select(linux: 16, windows: 8, macos: 12)
+has_io_uring = select(linux: 1, other: 0)
+```
+
+### Known limitation
+
+String values from `select()` work in variable declarations (`const char*`)
+but `println()` may use the wrong format specifier due to a type inference
+gap. Use string interpolation as a workaround:
+
+```aether
+os = select(linux: "Linux", windows: "Windows", macos: "macOS")
+// println(os)            // may print garbage (type inference gap)
+println("os: ${os}")      // works correctly
+```
+
+This will be resolved when type inference propagates through `select()`.

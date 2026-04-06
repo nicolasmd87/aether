@@ -356,6 +356,7 @@ const char* ast_node_type_to_string(ASTNodeType type) {
         case AST_DEFER_STATEMENT: return "DEFER_STATEMENT";
         case AST_CLOSURE: return "CLOSURE";
         case AST_CLOSURE_PARAM: return "CLOSURE_PARAM";
+        case AST_NAMED_ARG: return "NAMED_ARG";
         default: return "UNKNOWN";
     }
 }
