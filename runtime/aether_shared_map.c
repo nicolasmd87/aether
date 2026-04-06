@@ -10,10 +10,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#if defined(__linux__) || defined(__APPLE__)
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <fcntl.h>
+#endif
 
 #define MAX_ENTRIES 256
 #define MAX_ACTIVE_MAPS 16
@@ -178,8 +180,9 @@ void aether_shared_map_freeze_inputs_by_token(uint64_t token) {
     if (map) map->frozen_count = map->count;
 }
 
-// --- Cross-process shared memory ---
+// --- Cross-process shared memory (Linux/macOS only) ---
 // Format: frozen_count(4 bytes) + entries as key\0value\0...key\0value\0\0
+#if defined(__linux__) || defined(__APPLE__)
 
 char* aether_shared_map_to_shm(AetherSharedMap* map) {
     if (!map) return NULL;
@@ -265,3 +268,9 @@ void aether_shared_map_read_outputs_from_shm(AetherSharedMap* map, const char* s
 void aether_shared_map_unlink_shm(const char* shm_name) {
     if (shm_name) shm_unlink(shm_name);
 }
+#else
+// Non-POSIX stubs
+char* aether_shared_map_to_shm(AetherSharedMap* map) { (void)map; return NULL; }
+void aether_shared_map_read_outputs_from_shm(AetherSharedMap* map, const char* shm_name) { (void)map; (void)shm_name; }
+void aether_shared_map_unlink_shm(const char* shm_name) { (void)shm_name; }
+#endif

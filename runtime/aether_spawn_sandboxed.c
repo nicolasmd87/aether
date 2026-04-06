@@ -1,8 +1,9 @@
 // aether_spawn_sandboxed.c — spawn a child process under Aether sandbox
 //
-// Serializes the grant list to shared memory, forks, sets LD_PRELOAD
-// on the child, and execs the target program. The child's libc calls
-// are intercepted by libaether_sandbox.so which reads the shared grants.
+// Linux-only: uses fork, shm_open, LD_PRELOAD.
+// Other platforms get a stub that returns -1 with a clear message.
+
+#if defined(__linux__)
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -107,14 +108,13 @@ int aether_spawn_sandboxed(void* grant_list, const char* program, const char* ar
         // Child: set up LD_PRELOAD and grant source, then exec
         setenv("LD_PRELOAD", preload_path, 1);
         setenv("AETHER_SANDBOX_SHM", shm_name, 1);
-        setenv("AETHER_SANDBOX_VERBOSE", "0", 0);  // don't override if set
+        setenv("AETHER_SANDBOX_VERBOSE", "0", 0);
 
         if (arg) {
             execlp(program, program, arg, NULL);
         } else {
             execlp(program, program, NULL);
         }
-        // exec failed
         perror("exec");
         _exit(127);
     }
@@ -129,3 +129,13 @@ int aether_spawn_sandboxed(void* grant_list, const char* program, const char* ar
     if (WIFEXITED(status)) return WEXITSTATUS(status);
     return -1;
 }
+
+#else
+// Non-Linux stub
+#include <stdio.h>
+int aether_spawn_sandboxed(void* grant_list, const char* program, const char* arg) {
+    (void)grant_list; (void)program; (void)arg;
+    fprintf(stderr, "[aether] spawn_sandboxed is only available on Linux\n");
+    return -1;
+}
+#endif

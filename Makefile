@@ -540,9 +540,11 @@ stdlib: $(STD_OBJS) $(COLLECTIONS_OBJS) $(RUNTIME_OBJS)
 	@echo "Creating precompiled stdlib archive..."
 	@ar rcs build/libaether.a $(STD_OBJS) $(COLLECTIONS_OBJS) $(RUNTIME_OBJS)
 	@echo "✓ Stdlib archive created: build/libaether.a"
+ifeq ($(shell uname -s),Linux)
 	@echo "Building sandbox preload library..."
 	@$(CC) -shared -fPIC -o build/libaether_sandbox.so runtime/libaether_sandbox_preload.c -ldl -lrt 2>/dev/null || true
 	@test -f build/libaether_sandbox.so && echo "✓ Sandbox preload: build/libaether_sandbox.so" || true
+endif
 
 # Self-test: compiler on itself
 self-test: compiler

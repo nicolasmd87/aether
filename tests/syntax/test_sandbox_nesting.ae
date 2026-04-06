@@ -14,7 +14,7 @@ main() {
 
     // Test outer alone
     println("--- outer (HOME, USER) ---")
-    _aether_push(outer)
+    sandbox_push(outer)
     sandbox_install()
 
     r1 = os_getenv("HOME")
@@ -26,7 +26,7 @@ main() {
     else { println("  TERM: deny") }
 
     sandbox_uninstall()
-    _aether_pop()
+    sandbox_pop()
 
     // Inner tries to grant everything — outer should block
     println("--- inner(*) inside outer(HOME,USER) ---")
@@ -35,8 +35,8 @@ main() {
     list.add(inner, "env")
     list.add(inner, "*")
 
-    _aether_push(outer)
-    _aether_push(inner)
+    sandbox_push(outer)
+    sandbox_push(inner)
     sandbox_install()
 
     r3 = os_getenv("HOME")
@@ -52,8 +52,8 @@ main() {
     else { println("  AWS_SECRET_KEY: deny") }
 
     sandbox_uninstall()
-    _aether_pop()
-    _aether_pop()
+    sandbox_pop()
+    sandbox_pop()
 
     // Inner narrows to HOME only
     println("--- inner(HOME) inside outer(HOME,USER) ---")
@@ -62,8 +62,8 @@ main() {
     list.add(narrow, "env")
     list.add(narrow, "HOME")
 
-    _aether_push(outer)
-    _aether_push(narrow)
+    sandbox_push(outer)
+    sandbox_push(narrow)
     sandbox_install()
 
     r6 = os_getenv("HOME")
@@ -75,8 +75,8 @@ main() {
     else { println("  USER: deny") }
 
     sandbox_uninstall()
-    _aether_pop()
-    _aether_pop()
+    sandbox_pop()
+    sandbox_pop()
 
     println("nesting ok")
 }

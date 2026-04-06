@@ -878,9 +878,9 @@ int typecheck_program(ASTNode* program) {
     Type* spawn_sandboxed_type = create_type(TYPE_INT);
     add_symbol(global_table, "spawn_sandboxed", spawn_sandboxed_type, 0, 1, 0);
     Type* aether_push_type = create_type(TYPE_VOID);
-    add_symbol(global_table, "_aether_push", aether_push_type, 0, 1, 0);
+    add_symbol(global_table, "sandbox_push", aether_push_type, 0, 1, 0);
     Type* aether_pop_type = create_type(TYPE_VOID);
-    add_symbol(global_table, "_aether_pop", aether_pop_type, 0, 1, 0);
+    add_symbol(global_table, "sandbox_pop", aether_pop_type, 0, 1, 0);
     Type* sandbox_install_type = create_type(TYPE_VOID);
     add_symbol(global_table, "sandbox_install", sandbox_install_type, 0, 1, 0);
     Type* sandbox_uninstall_type = create_type(TYPE_VOID);

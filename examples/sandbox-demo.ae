@@ -29,11 +29,11 @@ sandbox(name: string) {
 }
 
 run_sandboxed(perms: ptr, code: fn) {
-    _aether_push(perms)
+    sandbox_push(perms)
     sandbox_install()
     call(code, perms)
     sandbox_uninstall()
-    _aether_pop()
+    sandbox_pop()
 }
 
 // ---- Contained code: uses NORMAL stdlib ----
