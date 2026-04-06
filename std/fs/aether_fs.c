@@ -12,6 +12,7 @@ int file_close(File* f) { (void)f; return 0; }
 int file_exists(const char* p) { (void)p; return 0; }
 int file_delete(const char* p) { (void)p; return 0; }
 int file_size(const char* p) { (void)p; return -1; }
+int file_mtime(const char* p) { (void)p; return 0; }
 int dir_exists(const char* p) { (void)p; return 0; }
 int dir_create(const char* p) { (void)p; return 0; }
 int dir_delete(const char* p) { (void)p; return 0; }
@@ -21,7 +22,10 @@ char* path_basename(const char* p) { (void)p; return NULL; }
 char* path_extension(const char* p) { (void)p; return NULL; }
 int path_is_absolute(const char* p) { (void)p; return 0; }
 DirList* dir_list(const char* p) { (void)p; return NULL; }
+int dir_list_count(DirList* l) { (void)l; return 0; }
+const char* dir_list_get(DirList* l, int i) { (void)l; (void)i; return NULL; }
 void dir_list_free(DirList* l) { (void)l; }
+DirList* fs_glob(const char* p) { (void)p; return NULL; }
 #else
 
 #include <stdio.h>
@@ -122,6 +126,14 @@ int file_size(const char* path) {
     struct stat st;
     if (stat(path, &st) != 0) return 0;
     return (int)st.st_size;
+}
+
+int file_mtime(const char* path) {
+    if (!path) return 0;
+
+    struct stat st;
+    if (stat(path, &st) != 0) return 0;
+    return (int)st.st_mtime;
 }
 
 // Directory operations
@@ -294,6 +306,15 @@ DirList* dir_list(const char* path) {
     return list;
 }
 
+int dir_list_count(DirList* list) {
+    return list ? list->count : 0;
+}
+
+const char* dir_list_get(DirList* list, int index) {
+    if (!list || index < 0 || index >= list->count) return NULL;
+    return list->entries[index];
+}
+
 void dir_list_free(DirList* list) {
     if (!list) return;
 
@@ -302,6 +323,119 @@ void dir_list_free(DirList* list) {
     }
     free(list->entries);
     free(list);
+}
+
+// --- Glob: pattern matching for file discovery ---
+
+#ifndef _WIN32
+#include <glob.h>
+#include <fnmatch.h>
+#include <dirent.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#endif
+
+// Helper: add a path to a DirList
+static void dirlist_add(DirList* list, const char* path) {
+    char** new_entries = (char**)realloc(list->entries, (list->count + 1) * sizeof(char*));
+    if (!new_entries) return;
+    list->entries = new_entries;
+    list->entries[list->count] = strdup(path);
+    list->count++;
+}
+
+#ifndef _WIN32
+// Recursive walk for ** patterns (POSIX only)
+static void walk_recursive(const char* dir, const char* suffix_pattern, DirList* result) {
+    DIR* d = opendir(dir);
+    if (!d) return;
+
+    struct dirent* entry;
+    while ((entry = readdir(d)) != NULL) {
+        if (entry->d_name[0] == '.') continue;  // skip hidden + . and ..
+
+        char fullpath[4096];
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", dir, entry->d_name);
+
+        struct stat st;
+        if (stat(fullpath, &st) != 0) continue;
+
+        if (S_ISDIR(st.st_mode)) {
+            // Recurse into subdirectory
+            walk_recursive(fullpath, suffix_pattern, result);
+        } else {
+            // Check if filename matches the suffix pattern (e.g., "*.c")
+            if (fnmatch(suffix_pattern, entry->d_name, 0) == 0) {
+                dirlist_add(result, fullpath);
+            }
+        }
+    }
+    closedir(d);
+}
+#endif // !_WIN32
+
+DirList* fs_glob(const char* pattern) {
+    if (!pattern) return NULL;
+
+    DirList* result = (DirList*)malloc(sizeof(DirList));
+    if (!result) return NULL;
+    result->entries = NULL;
+    result->count = 0;
+
+#ifdef _WIN32
+    // Windows: basic glob via FindFirstFile (no ** support)
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern, &fd);
+    if (h != INVALID_HANDLE_VALUE) {
+        do {
+            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                dirlist_add(result, fd.cFileName);
+            }
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+#else
+    // Check for ** (recursive glob)
+    const char* dstar = strstr(pattern, "/**/");
+    if (dstar) {
+        // Split: prefix is the directory, suffix is the file pattern
+        // e.g., "src/**/*.c" → dir="src", suffix="*.c"
+        char dir[4096];
+        int dirlen = (int)(dstar - pattern);
+        if (dirlen == 0) {
+            strcpy(dir, ".");
+        } else {
+            strncpy(dir, pattern, dirlen);
+            dir[dirlen] = '\0';
+        }
+        const char* suffix = dstar + 4;  // skip "/**/"
+
+        // Also match files directly in the base directory
+        char direct[8192];
+        snprintf(direct, sizeof(direct), "%s/%s", dir, suffix);
+        glob_t g;
+        if (glob(direct, 0, NULL, &g) == 0) {
+            for (size_t i = 0; i < g.gl_pathc; i++) {
+                dirlist_add(result, g.gl_pathv[i]);
+            }
+            globfree(&g);
+        }
+
+        // Recursive walk
+        walk_recursive(dir, suffix, result);
+    } else {
+        // Simple glob (no **)
+        glob_t g;
+        if (glob(pattern, 0, NULL, &g) == 0) {
+            for (size_t i = 0; i < g.gl_pathc; i++) {
+                dirlist_add(result, g.gl_pathv[i]);
+            }
+            globfree(&g);
+        }
+    }
+#endif
+
+    return result;
 }
 
 #endif // AETHER_HAS_FILESYSTEM

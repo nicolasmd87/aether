@@ -17,6 +17,7 @@ int file_close(File* file);
 int file_exists(const char* path);
 int file_delete(const char* path);
 int file_size(const char* path);
+int file_mtime(const char* path);
 
 // Directory operations
 int dir_exists(const char* path);
@@ -37,7 +38,13 @@ typedef struct {
 } DirList;
 
 DirList* dir_list(const char* path);
+int dir_list_count(DirList* list);
+const char* dir_list_get(DirList* list, int index);
 void dir_list_free(DirList* list);
+
+// Glob: match files by pattern (e.g., "src/**/*.c")
+// Returns a DirList with full paths of matching files.
+DirList* fs_glob(const char* pattern);
 
 #endif // AETHER_FS_H
 

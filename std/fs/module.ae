@@ -9,12 +9,15 @@ extern file_write(file: ptr, data: string, length: int) -> int
 extern file_exists(path: string) -> int
 extern file_delete(path: string) -> int
 extern file_size(path: string) -> int
+extern file_mtime(path: string) -> int
 
 // Directory operations
 extern dir_exists(path: string) -> int
 extern dir_create(path: string) -> int
 extern dir_delete(path: string) -> int
 extern dir_list(path: string) -> ptr
+extern dir_list_count(list: ptr) -> int
+extern dir_list_get(list: ptr, index: int) -> string
 extern dir_list_free(list: ptr)
 
 // Path utilities
@@ -23,3 +26,8 @@ extern path_dirname(path: string) -> string
 extern path_basename(path: string) -> string
 extern path_extension(path: string) -> string
 extern path_is_absolute(path: string) -> int
+
+// Glob: match files by pattern
+// Supports * (any file), *.ext, and **/ (recursive)
+// Returns a DirList pointer — iterate with dir_list, free with dir_list_free
+extern fs_glob(pattern: string) -> ptr

@@ -9,3 +9,7 @@ extern os_exec(cmd: string) -> string
 
 // Get environment variable, returns string or NULL if not set
 extern os_getenv(name: string) -> string
+
+// Command-line arguments
+extern aether_args_count() -> int
+extern aether_args_get(index: int) -> string

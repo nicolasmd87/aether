@@ -1,0 +1,58 @@
+// Test: fs_glob pattern matching and dir_list iteration
+
+import std.fs
+
+main() {
+    // Exact match: find this test file
+    results = fs_glob("tests/syntax/test_glob.ae")
+    if dir_list_count(results) == 1 {
+        println("exact match found")
+    }
+    if dir_list_get(results, 0) == "tests/syntax/test_glob.ae" {
+        println("exact path correct")
+    }
+    dir_list_free(results)
+
+    // Wildcard: find test_arg* and test_glob*
+    wild = fs_glob("tests/syntax/test_glob*.ae")
+    if dir_list_count(wild) >= 1 {
+        println("wildcard found files")
+    }
+    dir_list_free(wild)
+
+    // No matches: nonexistent pattern
+    empty = fs_glob("tests/syntax/zzz_nonexistent_*.xyz")
+    if dir_list_count(empty) == 0 {
+        println("no match returns empty")
+    }
+    dir_list_free(empty)
+
+    // Null pattern
+    bad = fs_glob(null)
+    if bad == null {
+        println("null pattern returns null")
+    }
+
+    // Recursive **: find .ae files under tests/
+    recursive = fs_glob("tests/**/*.ae")
+    count = dir_list_count(recursive)
+    if count > 5 {
+        println("recursive found many files")
+    }
+    dir_list_free(recursive)
+
+    // dir_list_get out of bounds
+    one = fs_glob("tests/syntax/test_glob.ae")
+    oob = dir_list_get(one, 999)
+    if oob == null {
+        println("out of bounds is null")
+    }
+    dir_list_free(one)
+
+    // dir_list_count on null
+    if dir_list_count(null) == 0 {
+        println("count null is zero")
+    }
+
+    println("glob ok")
+}

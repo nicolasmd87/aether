@@ -1,0 +1,31 @@
+// Test: command-line argument access
+
+import std.os
+
+main() {
+    // Always has at least 1 arg (program name)
+    count = aether_args_count()
+    if count >= 1 {
+        println("has program name")
+    }
+
+    // Program name is always arg 0
+    prog = aether_args_get(0)
+    if prog != null {
+        println("arg0 exists")
+    }
+
+    // Out of bounds returns null
+    bad = aether_args_get(9999)
+    if bad == null {
+        println("out of bounds is null")
+    }
+
+    // Negative index returns null
+    neg = aether_args_get(0 - 1)
+    if neg == null {
+        println("negative index is null")
+    }
+
+    println("args ok")
+}
