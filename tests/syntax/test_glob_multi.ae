@@ -1,0 +1,68 @@
+// Test: fs_glob_multi — multi-pattern glob with list of patterns
+
+import std.fs
+import std.list
+import std.string
+
+main() {
+    // Multi-pattern: find both test_glob*.ae and test_args*.ae
+    patterns = list.new()
+    list.add(patterns, "tests/syntax/test_glob*.ae")
+    list.add(patterns, "tests/syntax/test_args*.ae")
+
+    results = fs_glob_multi(patterns)
+    count = dir_list_count(results)
+    if count >= 2 {
+        println("multi-pattern found files")
+    }
+
+    // Verify both patterns contributed
+    found_glob = 0
+    found_args = 0
+    i = 0
+    while i < count {
+        path = dir_list_get(results, i)
+        if string_contains(path, "test_glob") == 1 {
+            found_glob = 1
+        }
+        if string_contains(path, "test_args") == 1 {
+            found_args = 1
+        }
+        i = i + 1
+    }
+    if found_glob == 1 {
+        println("glob pattern matched")
+    }
+    if found_args == 1 {
+        println("args pattern matched")
+    }
+    dir_list_free(results)
+    list.free(patterns)
+
+    // Single pattern in list — same as fs_glob but via list
+    single = list.new()
+    list.add(single, "tests/syntax/test_glob_multi.ae")
+    single_results = fs_glob_multi(single)
+    if dir_list_count(single_results) == 1 {
+        println("single pattern works")
+    }
+    dir_list_free(single_results)
+    list.free(single)
+
+    // Empty list
+    empty_patterns = list.new()
+    empty_results = fs_glob_multi(empty_patterns)
+    if dir_list_count(empty_results) == 0 {
+        println("empty patterns returns empty")
+    }
+    dir_list_free(empty_results)
+    list.free(empty_patterns)
+
+    // Null list
+    null_results = fs_glob_multi(null)
+    if null_results == null {
+        println("null list returns null")
+    }
+
+    println("glob_multi ok")
+}

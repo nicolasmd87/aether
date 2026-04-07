@@ -31,3 +31,6 @@ extern path_is_absolute(path: string) -> int
 // Supports * (any file), *.ext, and **/ (recursive)
 // Returns a DirList pointer — iterate with dir_list, free with dir_list_free
 extern fs_glob(pattern: string) -> ptr
+
+// Multi-pattern glob: takes a list of patterns, returns merged results
+extern fs_glob_multi(patterns: ptr) -> ptr

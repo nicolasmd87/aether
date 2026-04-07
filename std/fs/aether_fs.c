@@ -26,6 +26,7 @@ int dir_list_count(DirList* l) { (void)l; return 0; }
 const char* dir_list_get(DirList* l, int i) { (void)l; (void)i; return NULL; }
 void dir_list_free(DirList* l) { (void)l; }
 DirList* fs_glob(const char* p) { (void)p; return NULL; }
+DirList* fs_glob_multi(void* l) { (void)l; return NULL; }
 #else
 
 #include <stdio.h>
@@ -434,6 +435,36 @@ DirList* fs_glob(const char* pattern) {
         }
     }
 #endif
+
+    return result;
+}
+
+// Multi-pattern glob: takes a list of patterns, returns merged DirList.
+// The list is an ArrayList (from std.list) containing string pointers.
+extern int list_size(void*);
+extern void* list_get(void*, int);
+
+DirList* fs_glob_multi(void* pattern_list) {
+    if (!pattern_list) return NULL;
+
+    DirList* result = (DirList*)malloc(sizeof(DirList));
+    if (!result) return NULL;
+    result->entries = NULL;
+    result->count = 0;
+
+    int n = list_size(pattern_list);
+    for (int i = 0; i < n; i++) {
+        const char* pattern = (const char*)list_get(pattern_list, i);
+        if (!pattern) continue;
+
+        DirList* partial = fs_glob(pattern);
+        if (!partial) continue;
+
+        for (int j = 0; j < partial->count; j++) {
+            dirlist_add(result, partial->entries[j]);
+        }
+        dir_list_free(partial);
+    }
 
     return result;
 }

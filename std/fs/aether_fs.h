@@ -46,5 +46,9 @@ void dir_list_free(DirList* list);
 // Returns a DirList with full paths of matching files.
 DirList* fs_glob(const char* pattern);
 
+// Multi-pattern glob: takes a list of patterns, returns merged results.
+// E.g., fs_glob_multi(["**/*.c", "**/*.h"]) returns all .c and .h files.
+DirList* fs_glob_multi(void* pattern_list);
+
 #endif // AETHER_FS_H
 
