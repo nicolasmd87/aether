@@ -1679,10 +1679,10 @@ static int cmd_test(int argc, char** argv) {
         char find_cmd[1024];
 #ifdef _WIN32
         snprintf(find_cmd, sizeof(find_cmd),
-            "dir /b /s \"%s\\*.ae\" 2>nul | findstr /v /i \"\\lib\\\\\"", test_dir);
+            "dir /b /s \"%s\\*.ae\" 2>nul", test_dir);
 #else
         snprintf(find_cmd, sizeof(find_cmd),
-            "find \"%s\" -path '*/lib/*' -prune -o -name '*.ae' -type f -print 2>/dev/null | sort",
+            "find \"%s\" \\( -name 'test_*.ae' -o -name '*_test.ae' \\) -type f 2>/dev/null | sort",
             test_dir);
 #endif
         FILE* pipe = popen(find_cmd, "r");
@@ -1690,11 +1690,20 @@ static int cmd_test(int argc, char** argv) {
             char line[512];
             while (fgets(line, sizeof(line), pipe) && test_count < 256) {
                 line[strcspn(line, "\r\n")] = '\0';
-                if (strlen(line) > 0) {
-                    strncpy(test_files[test_count], line, sizeof(test_files[0]) - 1);
-                    test_files[test_count][sizeof(test_files[0]) - 1] = '\0';
-                    test_count++;
+                if (strlen(line) == 0) continue;
+                // Convention: only files named test_*.ae or *_test.ae are tests
+                // (like pytest's test_*.py or Go's *_test.go)
+                const char* base = strrchr(line, '/');
+                if (!base) base = strrchr(line, '\\');
+                base = base ? base + 1 : line;
+                if (strncmp(base, "test_", 5) != 0) {
+                    // Check *_test.ae pattern
+                    const char* ext = strstr(base, "_test.ae");
+                    if (!ext || strcmp(ext, "_test.ae") != 0) continue;
                 }
+                strncpy(test_files[test_count], line, sizeof(test_files[0]) - 1);
+                test_files[test_count][sizeof(test_files[0]) - 1] = '\0';
+                test_count++;
             }
             pclose(pipe);
         }
