@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 the release pipeline automatically replaces `[current]` with the next version
 number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`fs_glob_multi(patterns)` in `std.fs`**: Multi-pattern glob that takes a list of patterns and returns merged results. Enables Starlark-style `glob(["**/*.c", "**/*.h"])` for build DSLs.
+
 ## [0.41.0]
 
 ### Fixed
