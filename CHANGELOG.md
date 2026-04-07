@@ -9,6 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 the release pipeline automatically replaces `[current]` with the next version
 number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`ae test` included library modules** (#109): `ae test` discovered `lib/*/module.ae` files and tried to build them as standalone programs, failing because they have no `main()`. Fixed: excluded `lib/` directories from test discovery, matching `make test-ae` behavior.
+- **`ae version` showed stale version after install** (#88): `ae version list` checked the `current` symlink (stale from previous `ae version use`) before the `active_version` file. Fixed: `active_version` file is now the authoritative source. Also fixed `install.sh` reading the old version from the `ae` binary instead of the `VERSION` file.
+- **Non-existent version install gave misleading message** (#95): `ae version install v0.99.0` downloaded a 404 HTML page, extracted 0 files, and suggested `--force`. Fixed: validates downloaded archive magic bytes (gzip/zip/xz) and fails immediately with a clear error if the version doesn't exist.
+- **CI now runs `ae test`**: Added step [8/9] to `make ci` that runs the user-facing `ae test` command, catching divergence between the Makefile test runner and the CLI test runner.
+
 ## [0.35.0]
 
 ### Added

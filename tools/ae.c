@@ -1678,9 +1678,12 @@ static int cmd_test(int argc, char** argv) {
 
         char find_cmd[1024];
 #ifdef _WIN32
-        snprintf(find_cmd, sizeof(find_cmd), "dir /b /s \"%s\\*.ae\" 2>nul", test_dir);
+        snprintf(find_cmd, sizeof(find_cmd),
+            "dir /b /s \"%s\\*.ae\" 2>nul | findstr /v /i \"\\lib\\\\\"", test_dir);
 #else
-        snprintf(find_cmd, sizeof(find_cmd), "find \"%s\" -name '*.ae' -type f 2>/dev/null | sort", test_dir);
+        snprintf(find_cmd, sizeof(find_cmd),
+            "find \"%s\" -path '*/lib/*' -prune -o -name '*.ae' -type f -print 2>/dev/null | sort",
+            test_dir);
 #endif
         FILE* pipe = popen(find_cmd, "r");
         if (pipe) {
