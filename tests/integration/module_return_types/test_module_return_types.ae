@@ -1,0 +1,76 @@
+// Test: Module function return type inference
+// Verifies that calling module functions that return string or ptr
+// correctly infers the return type (not defaulting to int).
+// Regression test for: lookup_symbol -> lookup_qualified_symbol fix
+// in typechecker.c infer_type() AST_FUNCTION_CALL case.
+
+import typed
+
+extern string_length(s: string) -> int
+extern map_get(m: ptr, key: string) -> ptr
+
+main() {
+    // Test 1: module function returning string
+    println("test 1: module returns string")
+    greeting = typed.greet("world")
+    println(greeting)
+    if string_length(greeting) == 11 {
+        println("PASS")
+    } else {
+        println("FAIL — got wrong length")
+        exit(1)
+    }
+
+    // Test 2: module function returning int (baseline — always worked)
+    println("test 2: module returns int")
+    sum = typed.add(3, 4)
+    if sum == 7 {
+        println("PASS")
+    } else {
+        println("FAIL")
+        exit(1)
+    }
+
+    // Test 3: module function returning ptr (map)
+    println("test 3: module returns ptr")
+    pair = typed.make_pair("color", "blue")
+    val = map_get(pair, "color")
+    // val is a void* pointing to "blue" — print it
+    println(val)
+    println("PASS")
+
+    // Test 4: module function return used in expression
+    println("test 4: module return in expression")
+    total = typed.add(typed.add(1, 2), typed.add(3, 4))
+    if total == 10 {
+        println("PASS")
+    } else {
+        println("FAIL")
+        exit(1)
+    }
+
+    // Test 5: module function return used as argument to another function
+    println("test 5: module return as argument")
+    len = string_length(typed.greet("ab"))
+    // "hello " + "ab" = "hello ab" = 8 chars
+    if len == 8 {
+        println("PASS")
+    } else {
+        println("FAIL")
+        exit(1)
+    }
+
+    // Test 6: module function returning string from conditional
+    println("test 6: module returns string from conditional")
+    r1 = typed.get_length_str("hi")
+    r2 = typed.get_length_str("something long")
+    if string_length(r1) == 5 {
+        println("PASS")
+    } else {
+        println("FAIL — expected 'short'")
+        exit(1)
+    }
+
+    println("")
+    println("All 6 module return type tests passed!")
+}
