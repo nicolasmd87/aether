@@ -7,6 +7,24 @@
 #include "../aether_module.h"
 #include "../aether_error.h"
 
+// Check if an AST tree uses sandbox builtins (sandbox_install, sandbox_push, spawn_sandboxed, etc.)
+static int uses_sandbox(ASTNode* node) {
+    if (!node) return 0;
+    if (node->type == AST_FUNCTION_CALL && node->value) {
+        if (strcmp(node->value, "sandbox_install") == 0 ||
+            strcmp(node->value, "sandbox_uninstall") == 0 ||
+            strcmp(node->value, "sandbox_push") == 0 ||
+            strcmp(node->value, "sandbox_pop") == 0 ||
+            strcmp(node->value, "spawn_sandboxed") == 0) {
+            return 1;
+        }
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        if (uses_sandbox(node->children[i])) return 1;
+    }
+    return 0;
+}
+
 // Check if an AST node contains send expressions (for batch optimization)
 int contains_send_expression(ASTNode* node) {
     if (!node) return 0;
@@ -928,53 +946,52 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "static inline void _aether_ctx_push(void* ctx) { if (_aether_ctx_depth < 64) _aether_ctx_stack[_aether_ctx_depth++] = ctx; }");
     print_line(gen, "static inline void _aether_ctx_pop(void) { if (_aether_ctx_depth > 0) _aether_ctx_depth--; }");
     print_line(gen, "static inline void* _aether_ctx_get(void) { return _aether_ctx_depth > 0 ? _aether_ctx_stack[_aether_ctx_depth-1] : (void*)0; }");
-    // Sandbox bridge: connects compiler-generated context stack to runtime checks.
-    // The _aether_sandbox_checker is called by stdlib C code (tcp, fs, os) before
-    // performing privileged operations. It walks the context stack looking for
-    // permission lists. If no sandbox is active (depth==0), everything is allowed.
-    // Declare the global sandbox checker from libaether.a (aether_sandbox.c)
-    print_line(gen, "typedef int (*aether_sandbox_check_fn)(const char*, const char*);");
-    print_line(gen, "extern aether_sandbox_check_fn _aether_sandbox_checker;");
-    // Check if a single permission list allows (category, resource)
-    print_line(gen, "extern int list_size(void*);");
-    print_line(gen, "extern void* list_get(void*, int);");
-    print_line(gen, "static int _aether_perms_allow(void* ctx, const char* category, const char* resource) {");
-    print_line(gen, "    if (!ctx) return 1;");  // null context = allow (non-sandbox frame)
-    print_line(gen, "    int n = list_size(ctx);");
-    print_line(gen, "    if (n == 0) return 0;");  // empty perms = deny all
-    print_line(gen, "    for (int i = 0; i < n; i += 2) {");
-    print_line(gen, "        const char* cat = (const char*)list_get(ctx, i);");
-    print_line(gen, "        const char* pat = (const char*)list_get(ctx, i + 1);");
-    print_line(gen, "        if (!cat || !pat) continue;");
-    print_line(gen, "        if (cat[0] == '*' && pat[0] == '*') return 1;");  // grant_all
-    print_line(gen, "        if (strcmp(cat, category) == 0) {");
-    print_line(gen, "            int plen = strlen(pat);");
-    print_line(gen, "            int rlen = strlen(resource);");
-    print_line(gen, "            if (plen == 1 && pat[0] == '*') return 1;");
-    print_line(gen, "            if (plen > 1 && pat[plen-1] == '*') {");
-    print_line(gen, "                if (strncmp(pat, resource, plen-1) == 0) return 1;");
-    print_line(gen, "            }");
-    print_line(gen, "            if (plen > 1 && pat[0] == '*') {");
-    print_line(gen, "                int slen = plen - 1;");
-    print_line(gen, "                if (rlen >= slen && strcmp(resource + rlen - slen, pat + 1) == 0) return 1;");
-    print_line(gen, "            }");
-    print_line(gen, "            if (strcmp(pat, resource) == 0) return 1;");
-    print_line(gen, "        }");
-    print_line(gen, "    }");
-    print_line(gen, "    return 0;");
-    print_line(gen, "}");
-    // Check ALL sandbox levels — operation must be allowed by EVERY level.
-    // Inner sandbox cannot escalate beyond outer sandbox's grants.
-    print_line(gen, "static int _aether_sandbox_check_impl(const char* category, const char* resource) {");
-    print_line(gen, "    if (_aether_ctx_depth <= 0) return 1;");
-    print_line(gen, "    for (int level = 0; level < _aether_ctx_depth; level++) {");
-    print_line(gen, "        if (!_aether_perms_allow(_aether_ctx_stack[level], category, resource)) return 0;");
-    print_line(gen, "    }");
-    print_line(gen, "    return 1;");
-    print_line(gen, "}");
-    // Install the checker — set by sandbox() trailing blocks, cleared on pop
-    print_line(gen, "static void _aether_sandbox_install(void) { _aether_sandbox_checker = _aether_sandbox_check_impl; }");
-    print_line(gen, "static void _aether_sandbox_uninstall(void) { if (_aether_ctx_depth <= 0) _aether_sandbox_checker = 0; }");
+    // Only emit sandbox bridge code if the program actually uses sandbox builtins.
+    // This avoids preamble bloat and the list_size/list_get dependency for programs
+    // that don't use sandboxing.
+    bool has_sandbox = uses_sandbox(program);
+    if (has_sandbox) {
+        // Sandbox bridge: connects compiler-generated context stack to runtime checks.
+        print_line(gen, "typedef int (*aether_sandbox_check_fn)(const char*, const char*);");
+        print_line(gen, "extern aether_sandbox_check_fn _aether_sandbox_checker;");
+        print_line(gen, "extern int list_size(void*);");
+        print_line(gen, "extern void* list_get(void*, int);");
+        print_line(gen, "static int _aether_perms_allow(void* ctx, const char* category, const char* resource) {");
+        print_line(gen, "    if (!ctx) return 1;");
+        print_line(gen, "    int n = list_size(ctx);");
+        print_line(gen, "    if (n == 0) return 0;");
+        print_line(gen, "    for (int i = 0; i < n; i += 2) {");
+        print_line(gen, "        const char* cat = (const char*)list_get(ctx, i);");
+        print_line(gen, "        const char* pat = (const char*)list_get(ctx, i + 1);");
+        print_line(gen, "        if (!cat || !pat) continue;");
+        print_line(gen, "        if (cat[0] == '*' && pat[0] == '*') return 1;");
+        print_line(gen, "        if (strcmp(cat, category) == 0) {");
+        print_line(gen, "            int plen = strlen(pat);");
+        print_line(gen, "            int rlen = strlen(resource);");
+        print_line(gen, "            if (plen == 1 && pat[0] == '*') return 1;");
+        print_line(gen, "            if (plen > 1 && pat[plen-1] == '*') {");
+        print_line(gen, "                if (strncmp(pat, resource, plen-1) == 0) return 1;");
+        print_line(gen, "            }");
+        print_line(gen, "            if (plen > 1 && pat[0] == '*') {");
+        print_line(gen, "                int slen = plen - 1;");
+        print_line(gen, "                if (rlen >= slen && strcmp(resource + rlen - slen, pat + 1) == 0) return 1;");
+        print_line(gen, "            }");
+        print_line(gen, "            if (strcmp(pat, resource) == 0) return 1;");
+        print_line(gen, "        }");
+        print_line(gen, "    }");
+        print_line(gen, "    return 0;");
+        print_line(gen, "}");
+        print_line(gen, "static int _aether_sandbox_check_impl(const char* category, const char* resource) {");
+        print_line(gen, "    if (_aether_ctx_depth <= 0) return 1;");
+        print_line(gen, "    for (int level = 0; level < _aether_ctx_depth; level++) {");
+        print_line(gen, "        if (!_aether_perms_allow(_aether_ctx_stack[level], category, resource)) return 0;");
+        print_line(gen, "    }");
+        print_line(gen, "    return 1;");
+        print_line(gen, "}");
+        print_line(gen, "static void _aether_sandbox_install(void) { _aether_sandbox_checker = _aether_sandbox_check_impl; }");
+        print_line(gen, "static void _aether_sandbox_uninstall(void) { if (_aether_ctx_depth <= 0) _aether_sandbox_checker = 0; }");
+        print_line(gen, "extern int aether_spawn_sandboxed(void* grant_list, const char* program, const char* arg);");
+    }
     print_line(gen, "");
     // End of static helper definitions — close the warning suppression
     print_line(gen, "#if defined(__GNUC__) || defined(__clang__)");
@@ -983,8 +1000,6 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "");
     // Declare runtime args function (avoid full header to prevent conflicts with actor runtime)
     print_line(gen, "void aether_args_init(int argc, char** argv);");
-    // Sandboxed process spawning
-    print_line(gen, "extern int aether_spawn_sandboxed(void* grant_list, const char* program, const char* arg);");
     print_line(gen, "");
 
     // Only include actor runtime if program uses actors
