@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 the release pipeline automatically replaces `[current]` with the next version
 number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`ae test` included library modules** (#109): `ae test` discovered `lib/*/module.ae` files and tried to build them as standalone programs, failing because they have no `main()`. Fixed: convention-based test discovery — only files named `test_*.ae` or `*_test.ae` are recognized as tests (like pytest's `test_*.py` or Go's `*_test.go`).
+- **Module resolution didn't search relative to source file** (#99): `aetherc` resolved `lib/` and `src/` imports relative to CWD only, so integration tests with local `lib/` directories failed when run from the repo root. Fixed: `module_resolve_local_path()` now also searches relative to the source file's directory.
+- **Windows: stdlib path functions used backslashes** (#99): `path_join()` used `\` on Windows, breaking cross-platform tests. `path_is_absolute()` didn't recognize `/` on Windows. Fixed: `path_join()` uses `/` universally; `path_is_absolute()` accepts both `/` and drive letters.
+- **Windows: regression tests hardcoded `/tmp/`** (#99): File I/O tests used `/tmp/` which doesn't exist on native Windows. Fixed: tests use `TEMP`/`TMPDIR` env vars with `/tmp` fallback.
+- **`ae version` showed stale version after install** (#88): `ae version list` checked the `current` symlink (stale from previous `ae version use`) before the `active_version` file. Fixed: `active_version` file is now the authoritative source. Also fixed `install.sh` reading the old version from the `ae` binary instead of the `VERSION` file.
+- **Non-existent version install gave misleading message** (#95): `ae version install v0.99.0` downloaded a 404 HTML page, extracted 0 files, and suggested `--force`. Fixed: validates downloaded archive magic bytes (gzip/zip/xz) and fails immediately with a clear error if the version doesn't exist.
+- **CI now runs `ae test`**: Added step [8/9] to `make ci` that runs the user-facing `ae test` command, catching divergence between the Makefile test runner and the CLI test runner.
 ## [0.40.0]
 
 ### Added

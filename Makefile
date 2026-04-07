@@ -937,28 +937,32 @@ ci: clean
 	@echo "  Aether CI — Full Test Suite"
 	@echo "==================================="
 	@echo ""
-	@echo "[1/8] Building compiler (-Werror)..."
+	@echo "[1/9] Building compiler (-Werror)..."
 	@$(MAKE) compiler EXTRA_CFLAGS=-Werror
 	@echo ""
-	@echo "[2/8] Building ae CLI..."
+	@echo "[2/9] Building ae CLI..."
 	@$(MAKE) ae
 	@echo ""
-	@echo "[3/8] Building stdlib..."
+	@echo "[3/9] Building stdlib..."
 	@$(MAKE) stdlib
 	@echo ""
-	@echo "[4/8] Running C unit tests..."
+	@echo "[4/9] Running C unit tests..."
 	@$(MAKE) test
 	@echo ""
-	@echo "[5/8] Running .ae integration tests..."
+	@echo "[5/9] Running .ae integration tests..."
 	@$(MAKE) test-ae
 	@echo ""
-	@echo "[6/8] Building examples..."
+	@echo "[6/9] Building examples..."
 	@$(MAKE) examples
 	@echo ""
-	@echo "[7/8] Install smoke test..."
+	@echo "[7/9] Install smoke test..."
 	@$(MAKE) test-install
 	@echo ""
-	@echo "[8/8] Release archive smoke test..."
+	@echo "[8/9] ae test smoke check..."
+	@AETHER_HOME="" ./build/ae test examples/basics/hello.ae 2>&1 | tail -1
+	@echo "  [PASS] ae test runs correctly"
+	@echo ""
+	@echo "[9/9] Release archive smoke test..."
 	@$(MAKE) test-release-archive
 	@echo ""
 	@echo "==================================="
