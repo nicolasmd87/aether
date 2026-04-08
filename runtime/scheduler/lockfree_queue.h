@@ -61,26 +61,26 @@ static inline int queue_dequeue(LockFreeQueue* q, void** actor, Message* msg) {
 }
 
 // Batch enqueue - reduces atomic operations from N to 1
+// Returns number of messages actually enqueued (partial enqueue if queue is near full)
 static inline int queue_enqueue_batch(LockFreeQueue* q, void** actors, Message* msgs, int count) {
     int tail = atomic_load_explicit(&q->tail, memory_order_relaxed);
     int head = atomic_load_explicit(&q->head, memory_order_acquire);
-    
-    // Check space for entire batch
+
     int space = (head - tail - 1) & QUEUE_MASK;
-    if (space < count) {
-        return 0;  // Not enough space for batch
-    }
-    
-    // Copy batch into queue
-    for (int i = 0; i < count; i++) {
+    if (unlikely(space == 0)) return 0;
+
+    // Enqueue as many as fit — partial batch is better than dropping the whole batch
+    int to_enqueue = count < space ? count : space;
+
+    for (int i = 0; i < to_enqueue; i++) {
         q->items[tail].actor = actors[i];
         q->items[tail].msg = msgs[i];
         tail = (tail + 1) & QUEUE_MASK;
     }
-    
+
     // Single atomic update for entire batch
     atomic_store_explicit(&q->tail, tail, memory_order_release);
-    return count;
+    return to_enqueue;
 }
 
 // Batch dequeue - reduces atomic operations from N to 1

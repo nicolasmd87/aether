@@ -1047,6 +1047,20 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     for (char* p = c_func_name; *p; p++) {
                         if (*p == '.') *p = '_';
                     }
+
+                    // spawn_ActorName(preferred_core) — pass core hint or -1
+                    if (strncmp(func_name, "spawn_", 6) == 0 &&
+                        strcmp(func_name, "spawn_sandboxed") != 0) {
+                        fprintf(gen->output, "%s(", c_func_name);
+                        if (expr->child_count > 0 && expr->children[0]) {
+                            generate_expression(gen, expr->children[0]);
+                        } else {
+                            fprintf(gen->output, "-1");
+                        }
+                        fprintf(gen->output, ")");
+                        break;
+                    }
+
                     fprintf(gen->output, "%s(", c_func_name);
                     int arg_printed = 0;
                     // Auto-inject builder context for builder functions

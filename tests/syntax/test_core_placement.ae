@@ -1,0 +1,40 @@
+// Test: spawn with core placement hint
+// spawn(Actor(), core: N) distributes actors across scheduler cores
+
+message Work { id: int }
+
+actor Worker {
+    state processed = 0
+
+    receive {
+        Work(id) -> {
+            processed = processed + 1
+        }
+    }
+}
+
+main() {
+    // Default spawn (no core hint) — should still work
+    w0 = spawn(Worker())
+    w0 ! Work { id: 0 }
+
+    // Spawn with explicit core placement
+    w1 = spawn(Worker(), core: 0)
+    w1 ! Work { id: 1 }
+
+    w2 = spawn(Worker(), core: 1 % num_cores)
+    w2 ! Work { id: 2 }
+
+    // Spread workers across cores using num_cores builtin
+    w3 = spawn(Worker(), core: 2 % num_cores)
+    w3 ! Work { id: 3 }
+
+    wait_for_idle()
+
+    total = w0.processed + w1.processed + w2.processed + w3.processed
+    if (total != 4) {
+        print("FAIL: expected 4, got ")
+        println(total)
+    }
+    println("done")
+}

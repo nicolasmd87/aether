@@ -1154,7 +1154,7 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     for (int i = 0; i < program->child_count; i++) {
         ASTNode* child = program->children[i];
         if (!child || child->type != AST_ACTOR_DEFINITION || !child->value) continue;
-        fprintf(gen->output, "struct %s* spawn_%s();\n", child->value, child->value);
+        fprintf(gen->output, "struct %s* spawn_%s(int preferred_core);\n", child->value, child->value);
     }
     print_line(gen, "");
 

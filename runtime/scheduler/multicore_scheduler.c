@@ -1499,21 +1499,30 @@ void scheduler_send_batch_flush(void) {
 
         // Batch send is always called from main thread (current_core_id = -1),
         // so use the main-thread SPSC channel (from_queues[MAX_CORES]).
-        int enqueued = queue_enqueue_batch(
-            &schedulers[c].from_queues[MAX_CORES],
-            &sorted_actors[start],
-            &sorted_msgs[start],
-            cnt
-        );
+        LockFreeQueue* q = &schedulers[c].from_queues[MAX_CORES];
+        int remaining = cnt;
+        int base = start;
 
-        // Fallback for overflow (rare) - scheduler_send_remote handles its own counting
-        for (int j = enqueued; j < cnt; j++) {
-            scheduler_send_remote(sorted_actors[start + j], sorted_msgs[start + j], -1);
+        // Partial batch enqueue: insert as many as fit, retry remainder.
+        // The scheduler thread drains concurrently, so each retry makes
+        // progress.  Yield periodically so the OS can schedule the consumer
+        // thread on systems where threads outnumber cores.
+        int spins = 0;
+        while (remaining > 0) {
+            int enqueued = queue_enqueue_batch(q, &sorted_actors[base], &sorted_msgs[base], remaining);
+            if (enqueued > 0) {
+                total_sent += enqueued;
+                atomic_fetch_add_explicit(&schedulers[c].work_count, enqueued, memory_order_relaxed);
+                base += enqueued;
+                remaining -= enqueued;
+                spins = 0;
+            } else if (++spins > 64) {
+                aether_sched_yield();
+                spins = 0;
+            } else {
+                AETHER_PAUSE();
+            }
         }
-
-        // Only count batch-enqueued messages here (fallback already counted by send_remote)
-        total_sent += enqueued;
-        atomic_fetch_add_explicit(&schedulers[c].work_count, enqueued, memory_order_relaxed);
     }
 
     // Single atomic update for batch-sent messages

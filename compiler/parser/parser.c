@@ -599,7 +599,7 @@ ASTNode* parse_primary_expression(Parser* parser) {
         }
 
         case TOKEN_SPAWN: {
-            // spawn(ActorName()) - spawn as function-call syntax
+            // spawn(ActorName()) or spawn(ActorName(), core: N)
             int line = token->line;
             int column = token->column;
             advance_token(parser); // consume 'spawn'
@@ -620,14 +620,30 @@ ASTNode* parse_primary_expression(Parser* parser) {
             if (!expect_token(parser, TOKEN_LEFT_PAREN)) return NULL;
             if (!expect_token(parser, TOKEN_RIGHT_PAREN)) return NULL;
 
-            // Expect closing paren for spawn(...)
-            if (!expect_token(parser, TOKEN_RIGHT_PAREN)) return NULL;
-
-            // Internal representation unchanged: AST_FUNCTION_CALL with spawn_ActorName
+            // Internal representation: AST_FUNCTION_CALL with spawn_ActorName
             char func_name[256];
             snprintf(func_name, sizeof(func_name), "spawn_%s", actor_name->value);
 
             ASTNode* spawn_call = create_ast_node(AST_FUNCTION_CALL, func_name, line, column);
+
+            // Optional core placement hint: spawn(Actor(), core: N)
+            Token* next = peek_token(parser);
+            if (next && next->type == TOKEN_COMMA) {
+                advance_token(parser);  // consume ','
+                Token* keyword = expect_token(parser, TOKEN_IDENTIFIER);
+                if (!keyword || strcmp(keyword->value, "core") != 0) {
+                    parser_error(parser, "Expected 'core' keyword in spawn options");
+                    return NULL;
+                }
+                if (!expect_token(parser, TOKEN_COLON)) return NULL;
+                ASTNode* core_expr = parse_expression(parser);
+                if (!core_expr) return NULL;
+                add_child(spawn_call, core_expr);  // child[0] = core expression
+            }
+
+            // Expect closing paren for spawn(...)
+            if (!expect_token(parser, TOKEN_RIGHT_PAREN)) return NULL;
+
             return spawn_call;
         }
 

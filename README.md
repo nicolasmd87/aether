@@ -435,7 +435,6 @@ Aether is under active development. The compiler, runtime, and standard library 
 - Stdlib still uses `int` returns for error handling (migration to result types planned)
 
 **Roadmap:**
-- Closures and first-class functions
 - Stdlib migration to result types
 - Async I/O (io_uring/kqueue/IOCP)
 - WebAssembly Phase 2 (Web Workers)

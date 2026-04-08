@@ -60,6 +60,7 @@ void http_serve_static(HttpRequest* r, HttpServerResponse* s, void* d) { (void)r
     #include <unistd.h>
     #include <fcntl.h>
     #include <limits.h>
+    #include <poll.h>
 #endif
 
 // Portable case-insensitive substring search (strcasestr is a GNU extension)
@@ -549,6 +550,15 @@ int http_route_matches(const char* pattern, const char* path, HttpRequest* req) 
 
 // Handle a single client connection
 static void handle_client_connection(HttpServer* server, int client_fd) {
+    // Set read timeout so a slow or dead client doesn't hold this thread forever
+#ifdef _WIN32
+    DWORD rcv_timeout = 30000;
+    setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&rcv_timeout, sizeof(rcv_timeout));
+#else
+    struct timeval rcv_tv = { .tv_sec = 30, .tv_usec = 0 };
+    setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &rcv_tv, sizeof(rcv_tv));
+#endif
+
     // Read headers first (up to 8KB), then read body up to Content-Length
     int capacity = 8192;
     char* buffer = malloc(capacity);
@@ -655,22 +665,98 @@ static void handle_client_connection(HttpServer* server, int client_fd) {
     http_server_response_free(res);
 }
 
-// Thread-per-connection: context passed to each worker thread
-#if AETHER_HAS_THREADS
+// ============================================================================
+// Bounded thread pool for connection handling
+// ============================================================================
+// Replaces thread-per-connection with a fixed pool of worker threads.
+// Connections beyond pool capacity wait in the kernel accept backlog.
+// This prevents unbounded thread creation under load.
+
+#if AETHER_HAS_THREADS && !defined(_WIN32)
+
+#define HTTP_POOL_WORKERS   8
+#define HTTP_POOL_QUEUE_CAP 256
+
 typedef struct {
     HttpServer* server;
-    int client_fd;
-} ConnectionCtx;
+    int queue[HTTP_POOL_QUEUE_CAP];   // Ring buffer of pending client fds
+    int head, tail, count;
+    pthread_mutex_t lock;
+    pthread_cond_t  not_empty;
+    pthread_cond_t  not_full;
+    int shutdown;
+    pthread_t workers[HTTP_POOL_WORKERS];
+} HttpConnectionPool;
 
-#ifndef _WIN32
-static void* connection_thread(void* arg) {
-    ConnectionCtx* ctx = (ConnectionCtx*)arg;
-    handle_client_connection(ctx->server, ctx->client_fd);
-    free(ctx);
+static void* http_pool_worker(void* arg) {
+    HttpConnectionPool* pool = (HttpConnectionPool*)arg;
+    while (1) {
+        pthread_mutex_lock(&pool->lock);
+        while (pool->count == 0 && !pool->shutdown) {
+            pthread_cond_wait(&pool->not_empty, &pool->lock);
+        }
+        if (pool->shutdown && pool->count == 0) {
+            pthread_mutex_unlock(&pool->lock);
+            break;
+        }
+        int client_fd = pool->queue[pool->head];
+        pool->head = (pool->head + 1) % HTTP_POOL_QUEUE_CAP;
+        pool->count--;
+        pthread_cond_signal(&pool->not_full);
+        pthread_mutex_unlock(&pool->lock);
+
+        handle_client_connection(pool->server, client_fd);
+    }
     return NULL;
 }
-#endif
-#endif // AETHER_HAS_THREADS
+
+static HttpConnectionPool* http_pool_create(HttpServer* server) {
+    HttpConnectionPool* pool = calloc(1, sizeof(HttpConnectionPool));
+    if (!pool) return NULL;
+    pool->server = server;
+    pthread_mutex_init(&pool->lock, NULL);
+    pthread_cond_init(&pool->not_empty, NULL);
+    pthread_cond_init(&pool->not_full, NULL);
+    for (int i = 0; i < HTTP_POOL_WORKERS; i++) {
+        pthread_create(&pool->workers[i], NULL, http_pool_worker, pool);
+    }
+    return pool;
+}
+
+static void http_pool_submit(HttpConnectionPool* pool, int client_fd) {
+    pthread_mutex_lock(&pool->lock);
+    while (pool->count >= HTTP_POOL_QUEUE_CAP && !pool->shutdown) {
+        pthread_cond_wait(&pool->not_full, &pool->lock);
+    }
+    if (pool->shutdown) {
+        pthread_mutex_unlock(&pool->lock);
+        close(client_fd);
+        return;
+    }
+    pool->queue[pool->tail] = client_fd;
+    pool->tail = (pool->tail + 1) % HTTP_POOL_QUEUE_CAP;
+    pool->count++;
+    pthread_cond_signal(&pool->not_empty);
+    pthread_mutex_unlock(&pool->lock);
+}
+
+static void http_pool_destroy(HttpConnectionPool* pool) {
+    if (!pool) return;
+    pthread_mutex_lock(&pool->lock);
+    pool->shutdown = 1;
+    pthread_cond_broadcast(&pool->not_empty);
+    pthread_cond_broadcast(&pool->not_full);
+    pthread_mutex_unlock(&pool->lock);
+    for (int i = 0; i < HTTP_POOL_WORKERS; i++) {
+        pthread_join(pool->workers[i], NULL);
+    }
+    pthread_mutex_destroy(&pool->lock);
+    pthread_cond_destroy(&pool->not_empty);
+    pthread_cond_destroy(&pool->not_full);
+    free(pool);
+}
+
+#endif // AETHER_HAS_THREADS && !_WIN32
 
 int http_server_start(HttpServer* server) {
     if (http_server_bind(server, server->host, server->port) < 0) {
@@ -683,7 +769,21 @@ int http_server_start(HttpServer* server) {
     printf("Press Ctrl+C to stop\n\n");
     fflush(stdout);
 
+#if AETHER_HAS_THREADS && !defined(_WIN32)
+    HttpConnectionPool* pool = http_pool_create(server);
+#endif
+
     while (server->is_running) {
+        // Poll the server socket with a 1-second timeout so we can check
+        // is_running periodically for graceful shutdown.  Without this,
+        // accept() blocks indefinitely and a server with no traffic
+        // can't shut down until the next connection arrives.
+#if !defined(_WIN32)
+        struct pollfd pfd = { .fd = server->socket_fd, .events = POLLIN };
+        int ready = poll(&pfd, 1, 1000);
+        if (ready <= 0) continue;  // timeout or error — re-check is_running
+#endif
+
         struct sockaddr_in client_addr;
         socklen_t client_len = sizeof(client_addr);
 
@@ -698,24 +798,17 @@ int http_server_start(HttpServer* server) {
         // Single-threaded: handle synchronously (cooperative/WASM/embedded)
         handle_client_connection(server, client_fd);
 #elif defined(_WIN32)
+        // Windows: synchronous (thread pool uses pthreads, not available here)
         handle_client_connection(server, client_fd);
 #else
-        ConnectionCtx* ctx = malloc(sizeof(ConnectionCtx));
-        if (!ctx) { close(client_fd); continue; }
-        ctx->server = server;
-        ctx->client_fd = client_fd;
-
-        pthread_t tid;
-        pthread_attr_t attr;
-        pthread_attr_init(&attr);
-        pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-        if (pthread_create(&tid, &attr, connection_thread, ctx) != 0) {
-            free(ctx);
-            handle_client_connection(server, client_fd);
-        }
-        pthread_attr_destroy(&attr);
+        // Dispatch to bounded thread pool — no unbounded thread creation
+        http_pool_submit(pool, client_fd);
 #endif
     }
+
+#if AETHER_HAS_THREADS && !defined(_WIN32)
+    http_pool_destroy(pool);
+#endif
 
     return 0;
 }
