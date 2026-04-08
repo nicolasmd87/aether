@@ -1,0 +1,35 @@
+// Module with functions returning different types.
+// Tests that the type inferrer correctly propagates return types
+// across module boundaries (lookup_qualified_symbol fix).
+
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+extern map_new() -> ptr
+extern map_put(m: ptr, key: string, value: ptr)
+extern map_get(m: ptr, key: string) -> ptr
+
+// Returns string — the caller must infer string, not int
+greet(name: string) {
+    return string_concat("hello ", name)
+}
+
+// Returns int — baseline (always worked)
+add(a, b) {
+    return a + b
+}
+
+// Returns ptr (map) — the caller must infer ptr, not int
+make_pair(key: string, val: string) {
+    m = map_new()
+    map_put(m, key, val)
+    return m
+}
+
+// Returns string from extern call
+get_length_str(s: string) {
+    len = string_length(s)
+    if len > 5 {
+        return "long"
+    }
+    return "short"
+}

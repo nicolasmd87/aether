@@ -365,8 +365,10 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
                                   get_token_type_from_string(expr->value));
             
         case AST_FUNCTION_CALL: {
-            Symbol* symbol = lookup_symbol(table, expr->value);
-            if (symbol && symbol->is_function && symbol->type) {
+            Symbol* symbol = lookup_qualified_symbol(table, expr->value);
+            if (symbol && symbol->is_function && symbol->type
+                && symbol->type->kind != TYPE_VOID
+                && symbol->type->kind != TYPE_UNKNOWN) {
                 return clone_type(symbol->type);
             }
             return create_type(TYPE_UNKNOWN);

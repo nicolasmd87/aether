@@ -29,7 +29,7 @@
 #include "aether_module.h"
 
 // Compiler limits
-#define MAX_TOKENS 10000
+#define MAX_TOKENS 50000
 
 // Version is set by Makefile from VERSION file
 #ifndef AETHER_VERSION

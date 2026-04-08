@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 the release pipeline automatically replaces `[current]` with the next version
 number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **Module function return types not inferred across module boundaries**: When calling a module function that returns `string` or `ptr` (e.g., `result = mymod.greet("world")`), the type inferrer defaulted to `int` because `infer_type()` used `lookup_symbol()` which couldn't resolve dotted names like `mymod.greet`. Fixed: use `lookup_qualified_symbol()` instead, with guards to skip `void`/`unknown` types (which occur for pure-Aether functions whose return types haven't been inferred yet). Regression test added: `tests/integration/module_return_types/`.
+
+### Changed
+
+- **`MAX_MODULE_TOKENS`** increased from 2,000 to 20,000 — modules with many functions (e.g., a build system SDK) silently truncated at the old limit with no error message.
+- **`MAX_TOKENS`** increased from 10,000 to 50,000 — same issue for large source files.
+
 ## [0.43.0]
 
 ### Changed
