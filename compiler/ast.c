@@ -210,6 +210,7 @@ ASTNode* create_ast_node(ASTNodeType type, const char* value, int line, int colu
     node->child_count = 0;
     node->line = line;
     node->column = column;
+    node->annotation = NULL;
     return node;
 }
 
@@ -231,6 +232,7 @@ ASTNode* clone_ast_node(ASTNode* node) {
 
     ASTNode* clone = create_ast_node(node->type, node->value, node->line, node->column);
     clone->node_type = clone_type(node->node_type);
+    clone->annotation = node->annotation ? strdup(node->annotation) : NULL;
 
     for (int i = 0; i < node->child_count; i++) {
         add_child(clone, clone_ast_node(node->children[i]));
@@ -245,7 +247,11 @@ void free_ast_node(ASTNode* node) {
     if (node->value) {
         free(node->value);
     }
-    
+
+    if (node->annotation) {
+        free(node->annotation);
+    }
+
     if (node->node_type) {
         free_type(node->node_type);
     }

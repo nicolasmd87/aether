@@ -16,6 +16,7 @@ typedef enum {
     AST_STRUCT_DEFINITION,
     AST_STRUCT_FIELD,
     AST_EXTERN_FUNCTION,      // External C function declaration
+    AST_DEFER_FUNCTION,       // Defer function: block runs first, then function executes
     AST_CONST_DECLARATION,    // Top-level constant: const NAME = value
 
     // Statements
@@ -133,6 +134,7 @@ typedef struct ASTNode {
     int child_count;
     int line;
     int column;
+    char* annotation;          // Optional metadata (e.g., defer factory name)
 } ASTNode;
 
 // Type functions

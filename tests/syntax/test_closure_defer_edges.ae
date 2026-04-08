@@ -1,0 +1,160 @@
+// Test: defer function edge cases — no params, return values, list config,
+// nesting inside regular trailing blocks, mixed usage
+
+import std.map
+import std.list
+
+// --- Builder functions for map-based config ---
+
+set_option(_ctx: ptr, key: string, value: string) {
+    map_put(_ctx, key, value)
+}
+
+// --- Builder functions for multi-item config ---
+// Uses map keys "item0", "item1", etc. to demonstrate
+// the config object is just a map the setters can use freely
+
+add_item(_ctx: ptr, value: string) {
+    if map_has(_ctx, "item0") == 0 { map_put(_ctx, "item0", value) }
+    else { if map_has(_ctx, "item1") == 0 { map_put(_ctx, "item1", value) }
+    else { map_put(_ctx, "item2", value) } }
+}
+
+// --- 1. Defer with no explicit parameters (only hidden _defer) ---
+
+defer run_task() {
+    has_cfg = 0
+    if _defer != null { has_cfg = 1 }
+    println("run_task: has_config=${has_cfg}")
+}
+
+// --- 2. Defer function that returns a value ---
+
+defer make_greeting(name: string): string {
+    prefix = "Hello"
+    if _defer != null {
+        if map_has(_defer, "prefix") == 1 {
+            prefix = map_get(_defer, "prefix")
+        }
+    }
+    result = "${prefix}, ${name}!"
+    println("make_greeting: ${result}")
+    return result
+}
+
+// --- 3. Regular (non-defer) function with trailing block for contrast ---
+
+setup(label: string) {
+    println("setup: ${label}")
+}
+
+// --- 4. Defer with a list instead of a map ---
+
+defer process_items(label: string) {
+    count = 0
+    if _defer != null {
+        if map_has(_defer, "item0") == 1 { count = count + 1 }
+        if map_has(_defer, "item1") == 1 { count = count + 1 }
+        if map_has(_defer, "item2") == 1 { count = count + 1 }
+    }
+    println("process_items: ${label} item_count=${count}")
+    if count > 0 {
+        first = map_get(_defer, "item0")
+        println("process_items: first=${first}")
+    }
+}
+
+// --- 5. Defer function used from inside a regular trailing block ---
+
+defer deploy(target: string) {
+    mode = "default"
+    if _defer != null {
+        if map_has(_defer, "mode") == 1 {
+            mode = map_get(_defer, "mode")
+        }
+    }
+    println("deploy: ${target} mode=${mode}")
+}
+
+// --- 6. Defer that returns int ---
+
+defer count_config(): int {
+    n = 0
+    if _defer != null {
+        if map_has(_defer, "a") == 1 { n = n + 1 }
+        if map_has(_defer, "b") == 1 { n = n + 1 }
+        if map_has(_defer, "c") == 1 { n = n + 1 }
+    }
+    println("count_config: ${n}")
+    return n
+}
+
+main() {
+    // 1. Defer with no explicit params — with trailing block
+    run_task() {
+        set_option("action", "build")
+    }
+
+    // 1b. Defer with no explicit params — without trailing block
+    run_task()
+
+    // 2. Defer that returns a value — with config
+    g1 = make_greeting("Alice") {
+        set_option("prefix", "Hi")
+    }
+    println("got: ${g1}")
+
+    // 2b. Defer that returns a value — without config (default prefix)
+    g2 = make_greeting("Bob")
+    println("got: ${g2}")
+
+    // 3. Mix defer and regular trailing blocks in the same program
+    setup("before deploy") {
+        println("in regular trailing block")
+    }
+
+    deploy("staging") {
+        set_option("mode", "canary")
+    }
+
+    setup("after deploy") {
+        println("in another regular trailing block")
+    }
+
+    // 4. Defer with list-based config instead of map
+    process_items("batch1") {
+        add_item("alpha")
+        add_item("beta")
+        add_item("gamma")
+    }
+
+    // 4b. Defer with list — no trailing block
+    process_items("batch2")
+
+    // 5. Defer called from inside a regular trailing block
+    setup("outer") {
+        println("nesting defer inside regular block")
+        deploy("production") {
+            set_option("mode", "blue-green")
+        }
+    }
+
+    // 6. Defer with and without trailing block in sequence — return values
+    c1 = count_config() {
+        set_option("a", "1")
+        set_option("b", "2")
+    }
+    println("c1=${c1}")
+
+    c2 = count_config()
+    println("c2=${c2}")
+
+    c3 = count_config() {
+        set_option("a", "x")
+        set_option("b", "y")
+        set_option("c", "z")
+    }
+    println("c3=${c3}")
+
+    println("defer edges ok")
+}

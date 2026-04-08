@@ -250,6 +250,132 @@ _aether_ctx_push(frame_result);
 _aether_ctx_pop();
 ```
 
+## Defer Functions — "Configure Then Execute"
+
+Regular trailing blocks run the function first, then decorate the result. **Defer
+functions** flip this: the block runs first to fill a configuration, then the function
+executes with that configuration.
+
+This is the second flavor of trailing-block function, toggled by the `defer` keyword
+on the definition:
+
+| | When does it run? | Block provides | Function provides |
+|---------|-------------------------------|---------------------|------------------------|
+| Regular | Function first, block second | Decoration/children | The container to fill |
+| Defer | Block first, function second | Configuration | The action to perform |
+
+### Defining a defer function
+
+```aether
+import std.map
+
+defer compile(src: string) {
+    // _defer is implicitly available — it's the config the block filled
+    // It's null when called without a trailing block
+    rel = ""
+    if _defer != null {
+        if map_has(_defer, "release") == 1 {
+            rel = map_get(_defer, "release")
+        }
+    }
+    println("compiling ${src} with release=${rel}")
+}
+```
+
+The `_defer` parameter is compiler-injected (like `_ctx` for builder functions).
+The caller never sees it.
+
+### Calling a defer function
+
+```aether
+// With trailing block — block fills config, then compile() runs
+compile("Main.java") {
+    set_release("21")
+    set_lint("all")
+}
+
+// Without trailing block — _defer is null, zero-config
+compile("Test.java")
+```
+
+The setter functions (`set_release`, `set_lint`) are regular builder functions
+with `_ctx: ptr` — they work on whatever was pushed to the context stack. The
+compiler creates the config object (currently a map), pushes it, runs the block,
+pops, then calls the function with the filled config.
+
+### Defer functions can return values
+
+```aether
+defer make_greeting(name: string): string {
+    prefix = "Hello"
+    if _defer != null {
+        if map_has(_defer, "prefix") == 1 {
+            prefix = map_get(_defer, "prefix")
+        }
+    }
+    return "${prefix}, ${name}!"
+}
+
+main() {
+    g = make_greeting("Alice") {
+        set_option("prefix", "Hi")
+    }
+    println(g)  // "Hi, Alice!"
+}
+```
+
+### Choosing the config factory with `with`
+
+By default, the compiler creates the config object via `map_new()`. The `with`
+clause lets the SDK author specify any zero-argument factory function:
+
+```aether
+// Default — map_new
+defer compile(src: string) { ... }
+
+// List — ordered collection of flags
+defer run_command(name: string) with list_new { ... }
+
+// Custom builder — any user-defined factory
+query_builder_new() {
+    m = map_new()
+    map_put(m, "_type", "query")
+    return m
+}
+defer execute_query(db: string) with query_builder_new { ... }
+```
+
+The factory just needs to be a zero-argument function returning `ptr`. The
+trailing block's setter functions and the defer function body must agree on the
+protocol — the compiler doesn't care what the object is, only that it can be
+pushed to the context stack as `void*`.
+
+### Generated code
+
+For `compile("Main.java") { set_release("21") }`, the compiler generates:
+
+```c
+{
+    void* _dcfg = map_new();         // 1. create config
+    _aether_ctx_push(_dcfg);         // 2. push as context
+    {
+        set_release(_aether_ctx_get(), "21");  // 3. block fills config
+    }
+    _aether_ctx_pop();               // 4. pop
+    compile("Main.java", _dcfg);     // 5. function runs with filled config
+}
+```
+
+Compare with the regular trailing block pattern:
+
+```c
+_aether_ctx_push((void*)(intptr_t)frame("App"));  // 1. function runs
+{
+    panel(_aether_ctx_get(), "Controls");           // 2. block decorates
+}
+_aether_ctx_pop();                                  // 3. pop
+```
+
 ## Ref Cells — Shared Mutable State for Closures
 
 Aether closures capture variables by value. This means a closure that does

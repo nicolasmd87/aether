@@ -33,6 +33,28 @@ void register_extern_func(CodeGenerator* gen, ASTNode* ext) {
     }
 }
 
+// Check if a function name is registered as a defer function.
+int is_defer_func(CodeGenerator* gen, const char* func_name) {
+    if (!gen || !func_name) return 0;
+    for (int i = 0; i < gen->defer_func_count; i++) {
+        if (gen->defer_funcs[i].name && strcmp(gen->defer_funcs[i].name, func_name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Get the factory function for a defer function (default: "map_new").
+const char* get_defer_factory(CodeGenerator* gen, const char* func_name) {
+    if (!gen || !func_name) return "map_new";
+    for (int i = 0; i < gen->defer_func_count; i++) {
+        if (gen->defer_funcs[i].name && strcmp(gen->defer_funcs[i].name, func_name) == 0) {
+            return gen->defer_funcs[i].factory ? gen->defer_funcs[i].factory : "map_new";
+        }
+    }
+    return "map_new";
+}
+
 // Check if a function name is registered as an extern function.
 int is_extern_func(CodeGenerator* gen, const char* func_name) {
     if (!gen || !func_name) return 0;
@@ -194,7 +216,7 @@ void propagate_tuple_type_to_calls(ASTNode* node, const char* func_name, Type* t
 }
 
 void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
-    if (!func || func->type != AST_FUNCTION_DEFINITION) return;
+    if (!func || (func->type != AST_FUNCTION_DEFINITION && func->type != AST_DEFER_FUNCTION)) return;
 
     // If function returns a tuple with UNKNOWN elements, scan all returns and merge
     if (func->node_type && func->node_type->kind == TYPE_TUPLE) {
@@ -260,6 +282,13 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
             // has_list_patterns = 1;  // Reserved for future optimization
             param_count++;
         }
+    }
+
+    // Defer functions get hidden void* _defer as last parameter
+    if (func->type == AST_DEFER_FUNCTION) {
+        if (param_count > 0) fprintf(gen->output, ", ");
+        fprintf(gen->output, "void* _defer");
+        param_count++;
     }
 
     fprintf(gen->output, ") {\n");

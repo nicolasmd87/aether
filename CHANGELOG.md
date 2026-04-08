@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 the release pipeline automatically replaces `[current]` with the next version
 number before tagging the release.
 
+## [current]
+
+### Added
+
+- **Defer trailing-block functions**: New `defer` keyword for function definitions enables "configure then execute" DSL pattern. The trailing block runs first to fill a config object, then the function executes with it via implicit `_defer` parameter. Complements the existing regular trailing-block pattern ("function first, block decorates").
+- **Configurable defer factory with `with` clause**: `defer func(...) with factory_fn { ... }` lets SDK authors specify what config object the trailing block operates on. Defaults to `map_new`; alternatives include `list_new` or any user-defined zero-arg factory.
+
+### Fixed
+
+- Fixed `-Wunused-result` warnings in `tools/ae.c` for `fread` and `system` calls.
+- `install.sh` now prints a message before `git fetch --tags` so users know why SSH credentials may be requested.
+
 ## [0.45.0]
 
 ### Added

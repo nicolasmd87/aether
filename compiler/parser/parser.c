@@ -15,6 +15,7 @@ Parser* create_parser(Token** tokens, int token_count) {
     parser->token_count = token_count;
     parser->current_token = 0;
     parser->suppress_errors = 0;  // By default, show errors
+    parser->parsing_defer = 0;
     return parser;
 }
 
@@ -2364,7 +2365,20 @@ ASTNode* parse_function_definition(Parser* parser) {
         next = peek_token(parser);
     }
     func->node_type = return_type;
-    
+
+    // Check for 'with factory' clause (defer functions only)
+    if (parser->parsing_defer) {
+        Token* maybe_with = peek_token(parser);
+        if (maybe_with && maybe_with->type == TOKEN_IDENTIFIER &&
+            strcmp(maybe_with->value, "with") == 0) {
+            advance_token(parser); // consume 'with'
+            Token* factory_tok = expect_token(parser, TOKEN_IDENTIFIER);
+            if (factory_tok) {
+                func->annotation = strdup(factory_tok->value);
+            }
+        }
+    }
+
     // Check for Erlang-style arrow body: -> expr OR -> { stmts; expr }
     if (match_token(parser, TOKEN_ARROW)) {
         Token* peek = peek_token(parser);
@@ -2695,6 +2709,26 @@ ASTNode* parse_program(Parser* parser) {
             case TOKEN_EXTERN:
                 node = parse_extern_declaration(parser);
                 break;
+            case TOKEN_DEFER: {
+                // defer before a function definition = defer function
+                Token* next_d = peek_ahead(parser, 1);
+                Token* next_d2 = peek_ahead(parser, 2);
+                if (next_d && next_d->type == TOKEN_IDENTIFIER &&
+                    next_d2 && next_d2->type == TOKEN_LEFT_PAREN) {
+                    advance_token(parser); // consume 'defer'
+                    parser->parsing_defer = 1;
+                    node = parse_function_definition(parser);
+                    parser->parsing_defer = 0;
+                    if (node) {
+                        node->type = AST_DEFER_FUNCTION;
+                    }
+                } else {
+                    parser_error(parser, "Expected function definition after 'defer' at top level");
+                    advance_token(parser);
+                    continue;
+                }
+                break;
+            }
             case TOKEN_CONST: {
                 // Top-level constant: const NAME = value
                 int cline = token->line, ccol = token->column;

@@ -2635,7 +2635,7 @@ static int cmd_version_install(const char* version) {
         // Also check the first bytes for archive magic
         fseek(af, 0, SEEK_SET);
         unsigned char magic[4] = {0};
-        fread(magic, 1, 4, af);
+        if (fread(magic, 1, 4, af) < 4) { /* short read — magic stays zeroed */ }
         fclose(af);
 
         int is_gzip = (magic[0] == 0x1f && magic[1] == 0x8b);  // .tar.gz
@@ -2727,7 +2727,7 @@ static int cmd_version_install(const char* version) {
 #else
             snprintf(probe, sizeof(probe), "rm -rf '%s'", ver_dir);
 #endif
-            (void)system(probe);
+            if (system(probe) != 0) { /* cleanup failed — non-fatal */ }
             fprintf(stderr, "Error: Installation of %s failed — no bin/, lib/, or share/ found.\n", vtag);
             fprintf(stderr, "This version may not have a release for " AE_PLATFORM ".\n");
             fprintf(stderr, "Available versions: ae version list\n");
@@ -2807,7 +2807,7 @@ static int cmd_version_use(const char* version) {
                     snprintf(bak_cmd, sizeof(bak_cmd),
                         "robocopy \"%s\" \"%s\" /E /NFL /NDL /NJH /NJS /IS /IT /XD versions cache >nul 2>&1",
                         dest_root_bak, cur_ver_dir);
-                    (void)system(bak_cmd);
+                    if (system(bak_cmd) != 0) { /* backup failed — non-fatal */ }
                 }
             }
         }
@@ -2862,7 +2862,7 @@ static int cmd_version_use(const char* version) {
                         "cp -r \"%s/.aether/share\" \"%s/\" 2>/dev/null; true",
                         home, cur_ver_dir, home, cur_ver_dir,
                         home, cur_ver_dir, home, cur_ver_dir);
-                    (void)system(bak_cmd);
+                    if (system(bak_cmd) != 0) { /* backup failed — non-fatal */ }
                 }
             }
         }
