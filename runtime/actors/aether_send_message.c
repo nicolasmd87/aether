@@ -299,15 +299,13 @@ void aether_send_message(void* actor_ptr, void* message_data, size_t message_siz
     msg.zerocopy.owned = 0;
     msg._reply_slot = g_pending_reply_slot;
 
-    // Use optimized scheduler send paths:
-    // - Same-core: direct mailbox send (no queue overhead)
-    // - Cross-core: lock-free queue with batching
-    if (current_core_id >= 0 && current_core_id == atomic_load_explicit(&actor->assigned_core, memory_order_relaxed)) {
-        // Same-core: direct mailbox send
+    // Cache TLS once — avoids repeated tlv_get_addr calls on macOS
+    const int my_core = current_core_id;
+
+    if (my_core >= 0 && my_core == atomic_load_explicit(&actor->assigned_core, memory_order_relaxed)) {
         scheduler_send_local(actor, msg);
     } else {
-        // Cross-core or main thread: use queue
-        scheduler_send_remote(actor, msg, current_core_id);
+        scheduler_send_remote(actor, msg, my_core);
     }
 #else
     // No threads: always use synchronous processing

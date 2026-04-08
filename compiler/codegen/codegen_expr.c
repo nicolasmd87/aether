@@ -1047,6 +1047,20 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     for (char* p = c_func_name; *p; p++) {
                         if (*p == '.') *p = '_';
                     }
+
+                    // spawn_ActorName(preferred_core) — pass core hint or -1
+                    if (strncmp(func_name, "spawn_", 6) == 0 &&
+                        strcmp(func_name, "spawn_sandboxed") != 0) {
+                        fprintf(gen->output, "%s(", c_func_name);
+                        if (expr->child_count > 0 && expr->children[0]) {
+                            generate_expression(gen, expr->children[0]);
+                        } else {
+                            fprintf(gen->output, "-1");
+                        }
+                        fprintf(gen->output, ")");
+                        break;
+                    }
+
                     fprintf(gen->output, "%s(", c_func_name);
                     int arg_printed = 0;
                     // Auto-inject builder context for builder functions
@@ -1312,15 +1326,16 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     if (msg_def) {
                         const char* single_int = get_single_int_field(msg_def);
                         if (single_int) {
+                            // Single-field inline: value stored in payload_int (no malloc)
                             fprintf(gen->output, "{ Message _imsg = {%d, 0, ", msg_def->message_id);
                             for (int i = 0; i < message->child_count; i++) {
                                 ASTNode* field_init = message->children[i];
                                 if (field_init && field_init->type == AST_FIELD_INIT && field_init->child_count > 0) {
-                                    // Actor refs passed in int message fields need intptr_t cast
-                                    // to avoid pointer-to-int conversion errors in payload_int.
+                                    int fk = msg_def->fields ? msg_def->fields->type_kind : TYPE_INT;
                                     ASTNode* val = field_init->children[0];
                                     int is_actor_ref = val->node_type && val->node_type->kind == TYPE_ACTOR_REF;
-                                    if (is_actor_ref) fprintf(gen->output, "(intptr_t)");
+                                    if (is_actor_ref || fk == TYPE_INT64 || fk == TYPE_PTR || fk == TYPE_ACTOR_REF)
+                                        fprintf(gen->output, "(intptr_t)");
                                     generate_expression(gen, val);
                                     break;
                                 }
@@ -1328,19 +1343,14 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             fprintf(gen->output, ", NULL, {NULL, 0, 0}}; ");
 
                             if (gen->in_main_loop) {
-                                // Main thread loop: batch sends to reduce atomics N→num_cores
                                 fprintf(gen->output, "scheduler_send_batch_add(");
                                 emit_send_target(gen, target, "ActorBase*");
                                 fprintf(gen->output, ", _imsg); }");
                             } else if (gen->current_actor == NULL) {
-                                // Main thread, non-loop: current_core_id is always -1, local path
-                                // is never taken — emit scheduler_send_remote directly (no dead branch)
                                 fprintf(gen->output, "scheduler_send_remote(");
                                 emit_send_target(gen, target, "ActorBase*");
                                 fprintf(gen->output, ", _imsg, current_core_id); }");
                             } else {
-                                // Inside an actor handler: same-core vs cross-core branch is live.
-                                // Store target in temp to avoid triple-evaluation of side-effecting expressions.
                                 fprintf(gen->output, "ActorBase* _send_target = ");
                                 emit_send_target(gen, target, "ActorBase*");
                                 fprintf(gen->output, "; ");
@@ -1349,9 +1359,9 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                 fprintf(gen->output, "scheduler_send_remote(_send_target, _imsg, current_core_id); } }");
                             }
                         } else {
+                            // Heap-allocated path (2+ fields or non-scalar types)
                             fprintf(gen->output, "{ %s _msg = { ._message_id = %d",
                                     message->value, msg_def->message_id);
-
                             for (int i = 0; i < message->child_count; i++) {
                                 ASTNode* field_init = message->children[i];
                                 if (field_init && field_init->type == AST_FIELD_INIT) {
@@ -1361,7 +1371,6 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                     }
                                 }
                             }
-
                             fprintf(gen->output, " }; aether_send_message(");
                             emit_send_target(gen, target, "void*");
                             fprintf(gen->output, ", &_msg, sizeof(%s)); }", message->value);

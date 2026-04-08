@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 the release pipeline automatically replaces `[current]` with the next version
 number before tagging the release.
 
+## [current]
+
+### Added
+
+- **Core placement hint**: `spawn(Actor(), core: N)` distributes actors across scheduler cores. Actors on different cores run on different OS threads, enabling parallel I/O-heavy workloads. Use with `num_cores` builtin: `spawn(Worker(), core: i % num_cores)`.
+- **Platform I/O poller**: `runtime/io/aether_poller.h` provides a unified event notification API with epoll (Linux), kqueue (macOS/BSD), and poll() (portable) backends. Foundation for non-blocking I/O and [PR #71](https://github.com/nicolasmd87/aether/pull/71) actor-integrated HTTP.
+- **Socket timeouts on all stdlib TCP operations**: `tcp_connect`, `tcp_accept`, and HTTP server connections now set 30-second `SO_RCVTIMEO`/`SO_SNDTIMEO`. A dead or slow peer returns an error instead of hanging the thread forever.
+- **HTTP server bounded thread pool**: Fixed pool of 8 worker threads replaces unbounded thread-per-connection. Prevents resource exhaustion under load.
+- **HTTP server graceful shutdown**: `poll()`-based accept loop with 1-second timeout. Server checks `is_running` between connections and shuts down cleanly without waiting for the next client.
+
+### Changed
+
+- **Inline message path extended to int64/ptr/bool/actor_ref**: Single-field messages with `long`, `ptr`, `bool`, or actor ref types now skip heap allocation entirely — value stored directly in `Message.payload_int`. Previously only `int` (32-bit) qualified. Profile-guided: eliminates malloc+free for 66% of messages in tree-spawn patterns (skynet). Measured +73% throughput improvement on skynet benchmark.
+- **TLS caching in scheduler hot path**: `current_core_id` cached in a local variable at function entry in `scheduler_send_local` and `aether_send_message`, avoiding 6+ `tlv_get_addr` dynamic linker calls per message send on macOS.
+- **Partial batch enqueue**: `queue_enqueue_batch` now returns how many messages fit instead of failing the entire batch when the queue is near full. The previous all-or-nothing behavior dropped the entire batch (up to 256 messages) when even one slot was missing, forcing every message through the slower per-message fallback path.
+- **Batch flush uses partial retry instead of per-message fallback**: `scheduler_send_batch_flush` retries `queue_enqueue_batch` with remaining messages instead of falling back to individual `scheduler_send_remote` calls. Profile-guided: the old per-message fallback spent 28% of main thread time in `sched_yield()` kernel yields during high-throughput fan-out patterns.
+- **Missing benchmark implementations**: Added Pony, Java, and Scala skynet benchmarks for complete cross-language coverage.
 ## [0.44.0]
 
 ### Fixed

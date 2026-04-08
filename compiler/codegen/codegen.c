@@ -35,15 +35,23 @@ int contains_send_expression(ASTNode* node) {
     return 0;
 }
 
-// Returns the field name if msg has exactly one int field (eligible for inline encoding),
-// or NULL otherwise. Inline messages skip pool allocation entirely — the single int field
-// is stored in Message.payload_int, avoiding memcpy and pool lookup on every send.
+static int is_inlineable_scalar(int type_kind) {
+    switch (type_kind) {
+        case TYPE_INT: case TYPE_INT64: case TYPE_PTR:
+            return 1;
+        default:
+            return 0;
+    }
+}
+
+// Returns the field name if msg has exactly one scalar field that fits in intptr_t
+// (eligible for inline encoding), or NULL otherwise.  Inline messages skip heap
+// allocation entirely — the field value is stored in Message.payload_int.
 const char* get_single_int_field(MessageDef* msg_def) {
     if (!msg_def || !msg_def->fields) return NULL;
     MessageFieldDef* field = msg_def->fields;
-    if (field->type_kind != TYPE_INT) return NULL;
-    if (field->next != NULL) return NULL;  // More than one field
-    return field->name;
+    if (field->next != NULL) return NULL;
+    return is_inlineable_scalar(field->type_kind) ? field->name : NULL;
 }
 
 CodeGenerator* create_code_generator(FILE* output) {
@@ -1169,7 +1177,7 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     for (int i = 0; i < program->child_count; i++) {
         ASTNode* child = program->children[i];
         if (!child || child->type != AST_ACTOR_DEFINITION || !child->value) continue;
-        fprintf(gen->output, "struct %s* spawn_%s();\n", child->value, child->value);
+        fprintf(gen->output, "struct %s* spawn_%s(int preferred_core);\n", child->value, child->value);
     }
     print_line(gen, "");
 

@@ -883,6 +883,9 @@ int typecheck_program(ASTNode* program) {
     add_symbol(global_table, "cooked_mode", cooked_mode_type, 0, 1, 0);
     Type* spawn_sandboxed_type = create_type(TYPE_INT);
     add_symbol(global_table, "spawn_sandboxed", spawn_sandboxed_type, 0, 1, 0);
+    // num_cores: runtime global (extern int num_cores in multicore_scheduler.h)
+    Type* num_cores_type = create_type(TYPE_INT);
+    add_symbol(global_table, "num_cores", num_cores_type, 0, 0, 0);
     Type* aether_push_type = create_type(TYPE_VOID);
     add_symbol(global_table, "sandbox_push", aether_push_type, 0, 1, 0);
     Type* aether_pop_type = create_type(TYPE_VOID);

@@ -120,6 +120,8 @@ scheduler_send_batch_flush();  // Bulk send with one atomic per core
 
 The flush snapshots each message's target core, sorts by core using radix sort, then calls `queue_enqueue_batch` for each core. This reduces atomics from N (one per message) to num_cores (one per core). Target cores are read once per message at flush time to produce a consistent snapshot — this prevents buffer overflows that could occur if an actor migrates between the time a message is buffered and the time the batch is flushed.
 
+**Partial batch enqueue:** `queue_enqueue_batch` enqueues as many messages as fit in the queue and returns the count, rather than failing the entire batch when the queue is near full. When the queue can't absorb the full batch, the flush retries with the remaining messages — spinning with `AETHER_PAUSE` and yielding to the OS after 64 failed spins so the consumer thread gets CPU time. This replaces the previous per-message `scheduler_send_remote` fallback which called `sched_yield()` on every iteration — profiling showed this consumed 28% of main thread time in fork_join patterns.
+
 **Runtime auto-detection:** The batch send path automatically detects when Main Thread Actor Mode is active (single-actor programs) and uses the synchronous zero-copy path instead of batching. This ensures single-actor benchmarks like counting use the optimal path while multi-actor fan-out patterns like fork-join benefit from batch send. No manual configuration is required.
 
 **Pattern detection:** Only applied in `main()` function loops, not inside actor receive handlers. This preserves low-latency actor-to-actor messaging while optimizing main-to-actors fan-out.

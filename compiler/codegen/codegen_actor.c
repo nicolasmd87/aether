@@ -399,8 +399,13 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
                         print_line(gen, "handle_%s:", pattern->value);
                         indent(gen);
                         if (single_int) {
-                            // Inline fast path: reconstruct struct on stack from msg fields.
-                            // No pool buffer exists, no free needed.
+                            // Single-field inline: reconstruct on stack from payload_int
+                            const char* cast = "";
+                            if (msg_def->fields) {
+                                int fk = msg_def->fields->type_kind;
+                                if (fk == TYPE_INT64) cast = "(int64_t)";
+                                else if (fk == TYPE_PTR || fk == TYPE_ACTOR_REF) cast = "(void*)";
+                            }
                             print_line(gen, "if (_msg_data) {");
                             indent(gen);
                             print_line(gen, "%s_handle_%s(self, _msg_data);", actor->value, pattern->value);
@@ -408,14 +413,15 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
                             unindent(gen);
                             print_line(gen, "} else {");
                             indent(gen);
-                            print_line(gen, "%s _msg_val = { ._message_id = msg.type, .%s = msg.payload_int };",
-                                      pattern->value, single_int);
+                            print_line(gen, "%s _msg_val = { ._message_id = msg.type, .%s = %smsg.payload_int };",
+                                      pattern->value, single_int, cast);
                             print_line(gen, "%s_handle_%s(self, &_msg_val);", actor->value, pattern->value);
                             unindent(gen);
                             print_line(gen, "}");
                         } else {
+                            // Two-field inline: reconstruct from payload_int + payload_ptr
                             print_line(gen, "%s_handle_%s(self, _msg_data);", actor->value, pattern->value);
-                            print_line(gen, "aether_free_message(_msg_data);  // Return to pool or free");
+                            print_line(gen, "aether_free_message(_msg_data);");
                         }
                         print_line(gen, "return;");
                         unindent(gen);
@@ -430,12 +436,12 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
     print_line(gen, "}");
     print_line(gen, "");
     
-    print_line(gen, "%s* spawn_%s() {", actor->value, actor->value);
+    print_line(gen, "%s* spawn_%s(int preferred_core) {", actor->value, actor->value);
     indent(gen);
     print_line(gen, "// AETHER_SINGLE_CORE=1 forces all actors to core 0 (eliminates cross-core overhead)");
     print_line(gen, "static int _single_core_cached = -1;");
     print_line(gen, "if (_single_core_cached < 0) _single_core_cached = (getenv(\"AETHER_SINGLE_CORE\") != NULL);");
-    print_line(gen, "int core = _single_core_cached ? 0 : -1;  // -1 = let runtime place on caller's core");
+    print_line(gen, "int core = (preferred_core >= 0) ? preferred_core : (_single_core_cached ? 0 : -1);");
     print_line(gen, "%s* actor = (%s*)scheduler_spawn_pooled(core, (void (*)(void*))%s_step, sizeof(%s));",
                actor->value, actor->value, actor->value, actor->value);
     print_line(gen, "if (!actor) {");

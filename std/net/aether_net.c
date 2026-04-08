@@ -52,6 +52,22 @@ static void net_init() {
     net_initialized = 1;
 }
 
+// Set read/write timeouts on a socket so blocking operations don't hang
+// indefinitely on dead or slow peers.  Default: 30 seconds.
+static void net_set_socket_timeouts(int fd, int timeout_sec) {
+#ifdef _WIN32
+    DWORD timeout_ms = (DWORD)timeout_sec * 1000;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout_ms, sizeof(timeout_ms));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeout_ms, sizeof(timeout_ms));
+#else
+    struct timeval tv;
+    tv.tv_sec = timeout_sec;
+    tv.tv_usec = 0;
+    setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+    setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+#endif
+}
+
 TcpSocket* tcp_connect(const char* host, int port) {
     // Sandbox check: is TCP connect to this host allowed?
     if (!aether_sandbox_check("tcp", host)) return NULL;
@@ -78,6 +94,8 @@ TcpSocket* tcp_connect(const char* host, int port) {
         close(sockfd);
         return NULL;
     }
+
+    net_set_socket_timeouts(sockfd, 30);
 
     TcpSocket* sock = (TcpSocket*)malloc(sizeof(TcpSocket));
     if (!sock) { close(sockfd); return NULL; }
@@ -174,6 +192,8 @@ TcpSocket* tcp_accept(TcpServer* server) {
     if (newsockfd < 0) {
         return NULL;
     }
+
+    net_set_socket_timeouts(newsockfd, 30);
 
     TcpSocket* sock = (TcpSocket*)malloc(sizeof(TcpSocket));
     if (!sock) { close(newsockfd); return NULL; }

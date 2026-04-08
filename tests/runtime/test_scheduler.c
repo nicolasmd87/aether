@@ -134,13 +134,13 @@ void test_mailbox_overflow(void) {
 
 void test_scheduler_init_cleanup(void) {
     scheduler_init(2);
-    
+
     ASSERT_EQ(2, num_cores);
     ASSERT_NOT_NULL(schedulers[0].actors);
     ASSERT_NOT_NULL(schedulers[1].actors);
     ASSERT_EQ(0, schedulers[0].actor_count);
     ASSERT_EQ(0, schedulers[1].actor_count);
-    
+
     // Cleanup
     scheduler_cleanup();
 }

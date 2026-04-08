@@ -6,35 +6,6 @@ Planned features and improvements for upcoming Aether releases.
 
 ## Language Features
 
-### Closures and First-Class Functions
-
-Arrow functions exist but are named functions, not values. There are no anonymous functions and no way to capture variables from an enclosing scope. This blocks higher-order patterns like `list.map()`, `list.filter()`, and callbacks.
-
-**Planned syntax (tentative):**
-
-```aether
-import std.list
-
-main() {
-    numbers = [1, 2, 3, 4, 5]
-
-    // Anonymous function as argument
-    doubled = list.map(numbers, fn(x) { x * 2 })
-
-    // Closure capturing a local variable
-    threshold = 3
-    big = list.filter(numbers, fn(x) { x > threshold })
-}
-```
-
-**What's needed:**
-- Anonymous function expression syntax (e.g., `fn(x) { x * 2 }`)
-- `AST_CLOSURE` node with a capture list in the compiler
-- Codegen emits a struct holding captured variables + a function pointer (standard closure conversion to C)
-- Function types in type inference (e.g., `(int) -> int` as a first-class type)
-
-**Design constraint:** Capture by value (copy into closure struct) is the default. No hidden heap allocation. This keeps closures predictable and compatible with manual memory management.
-
 ### Stdlib Migration to Result Types
 
 Result types (`a, err = func()`) are implemented in the language. The stdlib I/O functions (`file.open`, `io.read_file`, `file.write`, etc.) still use the old `int` return convention. Migrating them to `(value, error)` returns is a breaking change planned for a future release.
@@ -68,8 +39,20 @@ All I/O in Aether is currently blocking. `http.get()`, `file.read()`, `tcp_conne
 
 **User impact:** An actor doing 5 HTTP requests will block all sibling actors for the entire duration. There is no way for the scheduler to preempt a handler that's blocked in a system call.
 
-**What's needed:**
-- I/O event loop thread(s) using platform-native async APIs (io_uring on Linux, kqueue on macOS, IOCP on Windows)
+**Mitigation (shipped):**
+- **Socket timeouts** — All stdlib TCP operations now set 30-second `SO_RCVTIMEO`/`SO_SNDTIMEO`. A dead peer returns an error instead of hanging forever.
+- **Core placement** — `spawn(Actor(), core: N)` distributes I/O-heavy actors across cores so they run on different OS threads. Combined with `num_cores` builtin for `core: i % num_cores`.
+- **HTTP server thread pool** — Bounded worker pool (8 threads) replaces unbounded thread-per-connection. Poll-based accept with timeout for graceful shutdown.
+- **Platform poller** — `runtime/io/aether_poller.h` provides epoll (Linux), kqueue (macOS/BSD), and poll() (portable) backends behind a unified API.
+
+**Next: actor-integrated HTTP ([PR #71](https://github.com/nicolasmd87/aether/pull/71))**
+
+Ariel's PR proposes dispatching incoming HTTP connections as file descriptors directly to pre-spawned worker actors via mailbox delivery, replacing the thread pool with actor-based dispatch. This achieved +82-103% throughput improvement in benchmarks. The PR needs:
+- Rebase from v0.23.0 to current (v0.41.0+)
+- Use the new platform poller abstraction instead of Linux-only epoll
+- Integration with scheduler timeout support (added since the PR was opened)
+
+**Future: general async I/O**
 - I/O completions delivered as actor messages (send request → receive response as message)
 - Scheduler awareness of I/O-blocked actors (don't count them as idle)
 - Async variants of file and network operations in the stdlib
@@ -82,8 +65,6 @@ All I/O in Aether is currently blocking. `http.get()`, `file.read()`, `tcp_conne
 **What's needed:**
 - `ae version list` columns: version, status (active/installed/available)
 - `ae version use` should preserve the initial install in `versions/` before switching (currently loses it on Windows; POSIX needs same fix)
-- `ae --version` reads `active_version` file instead of compiled-in constant (done)
-- macOS quarantine removal on `install.sh` and `ae version use` (done)
 
 ## Tooling
 
