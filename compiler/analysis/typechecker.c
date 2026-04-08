@@ -108,6 +108,32 @@ Symbol* resolve_module_alias(SymbolTable* table, const char* name) {
 static char* imported_namespaces[64];
 static int namespace_count = 0;
 
+// Import alias table: maps short names to dotted qualified names
+// for selective imports (e.g. "release" -> "build.release")
+#define MAX_IMPORT_ALIASES 512
+static struct {
+    char short_name[128];
+    char qualified_name[256];
+} import_aliases[MAX_IMPORT_ALIASES];
+static int import_alias_count = 0;
+
+static void add_import_alias(const char* short_name, const char* qualified) {
+    if (import_alias_count < MAX_IMPORT_ALIASES) {
+        snprintf(import_aliases[import_alias_count].short_name, sizeof(import_aliases[0].short_name), "%s", short_name);
+        snprintf(import_aliases[import_alias_count].qualified_name, sizeof(import_aliases[0].qualified_name), "%s", qualified);
+        import_alias_count++;
+    }
+}
+
+static const char* find_import_alias(const char* name) {
+    for (int i = 0; i < import_alias_count; i++) {
+        if (strcmp(import_aliases[i].short_name, name) == 0) {
+            return import_aliases[i].qualified_name;
+        }
+    }
+    return NULL;
+}
+
 void register_namespace(const char* ns) {
     if (namespace_count < 64) {
         // Check if already registered
@@ -1098,6 +1124,65 @@ int typecheck_program(ASTNode* program) {
         }
     }
     
+    // Register unqualified short names for selective imports.
+    // At this point all merged function definitions are in the symbol table,
+    // so we can look up their types to register the short aliases.
+    import_alias_count = 0;  // Reset for fresh compilation
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* child = program->children[i];
+        if (child->type != AST_IMPORT_STATEMENT || !child->value) continue;
+        if (child->child_count == 0) continue;
+        ASTNode* first = child->children[0];
+        if (!first || first->type != AST_IDENTIFIER) continue;
+
+        const char* module_path = child->value;
+        const char* ns;
+        if (strncmp(module_path, "std.", 4) == 0) {
+            ns = module_path + 4;
+        } else {
+            ns = get_namespace_from_path(module_path);
+        }
+
+        for (int k = 0; k < child->child_count; k++) {
+            ASTNode* sel = child->children[k];
+            if (!sel || sel->type != AST_IDENTIFIER) continue;
+            const char* short_name = sel->value;
+
+            // Build the full C name: namespace_shortname
+            char full_name[256];
+            snprintf(full_name, sizeof(full_name), "%s_%s", ns, short_name);
+
+            Symbol* full_sym = lookup_symbol(global_table, full_name);
+            if (full_sym) {
+                Symbol* existing_short = lookup_symbol_local(global_table, short_name);
+                if (!existing_short || !existing_short->is_function) {
+                    // Register or override: either no existing symbol, or existing
+                    // is not a function (e.g. C's sqrt from math.h)
+                    if (existing_short) {
+                        // Update existing symbol in place
+                        if (existing_short->type) free_type(existing_short->type);
+                        existing_short->type = full_sym->type ? clone_type(full_sym->type) : create_type(TYPE_UNKNOWN);
+                        existing_short->is_function = full_sym->is_function;
+                        existing_short->node = full_sym->node;
+                    } else {
+                        add_symbol(global_table, short_name,
+                                   full_sym->type ? clone_type(full_sym->type) : create_type(TYPE_UNKNOWN),
+                                   0, full_sym->is_function, 0);
+                        Symbol* short_sym = lookup_symbol(global_table, short_name);
+                        if (short_sym && full_sym->node) {
+                            short_sym->node = full_sym->node;
+                        }
+                    }
+                }
+            }
+
+            // Store alias for AST rewriting: "release" -> "build.release"
+            char dotted[256];
+            snprintf(dotted, sizeof(dotted), "%s.%s", ns, short_name);
+            add_import_alias(short_name, dotted);
+        }
+    }
+
     // NEW: Run type inference before type checking
     if (!infer_all_types(program, global_table)) {
         free_symbol_table(global_table);
@@ -2150,6 +2235,16 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
 
     // Use qualified lookup to handle namespaced calls like string.new -> string_new
     Symbol* symbol = lookup_qualified_symbol(table, call->value);
+
+    // Rewrite import alias to qualified name for codegen (e.g. "release" -> "build.release")
+    if (symbol && symbol->is_function && call->value) {
+        const char* alias_target = find_import_alias(call->value);
+        if (alias_target) {
+            free(call->value);
+            call->value = strdup(alias_target);
+        }
+    }
+
     if (!symbol || !symbol->is_function) {
         char error_msg[256];
         // Check if this is a visibility rejection (not-exported) rather than truly undefined

@@ -33,11 +33,23 @@ void register_extern_func(CodeGenerator* gen, ASTNode* ext) {
     }
 }
 
+// Normalize a function name by replacing dots with underscores (for module-qualified calls).
+// Writes into a caller-provided buffer.
+static void normalize_func_name(const char* name, char* buf, int buf_size) {
+    strncpy(buf, name, buf_size - 1);
+    buf[buf_size - 1] = '\0';
+    for (char* p = buf; *p; p++) {
+        if (*p == '.') *p = '_';
+    }
+}
+
 // Check if a function name is registered as a defer function.
 int is_defer_func(CodeGenerator* gen, const char* func_name) {
     if (!gen || !func_name) return 0;
+    char normalized[256];
+    normalize_func_name(func_name, normalized, sizeof(normalized));
     for (int i = 0; i < gen->defer_func_count; i++) {
-        if (gen->defer_funcs[i].name && strcmp(gen->defer_funcs[i].name, func_name) == 0) {
+        if (gen->defer_funcs[i].name && strcmp(gen->defer_funcs[i].name, normalized) == 0) {
             return 1;
         }
     }
@@ -47,8 +59,10 @@ int is_defer_func(CodeGenerator* gen, const char* func_name) {
 // Get the factory function for a defer function (default: "map_new").
 const char* get_defer_factory(CodeGenerator* gen, const char* func_name) {
     if (!gen || !func_name) return "map_new";
+    char normalized[256];
+    normalize_func_name(func_name, normalized, sizeof(normalized));
     for (int i = 0; i < gen->defer_func_count; i++) {
-        if (gen->defer_funcs[i].name && strcmp(gen->defer_funcs[i].name, func_name) == 0) {
+        if (gen->defer_funcs[i].name && strcmp(gen->defer_funcs[i].name, normalized) == 0) {
             return gen->defer_funcs[i].factory ? gen->defer_funcs[i].factory : "map_new";
         }
     }

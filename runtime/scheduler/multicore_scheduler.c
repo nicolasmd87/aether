@@ -1471,7 +1471,7 @@ void scheduler_send_batch_flush(void) {
     }
 
     // === PHASE 2: Compute offsets for radix sort by core ===
-    int offsets[MAX_CORES];
+    int offsets[MAX_CORES] = {0};
     int offset = 0;
     for (int c = 0; c < num_cores; c++) {
         offsets[c] = offset;

@@ -742,7 +742,7 @@ static int collect_module_func_names(ASTNode* mod_ast, const char** names, int m
     int count = 0;
     for (int i = 0; i < mod_ast->child_count && count < max; i++) {
         ASTNode* decl = unwrap_export(mod_ast->children[i]);
-        if (decl->type == AST_FUNCTION_DEFINITION && decl->value) {
+        if ((decl->type == AST_FUNCTION_DEFINITION || decl->type == AST_DEFER_FUNCTION) && decl->value) {
             names[count++] = decl->value;
         }
     }
@@ -903,7 +903,7 @@ void module_merge_into_program(ASTNode* program) {
         for (int j = 0; j < mod_ast->child_count; j++) {
             ASTNode* decl = unwrap_export(mod_ast->children[j]);
 
-            if (decl->type == AST_FUNCTION_DEFINITION && decl->value) {
+            if ((decl->type == AST_FUNCTION_DEFINITION || decl->type == AST_DEFER_FUNCTION) && decl->value) {
                 // Skip if not in selective import list
                 if (has_selection) {
                     int selected = 0;
@@ -918,10 +918,24 @@ void module_merge_into_program(ASTNode* program) {
                     if (!selected) continue;
                 }
 
-                // Clone and rename: "double_it" -> "mymath_double_it"
-                ASTNode* clone = clone_ast_node(decl);
+                // Build prefixed name: "double_it" -> "mymath_double_it"
                 char prefixed[256];
-                snprintf(prefixed, sizeof(prefixed), "%s_%s", ns, clone->value);
+                snprintf(prefixed, sizeof(prefixed), "%s_%s", ns, decl->value);
+
+                // Skip if already merged (e.g. from a prior non-selective import)
+                int already_merged = 0;
+                for (int m = 0; m < program->child_count; m++) {
+                    ASTNode* existing = program->children[m];
+                    if (existing && (existing->type == AST_FUNCTION_DEFINITION ||
+                        existing->type == AST_DEFER_FUNCTION) &&
+                        existing->value && strcmp(existing->value, prefixed) == 0) {
+                        already_merged = 1;
+                        break;
+                    }
+                }
+                if (already_merged) continue;
+
+                ASTNode* clone = clone_ast_node(decl);
                 free(clone->value);
                 clone->value = strdup(prefixed);
 

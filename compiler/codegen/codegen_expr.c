@@ -1066,8 +1066,16 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     // Auto-inject builder context for builder functions
                     // (functions with _ctx: ptr as first param)
                     if (gen->in_trailing_block > 0) {
+                        // Normalize func_name (dots to underscores) for comparison
+                        // since builder_funcs are registered with underscores
+                        char bf_normalized[256];
+                        strncpy(bf_normalized, func_name, 255);
+                        bf_normalized[255] = '\0';
+                        for (char* p = bf_normalized; *p; p++) {
+                            if (*p == '.') *p = '_';
+                        }
                         for (int bi = 0; bi < gen->builder_func_count; bi++) {
-                            if (strcmp(gen->builder_funcs[bi], func_name) == 0) {
+                            if (strcmp(gen->builder_funcs[bi], bf_normalized) == 0) {
                                 fprintf(gen->output, "_aether_ctx_get()");
                                 arg_printed++;
                                 break;
