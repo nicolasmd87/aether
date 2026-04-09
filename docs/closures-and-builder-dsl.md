@@ -112,6 +112,38 @@ call(save_handler)    // prints "saved!"
 
 This mirrors Groovy's `actionPerformed: { ... }` pattern.
 
+### Callback blocks
+
+The `callback` keyword before a trailing block creates a real closure (hoisted,
+with variable capture) without requiring explicit parameters. This is the third
+trailing-block mode:
+
+| Mode | Syntax | Semantics |
+|------|--------|-----------|
+| Immediate | `func() { block }` | Runs inline as DSL structure |
+| Closure | `func() \|x\| { block }` | Real closure with explicit params |
+| Callback | `func() callback { block }` | Real closure, captures from scope |
+
+```aether
+counter = ref(0)
+
+btn("increment") callback { ref_set(counter, ref_get(counter) + 1) }
+btn("decrement") callback { ref_set(counter, ref_get(counter) - 1) }
+```
+
+The callbacks capture `counter` from the enclosing scope. No need to thread it
+through as an explicit parameter. At the call site, `call(handler)` is enough.
+
+Callback blocks also support explicit params and arrow bodies:
+
+```aether
+// With params — invoked as call(adder, 3, 4)
+store(action) callback |a: int, b: int| { return a + b }
+
+// Arrow body — shorthand for single-expression callbacks
+store(action) callback |x: int| -> x * 2
+```
+
 ## Higher-Order Functions
 
 Closures enable functional patterns with standard library collections:
