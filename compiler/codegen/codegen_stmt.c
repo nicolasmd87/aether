@@ -700,9 +700,12 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                                             fprintf(gen->output, "_aether_ctx_pop();\n");
                                             // Reassign variable with defer config
                                             print_indent(gen);
-                                            const char* dfn = safe_c_name(init_call->value);
+                                            char c_dfn[256];
+                                            strncpy(c_dfn, safe_c_name(init_call->value), sizeof(c_dfn) - 1);
+                                            c_dfn[sizeof(c_dfn) - 1] = '\0';
+                                            for (char* p = c_dfn; *p; p++) { if (*p == '.') *p = '_'; }
                                             fprintf(gen->output, "%s = %s(",
-                                                    safe_c_name(stmt->value), dfn);
+                                                    safe_c_name(stmt->value), c_dfn);
                                             int darg = 0;
                                             for (int ai = 0; ai < init_call->child_count; ai++) {
                                                 ASTNode* arg = init_call->children[ai];
@@ -1285,8 +1288,11 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
 
                     // 4. Call function with config as extra last arg
                     print_indent(gen);
-                    const char* func_name = safe_c_name(inner->value);
-                    fprintf(gen->output, "%s(", func_name);
+                    char c_defer_name[256];
+                    strncpy(c_defer_name, safe_c_name(inner->value), sizeof(c_defer_name) - 1);
+                    c_defer_name[sizeof(c_defer_name) - 1] = '\0';
+                    for (char* p = c_defer_name; *p; p++) { if (*p == '.') *p = '_'; }
+                    fprintf(gen->output, "%s(", c_defer_name);
                     int arg_printed = 0;
                     for (int ai = 0; ai < inner->child_count; ai++) {
                         ASTNode* arg = inner->children[ai];
