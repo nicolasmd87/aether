@@ -107,8 +107,17 @@ int parse_mps(string output) {
                     dp = string_split(part, ".")
                     if string_array_size(dp) == 2 {
                         whole = atoi(string_array_get(dp, 0))
-                        frac = atoi(string_array_get(dp, 1))
-                        mps = whole * 1000000 + frac * 10000
+                        frac_str = string_array_get(dp, 1)
+                        frac = atoi(frac_str)
+                        // Scale frac based on digit count: 2 digits -> *10000, 6 digits -> *1
+                        frac_len = string_length(frac_str)
+                        scale = 1000000
+                        fl = 0
+                        while fl < frac_len {
+                            scale = scale / 10
+                            fl = fl + 1
+                        }
+                        mps = whole * 1000000 + frac * scale
                         string_array_free(dp)
                         string_array_free(parts)
                         string_array_free(lines)

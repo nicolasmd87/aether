@@ -8,7 +8,7 @@ Comparative benchmarking of actor/message-passing implementations across 11 prog
 make benchmark    # From repo root — builds, runs, opens visualization
 ```
 
-The benchmark runner is written in Aether (`run_benchmarks.ae`), dogfooding the stdlib (`std.os`, `std.string`, `std.io`). It compiles all 11 languages, runs each benchmark, parses output, computes statistics, and writes JSON results.
+Both the benchmark runner (`run_benchmarks.ae`) and the visualization server (`visualize/server.ae`) are written in Aether using only the stdlib — no extern FFI, no C helper files. The runner compiles all 11 languages, runs each benchmark, parses output, computes statistics, and writes JSON results. The server serves the interactive dashboard over HTTP.
 
 ## Patterns (5)
 

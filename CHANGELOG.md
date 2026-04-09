@@ -58,6 +58,10 @@ number before tagging the release.
 - **Benchmark fairness**: Standardized skynet throughput to count total tree nodes across all 11 languages. Fixed Java detection on macOS (GNU sed `\U` → portable case statement). Fixed Scala package namespacing for sbt compilation.
 - **Benchmark statistical rigor**: 5 runs per benchmark (median reported). JVM/BEAM languages get warmup runs before measurement. JSON results include min/max, coefficient of variation (CV%), and individual run values.
 - **Benchmark visualization rewrite**: Sortable table columns, CV% color coding (green/orange/red), relative performance bars, min-max range, efficiency metric (throughput/MB), methodology explanation, Savina paper citation. Skynet tab added.
+- **Benchmark runner rewritten in Aether**: `run_benchmarks.ae` replaces the bash script — compiles all 11 languages, runs benchmarks, parses output, computes statistics, writes JSON results. Dogfoods `std.os`, `std.string`, `std.io`.
+- **Benchmark visualization server rewritten to pure stdlib**: `server.ae` replaced 26 `extern` FFI declarations and 200 lines of hand-written C (`server_ffi.c`) with stdlib imports (`std.net`, `std.io`, `std.string`, `std.os`). Zero C code required.
+- **Inner benchmark Makefile removed**: All benchmark orchestration moved to root Makefile. `make benchmark` directly builds the Aether runner, runs benchmarks, builds the server, and launches the UI.
+- **`string_array_get` bug fix**: Returned `AetherString*` (struct pointer) instead of `const char*` (raw string data). Any code using `string_split` + `string_array_get` with `print`, `string_contains`, etc. got garbled output. Fixed to return `s->data`.
 ## [0.44.0]
 
 ### Fixed

@@ -117,7 +117,7 @@ Each benchmark is run **5 times** (configurable via `BENCH_RUNS`). The **median*
 make benchmark
 ```
 
-This builds the Aether benchmark runner (`run_benchmarks.ae`), compiles all 11 languages, runs all 5 patterns, writes JSON results, and opens the visualization UI at `http://localhost:8080`. The runner itself is written in Aether, dogfooding `std.os`, `std.string`, and `std.io`.
+This builds the Aether benchmark runner (`run_benchmarks.ae`), compiles all 11 languages, runs all 5 patterns, writes JSON results, and launches the visualization server (`server.ae`) at `http://localhost:8080`. Both the runner and the server are written in Aether using only the stdlib — no extern FFI, no C helper files.
 
 ### Aether Only
 
