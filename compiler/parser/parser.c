@@ -838,9 +838,31 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
             
             // Check for trailing closure/block after function call
             // func(args) { body }  or  func(args) |x| { body }
+            // func(args) callback { body }  or  func(args) callback |x| { body }
             {
                 Token* next_tok = peek_token(parser);
-                if (next_tok && (next_tok->type == TOKEN_PIPE || next_tok->type == TOKEN_OR)) {
+                if (next_tok && next_tok->type == TOKEN_CALLBACK) {
+                    // Callback trailing block: always a real closure (hoisted, captures vars)
+                    // func(args) callback { body }  — zero-param closure
+                    // func(args) callback |x| { body }  — parameterized closure
+                    advance_token(parser); // consume 'callback'
+                    Token* after_cb = peek_token(parser);
+                    if (after_cb && (after_cb->type == TOKEN_PIPE || after_cb->type == TOKEN_OR)) {
+                        // callback |params| { body }
+                        ASTNode* trailing = parse_closure_expression(parser);
+                        if (trailing) {
+                            add_child(func_call, trailing);
+                        }
+                    } else if (after_cb && after_cb->type == TOKEN_LEFT_BRACE) {
+                        // callback { body } — zero-param closure (NOT a DSL block)
+                        ASTNode* trailing = create_ast_node(AST_CLOSURE, NULL,
+                                                             after_cb->line, after_cb->column);
+                        trailing->node_type = create_type(TYPE_FUNCTION);
+                        ASTNode* body = parse_block(parser);
+                        add_child(trailing, body);
+                        add_child(func_call, trailing);
+                    }
+                } else if (next_tok && (next_tok->type == TOKEN_PIPE || next_tok->type == TOKEN_OR)) {
                     // Trailing closure with params: func(args) |x| { ... }
                     // These are real closures (not DSL blocks) — they get hoisted
                     ASTNode* trailing = parse_closure_expression(parser);

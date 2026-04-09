@@ -77,37 +77,39 @@ main() {
     }
 
     // ---- THE DSL: button layout with callbacks right here ----
+    // callback { } creates a real closure that captures from scope
+    // — no need to thread num/prev/op as explicit params
     g = grid() {
-        btn("7") |n: ptr, p: ptr, o: ptr| { call(digit, n, 7) }
-        btn("8") |n: ptr, p: ptr, o: ptr| { call(digit, n, 8) }
-        btn("9") |n: ptr, p: ptr, o: ptr| { call(digit, n, 9) }
-        btn("+") |n: ptr, p: ptr, o: ptr| { call(set_op, n, p, o, PLUS) }
+        btn("7") callback { call(digit, num, 7) }
+        btn("8") callback { call(digit, num, 8) }
+        btn("9") callback { call(digit, num, 9) }
+        btn("+") callback { call(set_op, num, prev, op, PLUS) }
 
-        btn("4") |n: ptr, p: ptr, o: ptr| { call(digit, n, 4) }
-        btn("5") |n: ptr, p: ptr, o: ptr| { call(digit, n, 5) }
-        btn("6") |n: ptr, p: ptr, o: ptr| { call(digit, n, 6) }
-        btn("-") |n: ptr, p: ptr, o: ptr| { call(set_op, n, p, o, MINUS) }
+        btn("4") callback { call(digit, num, 4) }
+        btn("5") callback { call(digit, num, 5) }
+        btn("6") callback { call(digit, num, 6) }
+        btn("-") callback { call(set_op, num, prev, op, MINUS) }
 
-        btn("1") |n: ptr, p: ptr, o: ptr| { call(digit, n, 1) }
-        btn("2") |n: ptr, p: ptr, o: ptr| { call(digit, n, 2) }
-        btn("3") |n: ptr, p: ptr, o: ptr| { call(digit, n, 3) }
-        btn("*") |n: ptr, p: ptr, o: ptr| { call(set_op, n, p, o, STAR) }
+        btn("1") callback { call(digit, num, 1) }
+        btn("2") callback { call(digit, num, 2) }
+        btn("3") callback { call(digit, num, 3) }
+        btn("*") callback { call(set_op, num, prev, op, STAR) }
 
-        btn("0") |n: ptr, p: ptr, o: ptr| { call(digit, n, 0) }
-        btn(".") |n: ptr, p: ptr, o: ptr| { }
-        btn("=") |n: ptr, p: ptr, o: ptr| {
-            v = ref_get(n)
-            pv = ref_get(p)
-            ov = ref_get(o)
+        btn("0") callback { call(digit, num, 0) }
+        btn(".") callback { }
+        btn("=") callback {
+            v = ref_get(num)
+            pv = ref_get(prev)
+            ov = ref_get(op)
             if ov == PLUS  { v = pv + v }
             if ov == MINUS { v = pv - v }
             if ov == STAR  { v = pv * v }
             if ov == SLASH && v != 0 { v = pv / v }
-            ref_set(n, v)
-            ref_set(p, 0)
-            ref_set(o, 0)
+            ref_set(num, v)
+            ref_set(prev, 0)
+            ref_set(op, 0)
         }
-        btn("/") |n: ptr, p: ptr, o: ptr| { call(set_op, n, p, o, SLASH) }
+        btn("/") callback { call(set_op, num, prev, op, SLASH) }
     }
     defer list.free(g)
 
@@ -134,7 +136,7 @@ main() {
         if key == SPACE || key == ENTER {
             boxed = list.get(list.get(g, 1), cur)
             handler = unbox_closure(boxed)
-            call(handler, num, prev, op)
+            call(handler)
         }
 
         // Also support direct key input (digits/operators)

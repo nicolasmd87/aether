@@ -1,0 +1,84 @@
+// Test: callback keyword — edge cases
+// Covers: params, empty body, string capture, loops, nesting, arrow body, defer
+
+import std.list
+
+// Helper: store a callback, return it
+store_fn(action: fn) { return action }
+
+// Builder that takes a callback
+on_event(_ctx: ptr, handler: fn) {
+    list.add(_ctx, box_closure(handler))
+}
+
+make_list() { return list.new() }
+
+main() {
+    // --- 1. callback with explicit params ---
+    adder = store_fn() callback |a: int, b: int| {
+        return a + b
+    }
+    println(call(adder, 3, 4))
+
+    // --- 2. callback with arrow body ---
+    doubler = store_fn() callback |x: int| -> x * 2
+    println(call(doubler, 6))
+
+    // --- 3. empty callback body ---
+    noop = store_fn() callback { }
+    call(noop)
+    println("noop ok")
+
+    // --- 4. callback capturing a string ---
+    greeting = "hello"
+    greeter = store_fn() callback {
+        println(greeting)
+    }
+    call(greeter)
+
+    // --- 5. multiple callbacks sharing one captured variable ---
+    val = ref(100)
+    defer ref_free(val)
+    inc = store_fn() callback { ref_set(val, ref_get(val) + 1) }
+    dec = store_fn() callback { ref_set(val, ref_get(val) - 1) }
+    call(inc)
+    call(inc)
+    call(dec)
+    println(ref_get(val))
+
+    // --- 6. callbacks created inside a loop ---
+    fns = list.new()
+    defer list.free(fns)
+    for (i = 1; i <= 3; i++) {
+        captured = i  // snapshot
+        list.add(fns, box_closure(store_fn() callback |x: int| -> x + captured))
+    }
+    f0 = unbox_closure(list.get(fns, 0))
+    f1 = unbox_closure(list.get(fns, 1))
+    f2 = unbox_closure(list.get(fns, 2))
+    println(call(f0, 10))
+    println(call(f1, 10))
+    println(call(f2, 10))
+
+    // --- 7. callback nested inside a DSL trailing block ---
+    events = make_list() {
+        on_event() callback { println("event A") }
+        on_event() callback { println("event B") }
+    }
+    defer list.free(events)
+    ea = unbox_closure(list.get(events, 0))
+    eb = unbox_closure(list.get(events, 1))
+    call(ea)
+    call(eb)
+
+    // --- 8. callback mutating captured state ---
+    counter = ref(0)
+    defer ref_free(counter)
+    with_cleanup = store_fn() callback {
+        ref_set(counter, 42)
+    }
+    call(with_cleanup)
+    println(ref_get(counter))
+
+    println("edges ok")
+}
