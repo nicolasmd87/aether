@@ -1,3 +1,5 @@
+package bench.skynet
+
 // Scala Akka Skynet Benchmark
 // Based on https://github.com/atemerev/skynet
 // Recursive actor tree using Akka actors.
@@ -64,13 +66,14 @@ class SkynetRoot(numLeaves: Long, promise: Promise[Long]) extends Actor {
   }
 }
 
-object skynet extends App {
+object SkynetBenchmark extends App {
   val envVal = sys.env.getOrElse("BENCHMARK_MESSAGES", "1000000")
   val numLeaves = envVal.toLong
 
-  val totalActors = numLeaves / 100 + numLeaves / 1000 +
-                    numLeaves / 10000 + numLeaves / 100000 + 1
-  val totalMessages = totalActors * 2 + (numLeaves / 100) * 10
+  // Total tree nodes (same formula as all languages for fair comparison)
+  var totalNodes = 0L
+  var nn = numLeaves
+  while (nn >= 1) { totalNodes += nn; nn /= 10 }
 
   val system = ActorSystem("skynet")
   val promise = Promise[Long]()
@@ -83,8 +86,8 @@ object skynet extends App {
   println(s"Sum: $result")
 
   if (elapsed > 0) {
-    val nsPerMsg = elapsed / totalMessages
-    val throughput = totalMessages.toDouble / elapsed * 1e9
+    val nsPerMsg = elapsed / totalNodes
+    val throughput = totalNodes.toDouble / elapsed * 1e9
     println(s"ns/msg:         $nsPerMsg")
     println(f"Throughput:     ${throughput / 1e6}%.2f M msg/sec")
   }

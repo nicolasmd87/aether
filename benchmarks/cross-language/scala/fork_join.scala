@@ -1,3 +1,5 @@
+package bench.fork_join
+
 // Scala Akka Fork-Join Benchmark (Savina-style)
 import akka.actor.{Actor, ActorRef, ActorSystem, Props}
 import scala.concurrent.duration._

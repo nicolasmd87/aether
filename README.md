@@ -63,9 +63,13 @@ The Aether runtime implements a native actor system with optimized message passi
 
 ### Benchmarks
 
-Aether includes a comprehensive cross-language benchmark suite comparing actor implementations across 11 languages. Run `make benchmark` to evaluate performance on your system.
+Cross-language benchmark suite based on the [Savina Actor Benchmark Suite](https://dl.acm.org/doi/10.1145/2687357.2687368) — 11 languages × 5 patterns (ping-pong, counting, thread ring, fork-join, skynet). Each benchmark runs 5 times with median reported. Interactive visualization UI with sortable results, statistical metrics (CV%, min-max range), and efficiency analysis.
 
-See [benchmarks/cross-language/](benchmarks/cross-language/) for methodology and implementation details.
+```bash
+make benchmark    # Runs all 55 benchmarks, opens UI at http://localhost:8080
+```
+
+See [Performance Benchmarks](docs/performance-benchmarks.md) for methodology and [benchmarks/cross-language/](benchmarks/cross-language/) for source.
 
 ## Quick Start
 
@@ -404,12 +408,9 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the full pre-PR checklist.
 make benchmark
 # Open http://localhost:8080 to view results
 
-# Or run directly
-cd benchmarks/cross-language
-./run_benchmarks.sh
 ```
 
-The benchmark suite compares Aether against C, C++, Go, Rust, Java, Zig, Erlang, Elixir, Pony, and Scala using baseline actor implementations. Results are system-dependent.
+The benchmark runner is written in Aether (`run_benchmarks.ae`), dogfooding the stdlib. It compiles and runs all 11 languages, parses output, and writes JSON results.
 
 ## Status
 

@@ -2,172 +2,174 @@
 
 ## Overview
 
-This document describes the benchmark methodology and available performance tests for the Aether runtime. Benchmarks measure message-passing throughput, latency, and scalability characteristics.
+The Aether benchmark suite measures message-passing throughput, latency, memory efficiency, and scalability across 11 programming languages using 5 patterns from the [Savina Actor Benchmark Suite](https://dl.acm.org/doi/10.1145/2687357.2687368) (Imam & Sarkar, Rice University, 2014).
 
 ## Benchmark Patterns
 
 ### Ping-Pong
 
-Two actors exchange messages in sequence. Tests cross-actor message-passing latency and throughput.
+Two actors exchange messages back and forth. Measures pure message-passing latency with zero computation.
 
-**Workload:**
-- 2 actors exchanging messages
-- Configurable message count via `BENCHMARK_MESSAGES` environment variable
-- Measures round-trip throughput
+- 2 actors, configurable message count via `BENCHMARK_MESSAGES`
+- Tests: message send/receive overhead, mailbox performance
 
 **Location:** `benchmarks/cross-language/aether/ping_pong.ae`
 
 ### Counting
 
-Single actor receives increment messages from the main thread. Tests main thread to actor message throughput.
+Single actor counts incoming messages from the main thread. Tests unidirectional throughput and single-actor scheduler optimizations.
 
-**Workload:**
-- 1 actor
-- Main thread sends all messages
-- Measures unidirectional throughput
-
-**Notes:**
+- 1 actor, main thread sends all messages
 - Activates Main Thread Actor Mode (synchronous processing, no scheduler overhead)
-- Represents best-case single-actor performance
 
 **Location:** `benchmarks/cross-language/aether/counting.ae`
 
 ### Thread Ring
 
-N actors arranged in a ring, each forwarding messages to the next. Tests multi-actor coordination and scheduler efficiency.
+Token passed through a ring of 100 actors with sequential dependencies. Measures scheduling overhead with many actors.
 
-**Workload:**
-- N actors (configurable)
-- Token passed around the ring
-- Measures ring completion time
-
-**Notes:**
-- Benefits from locality-aware placement — all actors spawned from main are co-located on the same core, enabling direct mailbox delivery and work inlining
-- Cross-core placement would force every message through the lock-free queue path, adding significant overhead for this tightly-coupled communication pattern
+- 100 actors in a ring, token forwarded around
+- Benefits from locality-aware placement (all actors on same core)
 
 **Location:** `benchmarks/cross-language/aether/thread_ring.ae`
 
 ### Fork-Join
 
-Master spawns N workers, distributes work, collects results. Tests fan-out/fan-in patterns.
+Round-robin fan-out to 8 worker actors. Tests parallel dispatch throughput and batch send optimization.
 
-**Workload:**
-- 1 master actor, N worker actors
-- Master sends tasks, workers reply with results
-- Measures parallel dispatch and aggregation
-
-**Notes:**
+- 8 worker actors, messages distributed round-robin from main thread
 - Activates Batch Send optimization (groups messages by target core)
-- Reduces atomic operations from N to num_cores
-- Main thread fan-out pattern benefits significantly from batching
 
 **Location:** `benchmarks/cross-language/aether/fork_join.ae`
 
-## Cross-Language Benchmarks
+### Skynet
 
-The `benchmarks/cross-language/` directory contains equivalent implementations across multiple languages for comparative analysis:
+Recursive 10-ary tree summing 1M leaves. Tests actor creation rate, message aggregation, and tree coordination.
 
-- **Aether**: Lock-free SPSC queues, batch dequeue, thread-local message pools
-- **Go**: Goroutines with buffered channels
-- **Rust**: Tokio async runtime with mpsc channels
-- **C++**: std::thread with concurrent queues
-- **Erlang**: BEAM VM processes with mailboxes
-- **Java**: Thread pools with blocking queues
+- Recursive tree: each node spawns 10 children, leaves compute partial sums
+- Each language uses its idiomatic concurrency model (threads, goroutines, actors, processes)
+- Throughput measured as **total tree nodes / elapsed time** for fair cross-language comparison
 
-Results vary based on hardware architecture, OS scheduler, compiler optimization level, and runtime design choices (VM vs native, GC vs manual memory management). Report your specific test environment when sharing results.
+**Location:** `benchmarks/cross-language/aether/skynet.ae`
 
-See [benchmarks/cross-language/README.md](../benchmarks/cross-language/README.md) for detailed methodology.
+## Languages
 
-## Active Optimization Techniques
+All 11 languages implement all 5 patterns:
 
-### Lock-Free Queues
-Single-producer, single-consumer ring buffers for cross-core messaging. Cache-line aligned with power-of-2 sizing for fast modulo.
-
-**Implementation:** `runtime/scheduler/lockfree_queue.h`
-
-### Message Coalescing
-Batch dequeue drains multiple messages in a single atomic operation, reducing per-message atomic overhead.
-
-**Implementation:** `runtime/scheduler/multicore_scheduler.c`
-
-### Thread-Local Message Pools
-Per-thread pre-allocated buffers eliminate malloc/free on the hot path. Falls back to malloc for oversized messages.
-
-**Implementation:** `runtime/actors/aether_send_message.c`
-
-### Adaptive Batching
-Dynamic batch size adjustment based on queue utilization. Range: 64 to 1024 messages.
-
-**Implementation:** `runtime/actors/aether_adaptive_batch.h`
-
-### Inline Single-Int Messages
-Messages with exactly one integer field bypass pool allocation. The value is stored directly in `Message.payload_int`.
-
-**Implementation:** `compiler/codegen/codegen.c`
-
-### Computed Goto Dispatch
-Message handlers use a dispatch table with GCC computed goto for direct label jumps.
-
-**Implementation:** `compiler/codegen/codegen.c` (generated code)
+| Language | Runtime | Concurrency Model | Optimization |
+|----------|---------|-------------------|-------------|
+| **Aether** | Native (Aether runtime) | Lock-free SPSC actors | `-O3 -march=native` |
+| **C** | Native (pthread) | pthread mutex + condvar | `-O3 -march=native` |
+| **C++** | Native (std::thread) | std::mutex + std::condition_variable | `-O3 -std=c++17 -march=native` |
+| **Go** | Go runtime | Goroutines with channels | Default (Go always optimizes) |
+| **Rust** | Native (std::sync) | sync_channel (bounded MPSC) | `--release` |
+| **Java** | JVM | BlockingQueue / ForkJoinPool | Default |
+| **Zig** | Native | Mutex + Condition variable | `ReleaseFast` |
+| **Elixir** | BEAM VM | Lightweight processes + mailboxes | Default |
+| **Erlang** | BEAM VM | Lightweight processes + mailboxes | Default |
+| **Pony** | Native (Pony runtime) | GC-free actors, ref capabilities | Default |
+| **Scala** | JVM (Akka) | Akka actor system | Default |
 
 ## Methodology
 
-### Measurement Approach
+### Statistical Approach
 
-- High-precision timing (`clock_gettime` with `CLOCK_MONOTONIC`)
-- Multiple runs with warmup periods
-- Isolated processes to minimize interference
-- Compiler flags: `-O3 -march=native -flto`
-- Correctness validation before measurement
+Each benchmark is run **5 times** (configurable via `BENCH_RUNS`). The **median** throughput is reported to reduce the impact of outliers. All individual run values are stored for transparency.
 
-### Hardware Specifications
+**JVM/BEAM warmup:** Java, Scala, Erlang, and Elixir receive 1 warmup run (discarded, not timed) before the measured runs. This allows JIT compilation to complete before measurement, matching how these runtimes perform in production.
 
-Document your test environment when reporting results:
-- CPU model, core count, and clock speed
-- Operating system and version
-- Compiler and version
-- Memory configuration
+**Metrics reported per language:**
 
-### Statistical Validity
+| Metric | Description |
+|--------|-------------|
+| Throughput (M msg/s) | Messages processed per second (median of N runs) |
+| Latency (ns/msg) | Nanoseconds per message (median) |
+| Memory (MB) | Peak resident set size via `/usr/bin/time` |
+| Relative (%) | Percentage of the fastest language's throughput |
+| CV% | Coefficient of variation (σ/μ × 100) — measures run-to-run stability |
+| Range | Min–Max throughput across all runs |
+| Efficiency | Throughput per MB of memory (M msg/s/MB) |
 
-- Multiple iterations to account for variance
-- Median values to avoid outlier bias
-- Both cold-start and warm-cache scenarios considered
+**CV% interpretation:**
+- **< 5%** (green): Stable results, high confidence
+- **5–15%** (orange): Moderate variance, interpret with care
+- **> 15%** (red): High variance, likely thermal throttling or OS scheduling noise
+
+### Measurement
+
+- Wall-clock time via `CLOCK_MONOTONIC` (not CPU time)
+- All compiled languages use highest optimization flags
+- Correctness validated (e.g., skynet sum = 499,999,500,000 for 1M leaves)
+- Memory measured as peak RSS via `/usr/bin/time -l` (macOS) or `/usr/bin/time -v` (Linux)
+
+### Fairness
+
+- All languages use the same message count (`BENCHMARK_MESSAGES` environment variable)
+- Skynet throughput standardized: all languages count **total tree nodes** (not messages or threads)
+- Each language uses its idiomatic concurrency model — the benchmark measures "how well does this language solve the problem," not "how identical is the implementation"
+- Results JSON includes full methodology metadata for reproducibility
 
 ## Running Benchmarks
 
-### Cross-Language Suite
+### Full Suite (all languages)
 
 ```bash
-cd benchmarks/cross-language
-./run_benchmarks.sh
+make benchmark
 ```
+
+This builds the Aether benchmark runner (`run_benchmarks.ae`), compiles all 11 languages, runs all 5 patterns, writes JSON results, and opens the visualization UI at `http://localhost:8080`. The runner itself is written in Aether, dogfooding `std.os`, `std.string`, and `std.io`.
 
 ### Aether Only
 
 ```bash
 cd benchmarks/cross-language/aether
-make
-./ping_pong
+make ping_pong && ./ping_pong
 ```
 
-## Interpreting Results
+### Configuration
 
-### Key Metrics
+```bash
+# Override message count
+BENCHMARK_MESSAGES=10000000 make benchmark
 
-- **Throughput**: Messages processed per second (M msg/sec)
-- **ns/msg**: Nanoseconds per message (lower is better)
-- **Latency**: Time from send to receive (per round-trip)
+# Override number of timed runs
+BENCH_RUNS=10 make benchmark
 
-### Considerations
+# Override warmup runs for JIT languages
+BENCH_WARMUP=3 make benchmark
+```
 
-- Single-node architecture (no distributed messaging)
-- Arena-based memory management (no tracing GC pauses)
-- Platform-specific optimizations (PAUSE, YIELD, NUMA)
-- Cross-language comparisons involve fundamentally different runtime models
+### Visualization
+
+After `make benchmark`, a web UI opens at `http://localhost:8080` showing:
+
+- **Summary strip**: Aether rank, throughput, vs fastest, efficiency, spread
+- **Charts**: Throughput and memory bar charts with Aether highlighted
+- **Sortable table**: Click any column header to sort. Columns include throughput, latency, memory, relative performance bar, CV%, min-max range, and efficiency
+- **Pattern tabs**: Switch between all 5 benchmark patterns
+- **Methodology box**: Explains what's being measured and how to interpret CV%
+
+Results are stored as JSON in `benchmarks/cross-language/visualize/results_*.json` with full metadata (hardware, runs, warmup, methodology).
+
+## Active Optimizations
+
+These Aether runtime optimizations affect benchmark performance:
+
+| Optimization | Effect | File |
+|-------------|--------|------|
+| Main Thread Actor Mode | Single-actor programs bypass scheduler entirely | `runtime/actors/aether_send_message.c` |
+| Inline message path | Single-field messages (int, int64, ptr, bool, actor_ref) skip heap allocation — value stored in `Message.payload_int` | `compiler/codegen/codegen.c` |
+| Batch send | Main-thread fan-out groups messages by target core, reducing atomics from N to num_cores | `runtime/scheduler/multicore_scheduler.c` |
+| Partial batch enqueue | `queue_enqueue_batch` returns how many fit instead of all-or-nothing | `runtime/scheduler/lockfree_queue.h` |
+| Work inlining | Same-core sends invoke `actor->step()` immediately, skipping the scheduler drain loop | `runtime/scheduler/multicore_scheduler.c` |
+| Computed goto dispatch | Message handlers use GCC computed-goto dispatch tables | `compiler/codegen/codegen_actor.c` |
+| TLS caching | `current_core_id` cached in local variables, avoiding repeated `tlv_get_addr` on macOS | `runtime/scheduler/multicore_scheduler.c` |
+| SPSC queues | Lock-free single-producer single-consumer ring buffers for cross-core messaging | `runtime/scheduler/lockfree_queue.h` |
+| Adaptive batching | Batch size adjusts dynamically (64–1024) based on queue utilization | `runtime/actors/aether_adaptive_batch.h` |
 
 ## References
 
-- [Cross-Language Benchmarks](../benchmarks/cross-language/)
+- [Savina — An Actor Benchmark Suite](https://dl.acm.org/doi/10.1145/2687357.2687368) (Imam & Sarkar, 2014)
+- [Cross-Language Benchmark Source](../benchmarks/cross-language/)
 - [Runtime Optimizations](runtime-optimizations.md)
 - [Scheduler Architecture](scheduler-quick-reference.md)

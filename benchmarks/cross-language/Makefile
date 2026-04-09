@@ -17,9 +17,12 @@ benchmark-ui: run-benchmarks build-ui
 	@echo ""
 	@cd visualize && ./server
 
-# Run all benchmarks
+# Run all benchmarks (written in Aether — dogfooding the stdlib)
 run-benchmarks:
-	@./run_benchmarks.sh
+	@mkdir -p build
+	@echo "Building benchmark runner (Aether)..."
+	@cd ../.. && AETHER_HOME="" ./build/ae build benchmarks/cross-language/run_benchmarks.ae -o benchmarks/cross-language/build/bench_runner
+	@./build/bench_runner
 
 # Build the visualization server (Aether)
 build-ui:
@@ -52,6 +55,7 @@ build-ui:
 clean:
 	@echo "Cleaning build artifacts..."
 	@rm -f visualize/server visualize/server_generated.c
+	@rm -rf build/
 	@echo "Done!"
 
 # Help target

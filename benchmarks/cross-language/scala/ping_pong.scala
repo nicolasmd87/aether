@@ -1,3 +1,5 @@
+package bench.ping_pong
+
 // Scala Akka Ping-Pong Benchmark
 // Classic actor framework comparison
 

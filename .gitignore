@@ -1,6 +1,7 @@
 # Build outputs
 /build/*
 /target/
+benchmarks/cross-language/build/
 *.exe
 *.o
 *.obj
@@ -33,6 +34,7 @@ benchmarks/cross-language/*/skynet_noinline
 benchmarks/cross-language/*/*.exe
 benchmarks/cross-language/*/*.beam
 benchmarks/cross-language/*/*.class
+erl_crash.dump
 benchmarks/cross-language/*/erl_crash.dump
 benchmarks/cross-language/**/*.dSYM/
 
