@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 the release pipeline automatically replaces `[current]` with the next version
 number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`callback` keyword for trailing blocks**: Third trailing-block mode — `func(args) callback { body }` creates a real closure (hoisted, captures variables from scope) rather than an inline DSL block. The block runs later when invoked, not at construction time. Also supports explicit params (`callback |x: int| { ... }`) and arrow bodies (`callback |x| -> x * 2`).
+
 ## [0.47.0]
 
 ### Added
