@@ -15,6 +15,7 @@ number before tagging the release.
 
 - **Builder functions** (renamed from `defer`): `builder` keyword for function definitions enables "configure then execute" DSL pattern. The trailing block runs first to fill a config object, then the function executes with it via implicit `_builder` parameter. Renamed to avoid overloading `defer` (which remains for scope cleanup). Complements the existing regular trailing-block pattern ("function first, block decorates").
 - **Configurable builder factory with `with` clause**: `builder func(...) with factory_fn { ... }` lets SDK authors specify what config object the trailing block operates on. Defaults to `map_new`; alternatives include `list_new` or any user-defined zero-arg factory.
+- **`--lib` flag for custom module library directory**: `aetherc --lib DIR` resolves imports from a custom directory instead of the default `lib/`. Threaded through `ae run` and `ae check`. Enables build tools like aetherBuild to use `.aeb/lib/` without polluting the project's `lib/`.
 - **Unqualified selective imports**: `import mymodule (foo, bar)` now registers short names so `foo()` can be called without the `mymodule.` prefix. Qualified calls (`mymodule.foo()`) continue to work alongside unqualified ones. Enables clean DSL blocks where setter functions don't need module qualification:
   ```aether
   import build
