@@ -1,5 +1,5 @@
 // Test defer statement with various return types
-// Verifies: _defer_ret uses correct type (not always int)
+// Verifies: _builder_ret uses correct type (not always int)
 
 extern puts(s: string) -> int
 

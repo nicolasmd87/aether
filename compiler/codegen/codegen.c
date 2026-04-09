@@ -98,6 +98,10 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->builder_func_count = 0;
     gen->builder_func_capacity = 0;
     gen->in_trailing_block = 0;
+    // Builder function registry
+    gen->builder_funcs_reg = NULL;
+    gen->builder_func_reg_count = 0;
+    gen->builder_func_reg_capacity = 0;
     // Closure support
     gen->closure_counter = 0;
     gen->closures = NULL;
@@ -219,7 +223,7 @@ int count_function_clauses(ASTNode* program, const char* func_name) {
     int count = 0;
     for (int i = 0; i < program->child_count; i++) {
         ASTNode* child = program->children[i];
-        if (child->type == AST_FUNCTION_DEFINITION &&
+        if ((child->type == AST_FUNCTION_DEFINITION || child->type == AST_BUILDER_FUNCTION) &&
             child->value && strcmp(child->value, func_name) == 0) {
             count++;
         }
@@ -239,7 +243,7 @@ ASTNode** collect_function_clauses(ASTNode* program, const char* func_name, int*
     int idx = 0;
     for (int i = 0; i < program->child_count; i++) {
         ASTNode* child = program->children[i];
-        if (child->type == AST_FUNCTION_DEFINITION &&
+        if ((child->type == AST_FUNCTION_DEFINITION || child->type == AST_BUILDER_FUNCTION) &&
             child->value && strcmp(child->value, func_name) == 0) {
             clauses[idx++] = child;
         }
@@ -1075,7 +1079,7 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     extern void merge_return_tuple_types(ASTNode* node, Type* merged);
     for (int i = 0; i < program->child_count; i++) {
         ASTNode* child = program->children[i];
-        if (child && child->type == AST_FUNCTION_DEFINITION && child->node_type &&
+        if (child && (child->type == AST_FUNCTION_DEFINITION || child->type == AST_BUILDER_FUNCTION) && child->node_type &&
             child->node_type->kind == TYPE_TUPLE) {
             merge_return_tuple_types(child, child->node_type);
             ensure_tuple_typedef(gen, child->node_type);
@@ -1087,7 +1091,7 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         ASTNode* child = program->children[i];
         if (!child) continue;
         // For each function with a tuple return type, update matching call sites
-        if (child->type == AST_FUNCTION_DEFINITION && child->node_type &&
+        if ((child->type == AST_FUNCTION_DEFINITION || child->type == AST_BUILDER_FUNCTION) && child->node_type &&
             child->node_type->kind == TYPE_TUPLE && child->value) {
             // Find all calls to this function in the program and update their node_type
             extern void propagate_tuple_type_to_calls(ASTNode* node, const char* func_name, Type* type);
@@ -1120,19 +1124,34 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         }
     }
 
+    // Pre-pass: identify builder functions (marked with 'builder' keyword)
+    // These get block-first execution: block fills config, then function runs with it
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* child = program->children[i];
+        if (!child || child->type != AST_BUILDER_FUNCTION || !child->value) continue;
+        if (gen->builder_func_reg_count >= gen->builder_func_reg_capacity) {
+            gen->builder_func_reg_capacity = gen->builder_func_reg_capacity ? gen->builder_func_reg_capacity * 2 : 16;
+            gen->builder_funcs_reg = realloc(gen->builder_funcs_reg,
+                gen->builder_func_reg_capacity * sizeof(struct BuilderFuncEntry));
+        }
+        gen->builder_funcs_reg[gen->builder_func_reg_count].name = strdup(child->value);
+        gen->builder_funcs_reg[gen->builder_func_reg_count].factory = child->annotation ? strdup(child->annotation) : NULL;
+        gen->builder_func_reg_count++;
+    }
+
     // Generate forward declarations for all functions FIRST so that
     // hoisted closure functions can call them without implicit declarations.
     print_line(gen, "// Forward declarations");
     for (int i = 0; i < program->child_count; i++) {
         ASTNode* child = program->children[i];
-        if (!child || child->type != AST_FUNCTION_DEFINITION) continue;
+        if (!child || (child->type != AST_FUNCTION_DEFINITION && child->type != AST_BUILDER_FUNCTION)) continue;
         if (!child->value) continue;
 
         // Skip if already forward-declared (pattern matching generates combined functions)
         int already_declared = 0;
         for (int j = 0; j < i; j++) {
             ASTNode* prev = program->children[j];
-            if (prev && prev->type == AST_FUNCTION_DEFINITION &&
+            if (prev && (prev->type == AST_FUNCTION_DEFINITION || prev->type == AST_BUILDER_FUNCTION) &&
                 prev->value && strcmp(prev->value, child->value) == 0) {
                 already_declared = 1;
                 break;
@@ -1168,6 +1187,11 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                 generate_type(gen, param->node_type);
                 param_count++;
             }
+        }
+        // Builder functions get hidden void* _builder as last parameter
+        if (child->type == AST_BUILDER_FUNCTION) {
+            if (param_count > 0) fprintf(gen->output, ", ");
+            fprintf(gen->output, "void*");
         }
         fprintf(gen->output, ");\n");
     }
@@ -1478,6 +1502,7 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                     }
                 }
                 break;
+            case AST_BUILDER_FUNCTION:
             case AST_FUNCTION_DEFINITION:
                 // Check if this function was already generated (handles pattern matching clauses)
                 if (child->value && !is_function_generated(gen, child->value)) {

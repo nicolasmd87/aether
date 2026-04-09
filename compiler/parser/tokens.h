@@ -19,6 +19,7 @@ typedef enum {
     TOKEN_CONTINUE,
     TOKEN_RETURN,
     TOKEN_DEFER,
+    TOKEN_BUILDER,          // 'builder' keyword for configure-then-execute functions
     TOKEN_MATCH,
     TOKEN_WHEN,
     TOKEN_RECEIVE,

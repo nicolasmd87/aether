@@ -46,6 +46,10 @@ void register_extern_func(CodeGenerator* gen, ASTNode* ext);
 int is_extern_func(CodeGenerator* gen, const char* func_name);
 TypeKind lookup_extern_param_kind(CodeGenerator* gen, const char* func_name, int param_idx);
 
+/* Builder function registry — functions where block configures first, then function executes */
+int is_builder_func_reg(CodeGenerator* gen, const char* func_name);
+const char* get_builder_factory(CodeGenerator* gen, const char* func_name);
+
 /* Function/struct generation (codegen_func.c) */
 int has_return_value(ASTNode* node);
 void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext);

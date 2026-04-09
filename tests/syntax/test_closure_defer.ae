@@ -1,0 +1,70 @@
+// Test: builder trailing block — "configure then execute" pattern
+// The block runs first (filling config), then the function executes with it.
+
+import std.map
+
+// --- Builder functions: these use _ctx to set config entries ---
+
+set_release(_ctx: ptr, version: string) {
+    map_put(_ctx, "release", version)
+}
+
+set_lint(_ctx: ptr, level: string) {
+    map_put(_ctx, "lint", level)
+}
+
+set_werror(_ctx: ptr) {
+    map_put(_ctx, "werror", "true")
+}
+
+// --- Builder function: block configures, then this executes ---
+
+builder compile(src: string) {
+    // _builder is the config map filled by the trailing block
+    rel = ""
+    lint_level = ""
+    werror = 0
+
+    if _builder != null {
+        if map_has(_builder, "release") == 1 {
+            rel = map_get(_builder, "release")
+        }
+        if map_has(_builder, "lint") == 1 {
+            lint_level = map_get(_builder, "lint")
+        }
+        if map_has(_builder, "werror") == 1 {
+            werror = 1
+        }
+    }
+
+    println("compile: ${src} release=${rel} lint=${lint_level} werror=${werror}")
+}
+
+// --- Another builder function without trailing block (zero-config) ---
+
+builder build_jar(name: string) {
+    has_cfg = 0
+    if _builder != null {
+        has_cfg = 1
+    }
+    println("build_jar: ${name} has_config=${has_cfg}")
+}
+
+main() {
+    // Builder call WITH trailing block — block fills config first
+    compile("Main.java") {
+        set_release("21")
+        set_lint("all")
+        set_werror()
+    }
+
+    // Builder call WITHOUT trailing block — zero-config
+    compile("Test.java")
+
+    // Another builder function with config
+    build_jar("app") {
+        set_release("17")
+    }
+
+    println("defer ok")
+}

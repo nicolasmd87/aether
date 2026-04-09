@@ -77,6 +77,15 @@ typedef struct {
     int builder_func_capacity;
     int in_trailing_block;  // >0 when generating code inside a trailing block
 
+    // Builder function registry: functions marked with 'builder' keyword
+    // Block runs first (filling config), then function executes with config
+    struct BuilderFuncEntry {
+        char* name;
+        char* factory;  // Factory function name, NULL means "map_new"
+    } *builder_funcs_reg;
+    int builder_func_reg_count;
+    int builder_func_reg_capacity;
+
     // Closure support: track closures for hoisted C function generation
     int closure_counter;    // unique ID for closure env structs and functions
     // Map variable names to closure IDs (set during variable declaration codegen)

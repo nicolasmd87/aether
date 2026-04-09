@@ -311,6 +311,7 @@ Token* read_identifier() {
     else if (strcmp(buffer, "continue") == 0) token = create_token(TOKEN_CONTINUE, buffer, current_line, current_column);
     else if (strcmp(buffer, "return") == 0) token = create_token(TOKEN_RETURN, buffer, current_line, current_column);
     else if (strcmp(buffer, "defer") == 0) token = create_token(TOKEN_DEFER, buffer, current_line, current_column);
+    else if (strcmp(buffer, "builder") == 0) token = create_token(TOKEN_BUILDER, buffer, current_line, current_column);
     else if (strcmp(buffer, "match") == 0) token = create_token(TOKEN_MATCH, buffer, current_line, current_column);
     else if (strcmp(buffer, "when") == 0) token = create_token(TOKEN_WHEN, buffer, current_line, current_column);
     else if (strcmp(buffer, "receive") == 0) token = create_token(TOKEN_RECEIVE, buffer, current_line, current_column);
@@ -647,6 +648,7 @@ const char* token_type_to_string(AeTokenType type) {
         case TOKEN_BREAK: return "BREAK";
         case TOKEN_CONTINUE: return "CONTINUE";
         case TOKEN_RETURN: return "RETURN";
+        case TOKEN_BUILDER: return "BUILDER";
         case TOKEN_MATCH: return "MATCH";
         case TOKEN_WHEN: return "WHEN";
         case TOKEN_RECEIVE: return "RECEIVE";

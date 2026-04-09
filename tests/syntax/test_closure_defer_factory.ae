@@ -1,0 +1,173 @@
+// Test: builder factory — configurable config object via 'with' clause
+// The 'with' clause lets the SDK author choose what config object
+// the trailing block operates on. Default is map_new.
+
+import std.map
+import std.list
+
+// ---- Map-based config (default, no 'with') ----
+
+set_opt(_ctx: ptr, key: string, value: string) {
+    map_put(_ctx, key, value)
+}
+
+builder compile(src: string) {
+    rel = ""
+    if _builder != null {
+        if map_has(_builder, "release") == 1 {
+            rel = map_get(_builder, "release")
+        }
+    }
+    println("compile: ${src} release=${rel}")
+}
+
+// ---- List-based config (with list_new) ----
+
+add_flag(_ctx: ptr, flag: string) {
+    list.add(_ctx, flag)
+}
+
+builder run_command(name: string) with list_new {
+    count = 0
+    if _builder != null {
+        count = list.size(_builder)
+    }
+    println("run: ${name} flags=${count}")
+    i = 0
+    for (i = 0; i < count; i++) {
+        f = list.get(_builder, i)
+        println("  flag: ${f}")
+    }
+}
+
+// ---- Custom builder factory ----
+// A builder is just a map with domain-specific setter functions
+
+query_builder_new() {
+    m = map_new()
+    map_put(m, "_type", "query")
+    return m
+}
+
+set_table(_ctx: ptr, table: string) {
+    map_put(_ctx, "table", table)
+}
+
+set_where(_ctx: ptr, clause: string) {
+    map_put(_ctx, "where", clause)
+}
+
+set_limit(_ctx: ptr, n: int) {
+    map_put(_ctx, "limit", n)
+}
+
+builder execute_query(db: string) with query_builder_new {
+    table = ""
+    where_clause = ""
+    if _builder != null {
+        if map_has(_builder, "table") == 1 { table = map_get(_builder, "table") }
+        if map_has(_builder, "where") == 1 { where_clause = map_get(_builder, "where") }
+    }
+    println("query: db=${db} table=${table} where=${where_clause}")
+}
+
+// ---- with + return value ----
+
+builder count_flags(label: string): int with list_new {
+    n = 0
+    if _builder != null {
+        n = list.size(_builder)
+    }
+    println("count_flags: ${label} n=${n}")
+    return n
+}
+
+// ---- with + no explicit params ----
+
+builder run_all() with list_new {
+    n = 0
+    if _builder != null {
+        n = list.size(_builder)
+    }
+    println("run_all: ${n} items")
+}
+
+// ---- Regular (non-defer) function for nesting test ----
+
+setup(label: string) {
+    println("setup: ${label}")
+}
+
+main() {
+    // 1. Default factory (map_new) — backward compatible
+    compile("App.java") {
+        set_opt("release", "21")
+    }
+
+    // 2. List factory — config is a list of flags
+    run_command("gcc") {
+        add_flag("-O2")
+        add_flag("-Wall")
+        add_flag("-Werror")
+    }
+
+    // 2b. List factory without trailing block
+    run_command("ls")
+
+    // 3. Custom builder factory
+    execute_query("prod") {
+        set_table("users")
+        set_where("active=1")
+        set_limit(100)
+    }
+
+    // 3b. Custom builder without trailing block
+    execute_query("test")
+
+    // 4. with + return value — capture result
+    c1 = count_flags("batch1") {
+        add_flag("a")
+        add_flag("b")
+    }
+    println("c1=${c1}")
+
+    // 4b. with + return value — no trailing block
+    c2 = count_flags("batch2")
+    println("c2=${c2}")
+
+    // 5. with + no explicit params — only hidden _builder
+    run_all() {
+        add_flag("task1")
+        add_flag("task2")
+    }
+
+    // 5b. with + no explicit params — no trailing block
+    run_all()
+
+    // 6. with inside a regular trailing block (nesting)
+    setup("outer") {
+        println("in regular block")
+        run_command("nested-gcc") {
+            add_flag("-g")
+            add_flag("-DDEBUG")
+        }
+    }
+
+    // 7. Mixed factories interleaved — default, list, custom, list, default
+    compile("One.java") {
+        set_opt("release", "17")
+    }
+    run_command("make") {
+        add_flag("clean")
+    }
+    execute_query("staging") {
+        set_table("logs")
+    }
+    run_command("deploy") {
+        add_flag("--dry-run")
+        add_flag("--verbose")
+    }
+    compile("Two.java")
+
+    println("builder factory ok")
+}

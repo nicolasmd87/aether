@@ -1,0 +1,23 @@
+// Test: selective imports with unqualified access
+// When using import module (func1, func2), the selected functions
+// can be called without the module prefix.
+
+import std.math (abs_int, sqrt)
+
+main() {
+    // Unqualified calls - should resolve to math.abs_int, math.sqrt
+    neg = abs_int(0 - 5)
+    print("abs_int(-5) = ")
+    println(neg)
+
+    result = sqrt(16.0)
+    print("sqrt(16) = ")
+    println(result)
+
+    // Qualified calls should still work too
+    result2 = math.sqrt(25.0)
+    print("math.sqrt(25) = ")
+    println(result2)
+
+    println("Unqualified selective import test passed!")
+}

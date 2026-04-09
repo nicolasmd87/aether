@@ -1,0 +1,54 @@
+// Test: builder function used inside an actor receive handler
+// Verifies that builder calls work correctly in actor context
+
+import std.map
+
+message Configure { label: string }
+message Report {}
+
+set_opt(_ctx: ptr, key: string, value: string) {
+    map_put(_ctx, key, value)
+}
+
+builder process(label: string) {
+    mode = "default"
+    if _builder != null {
+        if map_has(_builder, "mode") == 1 {
+            mode = map_get(_builder, "mode")
+        }
+    }
+    println("process: ${label} mode=${mode}")
+}
+
+actor Worker {
+    state job_count = 0;
+
+    receive {
+        Configure(label) -> {
+            job_count = job_count + 1;
+            // Builder call inside actor handler
+            process(label) {
+                set_opt("mode", "actor")
+            }
+        }
+        Report() -> {
+            println("jobs: ${job_count}");
+        }
+    }
+}
+
+main() {
+    // Builder works outside actors too
+    process("outside") {
+        set_opt("mode", "main")
+    }
+
+    // Spawn actor and send messages
+    w = spawn(Worker())
+    w ! Configure { label: "task1" }
+    w ! Configure { label: "task2" }
+    w ! Report {}
+    wait_for_idle()
+
+    println("builder actor ok")
+}

@@ -139,7 +139,7 @@ static const char* lookup_var_c_type(CodeGenerator* gen, const char* var_name) {
         ASTNode* top = gen->program->children[i];
         if (!top) continue;
         // Look in function bodies and main
-        if (top->type == AST_FUNCTION_DEFINITION || top->type == AST_MAIN_FUNCTION) {
+        if (top->type == AST_FUNCTION_DEFINITION || top->type == AST_BUILDER_FUNCTION || top->type == AST_MAIN_FUNCTION) {
             for (int j = 0; j < top->child_count; j++) {
                 ASTNode* body = top->children[j];
                 if (!body || body->type != AST_BLOCK) continue;
@@ -1066,8 +1066,16 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     // Auto-inject builder context for builder functions
                     // (functions with _ctx: ptr as first param)
                     if (gen->in_trailing_block > 0) {
+                        // Normalize func_name (dots to underscores) for comparison
+                        // since builder_funcs are registered with underscores
+                        char bf_normalized[256];
+                        strncpy(bf_normalized, func_name, 255);
+                        bf_normalized[255] = '\0';
+                        for (char* p = bf_normalized; *p; p++) {
+                            if (*p == '.') *p = '_';
+                        }
                         for (int bi = 0; bi < gen->builder_func_count; bi++) {
-                            if (strcmp(gen->builder_funcs[bi], func_name) == 0) {
+                            if (strcmp(gen->builder_funcs[bi], bf_normalized) == 0) {
                                 fprintf(gen->output, "_aether_ctx_get()");
                                 arg_printed++;
                                 break;
@@ -1085,7 +1093,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             int func_wants_fn = 0;
                             for (int fi = 0; fi < gen->program->child_count; fi++) {
                                 ASTNode* fdef = gen->program->children[fi];
-                                if (fdef && fdef->type == AST_FUNCTION_DEFINITION &&
+                                if (fdef && (fdef->type == AST_FUNCTION_DEFINITION || fdef->type == AST_BUILDER_FUNCTION) &&
                                     fdef->value && strcmp(fdef->value, func_name) == 0) {
                                     int pi = 0;
                                     for (int fj = 0; fj < fdef->child_count; fj++) {
@@ -1110,7 +1118,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             // Look up user-defined function's param type
                             for (int fi = 0; fi < gen->program->child_count; fi++) {
                                 ASTNode* fdef = gen->program->children[fi];
-                                if (fdef && fdef->type == AST_FUNCTION_DEFINITION &&
+                                if (fdef && (fdef->type == AST_FUNCTION_DEFINITION || fdef->type == AST_BUILDER_FUNCTION) &&
                                     fdef->value && strcmp(fdef->value, func_name) == 0) {
                                     int pi = 0;
                                     for (int fj = 0; fj < fdef->child_count; fj++) {
@@ -1134,6 +1142,11 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             generate_expression(gen, arg);
                         }
                         arg_printed++;
+                    }
+                    // Defer functions get (void*)0 as last arg when called without trailing block
+                    if (is_builder_func_reg(gen, func_name)) {
+                        if (arg_printed > 0) fprintf(gen->output, ", ");
+                        fprintf(gen->output, "(void*)0");
                     }
                     fprintf(gen->output, ")");
                 }

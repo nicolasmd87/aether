@@ -1,0 +1,112 @@
+// Test: builder function advanced cases
+// Covers: nested builder blocks, builder with early returns, builder inside actors
+
+import std.map
+
+// --- Setter functions ---
+
+set_opt(_ctx: ptr, key: string, value: string) {
+    map_put(_ctx, key, value)
+}
+
+// --- 1. Nested builder blocks ---
+
+builder outer_task(label: string) {
+    inner_mode = ""
+    outer_mode = ""
+    if _builder != null {
+        if map_has(_builder, "outer") == 1 { outer_mode = map_get(_builder, "outer") }
+        if map_has(_builder, "inner") == 1 { inner_mode = map_get(_builder, "inner") }
+    }
+    println("outer: ${label} outer=${outer_mode} inner=${inner_mode}")
+}
+
+builder inner_task(label: string) {
+    mode = ""
+    if _builder != null {
+        if map_has(_builder, "mode") == 1 { mode = map_get(_builder, "mode") }
+    }
+    println("  inner: ${label} mode=${mode}")
+}
+
+// --- 2. Builder with early return ---
+
+builder check_config(label: string): int {
+    if _builder == null {
+        println("check: ${label} no config")
+        return 0
+    }
+    if map_has(_builder, "required") == 0 {
+        println("check: ${label} missing required")
+        return -1
+    }
+    val = map_get(_builder, "required")
+    println("check: ${label} required=${val}")
+    return 1
+}
+
+// --- 3. Builder returning from middle of logic ---
+
+builder validate(name: string): string {
+    if _builder == null { return "none" }
+    if map_has(_builder, "mode") == 0 { return "default" }
+    return map_get(_builder, "mode")
+}
+
+main() {
+    // 1. Nested builder blocks — outer then inner
+    outer_task("step1") {
+        set_opt("outer", "release")
+        set_opt("inner", "verbose")
+    }
+
+    // 1b. Builder called from inside another builder's trailing block
+    // (inner_task inside outer_task's trailing block)
+    outer_task("step2") {
+        set_opt("outer", "debug")
+        inner_task("sub1") {
+            set_opt("mode", "fast")
+        }
+    }
+
+    // 1c. Double nesting
+    outer_task("step3") {
+        set_opt("outer", "test")
+        inner_task("sub2") {
+            set_opt("mode", "slow")
+        }
+        inner_task("sub3") {
+            set_opt("mode", "parallel")
+        }
+    }
+
+    // 2. Builder with early return — all three paths
+    r1 = check_config("a") {
+        set_opt("required", "yes")
+    }
+    println("r1=${r1}")
+
+    r2 = check_config("b") {
+        set_opt("other", "ignored")
+    }
+    println("r2=${r2}")
+
+    r3 = check_config("c")
+    println("r3=${r3}")
+
+    // 3. Builder returning from middle of logic
+    v1 = validate("x") {
+        set_opt("mode", "strict")
+    }
+    println("v1=${v1}")
+
+    v2 = validate("y") {
+        set_opt("other", "nope")
+    }
+    println("v2=${v2}")
+
+    v3 = validate("z")
+    println("v3=${v3}")
+
+    println("builder advanced ok")
+}

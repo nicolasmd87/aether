@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 the release pipeline automatically replaces `[current]` with the next version
 number before tagging the release.
 
+## [current]
+
+### Added
+
+- **Builder functions** (renamed from `defer`): `builder` keyword for function definitions enables "configure then execute" DSL pattern. The trailing block runs first to fill a config object, then the function executes with it via implicit `_builder` parameter. Renamed to avoid overloading `defer` (which remains for scope cleanup). Complements the existing regular trailing-block pattern ("function first, block decorates").
+- **Configurable builder factory with `with` clause**: `builder func(...) with factory_fn { ... }` lets SDK authors specify what config object the trailing block operates on. Defaults to `map_new`; alternatives include `list_new` or any user-defined zero-arg factory.
+- **Unqualified selective imports**: `import mymodule (foo, bar)` now registers short names so `foo()` can be called without the `mymodule.` prefix. Qualified calls (`mymodule.foo()`) continue to work alongside unqualified ones. Enables clean DSL blocks where setter functions don't need module qualification:
+  ```aether
+  import build
+  import build (release, lint, werror)
+
+  main() {
+      b = build.start()
+      build.javac(b) {
+          release("21")    // no build. prefix needed
+          lint("all")
+          werror()
+      }
+  }
+  ```
+
+### Fixed
+
+- **Builder functions not merged from modules**: `module_merge_into_program` only handled `AST_FUNCTION_DEFINITION`, silently skipping `AST_BUILDER_FUNCTION`. Module-defined builder functions are now merged correctly.
+- **Builder context `_ctx` injection failed for module-qualified calls**: The builder function registry compared names with underscores (`build_release`) against dotted call names (`build.release`), so `_ctx` was never injected. Fixed: normalize dots to underscores before comparison. Same fix applied to `is_builder_func_reg` and `get_builder_factory`.
+- **Duplicate function definitions from repeated module imports**: `import build` followed by `import build (foo)` merged `foo` twice, with the second copy using generic `_argN` parameter names. Fixed: `module_merge_into_program` now skips already-merged functions.
+- Fixed `-Wunused-result` warnings in `tools/ae.c` for `fread` and `system` calls.
+- `install.sh` now prints a message before `git fetch --tags` so users know why SSH credentials may be requested.
+
 ## [0.45.0]
 
 ### Added
