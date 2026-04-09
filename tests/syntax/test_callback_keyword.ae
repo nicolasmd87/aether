@@ -1,0 +1,54 @@
+// Test: callback keyword for trailing closure blocks
+// callback { } creates a real closure (hoisted, captures) — not a DSL block.
+// This is the third trailing-block mode: block-now, function-later.
+
+import std.list
+
+// A builder func that accepts a callback (fn parameter)
+register(_ctx: ptr, name: string, handler: fn) {
+    list.add(list.get(_ctx, 0), name)
+    list.add(list.get(_ctx, 1), box_closure(handler))
+}
+
+make_registry() {
+    r = list.new()
+    list.add(r, list.new())  // names
+    list.add(r, list.new())  // handlers
+    return r
+}
+
+main() {
+    counter = ref(0)
+    defer ref_free(counter)
+
+    // Build registry — callback blocks capture `counter` from scope
+    reg = make_registry() {
+        register("inc") callback { ref_set(counter, ref_get(counter) + 1) }
+        register("dec") callback { ref_set(counter, ref_get(counter) - 1) }
+        register("add10") callback { ref_set(counter, ref_get(counter) + 10) }
+    }
+    defer list.free(reg)
+
+    // Nothing has fired yet
+    println(ref_get(counter))
+
+    // Invoke callbacks — they captured `counter` at registration time
+    handlers = list.get(reg, 1)
+    h0 = unbox_closure(list.get(handlers, 0))
+    call(h0)
+    println(ref_get(counter))
+
+    call(h0)
+    call(h0)
+    println(ref_get(counter))
+
+    h1 = unbox_closure(list.get(handlers, 1))
+    call(h1)
+    println(ref_get(counter))
+
+    h2 = unbox_closure(list.get(handlers, 2))
+    call(h2)
+    println(ref_get(counter))
+
+    println("callback ok")
+}
