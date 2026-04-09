@@ -60,7 +60,7 @@ typedef struct {
 
 AetherStringArray* string_split(const void* str, const char* delimiter);
 int string_array_size(AetherStringArray* arr);
-AetherString* string_array_get(AetherStringArray* arr, int index);
+const char* string_array_get(AetherStringArray* arr, int index);
 void string_array_free(AetherStringArray* arr);
 
 // Conversion

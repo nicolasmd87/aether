@@ -1,3 +1,5 @@
+package bench.thread_ring
+
 // Scala Akka Thread Ring Benchmark (Savina-style)
 import akka.actor.{Actor, ActorRef, ActorSystem, Props}
 import scala.concurrent.duration._

@@ -34,7 +34,6 @@ actor SkynetNode {
             parent_ref = parent;
             if (size <= 100) {
                 // Sequential threshold: compute subtree sum without spawning actors.
-                // This is the key optimization — avoids 1M+ actor allocations.
                 long sum = 0;
                 long i = 0;
                 while (i < size) {
@@ -88,12 +87,15 @@ main() {
         num_leaves = atoi(env_val);
     }
 
-    // Estimate total actors (with threshold=100, ~11,111 for 1M leaves)
-    total_actors = num_leaves / 100 + num_leaves / 1000 +
-                   num_leaves / 10000 + num_leaves / 100000 + 1;
-    // Total messages is roughly total_actors * 3 (Setup + Spawn + Result)
-    // plus num_leaves for the sequential sums reported as Result
-    total_messages = total_actors * 2 + num_leaves / 100 * 10;
+    // Total tree nodes = sum of nodes at each level of the 10-ary tree
+    // For 1M leaves: 1 + 10 + 100 + 1000 + 10000 + 100000 + 1000000 = 1111111
+    // All languages use this same count for fair throughput comparison
+    long total_nodes = 0;
+    long n = num_leaves;
+    while (n >= 1) {
+        total_nodes = total_nodes + n;
+        n = n / 10;
+    }
 
     start_time = clock_ns();
 
@@ -113,13 +115,13 @@ main() {
     elapsed_us = elapsed_ns / 1000;
 
     if (elapsed_us > 0) {
-        ns_per_msg = elapsed_ns / total_messages;
+        ns_per_msg = elapsed_ns / total_nodes;
         print("ns/msg:         ");
         print(ns_per_msg);
         print("\n");
 
-        throughput_m = total_messages / elapsed_us;
-        leftover = total_messages - (throughput_m * elapsed_us);
+        throughput_m = total_nodes / elapsed_us;
+        leftover = total_nodes - (throughput_m * elapsed_us);
         throughput_frac = (leftover * 100) / elapsed_us;
 
         print("Throughput:     ");

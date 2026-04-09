@@ -34,7 +34,7 @@ All benchmark parameters are configured in a single JSON file: **`benchmark_conf
 }
 ```
 
-Just edit the values and run `./run_benchmarks.sh` - the configuration is applied automatically.
+Just edit the values and run `make benchmark` - the configuration is applied automatically.
 
 ## Configuration Options
 
@@ -107,7 +107,7 @@ Set any value you want:
 ### Run benchmarks
 ```bash
 cd benchmarks/cross-language
-./run_benchmarks.sh
+make benchmark
 ```
 
 The script automatically:
@@ -164,9 +164,9 @@ sudo pacman -S go rust zig erlang elixir
 ## Architecture Notes
 
 The configuration system works by:
-1. `run_benchmarks.sh` reads `benchmark_config.json`
-2. Before compilation, it updates source files using `sed`
-3. Each language is compiled with the configured values
+1. `run_benchmarks.ae` reads `BENCHMARK_MESSAGES` from environment
+2. Each language is compiled with highest optimization flags
+3. The Aether runner parses output and writes JSON results
 4. Results are normalized and compared fairly
 
 All languages use the exact same message count for fair comparison.

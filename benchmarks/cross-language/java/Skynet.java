@@ -55,9 +55,9 @@ public class Skynet {
         String env = System.getenv("BENCHMARK_MESSAGES");
         long numLeaves = env != null ? Long.parseLong(env) : 1000000;
 
-        long totalActors = numLeaves / 100 + numLeaves / 1000 +
-                           numLeaves / 10000 + numLeaves / 100000 + 1;
-        long totalMessages = totalActors * 2 + (numLeaves / 100) * 10;
+        // Total tree nodes (same formula as all languages for fair comparison)
+        long totalNodes = 0;
+        for (long n = numLeaves; n >= 1; n /= 10) totalNodes += n;
 
         ForkJoinPool pool = new ForkJoinPool();
 
@@ -68,8 +68,8 @@ public class Skynet {
         System.out.println("Sum: " + result);
 
         if (elapsed > 0) {
-            long nsPerMsg = elapsed / totalMessages;
-            double throughput = (double) totalMessages / elapsed * 1_000_000_000.0;
+            long nsPerMsg = elapsed / totalNodes;
+            double throughput = (double) totalNodes / elapsed * 1_000_000_000.0;
             System.out.println("ns/msg:         " + nsPerMsg);
             System.out.printf("Throughput:     %.2f M msg/sec%n", throughput / 1_000_000.0);
         }

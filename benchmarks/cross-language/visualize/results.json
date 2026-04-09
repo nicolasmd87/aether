@@ -1,9 +1,0 @@
-{
-  "timestamp": "2026-01-12T14:15:54Z",
-  "hardware": {
-    "cpu": "arm",
-    "cores": 8,
-    "os": "Darwin"
-  },
-  "benchmarks": {}
-}

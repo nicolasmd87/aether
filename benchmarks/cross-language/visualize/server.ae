@@ -1,111 +1,141 @@
 // Aether Benchmark Visualization Server
-// Demonstrates Aether's HTTP handling capabilities
+// Pure stdlib — no extern FFI required
 //
-// Build: ae build server.ae -o server --extra server_ffi.c
-// Run: ./server
+// Usage: ae build server.ae -o server && ./server
 // Open: http://localhost:8080
 
-// FFI declarations
-extern socket_create(port: int) -> int
-extern socket_accept(fd: int) -> int
-extern socket_read(fd: int, buf: string, size: int) -> int
-extern socket_write(fd: int, data: string, len: int) -> int
-extern socket_close(fd: int)
-extern file_read(path: string) -> string
-extern getcwd_str() -> string
-extern allocate_string(size: int) -> string
-extern free_string(s: string)
-extern cstr_length(s: string) -> int
-extern starts_with(s: string, prefix: string) -> int
-extern ends_with(s: string, suffix: string) -> int
-extern substring(s: string, start: int, len: int) -> string
-extern parse_http_path(request: string) -> string
-extern str_concat(a: string, b: string) -> string
-extern strcmp(a: string, b: string) -> int
-extern build_response(status: int, ctype: string, body: string) -> string
-
-// Message for actor-based handling
-message HandleRequest { client_fd: int }
+import std.net
+import std.io
+import std.string
+import std.os
 
 main() {
-    port = 8080;
+    port = 8080
 
-    print("=======================================================\n");
-    print("  Aether Benchmark Visualization Server\n");
-    print("  Written in Aether - Compiled to native code\n");
-    print("=======================================================\n\n");
+    println("=======================================================")
+    println("  Aether Benchmark Visualization Server")
+    println("  Written in Aether - Pure stdlib, no FFI")
+    println("=======================================================")
+    println("")
 
-    server_fd = socket_create(port);
-    if (server_fd < 0) {
-        print("Failed to create server socket\n");
+    server = tcp_listen(port)
+    if server == 0 {
+        println("Failed to create server socket")
+        return
     }
 
-    if (server_fd >= 0) {
-        print("Server listening on http://localhost:");
-        print(port);
-        print("\n");
-        print("Press Ctrl+C to stop\n\n");
+    print("Server listening on http://localhost:")
+    println(port)
+    println("Press Ctrl+C to stop")
+    println("")
 
-        base_dir = getcwd_str();
+    base_dir = string_trim(os_exec("pwd"))
 
-        // Main accept loop
-        while (1 == 1) {
-            client_fd = socket_accept(server_fd);
-            if (client_fd >= 0) {
-                buf = allocate_string(4096);
-                n = socket_read(client_fd, buf, 4096);
+    // Accept loop
+    while 1 == 1 {
+        client = tcp_accept(server)
+        if client != 0 {
+            request = tcp_receive(client, 4096)
 
-                if (n > 0) {
-                    path = parse_http_path(buf);
+            if request != 0 {
+                if string_length(request) > 0 {
+                    // Parse HTTP path from "GET /path HTTP/1.1"
+                    path = parse_path(request)
 
-                    // Variables for response - declared at top of scope
-                    status = 404;
-                    content_type = "text/plain";
-                    body = "Not Found";
-                    filepath = "";
-                    content = "";
-                    filename = "";
+                    status = 404
+                    ctype = "text/plain"
+                    body = "Not Found"
 
                     // Route: / or /index.html
-                    if (strcmp(path, "/") == 0 || strcmp(path, "/index.html") == 0) {
-                        filepath = str_concat(base_dir, "/index.html");
-                        content = file_read(filepath);
-                        if (cstr_length(content) > 0) {
-                            status = 200;
-                            content_type = "text/html; charset=utf-8";
-                            body = content;
+                    if string_equals(path, "/") == 1 {
+                        content = io_read_file(string_concat(base_dir, "/index.html"))
+                        if content != 0 {
+                            if string_length(content) > 0 {
+                                status = 200
+                                ctype = "text/html; charset=utf-8"
+                                body = content
+                            }
+                        }
+                    }
+
+                    if string_equals(path, "/index.html") == 1 {
+                        content = io_read_file(string_concat(base_dir, "/index.html"))
+                        if content != 0 {
+                            if string_length(content) > 0 {
+                                status = 200
+                                ctype = "text/html; charset=utf-8"
+                                body = content
+                            }
                         }
                     }
 
                     // Route: /results_*.json
-                    if (starts_with(path, "/results_") == 1 && ends_with(path, ".json") == 1) {
-                        filename = substring(path, 1, cstr_length(path) - 1);
-                        filepath = str_concat(base_dir, "/");
-                        filepath = str_concat(filepath, filename);
-                        content = file_read(filepath);
-                        status = 200;
-                        content_type = "application/json";
-                        if (cstr_length(content) > 0) {
-                            body = content;
-                        } else {
-                            body = "{\"benchmarks\":{},\"message\":\"No results yet\"}";
+                    if string_starts_with(path, "/results_") == 1 {
+                        if string_ends_with(path, ".json") == 1 {
+                            filename = string_substring(path, 1, string_length(path))
+                            filepath = string_concat(base_dir, string_concat("/", filename))
+                            content = io_read_file(filepath)
+                            status = 200
+                            ctype = "application/json"
+                            if content != 0 {
+                                if string_length(content) > 0 {
+                                    body = content
+                                } else {
+                                    body = "{\"benchmarks\":{},\"message\":\"No results yet\"}"
+                                }
+                            } else {
+                                body = "{\"benchmarks\":{},\"message\":\"No results yet\"}"
+                            }
                         }
                     }
 
                     // Route: /api/sysinfo
-                    if (strcmp(path, "/api/sysinfo") == 0) {
-                        status = 200;
-                        content_type = "application/json";
-                        body = "{\"server\":\"Aether HTTP Server\",\"version\":\"0.5.0\",\"language\":\"Aether\",\"runtime\":\"Native\"}";
+                    if string_equals(path, "/api/sysinfo") == 1 {
+                        status = 200
+                        ctype = "application/json"
+                        body = "{\"server\":\"Aether HTTP Server\",\"language\":\"Aether\",\"runtime\":\"Native\",\"stdlib\":true}"
                     }
 
-                    response = build_response(status, content_type, body);
-                    socket_write(client_fd, response, cstr_length(response));
+                    // Build and send HTTP response
+                    response = build_http_response(status, ctype, body)
+                    tcp_send(client, response)
                 }
-
-                free_string(buf);
-                socket_close(client_fd);
             }
+
+            tcp_close(client)
         }
     }
+}
+
+// Parse HTTP request path: "GET /foo HTTP/1.1\r\n..." -> "/foo"
+string parse_path(string request) {
+    // Find first space (after method)
+    idx = string_index_of(request, " ")
+    if idx < 0 { return "/" }
+
+    // Find second space (after path)
+    rest = string_substring(request, idx + 1, string_length(request))
+    end = string_index_of(rest, " ")
+    if end < 0 { return "/" }
+
+    return string_substring(rest, 0, end)
+}
+
+// Build a complete HTTP response string
+string build_http_response(int status, string content_type, string body) {
+    status_text = "Not Found"
+    if status == 200 { status_text = "OK" }
+
+    body_len = string_length(body)
+
+    r = string_concat("HTTP/1.1 ", string_from_int(status))
+    r = string_concat(r, " ")
+    r = string_concat(r, status_text)
+    r = string_concat(r, "\r\nContent-Type: ")
+    r = string_concat(r, content_type)
+    r = string_concat(r, "\r\nContent-Length: ")
+    r = string_concat(r, string_from_int(body_len))
+    r = string_concat(r, "\r\nConnection: close\r\nAccess-Control-Allow-Origin: *\r\n\r\n")
+    r = string_concat(r, body)
+    return r
 }

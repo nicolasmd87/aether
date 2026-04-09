@@ -271,9 +271,13 @@ int string_array_size(AetherStringArray* arr) {
     return arr ? (int)arr->count : 0;
 }
 
-AetherString* string_array_get(AetherStringArray* arr, int index) {
+// Returns the raw C string data (const char*) for the element at index.
+// Aether treats strings as const char* — returning AetherString* would cause
+// printf("%s", ...) to print garbage (struct pointer instead of char data).
+const char* string_array_get(AetherStringArray* arr, int index) {
     if (!arr || index < 0 || (size_t)index >= arr->count) return NULL;
-    return arr->strings[index];
+    AetherString* s = arr->strings[index];
+    return s ? s->data : NULL;
 }
 
 void string_array_free(AetherStringArray* arr) {

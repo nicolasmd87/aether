@@ -1,3 +1,5 @@
+package bench.counting
+
 // Scala Akka Counting Actor Benchmark (Savina-style)
 import akka.actor.{Actor, ActorRef, ActorSystem, Props}
 import scala.concurrent.duration._

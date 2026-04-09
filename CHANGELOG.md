@@ -21,11 +21,18 @@ number before tagging the release.
 
 ### Changed
 
-- **Inline message path extended to int64/ptr/bool/actor_ref**: Single-field messages with `long`, `ptr`, `bool`, or actor ref types now skip heap allocation entirely — value stored directly in `Message.payload_int`. Previously only `int` (32-bit) qualified. Profile-guided: eliminates malloc+free for 66% of messages in tree-spawn patterns (skynet). Measured +73% throughput improvement on skynet benchmark.
-- **TLS caching in scheduler hot path**: `current_core_id` cached in a local variable at function entry in `scheduler_send_local` and `aether_send_message`, avoiding 6+ `tlv_get_addr` dynamic linker calls per message send on macOS.
-- **Partial batch enqueue**: `queue_enqueue_batch` now returns how many messages fit instead of failing the entire batch when the queue is near full. The previous all-or-nothing behavior dropped the entire batch (up to 256 messages) when even one slot was missing, forcing every message through the slower per-message fallback path.
-- **Batch flush uses partial retry instead of per-message fallback**: `scheduler_send_batch_flush` retries `queue_enqueue_batch` with remaining messages instead of falling back to individual `scheduler_send_remote` calls. Profile-guided: the old per-message fallback spent 28% of main thread time in `sched_yield()` kernel yields during high-throughput fan-out patterns.
-- **Missing benchmark implementations**: Added Pony, Java, and Scala skynet benchmarks for complete cross-language coverage.
+- **Inline message path extended to int64/ptr/bool/actor_ref**: Single-field messages with `long`, `ptr`, `bool`, or actor ref types now skip heap allocation entirely — value stored directly in `Message.payload_int`. Previously only `int` (32-bit) qualified. Eliminates malloc+free for single-field messages, the most common pattern in tree-spawn and request-response workloads.
+- **TLS caching in scheduler hot path**: `current_core_id` cached in a local variable at function entry in `scheduler_send_local` and `aether_send_message`, reducing TLS accessor overhead on macOS.
+- **Partial batch enqueue**: `queue_enqueue_batch` now returns how many messages fit instead of failing the entire batch when the queue is near full. Eliminates the all-or-nothing behavior that forced remaining messages through the slower per-message fallback path.
+- **Batch flush uses partial retry instead of per-message fallback**: `scheduler_send_batch_flush` retries `queue_enqueue_batch` with remaining messages instead of falling back to individual `scheduler_send_remote` calls, reducing kernel yield overhead in high-throughput fan-out patterns.
+- **Missing benchmark implementations**: Added Pony, Java, and Scala skynet benchmarks for complete cross-language coverage (11 languages × 5 patterns = 55 benchmarks, zero skips).
+- **Benchmark fairness**: Standardized skynet throughput to count total tree nodes across all 11 languages. Fixed Java detection on macOS (GNU sed `\U` → portable case statement). Fixed Scala package namespacing for sbt compilation.
+- **Benchmark statistical rigor**: 5 runs per benchmark (median reported). JVM/BEAM languages get warmup runs before measurement. JSON results include min/max, coefficient of variation (CV%), and individual run values.
+- **Benchmark visualization rewrite**: Sortable table columns, CV% color coding (green/orange/red), relative performance bars, min-max range, efficiency metric (throughput/MB), methodology explanation, Savina paper citation. Skynet tab added.
+- **Benchmark runner rewritten in Aether**: `run_benchmarks.ae` replaces the bash script — compiles all 11 languages, runs benchmarks, parses output, computes statistics, writes JSON results. Dogfoods `std.os`, `std.string`, `std.io`.
+- **Benchmark visualization server rewritten to pure stdlib**: `server.ae` replaced 26 `extern` FFI declarations and 200 lines of hand-written C (`server_ffi.c`) with stdlib imports (`std.net`, `std.io`, `std.string`, `std.os`). Zero C code required.
+- **Inner benchmark Makefile removed**: All benchmark orchestration moved to root Makefile. `make benchmark` directly builds the Aether runner, runs benchmarks, builds the server, and launches the UI.
+- **`string_array_get` bug fix**: Returned `AetherString*` (struct pointer) instead of `const char*` (raw string data). Any code using `string_split` + `string_array_get` with `print`, `string_contains`, etc. got garbled output. Fixed to return `s->data`.
 ## [0.44.0]
 
 ### Fixed

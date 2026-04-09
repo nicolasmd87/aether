@@ -6,733 +6,429 @@
 <title>Aether Cross-Language Actor Benchmarks</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 <style>
+:root {
+  --bg-primary: #0d1117;
+  --bg-secondary: #161b22;
+  --bg-tertiary: #1c2128;
+  --border: #30363d;
+  --text-primary: #e6edf3;
+  --text-secondary: #8b949e;
+  --text-muted: #6e7681;
+  --accent: #58a6ff;
+  --accent-dim: #1f3a5f;
+  --green: #3fb950;
+  --orange: #d29922;
+  --red: #f85149;
+  --gold: #e3b341;
+  --silver: #8b949e;
+  --bronze: #da8a4d;
+}
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Inter', Roboto, sans-serif;
-  background: #0f0f0f;
-  color: #e8e8e8;
-  line-height: 1.6;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
 }
 
+/* Header */
 .header {
-  background: linear-gradient(135deg, #1a1a1a 0%, #0a0a0a 100%);
-  border-bottom: 1px solid #2a2a2a;
-  padding: 24px 0;
-  position: sticky;
-  top: 0;
-  z-index: 100;
-  backdrop-filter: blur(10px);
+  background: var(--bg-secondary);
+  border-bottom: 1px solid var(--border);
+  padding: 20px 0;
+  position: sticky; top: 0; z-index: 100;
 }
+.header-inner { max-width: 1440px; margin: 0 auto; padding: 0 24px; display: flex; justify-content: space-between; align-items: center; }
+.header h1 { font-size: 1.5rem; font-weight: 600; letter-spacing: -0.02em; }
+.header h1 span { color: var(--accent); }
+.header-meta { color: var(--text-secondary); font-size: 0.85rem; text-align: right; }
 
-.header-content {
-  max-width: 1400px;
-  margin: 0 auto;
-  padding: 0 32px;
+/* Layout */
+.container { max-width: 1440px; margin: 0 auto; padding: 24px; }
+
+/* Tabs */
+.tabs { display: flex; gap: 4px; margin-bottom: 24px; border-bottom: 1px solid var(--border); padding-bottom: 0; }
+.tab {
+  padding: 10px 20px; background: none; border: none; border-bottom: 2px solid transparent;
+  color: var(--text-secondary); font-size: 0.9rem; font-weight: 500; cursor: pointer; transition: all 0.15s;
 }
+.tab:hover { color: var(--text-primary); }
+.tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.tab .dot { display: inline-block; width: 6px; height: 6px; border-radius: 50%; margin-left: 6px; vertical-align: middle; }
+.tab .dot.ok { background: var(--green); }
+.tab .dot.err { background: var(--red); }
+.tab .dot.wait { background: var(--text-muted); }
 
-.header h1 {
-  font-size: 1.75rem;
-  font-weight: 700;
-  color: #fff;
-  margin-bottom: 4px;
-  letter-spacing: -0.02em;
-}
+/* Summary strip */
+.summary { display: flex; gap: 1px; margin-bottom: 24px; border-radius: 8px; overflow: hidden; }
+.summary-item { flex: 1; background: var(--bg-secondary); padding: 16px 20px; }
+.summary-label { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); margin-bottom: 4px; }
+.summary-value { font-size: 1.5rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+.summary-detail { font-size: 0.8rem; color: var(--text-secondary); margin-top: 2px; }
 
-.header-subtitle {
-  color: #888;
-  font-size: 0.95rem;
-}
+/* Cards grid */
+.grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+.card { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; padding: 20px; }
+.card-title { font-size: 0.85rem; font-weight: 600; color: var(--text-secondary); margin-bottom: 16px; text-transform: uppercase; letter-spacing: 0.04em; }
 
-.container {
-  max-width: 1400px;
-  margin: 0 auto;
-  padding: 40px 32px;
-}
+/* Chart */
+.chart-wrap { position: relative; height: 280px; }
 
-/* Pattern Tabs */
-.pattern-tabs {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 32px;
-  flex-wrap: wrap;
-}
-
-.pattern-tab {
-  padding: 12px 24px;
-  background: #1a1a1a;
-  border: 1px solid #2a2a2a;
-  border-radius: 8px;
-  color: #888;
-  font-size: 0.95rem;
-  font-weight: 500;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-
-.pattern-tab:hover {
-  border-color: #3a3a3a;
-  color: #ccc;
-}
-
-.pattern-tab.active {
-  background: linear-gradient(135deg, #1a2f4a 0%, #162538 100%);
-  border-color: #4a9eff;
-  color: #4a9eff;
-}
-
-.pattern-tab .status {
-  display: inline-block;
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  margin-left: 8px;
-}
-
-.pattern-tab .status.loaded { background: #4caf50; }
-.pattern-tab .status.error { background: #f44336; }
-.pattern-tab .status.pending { background: #666; }
-
-.system-info {
-  background: linear-gradient(135deg, #1a1f2e 0%, #161b26 100%);
-  border: 1px solid #2a3f5f;
-  border-left: 4px solid #4a9eff;
-  padding: 20px 24px;
-  margin-bottom: 32px;
-  border-radius: 8px;
-  display: flex;
-  gap: 32px;
-  flex-wrap: wrap;
-  align-items: center;
-}
-
-.system-info-item {
-  display: flex;
-  flex-direction: column;
-}
-
-.system-info-label {
-  font-size: 0.8rem;
-  color: #888;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  margin-bottom: 4px;
-}
-
-.system-info-value {
-  font-size: 0.95rem;
-  color: #e8e8e8;
-  font-weight: 500;
-}
-
-.metrics-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-  gap: 16px;
-  margin-bottom: 32px;
-}
-
-.metric-card {
-  background: linear-gradient(135deg, #1a1a1a 0%, #151515 100%);
-  border: 1px solid #2a2a2a;
-  padding: 20px;
-  border-radius: 10px;
-  transition: all 0.3s ease;
-}
-
-.metric-card:hover {
-  border-color: #3a3a3a;
-  transform: translateY(-2px);
-}
-
-.metric-label {
-  font-size: 0.8rem;
-  color: #888;
-  margin-bottom: 6px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-}
-
-.metric-value {
-  font-size: 2rem;
-  font-weight: 700;
-  color: #fff;
-  margin-bottom: 4px;
-}
-
-.metric-detail {
-  font-size: 0.85rem;
-  color: #666;
-}
-
-.charts-row {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 24px;
-  margin-bottom: 32px;
-}
-
-.section {
-  background: #1a1a1a;
-  border: 1px solid #2a2a2a;
-  border-radius: 12px;
-  padding: 24px;
-  margin-bottom: 24px;
-}
-
-.section-title {
-  font-size: 1.2rem;
-  font-weight: 600;
-  color: #fff;
-  margin-bottom: 20px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.section-title::before {
-  content: '';
-  width: 4px;
-  height: 20px;
-  background: linear-gradient(180deg, #4a9eff 0%, #2d7acc 100%);
-  border-radius: 2px;
-}
-
-.chart-container {
-  position: relative;
-  height: 300px;
-}
-
-.comparison-table {
-  width: 100%;
-  border-collapse: separate;
-  border-spacing: 0;
-  font-size: 0.9rem;
-}
-
-.comparison-table thead {
-  background: linear-gradient(180deg, #252525 0%, #1f1f1f 100%);
-}
-
-.comparison-table th {
-  padding: 14px 12px;
-  text-align: left;
-  color: #fff;
-  font-weight: 600;
-  border-bottom: 2px solid #4a9eff;
-  white-space: nowrap;
-}
-
-.comparison-table td {
-  padding: 12px;
-  border-bottom: 1px solid #2a2a2a;
-  color: #ccc;
-}
-
-.comparison-table tbody tr:hover {
-  background: #1f1f1f;
-}
-
-.rank-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
-  font-weight: 700;
-  font-size: 0.85rem;
-}
-
-.rank-1 { background: linear-gradient(135deg, #ffd700 0%, #ffed4e 100%); color: #000; }
-.rank-2 { background: linear-gradient(135deg, #c0c0c0 0%, #e8e8e8 100%); color: #000; }
-.rank-3 { background: linear-gradient(135deg, #cd7f32 0%, #e9a661 100%); color: #000; }
-.rank-other { background: #2a2a2a; color: #888; }
-
-.lang-name {
-  font-weight: 600;
-  color: #fff;
-}
-
-.runtime-tag {
-  display: inline-block;
-  padding: 3px 8px;
-  background: #2a2a2a;
-  border-radius: 4px;
-  font-size: 0.75rem;
-  color: #999;
-}
-
-.perf-value {
-  font-weight: 600;
-  font-family: 'Monaco', 'Menlo', monospace;
-  font-size: 0.9rem;
-}
-
-.winner-highlight {
-  color: #4a9eff !important;
-}
-
+/* Methodology */
 .methodology {
-  background: linear-gradient(135deg, #1a2a1a 0%, #151e15 100%);
-  border: 1px solid #2a3a2a;
-  border-left: 4px solid #4caf50;
-  padding: 20px;
-  border-radius: 8px;
-  margin-bottom: 32px;
+  background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px;
+  padding: 16px 20px; margin-bottom: 24px; font-size: 0.85rem; color: var(--text-secondary); line-height: 1.7;
 }
+.methodology strong { color: var(--text-primary); font-weight: 600; }
 
-.methodology h3 {
-  color: #4caf50;
-  font-size: 1rem;
-  margin-bottom: 10px;
-}
+/* Table */
+.table-card { background: var(--bg-secondary); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; margin-bottom: 24px; }
+.table-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; }
+.table-header h2 { font-size: 1rem; font-weight: 600; }
 
-.methodology p {
-  color: #aaa;
-  font-size: 0.85rem;
-  line-height: 1.6;
-}
+table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+thead { background: var(--bg-tertiary); }
+th { padding: 10px 12px; text-align: left; font-weight: 600; color: var(--text-secondary); font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; white-space: nowrap; cursor: pointer; user-select: none; border-bottom: 1px solid var(--border); }
+th:hover { color: var(--text-primary); }
+th.sorted { color: var(--accent); }
+td { padding: 10px 12px; border-bottom: 1px solid #21262d; font-variant-numeric: tabular-nums; }
+tbody tr:hover { background: #1c2128; }
 
-.footer {
-  text-align: center;
-  padding: 24px;
-  color: #666;
-  font-size: 0.85rem;
-  border-top: 1px solid #2a2a2a;
-  margin-top: 32px;
-}
+.rank { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 24px; border-radius: 4px; font-weight: 700; font-size: 0.8rem; }
+.rank-1 { background: var(--gold); color: #000; }
+.rank-2 { background: var(--silver); color: #000; }
+.rank-3 { background: var(--bronze); color: #000; }
+.rank-n { background: var(--bg-tertiary); color: var(--text-muted); }
 
-.loading {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 60px;
-  font-size: 1.1rem;
-  color: #888;
-}
+.lang { font-weight: 600; }
+.lang.winner { color: var(--accent); }
+.runtime { font-size: 0.75rem; color: var(--text-muted); background: var(--bg-tertiary); padding: 2px 6px; border-radius: 3px; }
+.mono { font-family: 'SF Mono', 'Cascadia Code', 'Fira Code', monospace; font-size: 0.85rem; }
 
-.no-data {
-  text-align: center;
-  padding: 40px;
-  color: #666;
-}
+/* Relative bar */
+.rel-bar-bg { display: inline-block; width: 80px; height: 8px; background: #21262d; border-radius: 4px; vertical-align: middle; margin-right: 6px; overflow: hidden; }
+.rel-bar-fill { height: 100%; border-radius: 4px; }
 
-@media (max-width: 900px) {
-  .charts-row {
-    grid-template-columns: 1fr;
-  }
-}
+/* CV color coding */
+.cv-good { color: var(--green); }
+.cv-ok { color: var(--orange); }
+.cv-bad { color: var(--red); }
 
-@media (max-width: 768px) {
-  .metrics-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-  .chart-container {
-    height: 250px;
-  }
-}
+/* Footer */
+.footer { text-align: center; padding: 32px 24px; color: var(--text-muted); font-size: 0.8rem; line-height: 1.8; border-top: 1px solid var(--border); }
+.footer a { color: var(--accent); text-decoration: none; }
+.footer a:hover { text-decoration: underline; }
+
+.loading { display: flex; align-items: center; justify-content: center; padding: 80px; color: var(--text-secondary); }
+
+@media (max-width: 900px) { .grid-2 { grid-template-columns: 1fr; } }
+@media (max-width: 768px) { .summary { flex-wrap: wrap; } .summary-item { min-width: 45%; } }
 </style>
 </head>
 <body>
 
 <div class="header">
-  <div class="header-content">
-    <h1>Aether Cross-Language Benchmarks</h1>
-    <div class="header-subtitle">Savina Actor Benchmark Suite - Performance Comparison</div>
+  <div class="header-inner">
+    <h1><span>Aether</span> Cross-Language Benchmarks</h1>
+    <div class="header-meta" id="header-meta">Savina Actor Benchmark Suite</div>
   </div>
 </div>
 
 <div class="container">
-  <div class="pattern-tabs" id="pattern-tabs">
-    <div class="pattern-tab active" data-pattern="ping_pong">
-      Ping-Pong <span class="status pending"></span>
+  <div class="tabs" id="tabs"></div>
+  <div id="loading" class="loading">Loading benchmark data…</div>
+  <div id="content" style="display:none;">
+    <div class="summary" id="summary"></div>
+    <div class="methodology" id="methodology"></div>
+    <div class="grid-2">
+      <div class="card"><div class="card-title">Throughput (M msg/sec)</div><div class="chart-wrap"><canvas id="chartThroughput"></canvas></div></div>
+      <div class="card"><div class="card-title">Peak Memory (MB)</div><div class="chart-wrap"><canvas id="chartMemory"></canvas></div></div>
     </div>
-    <div class="pattern-tab" data-pattern="counting">
-      Counting <span class="status pending"></span>
-    </div>
-    <div class="pattern-tab" data-pattern="thread_ring">
-      Thread Ring <span class="status pending"></span>
-    </div>
-    <div class="pattern-tab" data-pattern="fork_join">
-      Fork-Join <span class="status pending"></span>
-    </div>
-  </div>
-
-  <div id="loading" class="loading">Loading benchmark data...</div>
-
-  <div id="content" style="display: none;">
-    <div class="system-info" id="system-info"></div>
-
-    <div class="methodology" id="methodology">
-      <h3>Methodology</h3>
-      <p id="methodology-text"></p>
-    </div>
-
-    <div class="metrics-grid" id="metrics"></div>
-
-    <div class="charts-row">
-      <div class="section">
-        <div class="section-title">Throughput Comparison</div>
-        <div class="chart-container">
-          <canvas id="throughputChart"></canvas>
-        </div>
-      </div>
-      <div class="section">
-        <div class="section-title">Memory Usage</div>
-        <div class="chart-container">
-          <canvas id="memoryChart"></canvas>
-        </div>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="section-title">Detailed Results</div>
-      <table class="comparison-table">
-        <thead>
-          <tr>
-            <th>Rank</th>
-            <th>Language</th>
-            <th>Runtime</th>
-            <th>Throughput</th>
-            <th>Latency (ns/msg)</th>
-            <th>Memory</th>
-            <th>Notes</th>
-          </tr>
-        </thead>
-        <tbody id="tableBody"></tbody>
+    <div class="table-card">
+      <div class="table-header"><h2>Detailed Results</h2><span id="table-meta" style="font-size:0.8rem;color:var(--text-muted)"></span></div>
+      <div style="overflow-x:auto;">
+      <table>
+        <thead id="thead"></thead>
+        <tbody id="tbody"></tbody>
       </table>
+      </div>
+    </div>
+    <div class="methodology" id="legend" style="border-left-color:var(--accent);">
+      <strong>How to read this table</strong><br>
+      <strong>Throughput</strong> — Messages processed per second (higher is better). Median of multiple runs.<br>
+      <strong>Latency</strong> — Nanoseconds per message (lower is better). Inverse of throughput.<br>
+      <strong>Memory</strong> — Peak resident set size in megabytes. Includes runtime overhead (JVM ≈ 50–100 MB, BEAM ≈ 60 MB, native ≈ 1–5 MB).<br>
+      <strong>Relative</strong> — Percentage of the fastest language's throughput. 100% = fastest, 50% = half as fast. The bar visualizes this.<br>
+      <strong>CV%</strong> — Coefficient of variation (standard deviation ÷ mean × 100). Measures run-to-run stability: <span class="cv-good">●&lt;5%</span> stable, <span class="cv-ok">●5–15%</span> moderate variance, <span class="cv-bad">●&gt;15%</span> noisy (thermal throttling, OS scheduling).<br>
+      <strong>Range</strong> — Minimum and maximum throughput observed across all runs. Wider range = less predictable.<br>
+      <strong>Efficiency</strong> — Throughput divided by memory (M msg/s per MB). Higher means more work done per unit of memory. Favors lightweight runtimes.
     </div>
   </div>
 </div>
 
 <div class="footer">
-  Aether Programming Language | Fair, reproducible Savina benchmarks | Data auto-refreshes every 60s
+  Based on the <a href="https://dl.acm.org/doi/10.1145/2687357.2687368">Savina Actor Benchmark Suite</a> (Imam &amp; Sarkar, Rice University, 2014).<br>
+  All languages compiled with highest optimization flags. Median of N runs reported. JVM/BEAM languages receive warmup runs before timed measurement.<br>
+  Throughput = operations / wall-clock elapsed (CLOCK_MONOTONIC). Memory = peak RSS (/usr/bin/time). CV% = coefficient of variation (σ/μ).<br>
+  <a href="https://github.com/nicolasmd87/aether">Aether Programming Language</a> · Open source · MIT License
 </div>
 
 <script>
-const PATTERNS = ['ping_pong', 'counting', 'thread_ring', 'fork_join'];
-const PATTERN_INSIGHTS = {
-  ping_pong: 'Measures pure message passing overhead with minimal computation.',
-  counting: 'Tests single-actor throughput without contention.',
-  thread_ring: 'Measures scheduling overhead with many actors and sequential dependencies.',
-  fork_join: 'Tests parallel processing with work distribution.'
+const PATTERNS = ['ping_pong','counting','thread_ring','fork_join','skynet'];
+const PAT = {
+  ping_pong:   { label:'Ping-Pong',   what:'Two actors exchange messages back and forth.', why:'Measures pure message-passing latency with zero computation.' },
+  counting:    { label:'Counting',     what:'Single actor counts incoming messages.',       why:'Tests unidirectional throughput and single-actor scheduler optimizations.' },
+  thread_ring: { label:'Thread Ring',  what:'Token passed through a ring of 100 actors.',   why:'Measures scheduling overhead with sequential actor dependencies.' },
+  fork_join:   { label:'Fork-Join',    what:'Round-robin fan-out to 8 worker actors.',      why:'Tests parallel dispatch throughput and batch send optimization.' },
+  skynet:      { label:'Skynet',       what:'Recursive 10-ary tree summing 1M leaves.',     why:'Tests actor creation rate, message aggregation, and tree coordination. All languages count total tree nodes for fair comparison.' }
 };
 
-let allResults = {};
-let currentPattern = 'ping_pong';
-let throughputChart = null;
-let memoryChart = null;
+let data = {};
+let cur = 'ping_pong';
+let charts = {};
+let sortCol = 3; // default sort: throughput
+let sortAsc = false;
 
-async function loadPattern(pattern) {
-  const tab = document.querySelector(`[data-pattern="${pattern}"]`);
-  const status = tab.querySelector('.status');
-
+// Load
+async function load(p) {
   try {
-    // Check if running from file:// protocol
-    if (window.location.protocol === 'file:') {
-      throw new Error('Cannot load JSON via file:// protocol. Please run a local server.');
-    }
-
-    const response = await fetch(`results_${pattern}.json`);
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-
-    const data = await response.json();
-    if (!data.benchmarks || Object.keys(data.benchmarks).length === 0) {
-      throw new Error('No results');
-    }
-
-    allResults[pattern] = data;
-    status.className = 'status loaded';
+    if (location.protocol === 'file:') throw 'file://';
+    const r = await fetch(`results_${p}.json`);
+    if (!r.ok) throw r.status;
+    const d = await r.json();
+    if (!d.benchmarks || !Object.keys(d.benchmarks).length) throw 'empty';
+    data[p] = d;
     return true;
-  } catch (error) {
-    console.warn(`Failed to load ${pattern}:`, error);
-    status.className = 'status error';
-    return false;
-  }
+  } catch(e) { return false; }
 }
 
-async function loadAllPatterns() {
-  const promises = PATTERNS.map(p => loadPattern(p));
-  await Promise.all(promises);
+let tabsBuilt = false;
 
-  // Find first pattern with data
-  for (const pattern of PATTERNS) {
-    if (allResults[pattern]) {
-      currentPattern = pattern;
-      break;
-    }
+async function init() {
+  // Build tabs only once
+  if (!tabsBuilt) {
+    const tabs = document.getElementById('tabs');
+    PATTERNS.forEach(p => {
+      const t = document.createElement('div');
+      t.className = 'tab' + (p === cur ? ' active' : '');
+      t.dataset.p = p;
+      t.innerHTML = `${PAT[p].label} <span class="dot wait"></span>`;
+      t.onclick = () => select(p);
+      tabs.appendChild(t);
+    });
+    tabsBuilt = true;
   }
 
-  if (Object.keys(allResults).length === 0) {
-    if (window.location.protocol === 'file:') {
-      document.getElementById('loading').innerHTML =
-        '<strong>Cannot load data from file:// URL</strong><br><br>' +
-        'Please run a local server:<br><br>' +
-        '<code style="background:#222;padding:8px 12px;border-radius:4px;display:inline-block;">' +
-        'cd benchmarks/cross-language/visualize && python3 -m http.server 8080' +
-        '</code><br><br>' +
-        'Then open: <a href="http://localhost:8080" style="color:#4a9eff;">http://localhost:8080</a>';
-    } else {
-      document.getElementById('loading').innerHTML =
-        'No benchmark results found.<br><br>Run: <code>make benchmark</code>';
-    }
+  const results = await Promise.all(PATTERNS.map(load));
+  const tabs = document.getElementById('tabs');
+  PATTERNS.forEach((p,i) => {
+    const dot = tabs.children[i].querySelector('.dot');
+    dot.className = 'dot ' + (results[i] ? 'ok' : 'err');
+  });
+
+  for (const p of PATTERNS) { if (data[p]) { cur = p; break; } }
+
+  if (!Object.keys(data).length) {
+    document.getElementById('loading').innerHTML = location.protocol === 'file:'
+      ? '<strong>Cannot load from file://</strong><br><br>Run: <code style="background:#161b22;padding:6px 10px;border-radius:4px;">cd visualize && python3 -m http.server 8080</code>'
+      : 'No results. Run <code>make benchmark</code>';
     return;
   }
 
   document.getElementById('loading').style.display = 'none';
   document.getElementById('content').style.display = 'block';
-
-  renderDashboard();
+  render();
 }
 
-function selectPattern(pattern) {
-  if (!allResults[pattern]) return;
-
-  currentPattern = pattern;
-
-  // Update tab states
-  document.querySelectorAll('.pattern-tab').forEach(tab => {
-    tab.classList.toggle('active', tab.dataset.pattern === pattern);
-  });
-
-  renderDashboard();
+function select(p) {
+  if (!data[p]) return;
+  cur = p;
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.p === p));
+  render();
 }
 
-function renderDashboard() {
-  const data = allResults[currentPattern];
-  if (!data) return;
+function render() {
+  const d = data[cur];
+  const p = PAT[cur];
+  const langs = getSorted(d);
+  const benchs = langs.map(l => d.benchmarks[l]);
+  const ae = d.benchmarks['Aether'];
+  const top = benchs[0];
+  const aeRank = langs.indexOf('Aether') + 1;
+  const nRuns = d.runs_per_benchmark || (top?.runs?.length) || 1;
+  const nWarm = d.warmup_runs || 0;
 
-  // Sort languages by throughput
-  const languages = Object.keys(data.benchmarks).sort((a, b) =>
-    (data.benchmarks[b].msg_per_sec || 0) - (data.benchmarks[a].msg_per_sec || 0)
-  );
-  const benchmarks = languages.map(lang => data.benchmarks[lang]);
+  const mps = v => ((v?.msg_per_sec||0)/1e6);
+  const aeMps = mps(ae);
+  const topMps = mps(top);
 
-  // System info
-  document.getElementById('system-info').innerHTML = `
-    <div class="system-info-item">
-      <div class="system-info-label">CPU</div>
-      <div class="system-info-value">${data.hardware?.cpu || 'Unknown'}</div>
+  // Header meta
+  document.getElementById('header-meta').textContent =
+    `${langs.length} languages · ${nRuns} runs · ${d.hardware?.cpu || ''}`;
+
+  // Summary strip
+  document.getElementById('summary').innerHTML = `
+    <div class="summary-item">
+      <div class="summary-label">Aether Rank</div>
+      <div class="summary-value" style="color:${aeRank===1?'var(--accent)':'var(--text-primary)'}">#${aeRank}</div>
+      <div class="summary-detail">of ${langs.length} languages</div>
     </div>
-    <div class="system-info-item">
-      <div class="system-info-label">Cores</div>
-      <div class="system-info-value">${data.hardware?.cores || 'N/A'}</div>
+    <div class="summary-item">
+      <div class="summary-label">Throughput</div>
+      <div class="summary-value">${aeMps.toFixed(1)}<span style="font-size:0.9rem;color:var(--text-secondary)"> M/s</span></div>
+      <div class="summary-detail">${ae?.ns_per_msg||0} ns/msg latency</div>
     </div>
-    <div class="system-info-item">
-      <div class="system-info-label">OS</div>
-      <div class="system-info-value">${data.hardware?.os || 'Unknown'}</div>
+    <div class="summary-item">
+      <div class="summary-label">vs Fastest</div>
+      <div class="summary-value">${aeRank===1?'1st':((aeMps/topMps*100).toFixed(0)+'%')}</div>
+      <div class="summary-detail">${aeRank===1?'Aether is the fastest':`${langs[0]} at ${topMps.toFixed(1)}M/s`}</div>
     </div>
-    <div class="system-info-item">
-      <div class="system-info-label">Pattern</div>
-      <div class="system-info-value">${currentPattern.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase())}</div>
+    <div class="summary-item">
+      <div class="summary-label">Efficiency</div>
+      <div class="summary-value">${ae?.memory_mb>0?(aeMps/ae.memory_mb).toFixed(1):'—'}</div>
+      <div class="summary-detail">M msg/s per MB (Aether)</div>
     </div>
-    <div class="system-info-item">
-      <div class="system-info-label">Messages</div>
-      <div class="system-info-value">${data.messages ? Number(data.messages).toLocaleString() : 'N/A'}</div>
-    </div>
-    <div class="system-info-item">
-      <div class="system-info-label">Languages</div>
-      <div class="system-info-value">${languages.length}</div>
+    <div class="summary-item">
+      <div class="summary-label">Spread</div>
+      <div class="summary-value">${(topMps/(mps(benchs[benchs.length-1])||0.01)).toFixed(0)}×</div>
+      <div class="summary-detail">fastest vs slowest</div>
     </div>
   `;
 
-  // Methodology (built from JSON data, not hardcoded)
-  const msgCount = data.messages ? Number(data.messages).toLocaleString() : 'N/A';
-  const desc = data.description || 'No description available.';
-  const insight = PATTERN_INSIGHTS[currentPattern] || '';
-  document.getElementById('methodology-text').textContent =
-    `${desc} (${msgCount} messages). ${insight}`;
+  // Methodology
+  document.getElementById('methodology').innerHTML =
+    `<strong>What is being measured:</strong> ${p.what} ${p.why}<br>` +
+    `<strong>How:</strong> All languages compiled with highest optimization (<code>-O3</code>, <code>--release</code>). ` +
+    `Each benchmark run <strong>${nRuns} times</strong>; <strong>median</strong> throughput reported to reduce the impact of outliers. ` +
+    (nWarm > 0 ? `JVM/BEAM languages (Java, Scala, Erlang, Elixir) receive <strong>${nWarm} warmup</strong> run(s) before timed measurement to allow JIT compilation to complete. ` : '') +
+    `Throughput measured as operations ÷ wall-clock time (<code>CLOCK_MONOTONIC</code>). ` +
+    `Each language uses its idiomatic concurrency model — the benchmark measures how well each language solves the problem, not how identical the implementations are.`;
 
-  // Metrics
-  const topLang = benchmarks[0];
-  const aetherData = data.benchmarks['Aether'] || topLang;
-  const throughputM = (aetherData?.msg_per_sec || 0) / 1e6;
-  const lowestMemory = Math.min(...benchmarks.map(b => b.memory_mb || 999).filter(m => m > 0));
-  const highestThroughput = (topLang?.msg_per_sec || 0) / 1e6;
-  const lowestThroughput = (benchmarks[benchmarks.length - 1]?.msg_per_sec || 1) / 1e6;
+  renderCharts(langs, benchs);
+  renderTable(langs, benchs, d);
 
-  document.getElementById('metrics').innerHTML = `
-    <div class="metric-card">
-      <div class="metric-label">Aether Throughput</div>
-      <div class="metric-value">${throughputM.toFixed(1)}M</div>
-      <div class="metric-detail">messages/second</div>
-    </div>
-    <div class="metric-card">
-      <div class="metric-label">Aether Latency</div>
-      <div class="metric-value">${(aetherData?.ns_per_msg || 0).toFixed(0)}</div>
-      <div class="metric-detail">ns/message</div>
-    </div>
-    <div class="metric-card">
-      <div class="metric-label">Lowest Memory</div>
-      <div class="metric-value">${lowestMemory < 999 ? lowestMemory.toFixed(1) : 'N/A'}MB</div>
-      <div class="metric-detail">resident set size</div>
-    </div>
-    <div class="metric-card">
-      <div class="metric-label">Performance Range</div>
-      <div class="metric-value">${lowestThroughput > 0 ? (highestThroughput / lowestThroughput).toFixed(0) : 'N/A'}x</div>
-      <div class="metric-detail">fastest vs slowest</div>
-    </div>
-  `;
-
-  renderCharts(languages, benchmarks);
-  renderTable(languages, benchmarks);
+  document.getElementById('table-meta').textContent =
+    `Sorted by ${['#','Language','Runtime','Throughput','Latency','Memory','Relative','CV%','Range','Efficiency'][sortCol]} · Click headers to re-sort`;
 }
 
-function renderCharts(languages, benchmarks) {
-  const ctx1 = document.getElementById('throughputChart').getContext('2d');
-  const ctx2 = document.getElementById('memoryChart').getContext('2d');
+function getSorted(d) {
+  const langs = Object.keys(d.benchmarks);
+  // Default: sort by throughput descending
+  return langs.sort((a,b) => (d.benchmarks[b].msg_per_sec||0) - (d.benchmarks[a].msg_per_sec||0));
+}
 
-  const throughputData = benchmarks.map(b => (b.msg_per_sec || 0) / 1e6);
-  const memoryData = benchmarks.map(b => b.memory_mb || 0);
-  const colors = languages.map(lang => lang === 'Aether' ? '#4a9eff' : '#666');
+function renderCharts(langs, benchs) {
+  const tData = benchs.map(b => (b.msg_per_sec||0)/1e6);
+  const mData = benchs.map(b => b.memory_mb||0);
+  const tColors = langs.map(l => l==='Aether' ? 'rgba(88,166,255,0.85)' : 'rgba(110,118,129,0.5)');
+  const mColors = langs.map(l => l==='Aether' ? 'rgba(63,185,80,0.85)' : 'rgba(110,118,129,0.35)');
 
-  // Destroy existing charts
-  if (throughputChart) throughputChart.destroy();
-  if (memoryChart) memoryChart.destroy();
+  if (charts.t) charts.t.destroy();
+  if (charts.m) charts.m.destroy();
 
-  const chartOptions = {
-    responsive: true,
-    maintainAspectRatio: false,
-    plugins: {
-      legend: { display: false },
-      tooltip: {
-        backgroundColor: '#1a1a1a',
-        titleColor: '#fff',
-        bodyColor: '#ccc',
-        borderColor: '#4a9eff',
-        borderWidth: 1,
-        padding: 10,
-        displayColors: false
-      }
-    },
+  const opts = (yLabel) => ({
+    responsive: true, maintainAspectRatio: false,
+    plugins: { legend:{display:false}, tooltip:{backgroundColor:'#1c2128',titleColor:'#e6edf3',bodyColor:'#8b949e',borderColor:'#30363d',borderWidth:1,padding:10,displayColors:false} },
     scales: {
-      y: {
-        beginAtZero: true,
-        grid: { color: '#2a2a2a' },
-        ticks: { color: '#888' }
-      },
-      x: {
-        grid: { display: false },
-        ticks: { color: '#888', maxRotation: 45 }
-      }
-    }
-  };
-
-  throughputChart = new Chart(ctx1, {
-    type: 'bar',
-    data: {
-      labels: languages,
-      datasets: [{
-        label: 'Throughput (M msg/sec)',
-        data: throughputData,
-        backgroundColor: colors,
-        borderWidth: 0
-      }]
-    },
-    options: {
-      ...chartOptions,
-      plugins: {
-        ...chartOptions.plugins,
-        tooltip: {
-          ...chartOptions.plugins.tooltip,
-          callbacks: {
-            label: ctx => `${ctx.parsed.y.toFixed(2)} M msg/sec`
-          }
-        }
-      },
-      scales: {
-        ...chartOptions.scales,
-        y: {
-          ...chartOptions.scales.y,
-          title: { display: true, text: 'M msg/sec', color: '#888' }
-        }
-      }
+      y: { beginAtZero:true, grid:{color:'#21262d'}, ticks:{color:'#6e7681',font:{size:11}}, title:{display:true,text:yLabel,color:'#8b949e',font:{size:11}} },
+      x: { grid:{display:false}, ticks:{color:'#8b949e',font:{size:11},maxRotation:45} }
     }
   });
 
-  memoryChart = new Chart(ctx2, {
-    type: 'bar',
-    data: {
-      labels: languages,
-      datasets: [{
-        label: 'Memory (MB)',
-        data: memoryData,
-        backgroundColor: colors.map(c => c === '#4a9eff' ? '#4caf50' : '#555'),
-        borderWidth: 0
-      }]
-    },
-    options: {
-      ...chartOptions,
-      plugins: {
-        ...chartOptions.plugins,
-        tooltip: {
-          ...chartOptions.plugins.tooltip,
-          callbacks: {
-            label: ctx => `${ctx.parsed.y.toFixed(2)} MB`
-          }
-        }
-      },
-      scales: {
-        ...chartOptions.scales,
-        y: {
-          ...chartOptions.scales.y,
-          title: { display: true, text: 'Memory (MB)', color: '#888' }
-        }
+  charts.t = new Chart(document.getElementById('chartThroughput'), {
+    type:'bar',
+    data:{ labels:langs, datasets:[{ data:tData, backgroundColor:tColors, borderRadius:3, borderSkipped:false }] },
+    options:{ ...opts('M msg/sec'), plugins:{...opts('').plugins, tooltip:{...opts('').plugins.tooltip, callbacks:{
+      label: ctx => {
+        const b = benchs[ctx.dataIndex];
+        let s = ctx.parsed.y.toFixed(2) + ' M/s';
+        if (b.min_mps && b.max_mps) s += ` (${(b.min_mps/1e6).toFixed(1)}–${(b.max_mps/1e6).toFixed(1)})`;
+        return s;
       }
-    }
+    }}}}
+  });
+
+  charts.m = new Chart(document.getElementById('chartMemory'), {
+    type:'bar',
+    data:{ labels:langs, datasets:[{ data:mData, backgroundColor:mColors, borderRadius:3, borderSkipped:false }] },
+    options:{ ...opts('MB (peak RSS)'), plugins:{...opts('').plugins, tooltip:{...opts('').plugins.tooltip, callbacks:{
+      label: ctx => ctx.parsed.y.toFixed(1) + ' MB'
+    }}}}
   });
 }
 
-function renderTable(languages, benchmarks) {
-  const tbody = document.getElementById('tableBody');
-  let html = '';
+function renderTable(langs, benchs, d) {
+  const topMps = benchs[0]?.msg_per_sec || 1;
 
-  languages.forEach((lang, index) => {
-    const bench = benchmarks[index];
-    const rank = index + 1;
-    const rankClass = rank === 1 ? 'rank-1' : rank === 2 ? 'rank-2' : rank === 3 ? 'rank-3' : 'rank-other';
-    const throughput = ((bench.msg_per_sec || 0) / 1e6).toFixed(2);
-    const latency = (bench.ns_per_msg || 0).toFixed(1);
-    const memory = bench.memory_mb > 0 ? `${bench.memory_mb.toFixed(2)} MB` : 'N/A';
-    const isWinner = rank === 1;
+  // Build sortable header
+  const cols = ['#','Language','Runtime','Throughput','Latency','Memory','Relative','CV%','Range','Efficiency','Notes'];
+  document.getElementById('thead').innerHTML = '<tr>' + cols.map((c,i) =>
+    `<th class="${i===sortCol?'sorted':''}" onclick="resort(${i})" title="Click to sort">${c}${i===sortCol?(sortAsc?' ↑':' ↓'):''}</th>`
+  ).join('') + '</tr>';
 
-    html += `
-      <tr>
-        <td><span class="rank-badge ${rankClass}">${rank}</span></td>
-        <td><span class="lang-name ${isWinner ? 'winner-highlight' : ''}">${lang}</span></td>
-        <td><span class="runtime-tag">${bench.runtime || 'N/A'}</span></td>
-        <td class="perf-value ${isWinner ? 'winner-highlight' : ''}">${throughput} M/s</td>
-        <td class="perf-value">${latency}</td>
-        <td class="perf-value">${memory}</td>
-        <td style="color: #888; font-size: 0.85rem;">${bench.notes || ''}</td>
-      </tr>
-    `;
+  // Build rows as data array for sorting
+  let rows = langs.map((lang,idx) => {
+    const b = benchs[idx];
+    const mpsVal = (b.msg_per_sec||0)/1e6;
+    const lat = b.ns_per_msg||0;
+    const mem = b.memory_mb||0;
+    const pct = topMps > 0 ? (b.msg_per_sec||0)/topMps*100 : 0;
+    const cv = parseFloat(b.cv_pct) || 0;
+    const eff = mem > 0 ? mpsVal/mem : 0;
+    const minM = b.min_mps ? b.min_mps/1e6 : mpsVal;
+    const maxM = b.max_mps ? b.max_mps/1e6 : mpsVal;
+    return { lang, b, rank:idx+1, mpsVal, lat, mem, pct, cv, eff, minM, maxM };
   });
 
-  tbody.innerHTML = html;
-}
-
-// Tab click handlers
-document.querySelectorAll('.pattern-tab').forEach(tab => {
-  tab.addEventListener('click', () => selectPattern(tab.dataset.pattern));
-});
-
-// Initial load
-if (typeof Chart !== 'undefined') {
-  loadAllPatterns();
-  setInterval(() => loadAllPatterns(), 60000);
-} else {
-  window.addEventListener('load', () => {
-    if (typeof Chart !== 'undefined') {
-      loadAllPatterns();
-      setInterval(() => loadAllPatterns(), 60000);
-    } else {
-      document.getElementById('loading').innerHTML =
-        'Error: Chart.js failed to load. Check your internet connection.';
-    }
+  // Sort by selected column
+  const getVal = (r,col) => [r.rank, r.lang, r.b.runtime||'', r.mpsVal, r.lat, r.mem, r.pct, r.cv, r.maxM-r.minM, r.eff, ''][col];
+  rows.sort((a,b) => {
+    let va = getVal(a,sortCol), vb = getVal(b,sortCol);
+    if (typeof va === 'string') return sortAsc ? va.localeCompare(vb) : vb.localeCompare(va);
+    return sortAsc ? va-vb : vb-va;
   });
+
+  // Re-rank after sort by throughput for display
+  const byThroughput = [...rows].sort((a,b) => b.mpsVal - a.mpsVal);
+  const rankMap = {};
+  byThroughput.forEach((r,i) => rankMap[r.lang] = i+1);
+
+  const tbody = document.getElementById('tbody');
+  tbody.innerHTML = rows.map(r => {
+    const rank = rankMap[r.lang];
+    const rc = rank<=3 ? `rank-${rank}` : 'rank-n';
+    const isW = rank === 1;
+    const cvCls = r.cv < 5 ? 'cv-good' : r.cv < 15 ? 'cv-ok' : 'cv-bad';
+    const barColor = r.lang==='Aether' ? 'var(--accent)' : '#30363d';
+    const range = r.minM !== r.maxM ? `${r.minM.toFixed(1)}–${r.maxM.toFixed(1)}` : '—';
+
+    return `<tr>
+      <td><span class="rank ${rc}">${rank}</span></td>
+      <td><span class="lang ${isW?'winner':''}">${r.lang}</span></td>
+      <td><span class="runtime">${r.b.runtime||'—'}</span></td>
+      <td class="mono ${isW?'winner':''}">${r.mpsVal.toFixed(2)} M/s</td>
+      <td class="mono">${typeof r.lat==='number'?r.lat.toFixed(0):r.lat} ns</td>
+      <td class="mono">${r.mem>0?r.mem.toFixed(1)+' MB':'—'}</td>
+      <td><span class="rel-bar-bg"><span class="rel-bar-fill" style="width:${r.pct}%;background:${barColor}"></span></span><span class="mono">${r.pct.toFixed(0)}%</span></td>
+      <td class="mono ${cvCls}">${r.cv.toFixed(1)}%</td>
+      <td class="mono" style="color:var(--text-muted);font-size:0.8rem">${range}</td>
+      <td class="mono">${r.eff>0?r.eff.toFixed(2):'—'}</td>
+      <td style="color:var(--text-muted);font-size:0.8rem;max-width:160px;overflow:hidden;text-overflow:ellipsis">${r.b.notes||''}</td>
+    </tr>`;
+  }).join('');
 }
+
+function resort(col) {
+  if (sortCol === col) { sortAsc = !sortAsc; }
+  else { sortCol = col; sortAsc = col <= 2; } // text cols default asc, numeric desc
+  render();
+}
+
+// Init
+if (typeof Chart !== 'undefined') { init(); setInterval(init, 60000); }
+else window.addEventListener('load', () => { if (typeof Chart !== 'undefined') { init(); setInterval(init, 60000); } });
 </script>
-
 </body>
 </html>

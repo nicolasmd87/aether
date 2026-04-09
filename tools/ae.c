@@ -1542,6 +1542,9 @@ static int cmd_build(int argc, char** argv) {
         return 1;
     }
 
+    // Clean up intermediate C file — ae build produces a binary, not C source
+    remove(c_file);
+
     printf("Built: %s\n", exe_file);
     if (is_wasm) {
         // .wasm file is co-located with .js

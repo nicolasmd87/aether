@@ -402,13 +402,29 @@ test-all: test test-ae
 # Benchmark presets: full (10M), medium (1M), low (100K), stress (100M)
 BENCHMARK_PRESET ?= low
 
-benchmark:
+benchmark: compiler ae stdlib
 	@echo "============================================"
 	@echo "  Running Cross-Language Benchmark Suite"
-	@echo "  Preset: $(BENCHMARK_PRESET)"
 	@echo "============================================"
 	@echo ""
-	@cd benchmarks/cross-language && BENCHMARK_PRESET=$(BENCHMARK_PRESET) $(MAKE) benchmark-ui
+	@mkdir -p benchmarks/cross-language/build
+	@echo "Building benchmark runner (Aether)..."
+	@AETHER_HOME="" ./build/ae build benchmarks/cross-language/run_benchmarks.ae -o benchmarks/cross-language/build/bench_runner
+	@cd benchmarks/cross-language && ./build/bench_runner
+	@pkill -9 -f "benchmarks/cross-language/visualize/server" 2>/dev/null || true
+	@echo ""
+	@echo "Building Aether HTTP server..."
+	@AETHER_HOME="" ./build/ae build benchmarks/cross-language/visualize/server.ae -o benchmarks/cross-language/visualize/server
+	@echo "Server built successfully"
+	@echo ""
+	@echo "=========================================="
+	@echo "  Launching Benchmark Visualization UI"
+	@echo "=========================================="
+	@echo ""
+	@echo "Open your browser at http://localhost:8080"
+	@echo "Press Ctrl+C to stop the server"
+	@echo ""
+	@cd benchmarks/cross-language/visualize && ./server
 
 ifdef WINDOWS_NATIVE
 examples: compiler ae
@@ -1001,9 +1017,8 @@ asan-check: clean
 
 .PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime test-install test-release-archive benchmark benchmark-ui examples run compile repl clean help self-test install stats stdlib ci ci-windows docker-ci docker-ci-windows docker-build-ci valgrind-check asan-check ci-coop ci-wasm ci-embedded ci-portability docker-ci-wasm docker-ci-embedded
 
-# Cross-language benchmark UI
-benchmark-ui:
-	@cd benchmarks/cross-language && $(MAKE) benchmark-ui
+# Cross-language benchmark UI (alias for benchmark)
+benchmark-ui: benchmark
 
 # ============================================================================
 # Platform Portability CI
