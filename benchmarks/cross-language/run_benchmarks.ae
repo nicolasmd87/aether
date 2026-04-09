@@ -287,6 +287,16 @@ main() {
     env_m = getenv("BENCHMARK_MESSAGES")
     if env_m != 0 { msgs = atoi(env_m) }
 
+    // system() uses /bin/sh which has a minimal PATH.
+    // Add common tool locations so cargo, erlc, ponyc etc. are found.
+    home = getenv("HOME")
+    cur_path = getenv("PATH")
+    tool_paths = string_concat("/opt/homebrew/bin:/opt/homebrew/opt/erlang/bin:/opt/homebrew/opt/elixir/bin:/usr/local/bin:/usr/local/go/bin:/snap/bin:", cur_path)
+    if home != 0 {
+        tool_paths = string_concat(string_concat(home, "/.cargo/bin:"), string_concat(string_concat(home, "/go/bin:"), string_concat(string_concat(home, "/.local/bin:"), tool_paths)))
+    }
+    io_setenv("PATH", tool_paths)
+
     uname = os_exec("uname -s")
     is_mac = string_contains(uname, "Darwin")
     tc = "/usr/bin/time -v"
