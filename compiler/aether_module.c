@@ -23,6 +23,9 @@ ModuleRegistry* global_module_registry = NULL;
 // Source file directory for resolving lib/ imports relative to the source file.
 static char g_source_dir[2048] = "";
 
+// Custom lib folder name (default: "lib"). Set via --lib flag.
+static char g_lib_dir[256] = "lib";
+
 void module_set_source_dir(const char* source_path) {
     if (!source_path) { g_source_dir[0] = '\0'; return; }
     strncpy(g_source_dir, source_path, sizeof(g_source_dir) - 1);
@@ -37,6 +40,12 @@ void module_set_source_dir(const char* source_path) {
     } else {
         g_source_dir[0] = '\0';  // no directory component
     }
+}
+
+void module_set_lib_dir(const char* lib_dir) {
+    if (!lib_dir || !lib_dir[0]) return;
+    strncpy(g_lib_dir, lib_dir, sizeof(g_lib_dir) - 1);
+    g_lib_dir[sizeof(g_lib_dir) - 1] = '\0';
 }
 
 // Module management
@@ -477,12 +486,12 @@ char* module_resolve_local_path(const char* module_path) {
         if (*p == '.') *p = '/';
     }
 
-    // Try 1: lib/module_path/module.ae (CWD-relative)
-    snprintf(path, sizeof(path), "lib/%s/module.ae", converted);
+    // Try 1: {lib_dir}/module_path/module.ae (CWD-relative)
+    snprintf(path, sizeof(path), "%s/%s/module.ae", g_lib_dir, converted);
     if (access(path, F_OK) == 0) return strdup(path);
 
-    // Try 2: lib/module_path.ae
-    snprintf(path, sizeof(path), "lib/%s.ae", converted);
+    // Try 2: {lib_dir}/module_path.ae
+    snprintf(path, sizeof(path), "%s/%s.ae", g_lib_dir, converted);
     if (access(path, F_OK) == 0) return strdup(path);
 
     // Try 3: src/module_path/module.ae
@@ -501,11 +510,11 @@ char* module_resolve_local_path(const char* module_path) {
     snprintf(path, sizeof(path), "%s.ae", converted);
     if (access(path, F_OK) == 0) return strdup(path);
 
-    // Try 6b: Search relative to source file directory (e.g. tests/integration/pure_module/lib/)
+    // Try 6b: Search relative to source file directory
     if (g_source_dir[0]) {
-        snprintf(path, sizeof(path), "%slib/%s/module.ae", g_source_dir, converted);
+        snprintf(path, sizeof(path), "%s%s/%s/module.ae", g_source_dir, g_lib_dir, converted);
         if (access(path, F_OK) == 0) return strdup(path);
-        snprintf(path, sizeof(path), "%slib/%s.ae", g_source_dir, converted);
+        snprintf(path, sizeof(path), "%s%s/%s.ae", g_source_dir, g_lib_dir, converted);
         if (access(path, F_OK) == 0) return strdup(path);
         snprintf(path, sizeof(path), "%ssrc/%s/module.ae", g_source_dir, converted);
         if (access(path, F_OK) == 0) return strdup(path);

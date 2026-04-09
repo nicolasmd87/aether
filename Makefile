@@ -290,7 +290,7 @@ test-ae: compiler ae stdlib
 	printf 'fi\n'                                                                              >> "$$script"; \
 	chmod +x "$$script"; \
 	root=$$(pwd); \
-	find tests/syntax tests/compiler tests/integration -path '*/lib/*' -prune -o -name '*.ae' -print 2>/dev/null | sort | \
+	find tests/syntax tests/compiler tests/integration -path '*/lib/*' -prune -o -path '*/custom_lib_dir/*' -prune -o -name '*.ae' -print 2>/dev/null | sort | \
 	xargs -P $(NPROC) -I{} "$$script" "{}" "$$tmpdir" "$$root"; \
 	for sh_test in $$(find tests/integration -name 'test_*.sh' 2>/dev/null | sort); do \
 		name=$$(echo "$$sh_test" | sed 's|tests/||;s|/|_|g;s|\.sh$$||'); \

@@ -90,9 +90,19 @@ typedef struct {
     bool has_lib;              // Whether precompiled lib exists
     bool dev_mode;             // Running from source tree
     bool verbose;              // Verbose output
+    char lib_dir[256];         // Custom lib folder for module resolution (--lib flag)
 } Toolchain;
 
 static Toolchain tc = {0};
+
+// Build an aetherc command string with optional --lib flag
+static void build_aetherc_cmd(char* cmd, size_t cmd_size, const char* input, const char* output) {
+    if (tc.lib_dir[0]) {
+        snprintf(cmd, cmd_size, "\"%s\" --lib \"%s\" \"%s\" \"%s\"", tc.compiler, tc.lib_dir, input, output);
+    } else {
+        snprintf(cmd, cmd_size, "\"%s\" \"%s\" \"%s\"", tc.compiler, input, output);
+    }
+}
 
 // --------------------------------------------------------------------------
 // Cache infrastructure
@@ -1189,6 +1199,9 @@ static int cmd_run(int argc, char** argv) {
         if (strcmp(argv[i], "--extra") == 0 && i + 1 < argc) {
             if (extra_files[0]) strncat(extra_files, " ", sizeof(extra_files) - strlen(extra_files) - 1);
             strncat(extra_files, argv[++i], sizeof(extra_files) - strlen(extra_files) - 1);
+        } else if (strcmp(argv[i], "--lib") == 0 && i + 1 < argc) {
+            strncpy(tc.lib_dir, argv[++i], sizeof(tc.lib_dir) - 1);
+            tc.lib_dir[sizeof(tc.lib_dir) - 1] = '\0';
         } else if (argv[i][0] != '-' && !file) {
             file = argv[i];
         }
@@ -1281,12 +1294,12 @@ static int cmd_run(int argc, char** argv) {
 
     // Step 1: Compile .ae to .c
     if (tc.verbose) printf("Compiling %s...\n", file);
-    snprintf(cmd, sizeof(cmd), "\"%s\" \"%s\" \"%s\"", tc.compiler, file, c_file);
+    build_aetherc_cmd(cmd, sizeof(cmd), file, c_file);
 
     int aetherc_ret = tc.verbose ? run_cmd(cmd) : run_cmd_quiet(cmd);
     if (aetherc_ret != 0) {
         // Re-run with output visible so user can see the error
-        snprintf(cmd, sizeof(cmd), "\"%s\" \"%s\" \"%s\"", tc.compiler, file, c_file);
+        build_aetherc_cmd(cmd, sizeof(cmd), file, c_file);
         run_cmd(cmd);
         fprintf(stderr, "Compilation failed.\n");
         return 1;
@@ -1365,7 +1378,11 @@ static int cmd_check(int argc, char** argv) {
     }
 
     char cmd[4096];
-    snprintf(cmd, sizeof(cmd), "\"%s\" --check \"%s\"", tc.compiler, file);
+    if (tc.lib_dir[0]) {
+        snprintf(cmd, sizeof(cmd), "\"%s\" --lib \"%s\" --check \"%s\"", tc.compiler, tc.lib_dir, file);
+    } else {
+        snprintf(cmd, sizeof(cmd), "\"%s\" --check \"%s\"", tc.compiler, file);
+    }
     return run_cmd(cmd);
 }
 
@@ -1384,6 +1401,9 @@ static int cmd_build(int argc, char** argv) {
         } else if (strcmp(argv[i], "--extra") == 0 && i + 1 < argc) {
             if (extra_files[0]) strncat(extra_files, " ", sizeof(extra_files) - strlen(extra_files) - 1);
             strncat(extra_files, argv[++i], sizeof(extra_files) - strlen(extra_files) - 1);
+        } else if (strcmp(argv[i], "--lib") == 0 && i + 1 < argc) {
+            strncpy(tc.lib_dir, argv[++i], sizeof(tc.lib_dir) - 1);
+            tc.lib_dir[sizeof(tc.lib_dir) - 1] = '\0';
         } else if (argv[i][0] != '-') {
             file = argv[i];
         }
@@ -1494,7 +1514,7 @@ static int cmd_build(int argc, char** argv) {
     printf("Building %s%s...\n", file, is_wasm ? " (wasm)" : "");
 
     // Step 1: .ae to .c
-    snprintf(cmd, sizeof(cmd), "\"%s\" \"%s\" \"%s\"", tc.compiler, file, c_file);
+    build_aetherc_cmd(cmd, sizeof(cmd), file, c_file);
 
     // Always run visible on failure; print diagnostic on Windows
     int aetherc_ret = tc.verbose ? run_cmd(cmd) : run_cmd_quiet(cmd);
@@ -1502,7 +1522,7 @@ static int cmd_build(int argc, char** argv) {
         fprintf(stderr, "[diag] aetherc returned %d for: %s\n", aetherc_ret, file);
         fprintf(stderr, "[diag] cmd: %s\n", cmd);
         // Retry visible
-        snprintf(cmd, sizeof(cmd), "\"%s\" \"%s\" \"%s\"", tc.compiler, file, c_file);
+        build_aetherc_cmd(cmd, sizeof(cmd), file, c_file);
         int retry_ret = run_cmd(cmd);
         fprintf(stderr, "[diag] retry returned %d\n", retry_ret);
         fprintf(stderr, "Compilation failed.\n");
@@ -1743,7 +1763,7 @@ static int cmd_test(int argc, char** argv) {
 #  pragma GCC diagnostic push
 #  pragma GCC diagnostic ignored "-Wformat-truncation"
 #endif
-        snprintf(cmd, sizeof(cmd), "\"%s\" \"%s\" \"%s\"", tc.compiler, test, c_file);
+        build_aetherc_cmd(cmd, sizeof(cmd), test, c_file);
 #if defined(__GNUC__) && !defined(__clang__)
 #  pragma GCC diagnostic pop
 #endif
@@ -2059,7 +2079,7 @@ static int cmd_examples(int argc, char** argv) {
 #  pragma GCC diagnostic push
 #  pragma GCC diagnostic ignored "-Wformat-truncation"
 #endif
-        snprintf(cmd, sizeof(cmd), "%s %s %s", tc.compiler, src, c_file);
+        build_aetherc_cmd(cmd, sizeof(cmd), src, c_file);
 #if defined(__GNUC__) && !defined(__clang__)
 #  pragma GCC diagnostic pop
 #endif
@@ -2115,7 +2135,7 @@ static int repl_eval(const char* ae_file, const char* c_file,
     fclose(f);
 
     char cmd[16384];
-    snprintf(cmd, sizeof(cmd), "\"%s\" \"%s\" \"%s\"", tc.compiler, ae_file, c_file);
+    build_aetherc_cmd(cmd, sizeof(cmd), ae_file, c_file);
     if (run_cmd_quiet(cmd) != 0) {
         run_cmd(cmd);
         remove(c_file);
