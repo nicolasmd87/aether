@@ -333,6 +333,7 @@ Token* read_identifier() {
     else if (strcmp(buffer, "const") == 0) token = create_token(TOKEN_CONST, buffer, current_line, current_column);
     else if (strcmp(buffer, "in") == 0) token = create_token(TOKEN_IN, buffer, current_line, current_column);
     else if (strcmp(buffer, "after") == 0) token = create_token(TOKEN_AFTER, buffer, current_line, current_column);
+    else if (strcmp(buffer, "callback") == 0) token = create_token(TOKEN_CALLBACK, buffer, current_line, current_column);
     else if (strcmp(buffer, "ptr") == 0) token = create_token(TOKEN_PTR, buffer, current_line, current_column);
     else if (strcmp(buffer, "int") == 0) token = create_token(TOKEN_INT, buffer, current_line, current_column);
     else if (strcmp(buffer, "long") == 0) token = create_token(TOKEN_INT64, buffer, current_line, current_column);
@@ -708,6 +709,7 @@ const char* token_type_to_string(AeTokenType type) {
         case TOKEN_LSHIFT_ASSIGN: return "LSHIFT_ASSIGN";
         case TOKEN_RSHIFT_ASSIGN: return "RSHIFT_ASSIGN";
         case TOKEN_NULL: return "NULL";
+        case TOKEN_CALLBACK: return "CALLBACK";
         case TOKEN_IN: return "IN";
         case TOKEN_DOTDOT: return "DOTDOT";
         case TOKEN_CONST: return "CONST";
