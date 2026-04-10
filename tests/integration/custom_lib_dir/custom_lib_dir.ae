@@ -1,0 +1,19 @@
+import greeter
+
+main() {
+    println("test 1: function from custom lib dir")
+    greeter.greet("world")
+    println("PASS")
+
+    println("test 2: return value from custom lib dir")
+    result = greeter.add(3, 4)
+    if result == 7 {
+        println("PASS")
+    } else {
+        println("FAIL")
+        exit(1)
+    }
+
+    println("")
+    println("All custom lib dir tests passed!")
+}

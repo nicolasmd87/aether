@@ -22,6 +22,8 @@ typedef struct {
     AetherModule** modules;
     int module_count;
     int module_capacity;
+    char source_dir[2048];  // Source file directory for relative resolution
+    char lib_dir[256];      // Custom lib folder name (default: "lib")
 } ModuleRegistry;
 
 // Global module registry
@@ -81,6 +83,10 @@ void package_manifest_free(PackageManifest* manifest);
 
 // Set the source file directory so module resolution can search lib/ relative to it.
 void module_set_source_dir(const char* source_path);
+
+// Set the lib folder name for module resolution (default: "lib").
+// Use --lib flag to change, e.g. --lib .aeb
+void module_set_lib_dir(const char* lib_dir);
 
 // Orchestrate all module loading: scan imports, resolve, parse, cache, detect cycles.
 // Returns 1 on success, 0 on circular dependency error.

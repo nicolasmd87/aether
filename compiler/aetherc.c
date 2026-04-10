@@ -418,6 +418,13 @@ int main(int argc, char *argv[]) {
                 emit_header_path = "auto";  // Auto-derive from output filename
                 arg_offset++;
             }
+        } else if (strcmp(argv[arg_offset], "--lib") == 0) {
+            if (arg_offset + 1 >= argc) {
+                fprintf(stderr, "--lib requires an argument\n");
+                return 1;
+            }
+            module_set_lib_dir(argv[arg_offset + 1]);
+            arg_offset += 2;
         } else {
             fprintf(stderr, "Unknown option: %s\n", argv[arg_offset]);
             fprintf(stderr, "Use --help for usage information\n");

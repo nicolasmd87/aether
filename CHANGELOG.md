@@ -17,10 +17,24 @@ number before tagging the release.
 
 ## [0.47.0]
 
+### Changed
+
+- **Module resolver state moved from globals to registry**: `source_dir` and `lib_dir` are now fields on `ModuleRegistry` instead of file-level statics, so state is scoped to the registry lifecycle. Prepares the compiler for safe reuse as a library (e.g. from the LSP).
+- **`AETHER_LIB_DIR` environment variable**: Set `AETHER_LIB_DIR` to configure the module library directory without passing `--lib` on every invocation. `--lib` takes precedence if both are set.
+
+## [0.48.0]
+
+### Added
+
+- **`callback` keyword for trailing blocks**: Third trailing-block mode — `func(args) callback { body }` creates a real closure (hoisted, captures variables from scope) rather than an inline DSL block. The block runs later when invoked, not at construction time. Also supports explicit params (`callback |x: int| { ... }`) and arrow bodies (`callback |x| -> x * 2`).
+
+## [0.47.0]
+
 ### Added
 
 - **Builder functions** (renamed from `defer`): `builder` keyword for function definitions enables "configure then execute" DSL pattern. The trailing block runs first to fill a config object, then the function executes with it via implicit `_builder` parameter. Renamed to avoid overloading `defer` (which remains for scope cleanup). Complements the existing regular trailing-block pattern ("function first, block decorates").
 - **Configurable builder factory with `with` clause**: `builder func(...) with factory_fn { ... }` lets SDK authors specify what config object the trailing block operates on. Defaults to `map_new`; alternatives include `list_new` or any user-defined zero-arg factory.
+- **`--lib` flag for custom module library directory**: `aetherc --lib DIR` resolves imports from a custom directory instead of the default `lib/`. Threaded through `ae run` and `ae check`. Enables build tools like aetherBuild to use `.aeb/lib/` without polluting the project's `lib/`.
 - **Unqualified selective imports**: `import mymodule (foo, bar)` now registers short names so `foo()` can be called without the `mymodule.` prefix. Qualified calls (`mymodule.foo()`) continue to work alongside unqualified ones. Enables clean DSL blocks where setter functions don't need module qualification:
   ```aether
   import build
