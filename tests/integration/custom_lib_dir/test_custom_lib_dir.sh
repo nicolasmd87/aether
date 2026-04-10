@@ -31,8 +31,26 @@ else
     pass=$((pass + 1))
 fi
 
+# Test 3: AETHER_LIB_DIR env var should work like --lib
+if AETHER_LIB_DIR=.mylib "$ROOT/build/ae" run custom_lib_dir.ae >/tmp/ae_libdir_env.txt 2>&1; then
+    echo "  [PASS] AETHER_LIB_DIR env var resolves modules"
+    pass=$((pass + 1))
+else
+    echo "  [FAIL] AETHER_LIB_DIR env var did not resolve modules"
+    fail=$((fail + 1))
+fi
+
+# Test 4: --lib should override AETHER_LIB_DIR
+if AETHER_LIB_DIR=nonexistent "$ROOT/build/ae" run custom_lib_dir.ae --lib .mylib >/tmp/ae_libdir_override.txt 2>&1; then
+    echo "  [PASS] --lib overrides AETHER_LIB_DIR"
+    pass=$((pass + 1))
+else
+    echo "  [FAIL] --lib did not override AETHER_LIB_DIR"
+    fail=$((fail + 1))
+fi
+
 # Cleanup
-rm -f /tmp/ae_libdir_test.c /tmp/ae_libdir_noflag.c /tmp/ae_libdir_out.txt
+rm -f /tmp/ae_libdir_test.c /tmp/ae_libdir_noflag.c /tmp/ae_libdir_out.txt /tmp/ae_libdir_env.txt /tmp/ae_libdir_override.txt
 
 echo ""
 echo "Custom lib dir tests: $pass passed, $fail failed"

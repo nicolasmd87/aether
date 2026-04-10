@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 the release pipeline automatically replaces `[current]` with the next version
 number before tagging the release.
 
+## [current]
+
+### Changed
+
+- **Module resolver state moved from globals to registry**: `source_dir` and `lib_dir` are now fields on `ModuleRegistry` instead of file-level statics, so state is scoped to the registry lifecycle. Prepares the compiler for safe reuse as a library (e.g. from the LSP).
+- **`AETHER_LIB_DIR` environment variable**: Set `AETHER_LIB_DIR` to configure the module library directory without passing `--lib` on every invocation. `--lib` takes precedence if both are set.
+
 ## [0.48.0]
 
 ### Added

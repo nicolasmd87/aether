@@ -22,6 +22,8 @@ typedef struct {
     AetherModule** modules;
     int module_count;
     int module_capacity;
+    char source_dir[2048];  // Source file directory for relative resolution
+    char lib_dir[256];      // Custom lib folder name (default: "lib")
 } ModuleRegistry;
 
 // Global module registry
