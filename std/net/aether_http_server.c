@@ -899,9 +899,8 @@ static void* accept_thread_fn(void* arg) {
 int http_server_start(HttpServer* server) {
     server->is_running = 1;
 
-    int use_actor_mode = (server->spawn_fn && server->send_fn && server->step_fn);
-
 #if !defined(_WIN32)
+    int use_actor_mode = (server->spawn_fn && server->send_fn && server->step_fn);
     if (use_actor_mode && server->multi_accept) {
         // Multi-accept mode (opt-in): one accept thread per core with SO_REUSEPORT.
         // Best for very high connection rates where accept() is the bottleneck.
