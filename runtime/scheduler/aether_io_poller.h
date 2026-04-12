@@ -1,0 +1,45 @@
+// Platform-agnostic I/O poller interface
+// Backend selection: epoll (Linux), kqueue (macOS/BSD), poll() (portable fallback)
+
+#ifndef AETHER_IO_POLLER_H
+#define AETHER_IO_POLLER_H
+
+#include <stdint.h>
+
+// Portable I/O event flags
+#define AETHER_IO_READ  0x001
+#define AETHER_IO_WRITE 0x004
+#define AETHER_IO_ERROR 0x008
+
+// Single I/O event returned by aether_io_poller_poll
+typedef struct {
+    int fd;
+    uint32_t events;    // AETHER_IO_READ, AETHER_IO_WRITE, AETHER_IO_ERROR
+} AetherIoEvent;
+
+// Opaque backend handle (epoll fd, kqueue fd, or poll state pointer)
+typedef struct {
+    int fd;             // Backend fd (epoll/kqueue) or -1 for poll()
+    void* backend_data; // Backend-specific state (used by poll() fallback)
+} AetherIoPoller;
+
+// Initialize a poller instance. Returns 0 on success, -1 on failure.
+int  aether_io_poller_init(AetherIoPoller* poller);
+
+// Register fd for monitoring. events is a bitmask of AETHER_IO_READ/WRITE.
+// actor is opaque user data associated with this fd.
+// Returns 0 on success, -1 on failure.
+int  aether_io_poller_add(AetherIoPoller* poller, int fd, void* actor, uint32_t events);
+
+// Remove fd from monitoring.
+void aether_io_poller_remove(AetherIoPoller* poller, int fd);
+
+// Poll for ready events. Fills out[] with up to max_events results.
+// timeout_ms: 0 = non-blocking, >0 = wait up to N ms, -1 = block indefinitely.
+// Returns number of events written to out[], or 0 on timeout, -1 on error.
+int  aether_io_poller_poll(AetherIoPoller* poller, AetherIoEvent* out, int max_events, int timeout_ms);
+
+// Destroy poller and release all resources.
+void aether_io_poller_destroy(AetherIoPoller* poller);
+
+#endif // AETHER_IO_POLLER_H

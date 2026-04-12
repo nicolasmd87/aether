@@ -62,6 +62,7 @@ void http_serve_static(HttpRequest* r, HttpServerResponse* s, void* d) { (void)r
     #include <limits.h>
     #include <poll.h>
     #include <errno.h>
+    // I/O polling is handled by aether_io_poller (included via multicore_scheduler.h)
 #endif
 
 // Portable case-insensitive substring search (strcasestr is a GNU extension)
@@ -110,12 +111,13 @@ HttpServer* http_server_create(int port) {
     server->spawn_fn = NULL;
     server->release_fn = NULL;
     server->step_fn = NULL;
-    server->accept_epoll_fd = -1;
+    server->accept_poller.fd = -1;
+    server->accept_poller.backend_data = NULL;
     server->multi_accept = 0;
     server->accept_thread_count = 0;
     server->accept_threads = NULL;
     server->accept_listen_fds = NULL;
-    server->accept_epoll_fds = NULL;
+    server->accept_pollers = NULL;
 
     return server;
 }
@@ -773,12 +775,12 @@ static void http_pool_destroy(HttpConnectionPool* pool) {
 // ---------------------------------------------------------------------------
 // Accept thread context (one per core in multi-accept mode)
 // ---------------------------------------------------------------------------
-#if defined(__linux__) && !defined(_WIN32)
+#if !defined(_WIN32)
 typedef struct {
     HttpServer* server;
-    int listen_fd;      // This thread's SO_REUSEPORT listen socket
-    int epoll_fd;       // This thread's epoll instance
-    int thread_index;   // Which core's workers to prefer
+    int listen_fd;          // This thread's SO_REUSEPORT listen socket
+    AetherIoPoller* poller; // This thread's I/O poller
+    int thread_index;       // Which core's workers to prefer
 } AcceptThreadCtx;
 
 // Create a SO_REUSEPORT listen socket bound to the same port
@@ -788,7 +790,9 @@ static int create_reuseport_socket(const char* host, int port, int backlog) {
 
     int opt = 1;
     setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+#ifdef SO_REUSEPORT
     setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+#endif
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
@@ -832,24 +836,23 @@ static inline void dispatch_to_worker(HttpServer* server, int fd) {
     }
 }
 
-// Per-core accept + epoll loop with optimistic recv
+// Per-core accept + I/O poller loop with optimistic recv
 // Strategy: try MSG_PEEK on accept() — if data is already there (common for
-// short-lived HTTP), dispatch immediately without touching epoll (saves 3 syscalls).
-// Only register with epoll if the client hasn't sent data yet.
-static void accept_epoll_loop(HttpServer* server, int listen_fd, int epoll_fd) {
-    struct epoll_event events[256];
+// short-lived HTTP), dispatch immediately without touching the poller (saves syscalls).
+// Only register with the poller if the client hasn't sent data yet.
+static void accept_poller_loop(HttpServer* server, int listen_fd, AetherIoPoller* poller) {
+    AetherIoEvent events[256];
 
     while (server->is_running) {
-        int n = epoll_wait(epoll_fd, events, 256, 100);
-        if (n < 0) {
-            if (errno == EINTR) continue;
-            break;
-        }
+        int n = aether_io_poller_poll(poller, events, 256, 100);
 
         for (int i = 0; i < n; i++) {
-            int fd = events[i].data.fd;
+            int fd = events[i].fd;
 
             if (fd == listen_fd) {
+                // Re-register listen fd (one-shot semantics auto-removed it)
+                aether_io_poller_add(poller, listen_fd, NULL, AETHER_IO_READ);
+
                 // Accept all pending connections
                 while (1) {
                     struct sockaddr_in client_addr;
@@ -860,29 +863,25 @@ static void accept_epoll_loop(HttpServer* server, int listen_fd, int epoll_fd) {
 
                     // Optimistic path: check if data already arrived (very common
                     // for HTTP — request follows TCP handshake immediately).
-                    // This skips 3 syscalls: fcntl×2 + epoll_ctl per connection.
+                    // This skips syscalls per connection.
                     char peek;
                     int peeked = recv(client_fd, &peek, 1, MSG_PEEK | MSG_DONTWAIT);
                     if (peeked > 0) {
-                        // Data ready — dispatch directly, no epoll needed
+                        // Data ready — dispatch directly, no poller needed
                         dispatch_to_worker(server, client_fd);
                         continue;
                     }
 
-                    // Slow path: no data yet, register with epoll
+                    // Slow path: no data yet, register with poller
                     int cflags = fcntl(client_fd, F_GETFL, 0);
                     if (cflags >= 0) fcntl(client_fd, F_SETFL, cflags | O_NONBLOCK);
 
-                    struct epoll_event cev;
-                    cev.events = EPOLLIN | EPOLLONESHOT;
-                    cev.data.fd = client_fd;
-                    if (epoll_ctl(epoll_fd, EPOLL_CTL_ADD, client_fd, &cev) != 0) {
+                    if (aether_io_poller_add(poller, client_fd, NULL, AETHER_IO_READ) != 0) {
                         close(client_fd);
                     }
                 }
             } else {
-                // Data ready (from epoll) — remove from epoll and dispatch
-                epoll_ctl(epoll_fd, EPOLL_CTL_DEL, fd, NULL);
+                // Data ready (from poller, one-shot already removed) — dispatch
                 dispatch_to_worker(server, fd);
             }
         }
@@ -891,7 +890,7 @@ static void accept_epoll_loop(HttpServer* server, int listen_fd, int epoll_fd) {
 
 static void* accept_thread_fn(void* arg) {
     AcceptThreadCtx* ctx = (AcceptThreadCtx*)arg;
-    accept_epoll_loop(ctx->server, ctx->listen_fd, ctx->epoll_fd);
+    accept_poller_loop(ctx->server, ctx->listen_fd, ctx->poller);
     free(ctx);
     return NULL;
 }
@@ -902,9 +901,7 @@ int http_server_start(HttpServer* server) {
 
     int use_actor_mode = (server->spawn_fn && server->send_fn && server->step_fn);
 
-    // Actor mode with epoll: accept → epoll_wait for data → dispatch to worker
-    // This ensures workers never block on recv() inside their step() function.
-#if defined(__linux__) && !defined(_WIN32)
+#if !defined(_WIN32)
     if (use_actor_mode && server->multi_accept) {
         // Multi-accept mode (opt-in): one accept thread per core with SO_REUSEPORT.
         // Best for very high connection rates where accept() is the bottleneck.
@@ -913,16 +910,15 @@ int http_server_start(HttpServer* server) {
         if (n_threads > 16) n_threads = 16;
 
         server->accept_listen_fds = calloc(n_threads, sizeof(int));
-        server->accept_epoll_fds = calloc(n_threads, sizeof(int));
+        server->accept_pollers = calloc(n_threads, sizeof(AetherIoPoller));
         server->accept_threads = calloc(n_threads, sizeof(pthread_t));
-        if (!server->accept_listen_fds || !server->accept_epoll_fds || !server->accept_threads) {
+        if (!server->accept_listen_fds || !server->accept_pollers || !server->accept_threads) {
             fprintf(stderr, "Failed to allocate accept thread state\n");
             return -1;
         }
 
         for (int i = 0; i < n_threads; i++) {
             server->accept_listen_fds[i] = -1;
-            server->accept_epoll_fds[i] = -1;
         }
 
         for (int i = 0; i < n_threads; i++) {
@@ -933,17 +929,13 @@ int http_server_start(HttpServer* server) {
                 return -1;
             }
 
-            server->accept_epoll_fds[i] = epoll_create1(EPOLL_CLOEXEC);
-            if (server->accept_epoll_fds[i] < 0) {
-                fprintf(stderr, "epoll_create1 failed for thread %d\n", i);
+            if (aether_io_poller_init(&server->accept_pollers[i]) < 0) {
+                fprintf(stderr, "I/O poller init failed for thread %d\n", i);
                 return -1;
             }
 
-            struct epoll_event ev;
-            ev.events = EPOLLIN;
-            ev.data.fd = server->accept_listen_fds[i];
-            epoll_ctl(server->accept_epoll_fds[i], EPOLL_CTL_ADD,
-                      server->accept_listen_fds[i], &ev);
+            aether_io_poller_add(&server->accept_pollers[i],
+                                 server->accept_listen_fds[i], NULL, AETHER_IO_READ);
         }
 
         server->accept_thread_count = n_threads;
@@ -957,47 +949,43 @@ int http_server_start(HttpServer* server) {
             AcceptThreadCtx* ctx = malloc(sizeof(AcceptThreadCtx));
             ctx->server = server;
             ctx->listen_fd = server->accept_listen_fds[i];
-            ctx->epoll_fd = server->accept_epoll_fds[i];
+            ctx->poller = &server->accept_pollers[i];
             ctx->thread_index = i;
             pthread_create(&server->accept_threads[i], NULL, accept_thread_fn, ctx);
         }
 
-        accept_epoll_loop(server, server->accept_listen_fds[0],
-                          server->accept_epoll_fds[0]);
+        accept_poller_loop(server, server->accept_listen_fds[0],
+                           &server->accept_pollers[0]);
 
         for (int i = 1; i < n_threads; i++) {
             pthread_join(server->accept_threads[i], NULL);
         }
 
         for (int i = 0; i < n_threads; i++) {
-            if (server->accept_epoll_fds[i] >= 0) close(server->accept_epoll_fds[i]);
+            aether_io_poller_destroy(&server->accept_pollers[i]);
             if (server->accept_listen_fds[i] >= 0) close(server->accept_listen_fds[i]);
         }
         free(server->accept_listen_fds);
-        free(server->accept_epoll_fds);
+        free(server->accept_pollers);
         free(server->accept_threads);
         server->accept_listen_fds = NULL;
-        server->accept_epoll_fds = NULL;
+        server->accept_pollers = NULL;
         server->accept_threads = NULL;
         server->accept_thread_count = 0;
 
     } else if (use_actor_mode) {
-        // Single-accept with epoll (default): one accept thread waits for data
+        // Single-accept with I/O poller (default): one accept thread waits for data
         // before dispatching to worker actors. Best for most workloads.
         if (http_server_bind(server, server->host, server->port) < 0) {
             return -1;
         }
 
-        server->accept_epoll_fd = epoll_create1(EPOLL_CLOEXEC);
-        if (server->accept_epoll_fd < 0) {
-            fprintf(stderr, "epoll_create1 failed: %s\n", strerror(errno));
+        if (aether_io_poller_init(&server->accept_poller) < 0) {
+            fprintf(stderr, "I/O poller init failed\n");
             return -1;
         }
 
-        struct epoll_event listen_ev;
-        listen_ev.events = EPOLLIN;
-        listen_ev.data.fd = server->socket_fd;
-        epoll_ctl(server->accept_epoll_fd, EPOLL_CTL_ADD, server->socket_fd, &listen_ev);
+        aether_io_poller_add(&server->accept_poller, server->socket_fd, NULL, AETHER_IO_READ);
 
         int flags = fcntl(server->socket_fd, F_GETFL, 0);
         if (flags >= 0) fcntl(server->socket_fd, F_SETFL, flags | O_NONBLOCK);
@@ -1006,10 +994,9 @@ int http_server_start(HttpServer* server) {
         printf("Press Ctrl+C to stop\n\n");
         fflush(stdout);
 
-        accept_epoll_loop(server, server->socket_fd, server->accept_epoll_fd);
+        accept_poller_loop(server, server->socket_fd, &server->accept_poller);
 
-        close(server->accept_epoll_fd);
-        server->accept_epoll_fd = -1;
+        aether_io_poller_destroy(&server->accept_poller);
 
     } else
 #endif
@@ -1064,12 +1051,11 @@ void http_server_stop(HttpServer* server) {
 
     server->is_running = 0;
 
-#if defined(__linux__) && !defined(_WIN32)
-    // Close all accept epoll fds to unblock epoll_wait in accept threads
+#if !defined(_WIN32)
+    // Destroy pollers to unblock poll/epoll_wait/kevent in accept threads
     for (int i = 0; i < server->accept_thread_count; i++) {
-        if (server->accept_epoll_fds && server->accept_epoll_fds[i] >= 0) {
-            close(server->accept_epoll_fds[i]);
-            server->accept_epoll_fds[i] = -1;
+        if (server->accept_pollers) {
+            aether_io_poller_destroy(&server->accept_pollers[i]);
         }
         if (server->accept_listen_fds && server->accept_listen_fds[i] >= 0) {
             close(server->accept_listen_fds[i]);
@@ -1077,10 +1063,7 @@ void http_server_stop(HttpServer* server) {
         }
     }
 
-    if (server->accept_epoll_fd >= 0) {
-        close(server->accept_epoll_fd);
-        server->accept_epoll_fd = -1;
-    }
+    aether_io_poller_destroy(&server->accept_poller);
 #endif
 
     if (server->socket_fd >= 0) {

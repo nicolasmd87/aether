@@ -12,6 +12,7 @@
 #include "../actors/aether_spsc_queue.h"
 #include "../config/aether_optimization_config.h"
 #include "lockfree_queue.h"
+#include "aether_io_poller.h"
 
 #define MAX_ACTORS_PER_CORE 10000
 #define MAX_CORES 16
@@ -34,13 +35,8 @@ typedef struct {
     atomic_int         refcount;     // starts at 2 (asker + actor); freed when hits 0
 } ActorReplySlot;
 
-// I/O readiness message — delivered to actor when epoll reports fd ready
+// I/O readiness message — delivered to actor when the poller reports fd ready
 #define MSG_IO_READY 300
-
-// Portable I/O event flags (match epoll values on Linux)
-#define AETHER_IO_READ  0x001  // EPOLLIN
-#define AETHER_IO_WRITE 0x004  // EPOLLOUT
-#define AETHER_IO_ERROR 0x008  // EPOLLERR
 
 typedef struct {
     int type;       // MSG_IO_READY (must be first field)
@@ -131,10 +127,8 @@ typedef struct {
     ActorPool* actor_pool;            // Actor pooling (1.81x speedup)
     AdaptiveBatchState batch_state;   // Adaptive batching (small, embedded)
 
-    // Per-core I/O event loop (Linux: epoll, others: poll fallback)
-#ifdef __linux__
-    int epoll_fd;                     // epoll instance for this core (-1 if not initialized)
-#endif
+    // Per-core I/O event loop (platform-agnostic: epoll/kqueue/poll)
+    AetherIoPoller io_poller;         // Platform I/O poller instance
     AetherIoEntry* io_map;            // fd → actor mapping (heap-allocated, AETHER_IO_MAX_FDS entries)
     int io_registered_count;          // Number of active I/O registrations
 } Scheduler;

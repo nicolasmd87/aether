@@ -15,7 +15,6 @@
 #include <unistd.h>
 #endif
 #ifdef __linux__
-#include <sys/epoll.h>
 #include <fcntl.h>
 #endif
 #include <errno.h>
@@ -915,13 +914,10 @@ void scheduler_init(int cores) {
         // TIER 1 ALWAYS ON: Initialize adaptive batching
         adaptive_batch_init(&schedulers[i].batch_state);
 
-        // I/O event loop: per-core epoll (Linux only)
-#ifdef __linux__
-        schedulers[i].epoll_fd = epoll_create1(EPOLL_CLOEXEC);
-        if (schedulers[i].epoll_fd < 0) {
-            fprintf(stderr, "WARNING: epoll_create1 failed for core %d: %s\n", i, strerror(errno));
+        // I/O event loop: per-core platform poller (epoll/kqueue/poll)
+        if (aether_io_poller_init(&schedulers[i].io_poller) < 0) {
+            fprintf(stderr, "WARNING: I/O poller init failed for core %d\n", i);
         }
-#endif
         schedulers[i].io_map = calloc(AETHER_IO_MAX_FDS, sizeof(AetherIoEntry));
         schedulers[i].io_registered_count = 0;
     }
@@ -1179,12 +1175,7 @@ void scheduler_cleanup() {
         }
 
         // Clean up I/O event loop
-#ifdef __linux__
-        if (schedulers[i].epoll_fd >= 0) {
-            close(schedulers[i].epoll_fd);
-            schedulers[i].epoll_fd = -1;
-        }
-#endif
+        aether_io_poller_destroy(&schedulers[i].io_poller);
         free(schedulers[i].io_map);
         schedulers[i].io_map = NULL;
         schedulers[i].io_registered_count = 0;
@@ -1264,7 +1255,7 @@ void scheduler_deregister_actor(ActorBase* actor) {
 }
 
 // ---------------------------------------------------------------------------
-// I/O event integration (epoll on Linux)
+// I/O event integration (platform-agnostic: epoll/kqueue/poll)
 // ---------------------------------------------------------------------------
 
 int scheduler_io_register(int core_id, int fd, void* actor, uint32_t events) {
@@ -1273,23 +1264,8 @@ int scheduler_io_register(int core_id, int fd, void* actor, uint32_t events) {
 
     Scheduler* sched = &schedulers[core_id];
 
-#ifdef __linux__
-    if (sched->epoll_fd < 0) return -1;
-
-    struct epoll_event ev;
-    ev.events = events | EPOLLONESHOT;  // One-shot: auto-disables after firing (no duplicate events)
-    ev.data.fd = fd;
-
-    if (epoll_ctl(sched->epoll_fd, EPOLL_CTL_ADD, fd, &ev) != 0) {
-        if (errno == EEXIST) {
-            // Already registered — modify instead
-            if (epoll_ctl(sched->epoll_fd, EPOLL_CTL_MOD, fd, &ev) != 0)
-                return -1;
-        } else {
-            return -1;
-        }
-    }
-#endif
+    if (aether_io_poller_add(&sched->io_poller, fd, actor, events) != 0)
+        return -1;
 
     sched->io_map[fd].fd = fd;
     sched->io_map[fd].actor = actor;
@@ -1306,12 +1282,7 @@ void scheduler_io_unregister(int core_id, int fd) {
     if (fd < 0 || fd >= AETHER_IO_MAX_FDS) return;
 
     Scheduler* sched = &schedulers[core_id];
-
-#ifdef __linux__
-    if (sched->epoll_fd >= 0) {
-        epoll_ctl(sched->epoll_fd, EPOLL_CTL_DEL, fd, NULL);
-    }
-#endif
+    aether_io_poller_remove(&sched->io_poller, fd);
 
     if (sched->io_map[fd].active) {
         sched->io_map[fd].active = 0;
@@ -1320,18 +1291,17 @@ void scheduler_io_unregister(int core_id, int fd) {
     }
 }
 
-// Drain epoll events for a scheduler core, delivering MSG_IO_READY messages.
+// Drain I/O events for a scheduler core, delivering MSG_IO_READY messages.
 // Called from the scheduler's main loop. Returns number of events processed.
 static int scheduler_io_poll(Scheduler* sched, int timeout_ms) {
-#ifdef __linux__
-    if (sched->epoll_fd < 0 || sched->io_registered_count == 0) return 0;
+    if (sched->io_registered_count == 0) return 0;
 
-    struct epoll_event events[64];
-    int n = epoll_wait(sched->epoll_fd, events, 64, timeout_ms);
+    AetherIoEvent events[64];
+    int n = aether_io_poller_poll(&sched->io_poller, events, 64, timeout_ms);
     if (n <= 0) return 0;
 
     for (int i = 0; i < n; i++) {
-        int fd = events[i].data.fd;
+        int fd = events[i].fd;
         if (fd < 0 || fd >= AETHER_IO_MAX_FDS) continue;
 
         AetherIoEntry* entry = &sched->io_map[fd];
@@ -1360,7 +1330,7 @@ static int scheduler_io_poll(Scheduler* sched, int timeout_ms) {
         msg.zerocopy.owned = 0;
         msg._reply_slot = NULL;
 
-        // EPOLLONESHOT auto-disables the fd in the kernel.
+        // One-shot: the backend auto-disables the fd after firing.
         // Mark our io_map entry inactive so we don't try to unregister again.
         entry->active = 0;
         entry->actor = NULL;
@@ -1376,10 +1346,6 @@ static int scheduler_io_poll(Scheduler* sched, int timeout_ms) {
         atomic_store_explicit(&actor->active, 1, memory_order_relaxed);
     }
     return n;
-#else
-    (void)sched; (void)timeout_ms;
-    return 0;
-#endif
 }
 
 // Thread-local recursion guard for work inlining (prevent stack overflow)
