@@ -11,9 +11,13 @@
 #include <winsock2.h>
 #define poll WSAPoll
 typedef ULONG nfds_t;
+// On Windows, pollfd.fd is SOCKET (unsigned long long). Cast to avoid
+// -Werror=sign-compare when comparing against int fd parameters.
+#define AETHER_POLL_FD(fd) ((SOCKET)(fd))
 #else
 #include <poll.h>
 #include <unistd.h>
+#define AETHER_POLL_FD(fd) (fd)
 #endif
 
 #ifndef AETHER_IO_MAX_FDS
@@ -51,7 +55,7 @@ int aether_io_poller_add(AetherIoPoller* poller, int fd, void* actor, uint32_t e
 
     // Check if fd already registered — update in place
     for (int i = 0; i < pb->count; i++) {
-        if (pb->fds[i].fd == fd) {
+        if (pb->fds[i].fd == AETHER_POLL_FD(fd)) {
             pb->fds[i].events = 0;
             if (events & AETHER_IO_READ)  pb->fds[i].events |= POLLIN;
             if (events & AETHER_IO_WRITE) pb->fds[i].events |= POLLOUT;
@@ -71,7 +75,7 @@ int aether_io_poller_add(AetherIoPoller* poller, int fd, void* actor, uint32_t e
     }
 
     struct pollfd* pfd = &pb->fds[pb->count];
-    pfd->fd = fd;
+    pfd->fd = AETHER_POLL_FD(fd);
     pfd->events = 0;
     pfd->revents = 0;
     if (events & AETHER_IO_READ)  pfd->events |= POLLIN;
@@ -85,7 +89,7 @@ void aether_io_poller_remove(AetherIoPoller* poller, int fd) {
     if (!pb) return;
 
     for (int i = 0; i < pb->count; i++) {
-        if (pb->fds[i].fd == fd) {
+        if (pb->fds[i].fd == AETHER_POLL_FD(fd)) {
             // Swap with last element for O(1) removal
             pb->fds[i] = pb->fds[pb->count - 1];
             pb->count--;
