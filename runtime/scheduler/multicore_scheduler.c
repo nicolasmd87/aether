@@ -919,6 +919,7 @@ void scheduler_init(int cores) {
             fprintf(stderr, "WARNING: I/O poller init failed for core %d\n", i);
         }
         schedulers[i].io_map = calloc(AETHER_IO_MAX_FDS, sizeof(AetherIoEntry));
+        schedulers[i].io_map_capacity = AETHER_IO_MAX_FDS;
         schedulers[i].io_registered_count = 0;
     }
 }
@@ -1258,11 +1259,32 @@ void scheduler_deregister_actor(ActorBase* actor) {
 // I/O event integration (platform-agnostic: epoll/kqueue/poll)
 // ---------------------------------------------------------------------------
 
+// Grow io_map to accommodate fd. Returns 0 on success, -1 on failure.
+static int scheduler_io_map_grow(Scheduler* sched, int fd) {
+    int new_cap = sched->io_map_capacity;
+    while (new_cap <= fd) new_cap *= 2;
+
+    AetherIoEntry* new_map = realloc(sched->io_map, (size_t)new_cap * sizeof(AetherIoEntry));
+    if (!new_map) return -1;
+
+    // Zero-initialize the new entries
+    memset(&new_map[sched->io_map_capacity], 0,
+           (size_t)(new_cap - sched->io_map_capacity) * sizeof(AetherIoEntry));
+    sched->io_map = new_map;
+    sched->io_map_capacity = new_cap;
+    return 0;
+}
+
 int scheduler_io_register(int core_id, int fd, void* actor, uint32_t events) {
     if (core_id < 0 || core_id >= num_cores) return -1;
-    if (fd < 0 || fd >= AETHER_IO_MAX_FDS) return -1;
+    if (fd < 0) return -1;
 
     Scheduler* sched = &schedulers[core_id];
+
+    // Grow io_map if fd exceeds current capacity
+    if (fd >= sched->io_map_capacity) {
+        if (scheduler_io_map_grow(sched, fd) != 0) return -1;
+    }
 
     if (aether_io_poller_add(&sched->io_poller, fd, actor, events) != 0)
         return -1;
@@ -1279,7 +1301,7 @@ int scheduler_io_register(int core_id, int fd, void* actor, uint32_t events) {
 
 void scheduler_io_unregister(int core_id, int fd) {
     if (core_id < 0 || core_id >= num_cores) return;
-    if (fd < 0 || fd >= AETHER_IO_MAX_FDS) return;
+    if (fd < 0 || fd >= schedulers[core_id].io_map_capacity) return;
 
     Scheduler* sched = &schedulers[core_id];
     aether_io_poller_remove(&sched->io_poller, fd);
@@ -1302,7 +1324,7 @@ static int scheduler_io_poll(Scheduler* sched, int timeout_ms) {
 
     for (int i = 0; i < n; i++) {
         int fd = events[i].fd;
-        if (fd < 0 || fd >= AETHER_IO_MAX_FDS) continue;
+        if (fd < 0 || fd >= sched->io_map_capacity) continue;
 
         AetherIoEntry* entry = &sched->io_map[fd];
         if (!entry->active || !entry->actor) continue;

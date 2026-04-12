@@ -18,7 +18,9 @@
 #define MAX_CORES 16
 #define BATCH_SIZE 64  // Process up to 64 messages per batch for better throughput
 #define COALESCE_THRESHOLD 512  // Drain this many messages at once for high throughput
-#define AETHER_IO_MAX_FDS 4096  // Max tracked I/O file descriptors per core
+#ifndef AETHER_IO_MAX_FDS
+#define AETHER_IO_MAX_FDS 4096  // Initial I/O fd map capacity per core (grows on demand)
+#endif
 
 // Legacy compatibility - use g_aether_config instead
 #define g_sched_features g_aether_config
@@ -129,7 +131,8 @@ typedef struct {
 
     // Per-core I/O event loop (platform-agnostic: epoll/kqueue/poll)
     AetherIoPoller io_poller;         // Platform I/O poller instance
-    AetherIoEntry* io_map;            // fd → actor mapping (heap-allocated, AETHER_IO_MAX_FDS entries)
+    AetherIoEntry* io_map;            // fd → actor mapping (heap-allocated, grows on demand)
+    int io_map_capacity;              // Current allocated size of io_map
     int io_registered_count;          // Number of active I/O registrations
 } Scheduler;
 
