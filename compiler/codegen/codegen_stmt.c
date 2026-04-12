@@ -686,8 +686,8 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                             int init_heap = (stmt->child_count > 0 &&
                                              is_heap_string_expr(stmt->children[0]));
                             print_indent(gen);
-                            fprintf(gen->output, "int _heap_%s = %d;\n",
-                                    stmt->value, init_heap ? 1 : 0);
+                            fprintf(gen->output, "int _heap_%s = %d; (void)_heap_%s;\n",
+                                    stmt->value, init_heap ? 1 : 0, stmt->value);
                         }
                     }
                     // Record variable→closure mapping for closure invocation

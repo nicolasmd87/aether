@@ -5,9 +5,15 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.30.0]`. When a PR merges to `main`,
+**Workflow**: New changes go under `## [current]`. When a PR merges to `main`,
 the release pipeline automatically replaces `[current]` with the next version
 number before tagging the release.
+
+## [current]
+
+### Fixed
+
+- **String memory leak in loops**: `string_concat`, `string_substring`, `string_to_upper`, `string_to_lower`, `string_trim`, and string interpolation in loops no longer leak the previous value on reassignment. The codegen now emits a heap-ownership flag per string variable and frees the old value before each reassignment, preventing O(n²) memory growth that caused OOM on tight loops.
 
 ## [0.48.0]
 
