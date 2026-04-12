@@ -1,0 +1,41 @@
+// Regression: string_concat in a loop leaks memory (OOM)
+// Each iteration allocates a new string but never frees the old one.
+//
+// Before fix: O(n^2) leaked memory, OOM on large inputs
+// After fix:  O(n) memory, constant RSS
+//
+// Run with: ae run tests/regression/test_string_leak_loop.ae
+
+import std.string
+
+main() {
+    // Phase 1: string_concat in a tight loop
+    s = ""
+    i = 0
+    while i < 100000 {
+        s = string_concat(s, "x")
+        i = i + 1
+    }
+    println("concat loop done, length = ${string_length(s)}")
+
+    // Phase 2: simulated replace-all using index_of + substring + concat
+    input = "hello.world.foo.bar.baz"
+    result = input
+    j = 0
+    while j < 1000 {
+        out = ""
+        tmp = result
+        idx = string_index_of(tmp, ".")
+        while idx >= 0 {
+            out = string_concat(out, string_substring(tmp, 0, idx))
+            out = string_concat(out, "/")
+            tmp = string_substring(tmp, idx + 1, string_length(tmp))
+            idx = string_index_of(tmp, ".")
+        }
+        out = string_concat(out, tmp)
+        result = out
+        j = j + 1
+    }
+    println("replace-all loop done")
+    println(result)
+}

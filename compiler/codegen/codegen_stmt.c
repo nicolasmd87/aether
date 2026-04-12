@@ -388,6 +388,28 @@ static int has_list_patterns(ASTNode* match_stmt) {
     return 0;
 }
 
+// Returns 1 if the expression allocates a new heap string that the caller must free.
+static int is_heap_string_expr(ASTNode* expr) {
+    if (!expr) return 0;
+
+    // Function calls that return malloc'd strings
+    if (expr->type == AST_FUNCTION_CALL && expr->value) {
+        const char* fn = expr->value;
+        return (strcmp(fn, "string_concat") == 0 ||
+                strcmp(fn, "string_substring") == 0 ||
+                strcmp(fn, "string_to_upper") == 0 ||
+                strcmp(fn, "string_to_lower") == 0 ||
+                strcmp(fn, "string_trim") == 0);
+    }
+
+    // String interpolation (non-printf mode) allocates via _aether_interp
+    if (expr->type == AST_STRING_INTERP) {
+        return 1;
+    }
+
+    return 0;
+}
+
 void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
     if (!stmt) return;
 
@@ -473,12 +495,21 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             
             if (is_state_var) {
                 // Generate as assignment to self->field
-                fprintf(gen->output, "self->%s", stmt->value);
-                if (stmt->child_count > 0) {
-                    fprintf(gen->output, " = ");
+                if (stmt->child_count > 0 && is_heap_string_expr(stmt->children[0])) {
+                    fprintf(gen->output, "{ const char* _tmp_old = self->%s; ", stmt->value);
+                    fprintf(gen->output, "self->%s = ", stmt->value);
                     generate_expression(gen, stmt->children[0]);
+                    fprintf(gen->output, "; if (_heap_%s) free((void*)_tmp_old);",
+                            stmt->value);
+                    fprintf(gen->output, " _heap_%s = 1; }\n", stmt->value);
+                } else {
+                    fprintf(gen->output, "self->%s", stmt->value);
+                    if (stmt->child_count > 0) {
+                        fprintf(gen->output, " = ");
+                        generate_expression(gen, stmt->children[0]);
+                    }
+                    fprintf(gen->output, ";\n");
                 }
-                fprintf(gen->output, ";\n");
             } else {
                 // Match-as-expression: x = match val { ... }
                 if (stmt->child_count > 0 && stmt->children[0] &&
@@ -509,12 +540,26 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                 // Check if this is a reassignment (Python-style)
                 if (is_var_declared(gen, stmt->value)) {
                     // Already declared - generate assignment only
-                    fprintf(gen->output, "%s", stmt->value);
-                    if (stmt->child_count > 0) {
-                        fprintf(gen->output, " = ");
+                    if (stmt->child_count > 0 && is_heap_string_expr(stmt->children[0])) {
+                        // Free old heap string before reassignment.
+                        // Save to temp because old value may be an argument to the RHS
+                        // (e.g., s = string_concat(s, "x") — s is read before overwrite).
+                        // The _heap_ flag guards against freeing string literals on
+                        // the first iteration; it's declared alongside the variable.
+                        fprintf(gen->output, "{ const char* _tmp_old = %s; ", stmt->value);
+                        fprintf(gen->output, "%s = ", stmt->value);
                         generate_expression(gen, stmt->children[0]);
+                        fprintf(gen->output, "; if (_heap_%s) free((void*)_tmp_old);",
+                                stmt->value);
+                        fprintf(gen->output, " _heap_%s = 1; }\n", stmt->value);
+                    } else {
+                        fprintf(gen->output, "%s", stmt->value);
+                        if (stmt->child_count > 0) {
+                            fprintf(gen->output, " = ");
+                            generate_expression(gen, stmt->children[0]);
+                        }
+                        fprintf(gen->output, ";\n");
                     }
-                    fprintf(gen->output, ";\n");
                 } else {
                     // First declaration - generate type + variable
                     mark_var_declared(gen, stmt->value);
@@ -614,6 +659,37 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     }
 
                     fprintf(gen->output, ";\n");
+                    // Emit heap-ownership flag for string variables.
+                    // This flag is checked at reassignment to avoid freeing
+                    // string literals; it's set to 1 after the first heap
+                    // string assignment (string_concat, string_substring, etc.).
+                    {
+                        Type* vt = stmt->node_type;
+                        if ((!vt || vt->kind == TYPE_UNKNOWN || vt->kind == TYPE_VOID)
+                            && stmt->child_count > 0 && stmt->children[0]
+                            && stmt->children[0]->node_type) {
+                            vt = stmt->children[0]->node_type;
+                        }
+                        int is_string_var = (vt && vt->kind == TYPE_STRING);
+                        // Also detect string by initializer: literal string or string function
+                        if (!is_string_var && stmt->child_count > 0 && stmt->children[0]) {
+                            ASTNode* init = stmt->children[0];
+                            if (init->type == AST_LITERAL && init->value &&
+                                init->node_type && init->node_type->kind == TYPE_STRING) {
+                                is_string_var = 1;
+                            }
+                            if (is_heap_string_expr(init)) {
+                                is_string_var = 1;
+                            }
+                        }
+                        if (is_string_var) {
+                            int init_heap = (stmt->child_count > 0 &&
+                                             is_heap_string_expr(stmt->children[0]));
+                            print_indent(gen);
+                            fprintf(gen->output, "int _heap_%s = %d;\n",
+                                    stmt->value, init_heap ? 1 : 0);
+                        }
+                    }
                     // Record variable→closure mapping for closure invocation
                     if (stmt->child_count > 0 && stmt->children[0] &&
                         stmt->children[0]->type == AST_CLOSURE &&
