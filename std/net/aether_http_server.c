@@ -31,6 +31,11 @@ const char* http_status_text(int c) { (void)c; return "Unknown"; }
 const char* http_mime_type(const char* p) { (void)p; return "application/octet-stream"; }
 void http_serve_file(HttpServerResponse* r, const char* f) { (void)r; (void)f; }
 void http_serve_static(HttpRequest* r, HttpServerResponse* s, void* d) { (void)r; (void)s; (void)d; }
+void http_server_set_actor_handler(HttpServer* s, void (*sf)(void*), void (*snf)(void*, void*, size_t), void* (*spf)(int, void (*)(void*), size_t), void (*rf)(void*)) { (void)s; (void)sf; (void)snf; (void)spf; (void)rf; }
+const char* http_request_method(HttpRequest* r) { (void)r; return ""; }
+const char* http_request_path(HttpRequest* r) { (void)r; return ""; }
+const char* http_request_body(HttpRequest* r) { (void)r; return ""; }
+const char* http_request_query(HttpRequest* r) { (void)r; return ""; }
 #else
 
 #include <stdio.h>
