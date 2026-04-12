@@ -331,3 +331,17 @@ void scheduler_reply(ActorBase* self, void* data, size_t data_size) {
     }
     slot->reply_ready = 1;
 }
+
+// ============================================================================
+// I/O event integration — no-ops in cooperative mode
+// WASM and embedded targets have no kernel I/O poller.
+// ============================================================================
+
+int scheduler_io_register(int core_id, int fd, void* actor, uint32_t events) {
+    (void)core_id; (void)fd; (void)actor; (void)events;
+    return -1;  // I/O registration not supported in cooperative mode
+}
+
+void scheduler_io_unregister(int core_id, int fd) {
+    (void)core_id; (void)fd;
+}

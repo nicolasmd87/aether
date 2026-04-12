@@ -12,11 +12,15 @@
 #include "../actors/aether_spsc_queue.h"
 #include "../config/aether_optimization_config.h"
 #include "lockfree_queue.h"
+#include "aether_io_poller.h"
 
 #define MAX_ACTORS_PER_CORE 10000
 #define MAX_CORES 16
 #define BATCH_SIZE 64  // Process up to 64 messages per batch for better throughput
 #define COALESCE_THRESHOLD 512  // Drain this many messages at once for high throughput
+#ifndef AETHER_IO_MAX_FDS
+#define AETHER_IO_MAX_FDS 4096  // Initial I/O fd map capacity per core (grows on demand)
+#endif
 
 // Legacy compatibility - use g_aether_config instead
 #define g_sched_features g_aether_config
@@ -32,6 +36,23 @@ typedef struct {
     pthread_cond_t     cond;         // signalled by scheduler_reply()
     atomic_int         refcount;     // starts at 2 (asker + actor); freed when hits 0
 } ActorReplySlot;
+
+// I/O readiness message — delivered to actor when the poller reports fd ready
+#define MSG_IO_READY 300
+
+typedef struct {
+    int type;       // MSG_IO_READY (must be first field)
+    int fd;         // File descriptor that became ready
+    uint32_t events; // EPOLLIN, EPOLLOUT, etc.
+} IoReadyMessage;
+
+// Per-fd registration: maps fd → actor for I/O dispatch
+typedef struct {
+    int fd;
+    void* actor;        // ActorBase* that receives MSG_IO_READY
+    uint32_t events;    // Subscribed events
+    int active;         // 1 if slot is in use
+} AetherIoEntry;
 
 // Optimized spinlock with PAUSE instruction (3x faster than standard spinlock)
 typedef struct {
@@ -107,6 +128,12 @@ typedef struct {
     // Integrated optimizations (pointers to avoid bloating struct)
     ActorPool* actor_pool;            // Actor pooling (1.81x speedup)
     AdaptiveBatchState batch_state;   // Adaptive batching (small, embedded)
+
+    // Per-core I/O event loop (platform-agnostic: epoll/kqueue/poll)
+    AetherIoPoller io_poller;         // Platform I/O poller instance
+    AetherIoEntry* io_map;            // fd → actor mapping (heap-allocated, grows on demand)
+    int io_map_capacity;              // Current allocated size of io_map
+    int io_registered_count;          // Number of active I/O registrations
 } Scheduler;
 
 extern Scheduler schedulers[MAX_CORES];
@@ -127,6 +154,7 @@ void scheduler_shutdown();  // Wait + stop + join threads. Call once at program 
 void scheduler_cleanup();
 
 int scheduler_register_actor(ActorBase* actor, int preferred_core);
+void scheduler_deregister_actor(ActorBase* actor);
 void scheduler_send_local(ActorBase* actor, Message msg);
 void scheduler_send_remote(ActorBase* actor, Message msg, int from_core);
 
@@ -156,6 +184,12 @@ void scheduler_reply(ActorBase* self, void* data, size_t data_size);
 // max_per_actor: max messages to process per actor per call (0 = unlimited).
 // Returns total messages processed across all actors.
 int aether_scheduler_poll(int max_per_actor);
+
+// I/O event integration — register/unregister fds for non-blocking I/O dispatch
+// The fd is monitored on the specified core's epoll instance. When ready,
+// an MSG_IO_READY message is delivered to the actor's mailbox.
+int scheduler_io_register(int core_id, int fd, void* actor, uint32_t events);
+void scheduler_io_unregister(int core_id, int fd);
 
 // Thread-local reply slot set by the send path (sender) and step function (receiver).
 // g_pending_reply_slot: set before aether_send_message so the slot rides inside the Message.

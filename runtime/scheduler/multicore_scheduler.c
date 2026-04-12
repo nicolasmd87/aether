@@ -14,6 +14,9 @@
 #include <sched.h>
 #include <unistd.h>
 #endif
+#ifdef __linux__
+#include <fcntl.h>
+#endif
 #include <errno.h>
 #include <time.h>
 #include "multicore_scheduler.h"
@@ -39,6 +42,9 @@ static inline uint64_t aether_now_ns(void) {
 
 // Forward declaration to avoid header cycle with aether_send_message.h
 extern void aether_send_message(void* actor_ptr, void* message_data, size_t message_size);
+
+// Forward declaration: I/O polling used in scheduler thread loop
+static int scheduler_io_poll(Scheduler* sched, int timeout_ms);
 
 // Forward declaration: TLS guard set by aether_send_message_sync while an
 // actor's step() is executing synchronously on the main thread.  Used to
@@ -386,6 +392,11 @@ void* AETHER_HOT scheduler_thread(void* arg) {
         // from_queues.  This ensures deferred messages land on every loop and
         // prevents them from indefinitely blocking behind a saturated queue.
         overflow_flush(sched->core_id);
+
+        // Poll I/O events (non-blocking) — delivers MSG_IO_READY to actor mailboxes.
+        // Must run every iteration so I/O events are picked up promptly,
+        // not only when the scheduler is idle.
+        scheduler_io_poll(sched, 0);
 
         // TIER 1 ALWAYS ON: Adaptive batch sizing
         int batch_size = sched->batch_state.current_batch_size;
@@ -793,9 +804,14 @@ void* AETHER_HOT scheduler_thread(void* arg) {
                 // Tight spin with architecture-specific pause
                 AETHER_PAUSE();
             } else {
-                // Brief yield only after extended idle
-                aether_sched_yield();
-                idle_count = 5000;
+                // Extended idle: use I/O poller with short timeout instead of blind yield
+                int io_events = scheduler_io_poll(sched, 1);
+                if (io_events > 0) {
+                    idle_count = 0;  // I/O activity — go back to active processing
+                } else {
+                    aether_sched_yield();
+                    idle_count = 5000;
+                }
             }
         } else {
             idle_count = 0;
@@ -897,6 +913,14 @@ void scheduler_init(int cores) {
         }
         // TIER 1 ALWAYS ON: Initialize adaptive batching
         adaptive_batch_init(&schedulers[i].batch_state);
+
+        // I/O event loop: per-core platform poller (epoll/kqueue/poll)
+        if (aether_io_poller_init(&schedulers[i].io_poller) < 0) {
+            fprintf(stderr, "WARNING: I/O poller init failed for core %d\n", i);
+        }
+        schedulers[i].io_map = calloc(AETHER_IO_MAX_FDS, sizeof(AetherIoEntry));
+        schedulers[i].io_map_capacity = AETHER_IO_MAX_FDS;
+        schedulers[i].io_registered_count = 0;
     }
 }
 
@@ -1151,6 +1175,12 @@ void scheduler_cleanup() {
             schedulers[i].actor_pool = NULL;
         }
 
+        // Clean up I/O event loop
+        aether_io_poller_destroy(&schedulers[i].io_poller);
+        free(schedulers[i].io_map);
+        schedulers[i].io_map = NULL;
+        schedulers[i].io_registered_count = 0;
+
         // Reset counters
         schedulers[i].actor_count = 0;
         schedulers[i].capacity = 0;
@@ -1205,6 +1235,139 @@ int scheduler_register_actor(ActorBase* actor, int preferred_core) {
     spinlock_unlock(&sched->actor_lock);
 
     return preferred_core;
+}
+
+// Remove an actor from its scheduler's actor array.
+// Must be called before freeing actor memory to avoid dangling pointers.
+void scheduler_deregister_actor(ActorBase* actor) {
+    if (!actor) return;
+    int core = atomic_load_explicit(&actor->assigned_core, memory_order_relaxed);
+    if (core < 0 || core >= num_cores) return;
+
+    Scheduler* sched = &schedulers[core];
+    spinlock_lock(&sched->actor_lock);
+    for (int i = 0; i < sched->actor_count; i++) {
+        if (sched->actors[i] == actor) {
+            sched->actors[i] = sched->actors[--sched->actor_count];
+            break;
+        }
+    }
+    spinlock_unlock(&sched->actor_lock);
+}
+
+// ---------------------------------------------------------------------------
+// I/O event integration (platform-agnostic: epoll/kqueue/poll)
+// ---------------------------------------------------------------------------
+
+// Grow io_map to accommodate fd. Returns 0 on success, -1 on failure.
+static int scheduler_io_map_grow(Scheduler* sched, int fd) {
+    int new_cap = sched->io_map_capacity;
+    while (new_cap <= fd) new_cap *= 2;
+
+    AetherIoEntry* new_map = realloc(sched->io_map, (size_t)new_cap * sizeof(AetherIoEntry));
+    if (!new_map) return -1;
+
+    // Zero-initialize the new entries
+    memset(&new_map[sched->io_map_capacity], 0,
+           (size_t)(new_cap - sched->io_map_capacity) * sizeof(AetherIoEntry));
+    sched->io_map = new_map;
+    sched->io_map_capacity = new_cap;
+    return 0;
+}
+
+int scheduler_io_register(int core_id, int fd, void* actor, uint32_t events) {
+    if (core_id < 0 || core_id >= num_cores) return -1;
+    if (fd < 0) return -1;
+
+    Scheduler* sched = &schedulers[core_id];
+
+    // Grow io_map if fd exceeds current capacity
+    if (fd >= sched->io_map_capacity) {
+        if (scheduler_io_map_grow(sched, fd) != 0) return -1;
+    }
+
+    if (aether_io_poller_add(&sched->io_poller, fd, actor, events) != 0)
+        return -1;
+
+    sched->io_map[fd].fd = fd;
+    sched->io_map[fd].actor = actor;
+    sched->io_map[fd].events = events;
+    if (!sched->io_map[fd].active) {
+        sched->io_map[fd].active = 1;
+        sched->io_registered_count++;
+    }
+    return 0;
+}
+
+void scheduler_io_unregister(int core_id, int fd) {
+    if (core_id < 0 || core_id >= num_cores) return;
+    if (fd < 0 || fd >= schedulers[core_id].io_map_capacity) return;
+
+    Scheduler* sched = &schedulers[core_id];
+    aether_io_poller_remove(&sched->io_poller, fd);
+
+    if (sched->io_map[fd].active) {
+        sched->io_map[fd].active = 0;
+        sched->io_map[fd].actor = NULL;
+        sched->io_registered_count--;
+    }
+}
+
+// Drain I/O events for a scheduler core, delivering MSG_IO_READY messages.
+// Called from the scheduler's main loop. Returns number of events processed.
+static int scheduler_io_poll(Scheduler* sched, int timeout_ms) {
+    if (sched->io_registered_count == 0) return 0;
+
+    AetherIoEvent events[64];
+    int n = aether_io_poller_poll(&sched->io_poller, events, 64, timeout_ms);
+    if (n <= 0) return 0;
+
+    for (int i = 0; i < n; i++) {
+        int fd = events[i].fd;
+        if (fd < 0 || fd >= sched->io_map_capacity) continue;
+
+        AetherIoEntry* entry = &sched->io_map[fd];
+        if (!entry->active || !entry->actor) continue;
+
+        ActorBase* actor = (ActorBase*)entry->actor;
+
+        // Build and deliver MSG_IO_READY directly to mailbox
+        IoReadyMessage io_msg;
+        io_msg.type = MSG_IO_READY;
+        io_msg.fd = fd;
+        io_msg.events = events[i].events;
+
+        Message msg;
+        msg.type = MSG_IO_READY;
+        msg.sender_id = 0;
+        msg.payload_int = fd;
+
+        // Allocate payload copy for mailbox ownership
+        void* payload = malloc(sizeof(IoReadyMessage));
+        if (!payload) continue;
+        memcpy(payload, &io_msg, sizeof(IoReadyMessage));
+        msg.payload_ptr = payload;
+        msg.zerocopy.data = NULL;
+        msg.zerocopy.size = 0;
+        msg.zerocopy.owned = 0;
+        msg._reply_slot = NULL;
+
+        // One-shot: the backend auto-disables the fd after firing.
+        // Mark our io_map entry inactive so we don't try to unregister again.
+        entry->active = 0;
+        entry->actor = NULL;
+        sched->io_registered_count--;
+
+        // Route through the scheduler's self-channel (from_queues[core_id])
+        // instead of mailbox_send. The mailbox is SPSC and the accept thread
+        // is already the producer via direct_send — adding a second producer
+        // (this scheduler thread) would corrupt the ring buffer.
+        if (!queue_enqueue(&sched->from_queues[sched->core_id], actor, msg)) {
+            overflow_append(sched->core_id, actor, msg);
+        }
+        atomic_store_explicit(&actor->active, 1, memory_order_relaxed);
+    }
+    return n;
 }
 
 // Thread-local recursion guard for work inlining (prevent stack overflow)

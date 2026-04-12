@@ -31,6 +31,11 @@ const char* http_status_text(int c) { (void)c; return "Unknown"; }
 const char* http_mime_type(const char* p) { (void)p; return "application/octet-stream"; }
 void http_serve_file(HttpServerResponse* r, const char* f) { (void)r; (void)f; }
 void http_serve_static(HttpRequest* r, HttpServerResponse* s, void* d) { (void)r; (void)s; (void)d; }
+void http_server_set_actor_handler(HttpServer* s, void (*sf)(void*), void (*snf)(void*, void*, size_t), void* (*spf)(int, void (*)(void*), size_t), void (*rf)(void*)) { (void)s; (void)sf; (void)snf; (void)spf; (void)rf; }
+const char* http_request_method(HttpRequest* r) { (void)r; return ""; }
+const char* http_request_path(HttpRequest* r) { (void)r; return ""; }
+const char* http_request_body(HttpRequest* r) { (void)r; return ""; }
+const char* http_request_query(HttpRequest* r) { (void)r; return ""; }
 #else
 
 #include <stdio.h>
@@ -61,6 +66,8 @@ void http_serve_static(HttpRequest* r, HttpServerResponse* s, void* d) { (void)r
     #include <fcntl.h>
     #include <limits.h>
     #include <poll.h>
+    #include <errno.h>
+    // I/O polling is handled by aether_io_poller (included via multicore_scheduler.h)
 #endif
 
 // Portable case-insensitive substring search (strcasestr is a GNU extension)
@@ -104,6 +111,18 @@ HttpServer* http_server_create(int port) {
     server->max_connections = 1000;
     server->keep_alive_timeout = 30;
     server->scheduler = NULL;
+    server->handler_actor = NULL;
+    server->send_fn = NULL;
+    server->spawn_fn = NULL;
+    server->release_fn = NULL;
+    server->step_fn = NULL;
+    server->accept_poller.fd = -1;
+    server->accept_poller.backend_data = NULL;
+    server->multi_accept = 0;
+    server->accept_thread_count = 0;
+    server->accept_threads = NULL;
+    server->accept_listen_fds = NULL;
+    server->accept_pollers = NULL;
 
     return server;
 }
@@ -758,57 +777,275 @@ static void http_pool_destroy(HttpConnectionPool* pool) {
 
 #endif // AETHER_HAS_THREADS && !_WIN32
 
-int http_server_start(HttpServer* server) {
-    if (http_server_bind(server, server->host, server->port) < 0) {
+// ---------------------------------------------------------------------------
+// Accept thread context (one per core in multi-accept mode)
+// ---------------------------------------------------------------------------
+#if !defined(_WIN32)
+typedef struct {
+    HttpServer* server;
+    int listen_fd;          // This thread's SO_REUSEPORT listen socket
+    AetherIoPoller* poller; // This thread's I/O poller
+    int thread_index;       // Which core's workers to prefer
+} AcceptThreadCtx;
+
+// Create a SO_REUSEPORT listen socket bound to the same port
+static int create_reuseport_socket(const char* host, int port, int backlog) {
+    int fd = socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) return -1;
+
+    int opt = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt));
+#ifdef SO_REUSEPORT
+    setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, &opt, sizeof(opt));
+#endif
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    if (strcmp(host, "0.0.0.0") == 0) {
+        addr.sin_addr.s_addr = INADDR_ANY;
+    } else {
+        inet_pton(AF_INET, host, &addr.sin_addr);
+    }
+
+    if (bind(fd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
+        close(fd);
+        return -1;
+    }
+    if (listen(fd, backlog) < 0) {
+        close(fd);
         return -1;
     }
 
-    server->is_running = 1;
+    // Non-blocking for epoll
+    int flags = fcntl(fd, F_GETFL, 0);
+    if (flags >= 0) fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 
-    printf("Server running at http://%s:%d\n", server->host, server->port);
-    printf("Press Ctrl+C to stop\n\n");
-    fflush(stdout);
+    return fd;
+}
 
-#if AETHER_HAS_THREADS && !defined(_WIN32)
-    HttpConnectionPool* pool = http_pool_create(server);
-#endif
+// Dispatch a data-ready fd to a worker actor
+static inline void dispatch_to_worker(HttpServer* server, int fd) {
+    void* worker = server->spawn_fn(-1, server->step_fn, 0);
+    if (worker) {
+        HttpConnectionMessage conn_msg;
+        conn_msg.type = MSG_HTTP_CONNECTION;
+        conn_msg.client_fd = fd;
+        server->send_fn(worker, &conn_msg, sizeof(conn_msg));
+    } else {
+        const char* err = "HTTP/1.1 503 Service Unavailable\r\n"
+                          "Content-Length: 19\r\n\r\nService Unavailable";
+        send(fd, err, strlen(err), MSG_NOSIGNAL);
+        close(fd);
+    }
+}
+
+// Per-core accept + I/O poller loop with optimistic recv
+// Strategy: try MSG_PEEK on accept() — if data is already there (common for
+// short-lived HTTP), dispatch immediately without touching the poller (saves syscalls).
+// Only register with the poller if the client hasn't sent data yet.
+static void accept_poller_loop(HttpServer* server, int listen_fd, AetherIoPoller* poller) {
+    AetherIoEvent events[256];
 
     while (server->is_running) {
-        // Poll the server socket with a 1-second timeout so we can check
-        // is_running periodically for graceful shutdown.  Without this,
-        // accept() blocks indefinitely and a server with no traffic
-        // can't shut down until the next connection arrives.
-#if !defined(_WIN32)
-        struct pollfd pfd = { .fd = server->socket_fd, .events = POLLIN };
-        int ready = poll(&pfd, 1, 1000);
-        if (ready <= 0) continue;  // timeout or error — re-check is_running
+        int n = aether_io_poller_poll(poller, events, 256, 100);
+
+        for (int i = 0; i < n; i++) {
+            int fd = events[i].fd;
+
+            if (fd == listen_fd) {
+                // Re-register listen fd (one-shot semantics auto-removed it)
+                aether_io_poller_add(poller, listen_fd, NULL, AETHER_IO_READ);
+
+                // Accept all pending connections
+                while (1) {
+                    struct sockaddr_in client_addr;
+                    socklen_t client_len = sizeof(client_addr);
+                    int client_fd = accept(listen_fd,
+                        (struct sockaddr*)&client_addr, &client_len);
+                    if (client_fd < 0) break;
+
+                    // Optimistic path: check if data already arrived (very common
+                    // for HTTP — request follows TCP handshake immediately).
+                    // This skips syscalls per connection.
+                    char peek;
+                    int peeked = recv(client_fd, &peek, 1, MSG_PEEK | MSG_DONTWAIT);
+                    if (peeked > 0) {
+                        // Data ready — dispatch directly, no poller needed
+                        dispatch_to_worker(server, client_fd);
+                        continue;
+                    }
+
+                    // Slow path: no data yet, register with poller
+                    int cflags = fcntl(client_fd, F_GETFL, 0);
+                    if (cflags >= 0) fcntl(client_fd, F_SETFL, cflags | O_NONBLOCK);
+
+                    if (aether_io_poller_add(poller, client_fd, NULL, AETHER_IO_READ) != 0) {
+                        close(client_fd);
+                    }
+                }
+            } else {
+                // Data ready (from poller, one-shot already removed) — dispatch
+                dispatch_to_worker(server, fd);
+            }
+        }
+    }
+}
+
+static void* accept_thread_fn(void* arg) {
+    AcceptThreadCtx* ctx = (AcceptThreadCtx*)arg;
+    accept_poller_loop(ctx->server, ctx->listen_fd, ctx->poller);
+    free(ctx);
+    return NULL;
+}
 #endif
 
-        struct sockaddr_in client_addr;
-        socklen_t client_len = sizeof(client_addr);
+int http_server_start(HttpServer* server) {
+    server->is_running = 1;
 
-        int client_fd = accept(server->socket_fd, (struct sockaddr*)&client_addr, &client_len);
+#if !defined(_WIN32)
+    int use_actor_mode = (server->spawn_fn && server->send_fn && server->step_fn);
+    if (use_actor_mode && server->multi_accept) {
+        // Multi-accept mode (opt-in): one accept thread per core with SO_REUSEPORT.
+        // Best for very high connection rates where accept() is the bottleneck.
+        int n_threads = (int)sysconf(_SC_NPROCESSORS_ONLN);
+        if (n_threads <= 0) n_threads = 4;
+        if (n_threads > 16) n_threads = 16;
 
-        if (client_fd < 0) {
-            if (!server->is_running) break;
-            continue;
+        server->accept_listen_fds = calloc(n_threads, sizeof(int));
+        server->accept_pollers = calloc(n_threads, sizeof(AetherIoPoller));
+        server->accept_threads = calloc(n_threads, sizeof(pthread_t));
+        if (!server->accept_listen_fds || !server->accept_pollers || !server->accept_threads) {
+            fprintf(stderr, "Failed to allocate accept thread state\n");
+            return -1;
         }
 
-#if !AETHER_HAS_THREADS
-        // Single-threaded: handle synchronously (cooperative/WASM/embedded)
-        handle_client_connection(server, client_fd);
-#elif defined(_WIN32)
-        // Windows: synchronous (thread pool uses pthreads, not available here)
-        handle_client_connection(server, client_fd);
-#else
-        // Dispatch to bounded thread pool — no unbounded thread creation
-        http_pool_submit(pool, client_fd);
+        for (int i = 0; i < n_threads; i++) {
+            server->accept_listen_fds[i] = -1;
+        }
+
+        for (int i = 0; i < n_threads; i++) {
+            server->accept_listen_fds[i] = create_reuseport_socket(
+                server->host, server->port, server->max_connections);
+            if (server->accept_listen_fds[i] < 0) {
+                fprintf(stderr, "Failed to create SO_REUSEPORT socket for thread %d\n", i);
+                return -1;
+            }
+
+            if (aether_io_poller_init(&server->accept_pollers[i]) < 0) {
+                fprintf(stderr, "I/O poller init failed for thread %d\n", i);
+                return -1;
+            }
+
+            aether_io_poller_add(&server->accept_pollers[i],
+                                 server->accept_listen_fds[i], NULL, AETHER_IO_READ);
+        }
+
+        server->accept_thread_count = n_threads;
+
+        printf("Server running at http://%s:%d (%d accept threads, SO_REUSEPORT)\n",
+               server->host, server->port, n_threads);
+        printf("Press Ctrl+C to stop\n\n");
+        fflush(stdout);
+
+        for (int i = 1; i < n_threads; i++) {
+            AcceptThreadCtx* ctx = malloc(sizeof(AcceptThreadCtx));
+            ctx->server = server;
+            ctx->listen_fd = server->accept_listen_fds[i];
+            ctx->poller = &server->accept_pollers[i];
+            ctx->thread_index = i;
+            pthread_create(&server->accept_threads[i], NULL, accept_thread_fn, ctx);
+        }
+
+        accept_poller_loop(server, server->accept_listen_fds[0],
+                           &server->accept_pollers[0]);
+
+        for (int i = 1; i < n_threads; i++) {
+            pthread_join(server->accept_threads[i], NULL);
+        }
+
+        for (int i = 0; i < n_threads; i++) {
+            aether_io_poller_destroy(&server->accept_pollers[i]);
+            if (server->accept_listen_fds[i] >= 0) close(server->accept_listen_fds[i]);
+        }
+        free(server->accept_listen_fds);
+        free(server->accept_pollers);
+        free(server->accept_threads);
+        server->accept_listen_fds = NULL;
+        server->accept_pollers = NULL;
+        server->accept_threads = NULL;
+        server->accept_thread_count = 0;
+
+    } else if (use_actor_mode) {
+        // Single-accept with I/O poller (default): one accept thread waits for data
+        // before dispatching to worker actors. Best for most workloads.
+        if (http_server_bind(server, server->host, server->port) < 0) {
+            return -1;
+        }
+
+        if (aether_io_poller_init(&server->accept_poller) < 0) {
+            fprintf(stderr, "I/O poller init failed\n");
+            return -1;
+        }
+
+        aether_io_poller_add(&server->accept_poller, server->socket_fd, NULL, AETHER_IO_READ);
+
+        int flags = fcntl(server->socket_fd, F_GETFL, 0);
+        if (flags >= 0) fcntl(server->socket_fd, F_SETFL, flags | O_NONBLOCK);
+
+        printf("Server running at http://%s:%d\n", server->host, server->port);
+        printf("Press Ctrl+C to stop\n\n");
+        fflush(stdout);
+
+        accept_poller_loop(server, server->socket_fd, &server->accept_poller);
+
+        aether_io_poller_destroy(&server->accept_poller);
+
+    } else
 #endif
-    }
+    {
+        if (http_server_bind(server, server->host, server->port) < 0) {
+            return -1;
+        }
+
+        printf("Server running at http://%s:%d\n", server->host, server->port);
+        printf("Press Ctrl+C to stop\n\n");
+        fflush(stdout);
 
 #if AETHER_HAS_THREADS && !defined(_WIN32)
-    http_pool_destroy(pool);
+        HttpConnectionPool* pool = http_pool_create(server);
 #endif
+
+        // Fallback: poll + thread pool (non-Linux or no actor handler)
+        while (server->is_running) {
+#if !defined(_WIN32)
+            struct pollfd pfd = { .fd = server->socket_fd, .events = POLLIN };
+            int ready = poll(&pfd, 1, 1000);
+            if (ready <= 0) continue;
+#endif
+
+            struct sockaddr_in client_addr;
+            socklen_t client_len = sizeof(client_addr);
+            int client_fd = accept(server->socket_fd, (struct sockaddr*)&client_addr, &client_len);
+            if (client_fd < 0) {
+                if (!server->is_running) break;
+                continue;
+            }
+
+#if !AETHER_HAS_THREADS
+            handle_client_connection(server, client_fd);
+#elif defined(_WIN32)
+            handle_client_connection(server, client_fd);
+#else
+            http_pool_submit(pool, client_fd);
+#endif
+        }
+
+#if AETHER_HAS_THREADS && !defined(_WIN32)
+        http_pool_destroy(pool);
+#endif
+    }
 
     return 0;
 }
@@ -817,6 +1054,21 @@ void http_server_stop(HttpServer* server) {
     if (!server) return;
 
     server->is_running = 0;
+
+#if !defined(_WIN32)
+    // Destroy pollers to unblock poll/epoll_wait/kevent in accept threads
+    for (int i = 0; i < server->accept_thread_count; i++) {
+        if (server->accept_pollers) {
+            aether_io_poller_destroy(&server->accept_pollers[i]);
+        }
+        if (server->accept_listen_fds && server->accept_listen_fds[i] >= 0) {
+            close(server->accept_listen_fds[i]);
+            server->accept_listen_fds[i] = -1;
+        }
+    }
+
+    aether_io_poller_destroy(&server->accept_poller);
+#endif
 
     if (server->socket_fd >= 0) {
 #ifdef _WIN32
@@ -1002,6 +1254,38 @@ void http_serve_static(HttpRequest* req, HttpServerResponse* res, void* base_dir
     }
     http_serve_file(res, resolved);
 #endif
+}
+
+// ============================================================================
+// Actor dispatch mode
+// ============================================================================
+
+void http_server_set_actor_handler(HttpServer* server, void (*step_fn)(void*),
+                                    void (*send_fn)(void*, void*, size_t),
+                                    void* (*spawn_fn)(int, void (*)(void*), size_t),
+                                    void (*release_fn)(void*)) {
+    if (!server || !step_fn || !send_fn || !spawn_fn) return;
+    server->step_fn = step_fn;
+    server->send_fn = send_fn;
+    server->spawn_fn = spawn_fn;
+    server->release_fn = release_fn;
+}
+
+// Request accessors (for Aether .ae code via opaque ptr)
+const char* http_request_method(HttpRequest* req) {
+    return req ? req->method : "";
+}
+
+const char* http_request_path(HttpRequest* req) {
+    return req ? req->path : "";
+}
+
+const char* http_request_body(HttpRequest* req) {
+    return req ? req->body : "";
+}
+
+const char* http_request_query(HttpRequest* req) {
+    return req ? req->query_string : "";
 }
 
 #endif // AETHER_HAS_NETWORKING
