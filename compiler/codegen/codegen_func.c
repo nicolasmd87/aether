@@ -309,6 +309,18 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
     indent(gen);
     clear_declared_vars(gen);  // Reset for each function
     clear_heap_string_vars(gen);
+
+    // Mark function parameters as declared so they aren't re-declared
+    // (e.g., by hoist_loop_vars when a parameter is reassigned in a loop)
+    for (int i = 0; i < func->child_count; i++) {
+        ASTNode* child = func->children[i];
+        if (!child) continue;
+        if ((child->type == AST_PATTERN_VARIABLE || child->type == AST_VARIABLE_DECLARATION)
+            && child->value) {
+            mark_var_declared(gen, child->value);
+        }
+    }
+
     // Reset defer state for new function and enter function scope
     gen->defer_count = 0;
     gen->scope_depth = 0;
