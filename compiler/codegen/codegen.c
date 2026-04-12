@@ -110,6 +110,9 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->closure_var_map = NULL;
     gen->closure_var_count = 0;
     gen->closure_var_capacity = 0;
+    // Heap string ownership tracking
+    gen->heap_string_vars = NULL;
+    gen->heap_string_var_count = 0;
     // Ask/reply type map
     gen->reply_type_map = NULL;
     gen->reply_type_count = 0;
@@ -140,6 +143,7 @@ void free_code_generator(CodeGenerator* gen) {
             }
             free(gen->declared_vars);
         }
+        clear_heap_string_vars(gen);
         if (gen->message_registry) {
             free_message_registry(gen->message_registry);
         }
@@ -196,6 +200,38 @@ void clear_declared_vars(CodeGenerator* gen) {
     }
     gen->declared_vars = NULL;
     gen->declared_var_count = 0;
+}
+
+// Helper: check if variable currently holds a heap-allocated string
+int is_heap_string_var(CodeGenerator* gen, const char* var_name) {
+    for (int i = 0; i < gen->heap_string_var_count; i++) {
+        if (strcmp(gen->heap_string_vars[i], var_name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Helper: mark variable as holding a heap-allocated string
+void mark_heap_string_var(CodeGenerator* gen, const char* var_name) {
+    if (is_heap_string_var(gen, var_name)) return;
+    char** new_vars = realloc(gen->heap_string_vars, sizeof(char*) * (gen->heap_string_var_count + 1));
+    if (!new_vars) return;
+    gen->heap_string_vars = new_vars;
+    gen->heap_string_vars[gen->heap_string_var_count] = strdup(var_name);
+    gen->heap_string_var_count++;
+}
+
+// Helper: clear heap string vars (call at function start)
+void clear_heap_string_vars(CodeGenerator* gen) {
+    if (gen->heap_string_vars) {
+        for (int i = 0; i < gen->heap_string_var_count; i++) {
+            free(gen->heap_string_vars[i]);
+        }
+        free(gen->heap_string_vars);
+    }
+    gen->heap_string_vars = NULL;
+    gen->heap_string_var_count = 0;
 }
 
 // Helper: check if a function was already generated
@@ -722,6 +758,7 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
     print_line(gen, "int main(int argc, char** argv) {");
     indent(gen);
     clear_declared_vars(gen);  // Reset for main function
+    clear_heap_string_vars(gen);
     // Reset defer state for main function and enter scope
     gen->defer_count = 0;
     gen->scope_depth = 0;

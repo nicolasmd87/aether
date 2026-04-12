@@ -308,6 +308,7 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
     fprintf(gen->output, ") {\n");
     indent(gen);
     clear_declared_vars(gen);  // Reset for each function
+    clear_heap_string_vars(gen);
     // Reset defer state for new function and enter function scope
     gen->defer_count = 0;
     gen->scope_depth = 0;
@@ -746,6 +747,7 @@ void generate_combined_function(CodeGenerator* gen, ASTNode** clauses, int claus
     fprintf(gen->output, ") {\n");
     indent(gen);
     clear_declared_vars(gen);
+    clear_heap_string_vars(gen);
 
     // Generate each clause as an if/else-if branch
     int is_first = 1;

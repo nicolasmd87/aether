@@ -107,6 +107,12 @@ typedef struct {
     int closure_count;
     int closure_capacity;
 
+    // Heap-owned string variables: variables whose current value is a
+    // heap-allocated string (from string_concat, string_substring, etc.).
+    // Used to emit free() on reassignment and avoid freeing string literals.
+    char** heap_string_vars;
+    int heap_string_var_count;
+
     // Ask/reply type map: request message name -> reply message name.
     // Built by scanning actor receive handlers for reply statements.
     struct ReplyTypeEntry {
