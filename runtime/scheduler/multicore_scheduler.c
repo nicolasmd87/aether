@@ -394,7 +394,7 @@ void* AETHER_HOT scheduler_thread(void* arg) {
         overflow_flush(sched->core_id);
 
         // Poll I/O events (non-blocking) — delivers MSG_IO_READY to actor mailboxes.
-        // Must run every iteration so epoll events are picked up promptly,
+        // Must run every iteration so I/O events are picked up promptly,
         // not only when the scheduler is idle.
         scheduler_io_poll(sched, 0);
 
@@ -804,7 +804,7 @@ void* AETHER_HOT scheduler_thread(void* arg) {
                 // Tight spin with architecture-specific pause
                 AETHER_PAUSE();
             } else {
-                // Extended idle: use epoll_wait with short timeout instead of blind yield
+                // Extended idle: use I/O poller with short timeout instead of blind yield
                 int io_events = scheduler_io_poll(sched, 1);
                 if (io_events > 0) {
                     idle_count = 0;  // I/O activity — go back to active processing
