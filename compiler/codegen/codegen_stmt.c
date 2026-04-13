@@ -410,6 +410,39 @@ static int is_heap_string_expr(ASTNode* expr) {
     return 0;
 }
 
+// Pre-declare variables from a while/for loop body so they're visible
+// at function scope in the generated C. Without this, variables first
+// assigned inside a while block are C-block-scoped and invisible to
+// subsequent while blocks in the same function.
+static void hoist_loop_vars(CodeGenerator* gen, ASTNode* body) {
+    if (!body) return;
+    for (int i = 0; i < body->child_count; i++) {
+        ASTNode* child = body->children[i];
+        if (!child) continue;
+        if (child->type == AST_VARIABLE_DECLARATION && child->value) {
+            if (!is_var_declared(gen, child->value)) {
+                mark_var_declared(gen, child->value);
+                // Determine type
+                Type* var_type = child->node_type;
+                if ((!var_type || var_type->kind == TYPE_VOID || var_type->kind == TYPE_UNKNOWN)
+                    && child->child_count > 0 && child->children[0] && child->children[0]->node_type) {
+                    var_type = child->children[0]->node_type;
+                }
+                const char* c_type = get_c_type(var_type);
+                print_indent(gen);
+                fprintf(gen->output, "%s %s;\n", c_type, child->value);
+            }
+        }
+        // Recurse into nested blocks (e.g., if inside while)
+        if (child->type == AST_IF_STATEMENT || child->type == AST_WHILE_LOOP ||
+            child->type == AST_FOR_LOOP) {
+            for (int j = 0; j < child->child_count; j++) {
+                hoist_loop_vars(gen, child->children[j]);
+            }
+        }
+    }
+}
+
 void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
     if (!stmt) return;
 
@@ -977,6 +1010,12 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             if (has_sends && gen->current_actor == NULL) {
                 print_line(gen, "scheduler_send_batch_start();");
                 gen->in_main_loop = 1;
+            }
+
+            // Hoist variable declarations from loop body to function scope
+            // so they're visible to subsequent while blocks
+            if (stmt->child_count > 1) {
+                hoist_loop_vars(gen, stmt->children[1]);
             }
 
             fprintf(gen->output, "while (");

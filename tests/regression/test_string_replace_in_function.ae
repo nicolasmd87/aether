@@ -1,0 +1,41 @@
+// Regression test: reassigning a function parameter in a loop causes OOM
+//
+// This test SHOULD pass but will OOM-kill the process (signal 9) due to
+// a bug where reassigning a function parameter doesn't update the loop
+// condition's view of the variable. The loop runs forever.
+//
+// If this test completes and prints PASS, the bug is fixed.
+// If it gets killed (signal 9/11), the bug is confirmed.
+
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+extern string_contains(s: string, sub: string) -> int
+extern string_index_of(s: string, sub: string) -> int
+extern string_substring(s: string, start: int, end: int) -> string
+
+// This function reassigns parameter `s` in the loop — triggers the bug
+_replace_all(s: string, from: string, to: string) {
+    result = ""
+    from_len = string_length(from)
+    while string_contains(s, from) == 1 {
+        idx = string_index_of(s, from)
+        prefix = string_substring(s, 0, idx)
+        result = string_concat(result, prefix)
+        result = string_concat(result, to)
+        s = string_substring(s, idx + from_len, string_length(s))
+    }
+    result = string_concat(result, s)
+    return result
+}
+
+main() {
+    println("=== Parameter reassignment in loop ===")
+    // This call will OOM if the bug is present
+    result = _replace_all("a/b/c", "/", "_")
+    if result == "a_b_c" {
+        println("PASS: parameter reassignment works")
+    } else {
+        println("FAIL: got ${result}")
+    }
+    println("=== ALL DONE ===")
+}

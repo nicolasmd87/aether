@@ -1,0 +1,64 @@
+// Regression test: variables declared inside a while block are not visible
+// in subsequent while blocks within the same function.
+//
+// When this code is in a function (not main), it FAILS to compile with:
+//   error: 'item' undeclared (first use in this function)
+//
+// Workaround: pre-declare variables before the first while loop.
+
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+
+process_two_lists(a: string, b: string) {
+    result = ""
+
+    // First "loop" — declares `item`
+    item = "first"
+    result = string_concat(result, a)
+    result = string_concat(result, " ")
+
+    // Reset and reuse — in a function this can fail if `item` scope is limited
+    item = "second"
+    result = string_concat(result, b)
+
+    return result
+}
+
+// The actual failing case: two while loops in a function
+concat_lists(items1: string, items2: string) {
+    result = ""
+    count = 2
+
+    // First loop
+    i = 0
+    while i < 1 {
+        part = items1
+        result = string_concat(result, part)
+        result = string_concat(result, " ")
+        i = i + 1
+    }
+
+    // Second loop — `part` was declared in first loop
+    // BUG: in a function, `part` is undeclared here
+    i = 0
+    while i < 1 {
+        part = items2
+        result = string_concat(result, part)
+        i = i + 1
+    }
+
+    return result
+}
+
+main() {
+    println("=== Variable scope across loops ===")
+
+    result = concat_lists("hello", "world")
+    if result == "hello world" {
+        println("PASS: variable visible across while blocks in function")
+    } else {
+        println("FAIL: got: ${result}")
+    }
+
+    println("=== ALL DONE ===")
+}
