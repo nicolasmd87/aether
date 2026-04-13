@@ -1,11 +1,14 @@
 /**
  * Benchmark: epoll-driven actor HTTP server with adaptive keep-alive
  *
- * Two worker modes:
- *   - Low concurrency:  keep-alive in worker loop (max throughput)
- *   - High concurrency: Connection: close (max concurrency)
+ * Three worker modes:
+ *   - keep-alive (default): blocking recv loop, max throughput at low concurrency
+ *   - close:                one request per connection, scales to high concurrency
+ *   - reactor:              non-blocking, re-registers fd with scheduler I/O poller
+ *                           after each response — handles 10K+ concurrent connections
+ *                           without blocking any scheduler thread
  *
- * The mode is controlled by a command-line flag: --keepalive or --close
+ * The mode is controlled by a command-line flag: --keepalive, --close, or --reactor
  * Default: keep-alive
  */
 #include <stdio.h>
@@ -17,6 +20,7 @@
 #include <sys/socket.h>
 #include <errno.h>
 #include <netinet/in.h>
+#include <fcntl.h>
 #include "../../std/net/aether_http_server.h"
 #include "../../runtime/scheduler/multicore_scheduler.h"
 #include "../../runtime/actors/actor_state_machine.h"
@@ -28,6 +32,7 @@
 
 static atomic_int total_requests = 0;
 static int use_keepalive = 1;  // default: keep-alive
+static int use_reactor = 0;
 
 // ---------------------------------------------------------------------------
 // Worker pool
@@ -202,6 +207,96 @@ static void worker_step_close(void* self) {
 }
 
 // ---------------------------------------------------------------------------
+// Worker step — reactor mode (non-blocking, re-registers fd after each response)
+//
+// Each step() invocation handles exactly one request then returns. The fd is
+// re-registered with the scheduler's per-core I/O poller so the scheduler
+// thread is never blocked waiting for the next keep-alive request. When data
+// arrives, the scheduler delivers MSG_IO_READY and calls step() again.
+//
+// This allows the same worker pool to handle 10K+ simultaneous keep-alive
+// connections without starving the scheduler.
+// ---------------------------------------------------------------------------
+static void worker_step_reactor(void* self) {
+    ActorBase* actor = (ActorBase*)self;
+    Message msg;
+
+    while (mailbox_receive(&actor->mailbox, &msg)) {
+        int client_fd = -1;
+
+        if (msg.type == MSG_HTTP_CONNECTION) {
+            HttpConnectionMessage* conn = (HttpConnectionMessage*)msg.payload_ptr;
+            client_fd = conn->client_fd;
+            free(msg.payload_ptr);
+
+            // Ensure fd is non-blocking for reactor pattern
+            int flags = fcntl(client_fd, F_GETFL, 0);
+            if (flags >= 0) fcntl(client_fd, F_SETFL, flags | O_NONBLOCK);
+
+        } else if (msg.type == MSG_IO_READY) {
+            IoReadyMessage* io_msg = (IoReadyMessage*)msg.payload_ptr;
+            client_fd = io_msg->fd;
+            uint32_t events = io_msg->events;
+            free(msg.payload_ptr);
+
+            if (events & AETHER_IO_ERROR) {
+                close(client_fd);
+                continue;
+            }
+        } else {
+            free(msg.payload_ptr);
+            continue;
+        }
+
+        // Recv — fd is non-blocking; for MSG_IO_READY, data is guaranteed
+        char buffer[8192];
+        int total = 0;
+        while (total < (int)sizeof(buffer) - 1) {
+            int n = recv(client_fd, buffer + total, sizeof(buffer) - 1 - total, MSG_DONTWAIT);
+            if (n > 0) {
+                total += n;
+                buffer[total] = '\0';
+                if (strstr(buffer, "\r\n\r\n")) break;
+            } else {
+                if (n == 0 || (errno != EAGAIN && errno != EWOULDBLOCK)) {
+                    // EOF or real error
+                    close(client_fd);
+                    client_fd = -1;
+                }
+                break;
+            }
+        }
+
+        if (client_fd < 0) continue;  // already closed above
+
+        if (total == 0) {
+            // No data yet (optimistic path sent us here but data not arrived) —
+            // register with poller and wait
+            int my_core = atomic_load_explicit(&actor->assigned_core, memory_order_relaxed);
+            if (scheduler_io_register(my_core, client_fd, actor, AETHER_IO_READ) != 0)
+                close(client_fd);
+            continue;
+        }
+
+        int want_close = strstr(buffer, "Connection: close") != NULL;
+        respond(client_fd, !want_close);
+
+        if (!want_close) {
+            // Re-register with the scheduler's per-core poller for the next request.
+            // step() runs on the scheduler thread, so io_map access is safe.
+            int my_core = atomic_load_explicit(&actor->assigned_core, memory_order_relaxed);
+            if (scheduler_io_register(my_core, client_fd, actor, AETHER_IO_READ) != 0)
+                close(client_fd);  // coop mode or error — no keep-alive
+        } else {
+            shutdown(client_fd, SHUT_WR);
+            char drain[512];
+            while (recv(client_fd, drain, sizeof(drain), 0) > 0) {}
+            close(client_fd);
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Main
 // ---------------------------------------------------------------------------
 static HttpServer* server = NULL;
@@ -216,8 +311,9 @@ int main(int argc, char** argv) {
 
     // Parse args
     for (int i = 1; i < argc; i++) {
-        if (strcmp(argv[i], "--close") == 0) use_keepalive = 0;
-        if (strcmp(argv[i], "--keepalive") == 0) use_keepalive = 1;
+        if (strcmp(argv[i], "--close") == 0)    { use_keepalive = 0; use_reactor = 0; }
+        if (strcmp(argv[i], "--keepalive") == 0) { use_keepalive = 1; use_reactor = 0; }
+        if (strcmp(argv[i], "--reactor") == 0)   { use_reactor = 1;   use_keepalive = 0; }
     }
 
     atomic_store(&g_aether_config.inline_mode_disabled, true);
@@ -226,10 +322,15 @@ int main(int argc, char** argv) {
 
     worker_count = num_cores * WORKERS_PER_CORE;
 
-    void (*step_fn)(void*) = use_keepalive ? worker_step_keepalive : worker_step_close;
+    void (*step_fn)(void*) = use_reactor    ? worker_step_reactor   :
+                             use_keepalive  ? worker_step_keepalive :
+                                             worker_step_close;
+
+    const char* mode_name = use_reactor   ? "reactor" :
+                            use_keepalive ? "keep-alive" : "close";
 
     printf("Epoll-actor HTTP server: %d cores, %d workers, mode=%s\n",
-           num_cores, worker_count, use_keepalive ? "keep-alive" : "close");
+           num_cores, worker_count, mode_name);
 
     scheduler_start();
 
