@@ -1,19 +1,8 @@
-// TinyWeb — Aether port of the Tiny Java web framework
+// TinyWeb — DSL-style HTTP server library for Aether
 // MIT License — Copyright (c) 2025 Aether Programming Language Contributors
 // Port of Tiny (MIT License, Copyright (c) Paul Hammant, 2024-2025)
 //
-// A DSL-style HTTP server library using Aether's trailing blocks
-// and builder context injection to approximate the Java original's
-// double-brace initialization pattern.
-//
-// Java:                              Aether:
-//   new Tiny.WebServer(config) {{      server = web_server(8080) {
-//     path("/api", () -> {               path("/api") {
-//       filter(GET, "/.*", ...);           filter(GET, "/.*") |req, res, ctx| { ... }
-//       endPoint(GET, "/bar", ...);        end_point(GET, "/bar") |req, res, ctx| { ... }
-//     });                                }
-//   }}.start();                        }
-//                                      server_start(server)
+// Uses trailing blocks and builder context injection for route registration.
 
 import std.list
 import std.map
@@ -22,7 +11,7 @@ import std.tcp
 import std.string
 
 // ---------------------------------------------------------------------------
-// Constants — HTTP methods (mirrors Tiny.HttpMethods enum)
+// Constants — HTTP methods
 // ---------------------------------------------------------------------------
 const ALL     = 0
 const GET     = 1
@@ -50,7 +39,7 @@ const REBIND  = 22
 const UNBIND  = 23
 const ACL     = 24
 
-// Filter actions (mirrors Tiny.FilterAction enum)
+// Filter actions
 const CONTINUE = 1
 const STOP     = 0
 
@@ -109,8 +98,7 @@ request_get_path_param(ctx: ptr, name: string) -> string {
     return http.get_path_param(ctx, name)
 }
 
-// Cookie parsing — mirrors Java's req.getCookie("name")
-// Parses the Cookie header: "name1=val1; name2=val2" and returns
+// Cookie parsing — parses the Cookie header and returns
 // the value for the given name, or "" if not found.
 request_get_cookie(req: ptr, name: string) -> string {
     cookie_header = http.get_header(req, "Cookie")
@@ -138,12 +126,8 @@ request_get_cookie(req: ptr, name: string) -> string {
 // ---------------------------------------------------------------------------
 // Request Attributes — filter-to-endpoint data passing
 //
-// Mirrors Java's ctx.setAttribute(key, value) / ctx.getAttribute(key)
-// which lets a filter attach data (e.g. authenticated user) for the
-// endpoint to read.
-//
-// In Tiny Java, attributes are stored on the HttpExchange object.
-// In Aether, we use a per-request map passed as the ctx parameter.
+// Lets a filter attach data (e.g. authenticated user) for the
+// endpoint to read. Stored in a per-request map passed as the ctx parameter.
 // ---------------------------------------------------------------------------
 
 // Create a new attribute context (call once per request)
@@ -151,12 +135,12 @@ attributes_new() {
     return map_new()
 }
 
-// Set an attribute — mirrors ctx.setAttribute("user", auth.user)
+// Set an attribute on the request context
 ctx_set_attribute(ctx: ptr, key: string, value: string) {
     map_put(ctx, key, value)
 }
 
-// Get an attribute — mirrors ctx.getAttribute("user")
+// Get an attribute from the request context
 ctx_get_attribute(ctx: ptr, key: string) -> string {
     if map_has(ctx, key) == 1 {
         return map_get(ctx, key)
@@ -196,7 +180,6 @@ const WS_OPCODE_PONG   = 10
 //
 // The WebSocket upgrade requires SHA-1 + Base64. These are provided as
 // extern C functions that must be linked (see ws_handshake.c).
-// This mirrors Tiny's Java use of MessageDigest.getInstance("SHA-1").
 // ---------------------------------------------------------------------------
 extern ws_generate_accept_key(client_key: string) -> string
 extern ws_base64_encode(data: ptr, len: int) -> string
@@ -278,7 +261,6 @@ filter_all(_ctx: ptr, pattern: string, handler: fn) {
 }
 
 // web_socket(path) |message, sender, ctx| { ... }
-// Mirrors Java's: webSocket("/events", (message, sender, ctx) -> { ... })
 web_socket(_ctx: ptr, ws_path: string, handler: fn) {
     ws_handlers = map_get(_ctx, "ws_handlers")
     prefix = map_get(_ctx, "prefix")
@@ -287,7 +269,6 @@ web_socket(_ctx: ptr, ws_path: string, handler: fn) {
 }
 
 // serve_static("/static", "/path/to/files")
-// Mirrors Java's: serveStaticFilesAsync("/static", directory)
 serve_static(_ctx: ptr, base_path: string, directory: string) {
     statics = map_get(_ctx, "statics")
     prefix = map_get(_ctx, "prefix")
@@ -349,7 +330,6 @@ web_server_host(host: string, port: int) {
 }
 
 // web_server_with_ws(host, http_port, ws_port) { ... }
-// Mirrors Java's: Config.create().withHostAndWebPort(host, port).withWebSocketPort(wsPort)
 web_server_with_ws(host: string, port: int, ws_port: int) {
     srv = web_server_host(host, port)
     map_put(srv, "ws_port", ws_port)
@@ -365,33 +345,20 @@ web_server_full(host: string, port: int, ws_port: int, sse_port: int) {
 }
 
 // ---------------------------------------------------------------------------
-// Config extras — mirrors Tiny.Config fluent API
-//
-// Java:  Config.create().withSocketTimeoutMillis(5000).withWebBacklog(100)
-// Aether: cfg = config(server); with_timeout(cfg, 5000); with_backlog(cfg, 100)
-//
-// Or use the builder DSL:
-//   server = web_server(8080) {
-//       ...
-//   }
-//   configure(server) {
-//       with_timeout(5000)
-//       with_backlog(100)
-//       with_keep_alive(0)
-//   }
+// Config extras — server tuning parameters
 // ---------------------------------------------------------------------------
 
-// Mirrors Config.withSocketTimeoutMillis(ms)
+// Set socket timeout in milliseconds
 with_timeout(srv: ptr, ms: int) {
     map_put(srv, "socket_timeout_ms", ms)
 }
 
-// Mirrors Config.withWebBacklog(n)
+// Set HTTP listen backlog
 with_backlog(srv: ptr, n: int) {
     map_put(srv, "web_backlog", n)
 }
 
-// Mirrors Config.withWsBacklog(n)
+// Set WebSocket listen backlog
 with_ws_backlog(srv: ptr, n: int) {
     map_put(srv, "ws_backlog", n)
 }
