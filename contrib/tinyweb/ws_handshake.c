@@ -2,7 +2,7 @@
 // MIT License — Copyright (c) 2025 Aether Programming Language Contributors
 //
 // Provides the SHA-1 + Base64 needed for the Sec-WebSocket-Accept key.
-// Mirrors what Java's MessageDigest.getInstance("SHA-1") does in Tiny.
+// Provides SHA-1 + Base64 for the Sec-WebSocket-Accept key (RFC 6455).
 //
 // Link with: cc -c ws_handshake.c -o ws_handshake.o
 
@@ -84,7 +84,7 @@ char* ws_base64_encode(const uint8_t *data, int len) {
 
 // ---- WebSocket accept key generation ----
 // Concatenates client_key + RFC 6455 magic GUID, SHA-1 hashes, Base64 encodes.
-// This is exactly what Java's Tiny does in generateAcceptKey().
+// Concatenates client_key + RFC 6455 magic GUID, SHA-1 hashes, Base64 encodes.
 
 static const char *WS_MAGIC = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
 

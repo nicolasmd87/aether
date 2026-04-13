@@ -1,15 +1,4 @@
-// WebSocket Client — Aether port of Tiny's WebSocketClient
-//
-// Mirrors Java's:
-//   try (Tiny.WebSocketClient client = new Tiny.WebSocketClient(
-//       "ws://localhost:8081/echo", "http://localhost:8080")) {
-//       client.performHandshake();
-//       client.sendMessage("Hello");
-//       client.receiveMessages("stop", message -> {
-//           System.out.println(message);
-//           return true;
-//       });
-//   }
+// WebSocket Client for TinyWeb
 
 import std.tcp
 import std.string
@@ -19,7 +8,7 @@ import std.string
 // ---------------------------------------------------------------------------
 
 // Connect to a WebSocket server. Returns a client map or 0 on failure.
-// Mirrors: new Tiny.WebSocketClient(url, originUrl)
+// Connect to a WebSocket server. Returns a client map or 0 on failure.
 ws_client_connect(host: string, port: int, ws_path: string, origin: string) {
     sock = tcp.connect(host, port)
     if sock == 0 { return 0 }
@@ -34,7 +23,7 @@ ws_client_connect(host: string, port: int, ws_path: string, origin: string) {
 }
 
 // Perform the WebSocket upgrade handshake.
-// Mirrors: client.performHandshake()
+// Perform the WebSocket upgrade handshake. Returns 0 on success.
 ws_client_handshake(client: ptr) -> int {
     sock = map_get(client, "sock")
     host = map_get(client, "host")
@@ -43,8 +32,7 @@ ws_client_handshake(client: ptr) -> int {
     origin = map_get(client, "origin")
 
     // Build HTTP upgrade request
-    // (Tiny's Java client sends a random Sec-WebSocket-Key; we use a fixed
-    //  one since the accept key is only validated by the client, not server)
+    // Fixed Sec-WebSocket-Key (accept key is only validated by the client)
     request = "GET ${ws_path} HTTP/1.1\r\n"
     request = string.concat(request, "Host: ${host}:${port}\r\n")
     request = string.concat(request, "Upgrade: websocket\r\n")
@@ -67,8 +55,7 @@ ws_client_handshake(client: ptr) -> int {
 }
 
 // Send a text message over the WebSocket connection.
-// Mirrors: client.sendMessage(message)
-// Client-to-server frames must be masked (RFC 6455).
+// Send a text message. Client-to-server frames must be masked (RFC 6455).
 ws_client_send(client: ptr, message: string) {
     sock = map_get(client, "sock")
     len = string.length(message)
@@ -88,8 +75,7 @@ ws_client_send(client: ptr, message: string) {
 }
 
 // Receive messages in a loop until stop_phrase is seen or connection closes.
-// Mirrors: client.receiveMessages(stopPhrase, handler)
-// Returns 1 if stopped by stop_phrase, 0 if connection closed.
+// Receive messages until stop_phrase or disconnect. Returns 1 if stopped, 0 if closed.
 ws_client_receive(client: ptr, stop_phrase: string, handler: fn) -> int {
     sock = map_get(client, "sock")
     running = 1
@@ -132,7 +118,7 @@ ws_client_receive(client: ptr, stop_phrase: string, handler: fn) -> int {
 }
 
 // Close the WebSocket connection.
-// Mirrors: client.close() which sends a masked close frame
+// Close the connection (sends a masked close frame)
 ws_client_close(client: ptr) {
     sock = map_get(client, "sock")
     // Send masked close frame: [0x88, 0x80, mask(4 zeros)]

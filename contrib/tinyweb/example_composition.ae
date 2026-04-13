@@ -1,29 +1,8 @@
-// Composition Example — Aether port of Tiny's ServerComposition pattern
-//
-// Demonstrates:
-//   1. Modular composition — adding routes to a server from separate blocks
-//   2. Nested path composition — automatic prefix joining
-//   3. Filter-to-endpoint attribute passing via context
-//
-// Java original (ServerComposition):
-//
-//   Tiny.WebServer server = new Tiny.WebServer(config);
-//   new Tiny.ServerComposition(server) {{
-//       path("/module1", () -> {
-//           endPoint(GET, "/api", (req, res, ctx) -> { ... });
-//       });
-//   }};
-//   new Tiny.ServerComposition(server) {{
-//       path("/module2", () -> {
-//           endPoint(GET, "/api", (req, res, ctx) -> { ... });
-//       });
-//   }};
-//   server.start();
+// Composition Example — modular route registration with nested paths and auth filters
 
 import contrib.tinyweb
 
-// --- Reusable handler function (like Java's method reference) ---
-
+// Reusable handler function
 handle_greeting(req: ptr, res: ptr, ctx: ptr) {
     first = request_get_path_param(ctx, "1")
     last  = request_get_path_param(ctx, "2")
@@ -33,10 +12,9 @@ handle_greeting(req: ptr, res: ptr, ctx: ptr) {
 main() {
     println("=== TinyWeb Composition Example ===\n")
 
-    // Create server without starting
     server = web_server_host("localhost", 8080) {
 
-        // --- Module 1: Public API ---
+        // Module 1: Public API
         path("/api") {
             path("/v1") {
                 end_point(GET, "/health") |req: ptr, res: ptr, ctx: ptr| {
@@ -49,7 +27,7 @@ main() {
             }
         }
 
-        // --- Module 2: Admin with auth filter ---
+        // Module 2: Admin with auth filter
         path("/admin") {
             filter(GET, "/.*") |req: ptr, res: ptr, ctx: ptr| {
                 token = request_get_header(req, "X-Admin-Token")
@@ -69,7 +47,7 @@ main() {
             }
         }
 
-        // --- Module 3: Deeply nested paths ---
+        // Module 3: Deeply nested paths
         path("/shop") {
             path("/catalog") {
                 path("/products") {
@@ -82,7 +60,7 @@ main() {
         }
     }
 
-    // --- Second composition block (mirrors ServerComposition) ---
+    // Second composition block — adds routes to existing server
     compose(server) {
         path("/extra") {
             end_point(GET, "/ping") |req: ptr, res: ptr, ctx: ptr| {

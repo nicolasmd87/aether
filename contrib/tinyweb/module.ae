@@ -307,12 +307,12 @@ web_server(port: int) {
     map_put(srv, "sse_handlers", list.new())
     map_put(srv, "statics", list.new())
     map_put(srv, "prefix", "")
-    // Config extras (mirrors Tiny.Config)
+    // Config extras
     map_put(srv, "socket_timeout_ms", 30000)
     map_put(srv, "web_backlog", 50)
     map_put(srv, "ws_backlog", 50)
     map_put(srv, "keep_alive", 1)
-    // Error handling callbacks (mirrors Java anonymous class overrides)
+    // Error handling callbacks
     map_put(srv, "on_error", 0)
     map_put(srv, "on_server_error", 0)
     map_put(srv, "on_ws_timeout", 0)
@@ -363,7 +363,6 @@ with_ws_backlog(srv: ptr, n: int) {
     map_put(srv, "ws_backlog", n)
 }
 
-// Mirrors Config.withWebKeepAlive(bool)
 // 1 = enabled (default), 0 = disabled
 with_keep_alive(srv: ptr, enabled: int) {
     map_put(srv, "keep_alive", enabled)
@@ -372,42 +371,26 @@ with_keep_alive(srv: ptr, enabled: int) {
 // ---------------------------------------------------------------------------
 // Error handling callbacks
 //
-// Java uses anonymous class overrides:
-//   webServer = new Tiny.WebServer(config) {{ ... }} {
-//       @Override protected void exceptionDuringHandling(Throwable e, HttpExchange x) { ... }
-//       @Override protected void serverException(ServerException e) { ... }
-//       @Override protected void webSocketTimeout(String path, InetAddress a, SocketTimeoutException e) { ... }
-//       @Override protected void webSocketIoException(String path, InetAddress a, IOException e) { ... }
-//   };
-//
-// Aether uses registered closures:
-//   on_error(server) |path, message| { println("Error at ${path}: ${message}") }
-//   on_server_error(server) |message| { println("Server error: ${message}") }
+// Register closures to handle errors:
+//   on_error(server) |path, msg| { println("Error: ${msg}") }
+//   on_server_error(server) |msg| { println("Server error: ${msg}") }
 // ---------------------------------------------------------------------------
 
-// Register a handler for endpoint/filter exceptions
-// Mirrors: exceptionDuringHandling(Throwable e, HttpExchange exchange)
 // Handler receives: (path: string, error_message: string)
 on_error(srv: ptr, handler: fn) {
     map_put(srv, "on_error", box_closure(handler))
 }
 
-// Register a handler for server-level exceptions
-// Mirrors: serverException(ServerException e)
 // Handler receives: (error_message: string)
 on_server_error(srv: ptr, handler: fn) {
     map_put(srv, "on_server_error", box_closure(handler))
 }
 
-// Register a handler for WebSocket timeouts
-// Mirrors: webSocketTimeout(String path, InetAddress addr, SocketTimeoutException e)
 // Handler receives: (path: string, error_message: string)
 on_ws_timeout(srv: ptr, handler: fn) {
     map_put(srv, "on_ws_timeout", box_closure(handler))
 }
 
-// Register a handler for WebSocket I/O errors
-// Mirrors: webSocketIoException(String path, InetAddress addr, IOException e)
 // Handler receives: (path: string, error_message: string)
 on_ws_error(srv: ptr, handler: fn) {
     map_put(srv, "on_ws_error", box_closure(handler))
@@ -420,7 +403,7 @@ _invoke_error_handler(srv: ptr, key: string, arg1: string, arg2: string) {
         handler = unbox_closure(boxed)
         call(handler, arg1, arg2)
     } else {
-        // Default: print to stderr (like Java's default which prints stack trace)
+        // Default: print to stderr
         println("tinyweb ${key}: ${arg1} ${arg2}")
     }
 }
@@ -428,27 +411,16 @@ _invoke_error_handler(srv: ptr, key: string, arg1: string, arg2: string) {
 // ---------------------------------------------------------------------------
 // Statistics / monitoring
 //
-// Java uses an override:
-//   @Override protected void recordStatistics(String path, Map<String,Object> stats) {
-//       // stats: { path, endpoint, status, duration, endpointDuration, filters: [FilterStat] }
-//   }
-//
-// Aether uses a registered closure:
-//   on_stats(server) |stats| {
-//       println("${stats_get_path(stats)} -> ${stats_get_status(stats)} in ${stats_get_duration(stats)}ms")
-//   }
+//   on_stats(server) |stats| { println("${stats_get_path(stats)}") }
 // ---------------------------------------------------------------------------
 
-// Register a statistics callback
-// Mirrors: recordStatistics(String path, Map<String,Object> stats)
-// Handler receives a stats map
+// Register a statistics callback — handler receives a stats map
 on_stats(srv: ptr, handler: fn) {
     map_put(srv, "on_stats", box_closure(handler))
 }
 
 // Create a stats record for a request
-// Mirrors Java's Map<String,Object> stats containing:
-//   path, endpoint, status, duration, endpointDuration, filters: [FilterStat]
+// Fields: path, endpoint, status, duration, endpoint_duration, filters
 stats_record(req_path: string, endpoint_pattern: string, status: int, duration_ms: int, endpoint_duration_ms: int) {
     s = map_new()
     map_put(s, "path", req_path)
@@ -461,7 +433,7 @@ stats_record(req_path: string, endpoint_pattern: string, status: int, duration_m
 }
 
 // Add a filter stat entry to a stats record
-// Mirrors Java's FilterStat record(String path, String result, long duration)
+// Add a filter stat entry (path, result, duration_ms)
 stats_add_filter(stats: ptr, filter_path: string, result: string, duration_ms: int) {
     fs = map_new()
     map_put(fs, "path", filter_path)
@@ -495,12 +467,11 @@ _record_stats(srv: ptr, stats: ptr) {
 // ---------------------------------------------------------------------------
 // WebSocket MessageSender — wraps a TCP socket for sending frames
 //
-// Mirrors Java's Tiny.MessageSender which wraps an OutputStream.
-// Sends unmasked frames (server->client per RFC 6455).
+// Sends unmasked WebSocket text frames (server->client per RFC 6455).
 // ---------------------------------------------------------------------------
 
 // Send an unmasked WebSocket text frame over a raw TCP socket.
-// Mirrors Java: MessageSender.sendBytesFrame(payload)
+// Send an unmasked text frame over a raw TCP socket
 ws_send_frame(sock: ptr, payload: string) {
     len = string.length(payload)
 
@@ -530,7 +501,7 @@ ws_send_close(sock: ptr) {
 //
 // Reads one WebSocket frame from a TCP socket, unmasking if needed.
 // Returns the payload as a string, or "" on close/error.
-// Mirrors the frame-reading loop in Java's WebSocketServer.handleClient()
+// Reads one WebSocket frame, unmasking if needed. Returns "" on close/error.
 // ---------------------------------------------------------------------------
 
 ws_read_frame(sock: ptr) -> string {
@@ -585,9 +556,8 @@ ws_read_frame(sock: ptr) -> string {
 // ---------------------------------------------------------------------------
 // WebSocket server accept loop
 //
-// Mirrors Java's WebSocketServer: listens on a separate port, performs
-// the HTTP upgrade handshake, then loops reading frames and dispatching
-// to the registered handler.
+// Listens on a separate port, performs the HTTP upgrade handshake,
+// then loops reading frames and dispatching to the registered handler.
 // ---------------------------------------------------------------------------
 
 ws_handle_client(client: ptr, ws_handlers: ptr) {
@@ -685,18 +655,8 @@ ws_accept_loop(tcp_server: ptr, ws_handlers: ptr) {
 // ---------------------------------------------------------------------------
 // Server-Sent Events (SSE) and Chunked Responses
 //
-// Tiny's Java SSE pattern uses res.getResponseBody() to get an OutputStream,
-// then writes "data: ...\n\n" events with flush() between them:
-//
-//   res.setHeader("Content-Type", "text/event-stream");
-//   res.sendResponseHeaders(200, 0);
-//   OutputStream out = res.getResponseBody();
-//   out.write("data: Initial event\n\n".getBytes());
-//   out.flush();
-//
-// Aether's C HTTP server closes the connection after the handler returns,
-// so streaming responses need a raw TCP approach. SSE endpoints run on
-// a separate port (like WebSockets) with their own accept loop.
+// SSE endpoints run on a separate port (like WebSockets) with their own
+// accept loop, since the C HTTP server closes connections after handler return.
 // ---------------------------------------------------------------------------
 
 // SSE endpoint entry: { path, handler_closure }
@@ -717,11 +677,7 @@ sse_endpoint(_ctx: ptr, sse_path: string, handler: fn) {
 }
 
 // An SSE stream wraps a TCP socket with the event-stream protocol.
-// Mirrors Java's: OutputStream from res.getResponseBody() after
-// res.setHeader("Content-Type", "text/event-stream")
-
-// Send an SSE event. Mirrors Java's:
-//   outputStream.write("data: Event 1\n\n".getBytes()); outputStream.flush();
+// Send an SSE data event
 sse_send(stream: ptr, data: string) {
     tcp.send(stream, "data: ${data}\n\n")
 }
@@ -777,11 +733,7 @@ sse_handle_client(client: ptr, sse_handlers: ptr) {
         return
     }
 
-    // Send SSE headers — mirrors Java's:
-    //   res.setHeader("Content-Type", "text/event-stream");
-    //   res.setHeader("Cache-Control", "no-cache");
-    //   res.setHeader("Connection", "keep-alive");
-    //   res.sendResponseHeaders(200, 0);
+    // Send SSE headers
     tcp.send(client, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n")
 
     // Call handler with the raw socket as "stream"
@@ -805,10 +757,7 @@ sse_accept_loop(tcp_server: ptr, sse_handlers: ptr) {
 }
 
 // --- Chunked transfer encoding helpers ---
-// Mirrors Java's: res.sendResponseChunked(content, statusCode) and
-// res.writeChunk(out, chunk)
-//
-// These work over raw TCP for streaming responses.
+// Work over raw TCP for streaming responses.
 
 // Send chunked response headers
 chunked_start(sock: ptr, status: int) {
@@ -816,7 +765,7 @@ chunked_start(sock: ptr, status: int) {
 }
 
 // Write a single chunk (hex-length + CRLF + data + CRLF)
-// Mirrors Java's: res.writeChunk(out, chunk)
+// Write a single chunk (hex-length + CRLF + data + CRLF)
 write_chunk(sock: ptr, data: string) {
     len = string.length(data)
     // Convert length to hex string
@@ -869,7 +818,7 @@ server_start(srv: ptr) {
     }
 
     // Register static file serving routes
-    // Java Tiny implements this as: endPoint(GET, basePath + "/(.*)", handler)
+    // Register a wildcard GET that delegates to the C static file handler
     // We use the C http_serve_static which handles MIME types, traversal protection, etc.
     statics = map_get(srv, "statics")
     n_static = list.size(statics)
@@ -953,7 +902,7 @@ server_stop(srv: ptr) {
 }
 
 // ---------------------------------------------------------------------------
-// Composition — add routes to an existing server (mirrors ServerComposition)
+// Composition — add routes to an existing server
 // ---------------------------------------------------------------------------
 
 // compose(server) { path("/module") { ... } }

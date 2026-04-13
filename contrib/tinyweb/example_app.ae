@@ -1,42 +1,4 @@
-// Example App — Aether port of the Tiny Java ExampleApp
-//
-// Compare with the Java original:
-//
-//   Tiny.WebServer server = new Tiny.WebServer(Config.create()
-//       .withHostAndWebPort("localhost", 8080)
-//       .withWebSocketPort(8081)) {{
-//
-//       path("/foo", () -> {
-//           filter(GET, "/.*", (req, res, ctx) -> {
-//               if (req.getHeaders().containsKey("sucks")) {
-//                   res.write("Access Denied", 403);
-//                   return STOP;
-//               }
-//               return CONTINUE;
-//           });
-//           endPoint(GET, "/bar", (req, res, ctx) -> {
-//               res.write("Hello, World!");
-//           });
-//       });
-//
-//       endPoint(GET, "/users/(\\w+)", (req, res, ctx) -> {
-//           res.write("User profile: " + ctx.getParam("1"));
-//       });
-//
-//       endPoint(POST, "/echo", (req, res, ctx) -> {
-//           res.write("You sent: " + req.getBody(), 201);
-//       });
-//
-//       endPoint(PUT, "/update", (req, res, ctx) -> {
-//           res.write("Updated data: " + req.getBody(), 200);
-//       });
-//
-//       path("/api", () -> {
-//           endPoint(GET, "/test/(\\w+)", (req, res, ctx) -> {
-//               res.write("Parameter: " + ctx.getParam("1"));
-//           });
-//       });
-//   }};
+// Example App — HTTP endpoints with filters and nested paths
 
 import contrib.tinyweb
 
@@ -93,9 +55,6 @@ main() {
         println("  curl -X POST -d 'hello' http://localhost:8080/echo")
         println("  curl http://localhost:8080/api/test/42")
         println("\nPress Ctrl+C to stop.")
-
-        // Block until interrupted
-        // (In a real app you'd have a signal handler here)
     } else {
         println("ERROR: Failed to start server (code ${result})")
     }

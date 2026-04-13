@@ -1,30 +1,4 @@
-// WebSocket Example — Aether port of Tiny's WebSocket functionality
-//
-// Demonstrates:
-//   1. HTTP + WebSocket on separate ports (like Java's Config with withWebSocketPort)
-//   2. webSocket() DSL registration inside path() blocks
-//   3. MessageSender pattern via ws_send_frame()
-//   4. Echo server and counter patterns from Tiny's test suite
-//
-// Compare with Java:
-//
-//   new Tiny.WebServer(Config.create()
-//       .withHostAndWebPort("localhost", 8080)
-//       .withWebSocketPort(8081)) {{
-//
-//       path("/foo", () -> {
-//           endPoint(GET, "/bar", (req, res, ctx) -> {
-//               res.write("Hello, World!");
-//           });
-//           webSocket("/eee", (message, sender, context) -> {
-//               for (int i = 1; i <= 3; i++) {
-//                   String responseMessage = "Server sent: " + bytesToString(message) + "-" + i;
-//                   sender.sendBytesFrame(toBytes(responseMessage));
-//                   Thread.sleep(100);
-//               }
-//           });
-//       });
-//   }}.start();
+// WebSocket Example — HTTP + WebSocket on separate ports with echo handler
 
 import contrib.tinyweb
 
@@ -33,28 +7,23 @@ main() {
 
     server = web_server_with_ws("localhost", 8080, 8081) {
 
-        // HTTP endpoints
         path("/foo") {
             end_point(GET, "/bar") |req: ptr, res: ptr, ctx: ptr| {
                 response_write(res, "Hello, World!")
             }
 
-            // WebSocket echo with repeat — mirrors Tiny's ExampleApp /foo/eee
+            // Echo the message back 3 times
             web_socket("/eee") |message: string, sender: ptr, ctx: ptr| {
-                // Echo the message back 3 times, like the Java original
                 ws_send_frame(sender, "Server sent: ${message}-1")
                 ws_send_frame(sender, "Server sent: ${message}-2")
                 ws_send_frame(sender, "Server sent: ${message}-3")
             }
         }
 
-        // Simple echo WebSocket at root level
         web_socket("/echo") |message: string, sender: ptr, ctx: ptr| {
             ws_send_frame(sender, "Echo: ${message}")
         }
 
-        // The HTML page that connects to the WebSocket
-        // (mirrors ExampleDotComDemo's inline HTML endpoint)
         end_point(GET, "/") |req: ptr, res: ptr, ctx: ptr| {
             response_set_header(res, "Content-Type", "text/html")
             response_write(res, "<!DOCTYPE html>
@@ -83,25 +52,11 @@ main() {
     println("Starting WebSocket server on localhost:8081...")
     println("")
     println("Open http://localhost:8080/ in a browser for the demo page.")
-    println("Or test from CLI:")
-    println("  curl http://localhost:8080/foo/bar")
-    println("")
-    println("WebSocket paths:")
     println("  ws://localhost:8081/echo     — simple echo")
-    println("  ws://localhost:8081/foo/eee  — echo x3 (like Java ExampleApp)")
+    println("  ws://localhost:8081/foo/eee  — echo x3")
 
-    // In a real app, you'd run HTTP and WS in separate actors:
-    //
-    //   actor HttpRunner { receive { Start -> server_start(server) } }
-    //   actor WsRunner   { receive { Start -> server_start_ws(server) } }
-    //
-    // For this demo, we start HTTP (which blocks):
     result = server_start(server)
-
-    if result != 0 {
-        println("ERROR: Failed to start server")
-    }
-
+    if result != 0 { println("ERROR: Failed to start server") }
     server_stop(server)
     println("Server stopped.")
 }
