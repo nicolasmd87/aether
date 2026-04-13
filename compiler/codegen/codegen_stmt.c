@@ -575,10 +575,6 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     // Already declared - generate assignment only
                     if (stmt->child_count > 0 && is_heap_string_expr(stmt->children[0])) {
                         // Free old heap string before reassignment.
-                        // Save to temp because old value may be an argument to the RHS
-                        // (e.g., s = string_concat(s, "x") — s is read before overwrite).
-                        // The _heap_ flag guards against freeing string literals on
-                        // the first iteration; it's declared alongside the variable.
                         fprintf(gen->output, "{ const char* _tmp_old = %s; ", stmt->value);
                         fprintf(gen->output, "%s = ", stmt->value);
                         generate_expression(gen, stmt->children[0]);
@@ -592,6 +588,109 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                             generate_expression(gen, stmt->children[0]);
                         }
                         fprintf(gen->output, ";\n");
+                    }
+                    // Handle trailing blocks on reassignment (same as first declaration)
+                    if (stmt->child_count > 0 && stmt->children[0] &&
+                        stmt->children[0]->type == AST_FUNCTION_CALL) {
+                        ASTNode* reinit_call = stmt->children[0];
+                        int reinit_is_builder = reinit_call->value &&
+                            is_builder_func_reg(gen, reinit_call->value);
+                        int reinit_has_trailing = 0;
+                        for (int tc = 0; tc < reinit_call->child_count; tc++) {
+                            if (reinit_call->children[tc] && reinit_call->children[tc]->type == AST_CLOSURE &&
+                                reinit_call->children[tc]->value &&
+                                strcmp(reinit_call->children[tc]->value, "trailing") == 0) {
+                                reinit_has_trailing = 1;
+                                break;
+                            }
+                        }
+                        if (reinit_has_trailing && reinit_is_builder) {
+                            // BUILDER PATTERN for reassignment
+                            for (int tc = 0; tc < reinit_call->child_count; tc++) {
+                                ASTNode* trailing = reinit_call->children[tc];
+                                if (trailing && trailing->type == AST_CLOSURE &&
+                                    trailing->value && strcmp(trailing->value, "trailing") == 0) {
+                                    for (int bi = 0; bi < trailing->child_count; bi++) {
+                                        if (trailing->children[bi] && trailing->children[bi]->type == AST_BLOCK) {
+                                            print_indent(gen);
+                                            fprintf(gen->output, "{\n");
+                                            gen->indent_level++;
+                                            print_indent(gen);
+                                            fprintf(gen->output, "void* _bcfg = %s();\n",
+                                                    get_builder_factory(gen, reinit_call->value));
+                                            print_indent(gen);
+                                            fprintf(gen->output, "_aether_ctx_push(_bcfg);\n");
+                                            print_indent(gen);
+                                            fprintf(gen->output, "{\n");
+                                            gen->indent_level++;
+                                            gen->in_trailing_block++;
+                                            ASTNode* body = trailing->children[bi];
+                                            for (int si = 0; si < body->child_count; si++) {
+                                                generate_statement(gen, body->children[si]);
+                                            }
+                                            gen->in_trailing_block--;
+                                            gen->indent_level--;
+                                            print_indent(gen);
+                                            fprintf(gen->output, "}\n");
+                                            print_indent(gen);
+                                            fprintf(gen->output, "_aether_ctx_pop();\n");
+                                            print_indent(gen);
+                                            char c_rfn[256];
+                                            strncpy(c_rfn, safe_c_name(reinit_call->value), sizeof(c_rfn) - 1);
+                                            c_rfn[sizeof(c_rfn) - 1] = '\0';
+                                            for (char* p = c_rfn; *p; p++) { if (*p == '.') *p = '_'; }
+                                            fprintf(gen->output, "%s = %s(", safe_c_name(stmt->value), c_rfn);
+                                            int rarg = 0;
+                                            for (int ai = 0; ai < reinit_call->child_count; ai++) {
+                                                ASTNode* arg = reinit_call->children[ai];
+                                                if (arg && arg->type == AST_CLOSURE &&
+                                                    arg->value && strcmp(arg->value, "trailing") == 0) continue;
+                                                if (rarg > 0) fprintf(gen->output, ", ");
+                                                generate_expression(gen, arg);
+                                                rarg++;
+                                            }
+                                            if (rarg > 0) fprintf(gen->output, ", ");
+                                            fprintf(gen->output, "_bcfg);\n");
+                                            gen->indent_level--;
+                                            print_indent(gen);
+                                            fprintf(gen->output, "}\n");
+                                            break;
+                                        }
+                                    }
+                                    break;
+                                }
+                            }
+                        } else if (reinit_has_trailing) {
+                            // REGULAR PATTERN: push reassigned value as context, run block
+                            for (int tc = 0; tc < reinit_call->child_count; tc++) {
+                                ASTNode* trailing = reinit_call->children[tc];
+                                if (trailing && trailing->type == AST_CLOSURE &&
+                                    trailing->value && strcmp(trailing->value, "trailing") == 0) {
+                                    for (int bi = 0; bi < trailing->child_count; bi++) {
+                                        if (trailing->children[bi] && trailing->children[bi]->type == AST_BLOCK) {
+                                            print_indent(gen);
+                                            fprintf(gen->output, "_aether_ctx_push((void*)(intptr_t)%s);\n",
+                                                    safe_c_name(stmt->value));
+                                            print_indent(gen);
+                                            fprintf(gen->output, "{\n");
+                                            gen->indent_level++;
+                                            gen->in_trailing_block++;
+                                            ASTNode* body = trailing->children[bi];
+                                            for (int si = 0; si < body->child_count; si++) {
+                                                generate_statement(gen, body->children[si]);
+                                            }
+                                            gen->in_trailing_block--;
+                                            gen->indent_level--;
+                                            print_indent(gen);
+                                            fprintf(gen->output, "}\n");
+                                            print_indent(gen);
+                                            fprintf(gen->output, "_aether_ctx_pop();\n");
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 } else {
                     // First declaration - generate type + variable
@@ -878,16 +977,137 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
 
         case AST_ASSIGNMENT:
             if (stmt->child_count >= 2) {
-                // Left side is lvalue (assignment target) - no atomic operations
+                ASTNode* lhs = stmt->children[0];
+                ASTNode* rhs = stmt->children[1];
+
+                // Check if RHS is a function call with a trailing block
+                int assign_has_trailing = 0;
+                if (rhs && rhs->type == AST_FUNCTION_CALL) {
+                    for (int tc = 0; tc < rhs->child_count; tc++) {
+                        if (rhs->children[tc] && rhs->children[tc]->type == AST_CLOSURE &&
+                            rhs->children[tc]->value &&
+                            strcmp(rhs->children[tc]->value, "trailing") == 0) {
+                            assign_has_trailing = 1;
+                            break;
+                        }
+                    }
+                }
+
+                // Generate the assignment itself
                 gen->generating_lvalue = 1;
-                generate_expression(gen, stmt->children[0]);
+                generate_expression(gen, lhs);
                 gen->generating_lvalue = 0;
-
                 fprintf(gen->output, " = ");
-
-                // Right side is rvalue (read) - may need atomic operations
-                generate_expression(gen, stmt->children[1]);
+                generate_expression(gen, rhs);
                 fprintf(gen->output, ";\n");
+
+                // Handle trailing blocks on the RHS function call
+                // Same logic as VAR_DECLARATION trailing block handler
+                if (assign_has_trailing && rhs->type == AST_FUNCTION_CALL) {
+                    int assign_is_builder = rhs->value &&
+                        is_builder_func_reg(gen, rhs->value);
+
+                    if (assign_is_builder) {
+                        // BUILDER PATTERN: block first, then call
+                        for (int tc = 0; tc < rhs->child_count; tc++) {
+                            ASTNode* trailing = rhs->children[tc];
+                            if (trailing && trailing->type == AST_CLOSURE &&
+                                trailing->value && strcmp(trailing->value, "trailing") == 0) {
+                                for (int bi = 0; bi < trailing->child_count; bi++) {
+                                    if (trailing->children[bi] &&
+                                        trailing->children[bi]->type == AST_BLOCK) {
+                                        print_indent(gen);
+                                        fprintf(gen->output, "{\n");
+                                        gen->indent_level++;
+                                        print_indent(gen);
+                                        fprintf(gen->output, "void* _bcfg = %s();\n",
+                                                get_builder_factory(gen, rhs->value));
+                                        print_indent(gen);
+                                        fprintf(gen->output, "_aether_ctx_push(_bcfg);\n");
+                                        print_indent(gen);
+                                        fprintf(gen->output, "{\n");
+                                        gen->indent_level++;
+                                        gen->in_trailing_block++;
+                                        ASTNode* body = trailing->children[bi];
+                                        for (int si = 0; si < body->child_count; si++) {
+                                            generate_statement(gen, body->children[si]);
+                                        }
+                                        gen->in_trailing_block--;
+                                        gen->indent_level--;
+                                        print_indent(gen);
+                                        fprintf(gen->output, "}\n");
+                                        print_indent(gen);
+                                        fprintf(gen->output, "_aether_ctx_pop();\n");
+                                        // Reassign with config
+                                        print_indent(gen);
+                                        gen->generating_lvalue = 1;
+                                        generate_expression(gen, lhs);
+                                        gen->generating_lvalue = 0;
+                                        char c_fn[256];
+                                        strncpy(c_fn, safe_c_name(rhs->value), sizeof(c_fn) - 1);
+                                        c_fn[sizeof(c_fn) - 1] = '\0';
+                                        for (char* p = c_fn; *p; p++) { if (*p == '.') *p = '_'; }
+                                        fprintf(gen->output, " = %s(", c_fn);
+                                        int darg = 0;
+                                        for (int ai = 0; ai < rhs->child_count; ai++) {
+                                            ASTNode* arg = rhs->children[ai];
+                                            if (arg && arg->type == AST_CLOSURE &&
+                                                arg->value && strcmp(arg->value, "trailing") == 0) {
+                                                continue;
+                                            }
+                                            if (darg > 0) fprintf(gen->output, ", ");
+                                            generate_expression(gen, arg);
+                                            darg++;
+                                        }
+                                        if (darg > 0) fprintf(gen->output, ", ");
+                                        fprintf(gen->output, "_bcfg);\n");
+                                        gen->indent_level--;
+                                        print_indent(gen);
+                                        fprintf(gen->output, "}\n");
+                                        break;
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    } else {
+                        // REGULAR PATTERN: push assigned value as context, run block
+                        for (int tc = 0; tc < rhs->child_count; tc++) {
+                            ASTNode* trailing = rhs->children[tc];
+                            if (trailing && trailing->type == AST_CLOSURE &&
+                                trailing->value && strcmp(trailing->value, "trailing") == 0) {
+                                for (int bi = 0; bi < trailing->child_count; bi++) {
+                                    if (trailing->children[bi] &&
+                                        trailing->children[bi]->type == AST_BLOCK) {
+                                        // Push the variable's value as builder context
+                                        print_indent(gen);
+                                        // For simple identifiers, use the variable name directly
+                                        fprintf(gen->output, "_aether_ctx_push((void*)(intptr_t)");
+                                        gen->generating_lvalue = 1;
+                                        generate_expression(gen, lhs);
+                                        gen->generating_lvalue = 0;
+                                        fprintf(gen->output, ");\n");
+                                        print_indent(gen);
+                                        fprintf(gen->output, "{\n");
+                                        gen->indent_level++;
+                                        gen->in_trailing_block++;
+                                        ASTNode* body = trailing->children[bi];
+                                        for (int si = 0; si < body->child_count; si++) {
+                                            generate_statement(gen, body->children[si]);
+                                        }
+                                        gen->in_trailing_block--;
+                                        gen->indent_level--;
+                                        print_indent(gen);
+                                        fprintf(gen->output, "}\n");
+                                        print_indent(gen);
+                                        fprintf(gen->output, "_aether_ctx_pop();\n");
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
             }
             break;
 

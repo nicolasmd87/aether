@@ -1,0 +1,289 @@
+// Aeocha — BDD-style test framework for Aether
+// MIT License — Copyright (c) 2025 Aether Programming Language Contributors
+//
+// A port of the Cuppa/Mocha/Jasmine spec pattern using Aether's
+// trailing blocks and _ctx builder context injection.
+//
+// Cuppa (Java):                         Aeocha (Aether):
+//   describe("thing", () -> {             describe("thing") {
+//     before(() -> { setup(); });           before() callback { setup() }
+//     it("works", () -> {                   it("works") callback {
+//       assertThat(x, equalTo(1));            assert_eq(x, 1)
+//     });                                   }
+//     after(() -> { teardown(); });          after() callback { teardown() }
+//   });                                   }
+//
+// Run with: ae run my_test.ae
+// Exit code 0 = all passed, 1 = failures
+
+import std.list
+import std.map
+
+// ---------------------------------------------------------------------------
+// State — test runner accumulates results
+// ---------------------------------------------------------------------------
+
+// Global counters
+_passed = ref(0)
+_failed = ref(0)
+_depth  = ref(0)
+
+// ---------------------------------------------------------------------------
+// Indentation helper
+// ---------------------------------------------------------------------------
+
+_indent() {
+    d = ref_get(_depth)
+    for (i = 0; i < d; i++) {
+        print("  ")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Suite context — what describe() returns for _ctx injection
+//
+// A suite holds:
+//   "name"     - string
+//   "befores"  - list of boxed closures (run before each it())
+//   "afters"   - list of boxed closures (run after each it())
+//   "its"      - list of { name, test_fn } entries
+//   "children" - list of child suite contexts (nested describes)
+// ---------------------------------------------------------------------------
+
+_suite_new(name: string) {
+    s = map_new()
+    map_put(s, "name", name)
+    map_put(s, "befores", list.new())
+    map_put(s, "afters", list.new())
+    return s
+}
+
+// ---------------------------------------------------------------------------
+// DSL functions — used inside describe() trailing blocks
+// ---------------------------------------------------------------------------
+
+// before() callback { ... }
+// Mirrors Cuppa's: before(() -> { ... })
+// Registers a setup closure to run before each it() in this describe block.
+before(_ctx: ptr, setup: fn) {
+    list.add(map_get(_ctx, "befores"), box_closure(setup))
+}
+
+// after() callback { ... }
+// Mirrors Cuppa's: after(() -> { ... })
+// Registers a teardown closure to run after each it() in this describe block.
+after(_ctx: ptr, teardown: fn) {
+    list.add(map_get(_ctx, "afters"), box_closure(teardown))
+}
+
+// before_each() callback { ... }
+// Alias for before() — Cuppa supports both forms
+before_each(_ctx: ptr, setup: fn) {
+    before(_ctx, setup)
+}
+
+// after_each() callback { ... }
+// Alias for after() — Cuppa supports both forms
+after_each(_ctx: ptr, teardown: fn) {
+    after(_ctx, teardown)
+}
+
+// it("description") callback { ... }
+// Mirrors Cuppa's: it("description", () -> { ... })
+// Runs the test immediately with before/after hooks from the current suite.
+it(_ctx: ptr, description: string, test_fn: fn) {
+    // Run all before hooks
+    befores = map_get(_ctx, "befores")
+    n_before = list.size(befores)
+    for (i = 0; i < n_before; i++) {
+        hook = unbox_closure(list.get(befores, i))
+        call(hook)
+    }
+
+    // Run the test
+    _indent()
+    // The test signals failure by calling fail() which sets a flag
+    _test_failed = ref(0)
+    _current_failure = ref(0)
+    map_put(_ctx, "_test_failed", _test_failed)
+    map_put(_ctx, "_failure_msg", _current_failure)
+
+    call(test_fn)
+
+    if ref_get(_test_failed) == 0 {
+        print("\x1b[32m  ✓\x1b[0m ${description}\n")
+        ref_set(_passed, ref_get(_passed) + 1)
+    } else {
+        print("\x1b[31m  ✗\x1b[0m ${description}\n")
+        ref_set(_failed, ref_get(_failed) + 1)
+    }
+
+    ref_free(_test_failed)
+    ref_free(_current_failure)
+
+    // Run all after hooks
+    afters = map_get(_ctx, "afters")
+    n_after = list.size(afters)
+    for (i = 0; i < n_after; i++) {
+        hook = unbox_closure(list.get(afters, i))
+        call(hook)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// describe() — the top-level grouping function
+//
+// Mirrors Cuppa's: describe("description", () -> { ... })
+// Creates a suite context, runs the block (which registers before/after/it),
+// and can be nested.
+// ---------------------------------------------------------------------------
+
+describe(description: string) {
+    _indent()
+    println(description)
+    ref_set(_depth, ref_get(_depth) + 1)
+    s = _suite_new(description)
+    // The trailing block will run with s as _ctx, populating it
+    // via before(), after(), it(), and nested describe() calls
+    return s
+}
+
+// After a describe block finishes, pop depth
+// (The compiler pops context automatically after trailing blocks,
+//  but we need to decrement depth. This is called via the context stack.)
+_describe_done() {
+    ref_set(_depth, ref_get(_depth) - 1)
+}
+
+// ---------------------------------------------------------------------------
+// Assertions — mirrors Hamcrest matchers used with Cuppa
+// ---------------------------------------------------------------------------
+
+// Get the current test's failure flag from context
+// (Assertions look up the _ctx stack for the innermost it() context)
+
+// fail() — unconditional test failure
+fail(msg: string) {
+    print("\x1b[31m      FAIL: ${msg}\x1b[0m\n")
+    ref_set(_passed, ref_get(_passed))  // no-op, just for clarity
+    // Signal failure via exit since we can't easily reach the ref
+    // from nested closures. Tests that call fail() abort immediately.
+    ref_set(_failed, ref_get(_failed) + 1)
+    // Don't exit — let after hooks run. Instead, the test is already
+    // counted as failed. Subsequent assertions in the same it() are skipped
+    // by convention (caller should return after fail).
+}
+
+// assert_true(condition, message)
+assert_true(condition: int, msg: string) {
+    if condition == 0 {
+        print("\x1b[31m      FAIL: ${msg} — expected true\x1b[0m\n")
+        ref_set(_failed, ref_get(_failed) + 1)
+        ref_set(_passed, ref_get(_passed) - 1)  // undo the pre-counted pass
+    }
+}
+
+// assert_false(condition, message)
+assert_false(condition: int, msg: string) {
+    if condition != 0 {
+        print("\x1b[31m      FAIL: ${msg} — expected false\x1b[0m\n")
+        ref_set(_failed, ref_get(_failed) + 1)
+        ref_set(_passed, ref_get(_passed) - 1)
+    }
+}
+
+// assert_eq(actual, expected) — integer equality
+// Mirrors: assertThat(actual, equalTo(expected))
+assert_eq(actual: int, expected: int, msg: string) {
+    if actual != expected {
+        print("\x1b[31m      FAIL: ${msg} — expected ${expected}, got ${actual}\x1b[0m\n")
+        ref_set(_failed, ref_get(_failed) + 1)
+        ref_set(_passed, ref_get(_passed) - 1)
+    }
+}
+
+// assert_str_eq(actual, expected) — string equality
+// Mirrors: assertThat(actual, equalTo(expected))
+assert_str_eq(actual: string, expected: string, msg: string) {
+    if str_eq(actual, expected) == 0 {
+        print("\x1b[31m      FAIL: ${msg} — expected '${expected}', got '${actual}'\x1b[0m\n")
+        ref_set(_failed, ref_get(_failed) + 1)
+        ref_set(_passed, ref_get(_passed) - 1)
+    }
+}
+
+// assert_not_eq(actual, expected) — integer inequality
+assert_not_eq(actual: int, expected: int, msg: string) {
+    if actual == expected {
+        print("\x1b[31m      FAIL: ${msg} — expected not ${expected}\x1b[0m\n")
+        ref_set(_failed, ref_get(_failed) + 1)
+        ref_set(_passed, ref_get(_passed) - 1)
+    }
+}
+
+// assert_gt(actual, expected) — greater than
+assert_gt(actual: int, expected: int, msg: string) {
+    if actual <= expected {
+        print("\x1b[31m      FAIL: ${msg} — expected > ${expected}, got ${actual}\x1b[0m\n")
+        ref_set(_failed, ref_get(_failed) + 1)
+        ref_set(_passed, ref_get(_passed) - 1)
+    }
+}
+
+// assert_contains(haystack, needle) — string contains
+// Mirrors: assertThat(str, containsString(sub))
+assert_contains(haystack: string, needle: string, msg: string) {
+    if string.contains(haystack, needle) == 0 {
+        print("\x1b[31m      FAIL: ${msg} — '${haystack}' does not contain '${needle}'\x1b[0m\n")
+        ref_set(_failed, ref_get(_failed) + 1)
+        ref_set(_passed, ref_get(_passed) - 1)
+    }
+}
+
+// assert_null(value, message) — pointer is null/zero
+assert_null(value: ptr, msg: string) {
+    if value != 0 {
+        print("\x1b[31m      FAIL: ${msg} — expected null\x1b[0m\n")
+        ref_set(_failed, ref_get(_failed) + 1)
+        ref_set(_passed, ref_get(_passed) - 1)
+    }
+}
+
+// assert_not_null(value, message) — pointer is non-null
+assert_not_null(value: ptr, msg: string) {
+    if value == 0 {
+        print("\x1b[31m      FAIL: ${msg} — expected non-null\x1b[0m\n")
+        ref_set(_failed, ref_get(_failed) + 1)
+        ref_set(_passed, ref_get(_passed) - 1)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Runner — summary and exit code
+// ---------------------------------------------------------------------------
+
+// Call at the end of main() to print summary and exit with appropriate code.
+// Mirrors Cuppa's Runner + DefaultReporter.
+run_summary() {
+    passed = ref_get(_passed)
+    failed = ref_get(_failed)
+    total = passed + failed
+
+    println("")
+    if failed == 0 {
+        println("\x1b[32m  ${passed} passing\x1b[0m")
+    } else {
+        println("\x1b[32m  ${passed} passing\x1b[0m")
+        println("\x1b[31m  ${failed} failing\x1b[0m")
+    }
+    println("")
+
+    // Cleanup global refs
+    ref_free(_passed)
+    ref_free(_failed)
+    ref_free(_depth)
+
+    if failed > 0 {
+        exit(1)
+    }
+}

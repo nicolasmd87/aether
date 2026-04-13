@@ -1,0 +1,61 @@
+// Static File Serving Example — Aether port of Tiny's serveStaticFilesAsync
+//
+// Compare with Java:
+//
+//   new Tiny.WebServer(Config.create().withHostAndWebPort("localhost", 8080)) {{
+//       serveStaticFilesAsync("/static", new File(".").getAbsolutePath());
+//   }}.start();
+//
+// Features mirrored from Tiny:
+//   - Automatic MIME type detection (html, css, js, images, fonts, etc.)
+//   - Directory traversal protection (rejects "..", encoded sequences)
+//   - Wildcard path matching: /static/any/path/file.ext
+//   - index.html fallback for directory roots
+//   - 404 for missing files, 403 for traversal attempts
+
+import contrib.tinyweb
+
+main() {
+    println("=== TinyWeb Static File Server ===\n")
+
+    server = web_server_host("localhost", 8080) {
+
+        // Serve current directory under /static — exactly like Tiny's test:
+        //   serveStaticFilesAsync("/static", new File(".").getAbsolutePath())
+        serve_static("/static", ".")
+
+        // Can also combine with regular endpoints
+        end_point(GET, "/") |req: ptr, res: ptr, ctx: ptr| {
+            response_set_header(res, "Content-Type", "text/html")
+            response_write(res, "<!DOCTYPE html>
+<html>
+<head><title>Static File Server</title></head>
+<body>
+  <h1>TinyWeb Static File Server</h1>
+  <p>Try these links:</p>
+  <ul>
+    <li><a href=\"/static/README.md\">/static/README.md</a></li>
+    <li><a href=\"/static/tinyweb.ae\">/static/tinyweb.ae</a></li>
+  </ul>
+</body>
+</html>")
+        }
+
+        // API endpoint alongside static files
+        end_point(GET, "/api/health") |req: ptr, res: ptr, ctx: ptr| {
+            response_json(res, "{\"status\":\"ok\"}")
+        }
+    }
+
+    println("Starting server on localhost:8080...")
+    println("  http://localhost:8080/              — index page")
+    println("  http://localhost:8080/static/...    — static files from cwd")
+    println("  http://localhost:8080/api/health    — JSON health check")
+
+    result = server_start(server)
+    if result != 0 {
+        println("ERROR: Failed to start server")
+    }
+
+    server_stop(server)
+}

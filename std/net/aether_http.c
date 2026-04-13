@@ -227,4 +227,19 @@ void http_response_free(HttpResponse* response) {
     free(response);
 }
 
+// Accessor functions for Aether .ae code (opaque ptr access)
+int http_response_status_code(HttpResponse* response) {
+    return response ? response->status_code : 0;
+}
+
+const char* http_response_body_str(HttpResponse* response) {
+    if (!response || !response->body) return "";
+    return response->body->data;
+}
+
+const char* http_response_headers_str(HttpResponse* response) {
+    if (!response || !response->headers) return "";
+    return response->headers->data;
+}
+
 #endif // AETHER_HAS_NETWORKING

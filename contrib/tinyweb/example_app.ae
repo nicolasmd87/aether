@@ -1,0 +1,105 @@
+// Example App — Aether port of the Tiny Java ExampleApp
+//
+// Compare with the Java original:
+//
+//   Tiny.WebServer server = new Tiny.WebServer(Config.create()
+//       .withHostAndWebPort("localhost", 8080)
+//       .withWebSocketPort(8081)) {{
+//
+//       path("/foo", () -> {
+//           filter(GET, "/.*", (req, res, ctx) -> {
+//               if (req.getHeaders().containsKey("sucks")) {
+//                   res.write("Access Denied", 403);
+//                   return STOP;
+//               }
+//               return CONTINUE;
+//           });
+//           endPoint(GET, "/bar", (req, res, ctx) -> {
+//               res.write("Hello, World!");
+//           });
+//       });
+//
+//       endPoint(GET, "/users/(\\w+)", (req, res, ctx) -> {
+//           res.write("User profile: " + ctx.getParam("1"));
+//       });
+//
+//       endPoint(POST, "/echo", (req, res, ctx) -> {
+//           res.write("You sent: " + req.getBody(), 201);
+//       });
+//
+//       endPoint(PUT, "/update", (req, res, ctx) -> {
+//           res.write("Updated data: " + req.getBody(), 200);
+//       });
+//
+//       path("/api", () -> {
+//           endPoint(GET, "/test/(\\w+)", (req, res, ctx) -> {
+//               res.write("Parameter: " + ctx.getParam("1"));
+//           });
+//       });
+//   }};
+
+import contrib.tinyweb
+
+main() {
+    println("=== TinyWeb Example App ===\n")
+
+    server = web_server_host("localhost", 8080) {
+
+        path("/foo") {
+            filter(GET, "/.*") |req: ptr, res: ptr, ctx: ptr| {
+                hdr = request_get_header(req, "sucks")
+                if str_eq(hdr, "") == 0 {
+                    response_write_status(res, "Access Denied", 403)
+                    return STOP
+                }
+                return CONTINUE
+            }
+
+            end_point(GET, "/bar") |req: ptr, res: ptr, ctx: ptr| {
+                response_write(res, "Hello, World!")
+            }
+        }
+
+        end_point(GET, "/users/(\\w+)") |req: ptr, res: ptr, ctx: ptr| {
+            user_id = request_get_path_param(ctx, "1")
+            response_write(res, "User profile: ${user_id}")
+        }
+
+        end_point(POST, "/echo") |req: ptr, res: ptr, ctx: ptr| {
+            body = request_get_body(req)
+            response_write_status(res, "You sent: ${body}", 201)
+        }
+
+        end_point(PUT, "/update") |req: ptr, res: ptr, ctx: ptr| {
+            body = request_get_body(req)
+            response_write_status(res, "Updated data: ${body}", 200)
+        }
+
+        path("/api") {
+            end_point(GET, "/test/(\\w+)") |req: ptr, res: ptr, ctx: ptr| {
+                param = request_get_path_param(ctx, "1")
+                response_write(res, "Parameter: ${param}")
+            }
+        }
+    }
+
+    println("Starting server on localhost:8080...")
+    result = server_start(server)
+
+    if result == 0 {
+        println("Server running! Try:")
+        println("  curl http://localhost:8080/foo/bar")
+        println("  curl http://localhost:8080/users/alice")
+        println("  curl -X POST -d 'hello' http://localhost:8080/echo")
+        println("  curl http://localhost:8080/api/test/42")
+        println("\nPress Ctrl+C to stop.")
+
+        // Block until interrupted
+        // (In a real app you'd have a signal handler here)
+    } else {
+        println("ERROR: Failed to start server (code ${result})")
+    }
+
+    server_stop(server)
+    println("Server stopped.")
+}

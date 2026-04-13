@@ -1,0 +1,110 @@
+// Test: HTTP response accessor functions
+// Guards: http_response_status_code, http_response_body_str, http_response_headers_str
+// These were added to std/net/aether_http.c to expose HttpResponse fields to Aether code.
+
+import std.http
+
+// Handler that sets status and body
+handle_test(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "X-Test", "yes")
+    http.response_set_body(res, "test body")
+}
+
+message Go { raw: ptr }
+message Noop {}
+
+actor Srv {
+    state s = 0
+    receive {
+        Go(raw) -> {
+            s = raw
+            http.server_start(raw)
+        }
+    }
+}
+
+// Force multi-threaded scheduler
+actor Helper {
+    state x = 0
+    receive { Noop() -> { x = 1 } }
+}
+
+main() {
+    print("=== HTTP Response Accessor Tests ===\n\n")
+
+    // Start server
+    raw = http.server_create(8080)
+    http.server_get(raw, "/test", handle_test, 0)
+    spawn(Helper())
+    a = spawn(Srv())
+    a ! Go { raw: raw }
+    sleep(300)
+
+    // Make request
+    resp = http.get("http://127.0.0.1:8080/test")
+
+    // Test 1: status code accessor
+    print("Test 1: http_response_status_code... ")
+    code = http.response_status_code(resp)
+    if code != 200 {
+        print("FAIL: expected 200, got "); print(code); println("")
+        exit(1)
+    }
+    println("PASS")
+
+    // Test 2: body string accessor
+    print("Test 2: http_response_body_str... ")
+    body = http.response_body_str(resp)
+    if str_eq(body, "test body") == 0 {
+        println("FAIL: expected 'test body', got '${body}'")
+        exit(1)
+    }
+    println("PASS")
+
+    // Test 3: headers string accessor (should contain X-Test header)
+    print("Test 3: http_response_headers_str... ")
+    hdrs = http.response_headers_str(resp)
+    if str_eq(hdrs, "") == 1 {
+        println("FAIL: headers string is empty")
+        exit(1)
+    }
+    println("PASS")
+
+    // Test 4: null response safety
+    print("Test 4: null response returns 0/empty... ")
+    null_code = http.response_status_code(0)
+    if null_code != 0 {
+        print("FAIL: expected 0 for null, got "); print(null_code); println("")
+        exit(1)
+    }
+    null_body = http.response_body_str(0)
+    if str_eq(null_body, "") == 0 {
+        println("FAIL: expected empty for null body")
+        exit(1)
+    }
+    println("PASS")
+
+    // Test 5: response_free doesn't crash
+    print("Test 5: http_response_free... ")
+    http.response_free(resp)
+    println("PASS")
+
+    // Test 6: 404 response has correct status
+    print("Test 6: 404 status code... ")
+    resp2 = http.get("http://127.0.0.1:8080/nonexistent")
+    code2 = http.response_status_code(resp2)
+    if code2 != 404 {
+        print("FAIL: expected 404, got "); print(code2); println("")
+        exit(1)
+    }
+    http.response_free(resp2)
+    println("PASS")
+
+    // Shutdown
+    http.server_stop(raw)
+    sleep(200)
+    http.server_free(raw)
+
+    print("\n=== All HTTP Accessor Tests Passed ===\n")
+}

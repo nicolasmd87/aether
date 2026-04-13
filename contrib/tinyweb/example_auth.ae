@@ -1,0 +1,114 @@
+// Cookie + Attribute Auth Example — Aether port of Tiny's FilterTests
+//
+// Demonstrates the complete auth pattern from Tiny:
+//   1. Filter reads a cookie with req.getCookie("logged-in")
+//   2. Filter validates the cookie and either STOPs (403) or CONTINUEs
+//   3. On success, filter passes the user via ctx.setAttribute("user", ...)
+//   4. Endpoint reads it with ctx.getAttribute("user")
+//
+// Compare with Java (FilterTests.java):
+//
+//   path("/api", () -> {
+//       filter(".*", (req, res, ctx) -> {
+//           String cookie = req.getCookie("logged-in");
+//           Authentication auth = IsEncryptedByUs.decrypt(cookie);
+//           if (!auth.authentic) {
+//               res.write("Try logging in again", 403);
+//               return STOP;
+//           }
+//           ctx.setAttribute("user", auth.user);
+//           return CONTINUE;
+//       });
+//       endPoint(GET, "/attribute-test", (req, res, ctx) -> {
+//           res.write("User Is logged in: " + ctx.getAttribute("user"));
+//       });
+//   });
+
+import contrib.tinyweb
+
+// Simple "validation" — in Tiny's test this is rot47 decryption.
+// Here we just check the cookie matches a known token.
+validate_token(token: string) -> string {
+    // In a real app this would decrypt/verify a JWT or session token
+    if str_eq(token, "valid-session-abc") == 1 {
+        return "alice@example.com"
+    }
+    if str_eq(token, "valid-session-xyz") == 1 {
+        return "bob@example.com"
+    }
+    return ""
+}
+
+main() {
+    println("=== TinyWeb Cookie + Attribute Auth Example ===\n")
+
+    server = web_server_host("localhost", 8080) {
+
+        path("/api") {
+            // Auth filter — mirrors Tiny's FilterTests exactly
+            // Reads the "session" cookie, validates it, and passes
+            // the user to the endpoint via attributes
+            filter(ALL, "/.*") |req: ptr, res: ptr, ctx: ptr| {
+                // req.getCookie("session") — mirrors Java's getCookie
+                token = request_get_cookie(req, "session")
+
+                user = validate_token(token)
+
+                if str_eq(user, "") == 1 {
+                    response_write_status(res, "Try logging in again", 403)
+                    return STOP
+                }
+
+                // ctx.setAttribute("user", user) — mirrors Java's setAttribute
+                ctx_set_attribute(ctx, "user", user)
+                return CONTINUE
+            }
+
+            end_point(GET, "/profile") |req: ptr, res: ptr, ctx: ptr| {
+                // ctx.getAttribute("user") — mirrors Java's getAttribute
+                user = ctx_get_attribute(ctx, "user")
+                response_write(res, "User is logged in: ${user}")
+            }
+
+            end_point(GET, "/dashboard") |req: ptr, res: ptr, ctx: ptr| {
+                user = ctx_get_attribute(ctx, "user")
+                response_json(res, "{\"user\":\"${user}\",\"dashboard\":true}")
+            }
+        }
+
+        // Public endpoint — no auth filter
+        end_point(GET, "/") |req: ptr, res: ptr, ctx: ptr| {
+            response_write(res, "Welcome! Login at /login")
+        }
+
+        // Login endpoint — sets the session cookie
+        end_point(POST, "/login") |req: ptr, res: ptr, ctx: ptr| {
+            body = request_get_body(req)
+            // In a real app: validate credentials, create session
+            response_set_header(res, "Set-Cookie", "session=valid-session-abc; Path=/; HttpOnly")
+            response_write(res, "Logged in!")
+        }
+    }
+
+    println("Starting server on localhost:8080...")
+    println("")
+    println("Test the auth flow:")
+    println("  curl http://localhost:8080/api/profile")
+    println("    -> 403 Try logging in again")
+    println("")
+    println("  curl -H 'Cookie: session=valid-session-abc' http://localhost:8080/api/profile")
+    println("    -> 200 User is logged in: alice@example.com")
+    println("")
+    println("  curl -H 'Cookie: session=valid-session-xyz' http://localhost:8080/api/dashboard")
+    println("    -> 200 {\"user\":\"bob@example.com\",\"dashboard\":true}")
+    println("")
+    println("  curl -H 'Cookie: session=bogus' http://localhost:8080/api/profile")
+    println("    -> 403 Try logging in again")
+
+    result = server_start(server)
+    if result != 0 {
+        println("ERROR: Failed to start server")
+    }
+
+    server_stop(server)
+}

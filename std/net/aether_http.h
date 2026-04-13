@@ -16,5 +16,10 @@ HttpResponse* http_put(const char* url, const char* body, const char* content_ty
 HttpResponse* http_delete(const char* url);
 void http_response_free(HttpResponse* response);
 
+// Accessor functions for Aether .ae code (opaque ptr access)
+int http_response_status_code(HttpResponse* response);
+const char* http_response_body_str(HttpResponse* response);
+const char* http_response_headers_str(HttpResponse* response);
+
 #endif
 
