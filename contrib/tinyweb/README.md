@@ -44,6 +44,25 @@ server_start(server)
 - **Statistics** — `on_stats(server) |stats| { ... }`
 - **Config** — `with_timeout`, `with_backlog`, `with_ws_backlog`, `with_keep_alive`
 
+## DSL semantics
+
+Each DSL call falls into one of two categories: **container** (its trailing
+block runs once at registration time and may contain more DSL calls) or
+**leaf** (its trailing block, if any, is stored as a request-time handler).
+
+| Call            | Trailing block runs…  | What gets stored             | Can nest DSL inside? |
+|-----------------|-----------------------|------------------------------|----------------------|
+| `web_server`    | now (once, root)      | nothing                      | yes — root container |
+| `path`          | now (once)            | nothing — block populates parent | yes — `path`, `end_point`, `filter`, `web_socket`, `sse_endpoint`, `serve_static` |
+| `end_point`     | later (per request)   | the block, as a handler      | leaf only            |
+| `filter`        | later (per request)   | the block, as a handler      | leaf only            |
+| `web_socket`    | later (per message)   | the block, as a handler      | leaf only            |
+| `sse_endpoint`  | later (per stream)    | the block, as a handler      | leaf only            |
+| `serve_static`  | n/a (no block)        | base→dir mapping             | leaf only            |
+
+Only `web_server` and `path` are nesting containers. Everything else is a
+leaf — its block, if any, is a request-time handler, not more DSL.
+
 ## Files
 
 - `module.ae` — The library
