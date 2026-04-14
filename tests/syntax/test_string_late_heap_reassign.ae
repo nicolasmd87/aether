@@ -1,0 +1,92 @@
+// Regression test: variable initially declared with a non-heap value but
+// later reassigned from a heap-string expression must compile cleanly.
+//
+// Before the codegen lazy _heap_<var> declaration fix, a sequence like
+//
+//     out = ""                        // initial: empty literal
+//     out = string_concat(out, "x")  // reassign: heap-string expression
+//
+// would emit a free-old wrapper that referenced `int _heap_out` without
+// ever declaring it, producing "_heap_out undeclared" errors in the
+// generated C. This file exercises several variants of that pattern; if
+// codegen regresses, the test will fail to compile.
+
+extern string_concat(a: string, b: string) -> string
+extern string_substring(s: string, start: int, end: int) -> string
+extern string_trim(s: string) -> string
+extern string_length(s: string) -> int
+extern string_index_of(s: string, sub: string) -> int
+extern println(s: string)
+extern exit(code: int)
+
+// Variant 1: initial empty literal, accumulator pattern.
+build1(input: string) {
+    out = ""
+    rest = input
+    while string_length(rest) > 0 {
+        sp = string_index_of(rest, " ")
+        if sp < 0 {
+            out = string_concat(out, rest)
+            rest = ""
+        } else {
+            out = string_concat(out, string_substring(rest, 0, sp))
+            out = string_concat(out, "_")
+            rest = string_substring(rest, sp + 1, string_length(rest))
+        }
+    }
+    return string_concat(out, "")
+}
+
+// Variant 2: variable declared in one if/else branch and reassigned outside.
+build2(input: string) {
+    n = string_length(input)
+    line = ""
+    if n > 3 {
+        line = string_substring(input, 0, 3)
+    } else {
+        line = input
+    }
+    line = string_trim(line)  // heap-string reassignment
+    return string_concat(line, "")
+}
+
+// Variant 3: a string variable that's first introduced inside the else
+// branch of an if/else, and then immediately re-read in the same branch.
+// The codegen treats the first assignment as a reassignment (not an initial
+// declaration), so the heap-tracker wrapper references _heap_sp without
+// the flag ever being declared. This is the exact pattern that broke when
+// compiling lib/build/module.ae's _collect_file_list().
+build3() {
+    result = ""
+    i = 0
+    while i < 3 {
+        f = "x"
+        if i == 0 {
+            result = string_concat(f, "")
+        } else {
+            sp = string_concat(result, " ")
+            result = string_concat(sp, f)
+        }
+        i = i + 1
+    }
+    return string_concat(result, "")
+}
+
+main() {
+    a = build1("hello world from aether")
+    if a != "hello_world_from_aether" {
+        println("FAIL build1")
+        exit(1)
+    }
+    b = build2("longer than three")
+    if b != "lon" {
+        println("FAIL build2")
+        exit(1)
+    }
+    c = build3()
+    if c != "x x x" {
+        println("FAIL build3")
+        exit(1)
+    }
+    println("PASS string late heap reassign")
+}
