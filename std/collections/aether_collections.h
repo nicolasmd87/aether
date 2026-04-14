@@ -8,7 +8,7 @@ typedef struct ArrayList ArrayList;
 typedef struct HashMap HashMap;
 
 ArrayList* list_new();
-void list_add(ArrayList* list, void* item);
+int list_add_raw(ArrayList* list, void* item);
 void* list_get(ArrayList* list, int index);
 void list_set(ArrayList* list, int index, void* item);
 int list_size(ArrayList* list);
@@ -17,7 +17,7 @@ void list_clear(ArrayList* list);
 void list_free(ArrayList* list);
 
 HashMap* map_new();
-void map_put(HashMap* map, const char* key, void* value);
+int map_put_raw(HashMap* map, const char* key, void* value);
 void* map_get(HashMap* map, const char* key);
 int map_has(HashMap* map, const char* key);
 void map_remove(HashMap* map, const char* key);

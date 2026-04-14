@@ -1,0 +1,34 @@
+// HTTP Client - Making GET requests with Go-style result types
+// Run with: ae run examples/stdlib/http-client.ae
+//
+// http.get returns (body, err) — the idiomatic Aether pattern. Check err
+// first, bail if non-empty, then use body. The wrapper auto-frees the
+// underlying response struct so you never need to think about ownership.
+
+import std.http
+
+fetch(url: string) {
+    println("GET ${url}")
+    body, err = http.get(url)
+    if err != "" {
+        println("  failed: ${err}")
+        return
+    }
+    println("  ok: ${body}")
+}
+
+main() {
+    println("=== HTTP client demo ===")
+
+    // Transport failure path: the .invalid TLD is reserved by RFC 2606
+    // and never resolves, so this reliably produces a DNS error without
+    // hitting the network.
+    fetch("http://aether-demo-invalid-host.invalid")
+
+    // Happy path against a real domain. If network is available this
+    // succeeds and prints the body; if not it fails with a transport
+    // error and the handler above prints it cleanly.
+    fetch("http://example.com")
+
+    println("done")
+}

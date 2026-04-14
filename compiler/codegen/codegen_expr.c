@@ -265,6 +265,30 @@ void emit_closure_definitions(CodeGenerator* gen) {
     }
 }
 
+// Look up a message field definition by name. Returns NULL if missing.
+MessageFieldDef* find_msg_field(MessageDef* msg_def, const char* name) {
+    if (!msg_def || !name) return NULL;
+    MessageFieldDef* f = msg_def->fields;
+    while (f) {
+        if (f->name && strcmp(f->name, name) == 0) return f;
+        f = f->next;
+    }
+    return NULL;
+}
+
+// Emit a message field initializer RHS. Handles the composite case where
+// an array-literal RHS is assigned to an array-typed field: C won't accept
+// `.sites = {"a", "b"}` inside a designated initializer, so we wrap it as
+// a compound literal `(const char*[]){"a", "b"}` which decays to a valid
+// pointer. For all other cases this behaves exactly like generate_expression.
+void emit_message_field_init(CodeGenerator* gen, MessageFieldDef* fdef, ASTNode* rhs) {
+    if (rhs && rhs->type == AST_ARRAY_LITERAL &&
+        fdef && fdef->element_c_type) {
+        fprintf(gen->output, "(%s[])", fdef->element_c_type);
+    }
+    generate_expression(gen, rhs);
+}
+
 // Emit a send target expression with the correct C cast.
 // Actor refs produce (ActorBase*)(expr) directly.
 // Int/int64 values (actor refs stored in int message fields or state) need
@@ -1115,11 +1139,17 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         // Check extern registry first, then user-defined function params.
                         TypeKind expected = lookup_extern_param_kind(gen, c_func_name, arg_printed);
                         if (expected == TYPE_UNKNOWN) {
-                            // Look up user-defined function's param type
+                            // Look up user-defined function's param type.
+                            // Try both the original call-site name and the
+                            // dot-normalized C name so merged stdlib wrappers
+                            // (e.g. list.add -> list_add in the program AST)
+                            // also get their ptr params auto-cast.
                             for (int fi = 0; fi < gen->program->child_count; fi++) {
                                 ASTNode* fdef = gen->program->children[fi];
                                 if (fdef && (fdef->type == AST_FUNCTION_DEFINITION || fdef->type == AST_BUILDER_FUNCTION) &&
-                                    fdef->value && strcmp(fdef->value, func_name) == 0) {
+                                    fdef->value &&
+                                    (strcmp(fdef->value, func_name) == 0 ||
+                                     strcmp(fdef->value, c_func_name) == 0)) {
                                     int pi = 0;
                                     for (int fj = 0; fj < fdef->child_count; fj++) {
                                         ASTNode* fp = fdef->children[fj];
@@ -1136,6 +1166,15 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         if (expected == TYPE_PTR && arg->node_type &&
                             (arg->node_type->kind == TYPE_INT || arg->node_type->kind == TYPE_BOOL)) {
                             fprintf(gen->output, "(void*)(intptr_t)(");
+                            generate_expression(gen, arg);
+                            fprintf(gen->output, ")");
+                        } else if (expected == TYPE_PTR && arg->node_type &&
+                                   arg->node_type->kind == TYPE_STRING) {
+                            // Cast const char* to void* to silence C's
+                            // "discards qualifiers" warning when passing
+                            // a string literal or const-char expression
+                            // into a ptr parameter.
+                            fprintf(gen->output, "(void*)(");
                             generate_expression(gen, arg);
                             fprintf(gen->output, ")");
                         } else {
@@ -1380,7 +1419,8 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                 if (field_init && field_init->type == AST_FIELD_INIT) {
                                     fprintf(gen->output, ", .%s = ", field_init->value);
                                     if (field_init->child_count > 0) {
-                                        generate_expression(gen, field_init->children[0]);
+                                        MessageFieldDef* fdef = find_msg_field(msg_def, field_init->value);
+                                        emit_message_field_init(gen, fdef, field_init->children[0]);
                                     }
                                 }
                             }
@@ -1440,7 +1480,8 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             if (field_init && field_init->type == AST_FIELD_INIT) {
                                 fprintf(gen->output, ", .%s = ", field_init->value);
                                 if (field_init->child_count > 0) {
-                                    generate_expression(gen, field_init->children[0]);
+                                    MessageFieldDef* fdef = find_msg_field(msg_def, field_init->value);
+                                    emit_message_field_init(gen, fdef, field_init->children[0]);
                                 }
                             }
                         }
@@ -1481,7 +1522,8 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             if (field_init && field_init->type == AST_FIELD_INIT) {
                                 fprintf(gen->output, ", .%s = ", field_init->value);
                                 if (field_init->child_count > 0) {
-                                    generate_expression(gen, field_init->children[0]);
+                                    MessageFieldDef* fdef = find_msg_field(msg_def, field_init->value);
+                                    emit_message_field_init(gen, fdef, field_init->children[0]);
                                 }
                             }
                         }

@@ -68,12 +68,26 @@ const char* string_to_cstr(const void* str);
 AetherString* string_from_int(int value);
 AetherString* string_from_float(float value);
 
-// Parsing (string -> number)
+// Parsing (string -> number) — raw form with out-parameter.
 // Returns 1 on success, 0 on failure. Result stored in out_value.
-int string_to_int(const void* str, int* out_value);
-int string_to_long(const void* str, long* out_value);
-int string_to_float(const void* str, float* out_value);
-int string_to_double(const void* str, double* out_value);
+// Aether code should prefer the Go-style wrappers in std.string
+// (`string.to_int`, etc.) which return `(value, error)` tuples.
+int string_to_int_raw(const void* str, int* out_value);
+int string_to_long_raw(const void* str, long* out_value);
+int string_to_float_raw(const void* str, float* out_value);
+int string_to_double_raw(const void* str, double* out_value);
+
+// Split-return helpers used by the Go-style wrappers. `_try` returns
+// 1 if parseable, 0 otherwise. `_get` returns the parsed value or
+// zero-value on failure.
+int    string_try_int(const void* s);
+int    string_get_int(const void* s);
+int    string_try_long(const void* s);
+long   string_get_long(const void* s);
+int    string_try_float(const void* s);
+float  string_get_float(const void* s);
+int    string_try_double(const void* s);
+double string_get_double(const void* s);
 
 // Formatting (printf-style)
 AetherString* string_format(const char* fmt, ...);

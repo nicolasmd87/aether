@@ -1,16 +1,69 @@
 // std.tcp - TCP Socket Operations (alias for std.net)
 //
-// This is a convenience module that re-exports TCP functions from std.net.
-// You can use either:
-//   import std.tcp   (this module)
-//   import std.net   (consolidated networking module)
-//
-// The implementations are in std/net/aether_net.c which is compiled into libaether.a
+// Raw externs end in `_raw` and return NULL/int in C-style. Aether-native
+// wrappers (below) use Go-style `(value, err)` tuple returns.
+// The implementations are in std/net/aether_net.c.
 
-extern tcp_connect(host: string, port: int) -> ptr
-extern tcp_send(sock: ptr, data: string) -> int
-extern tcp_receive(sock: ptr, max_bytes: int) -> string
+// Raw externs - escape hatch
+extern tcp_connect_raw(host: string, port: int) -> ptr
+extern tcp_send_raw(sock: ptr, data: string) -> int
+extern tcp_receive_raw(sock: ptr, max_bytes: int) -> string
 extern tcp_close(sock: ptr) -> int
-extern tcp_listen(port: int) -> ptr
-extern tcp_accept(server: ptr) -> ptr
+extern tcp_listen_raw(port: int) -> ptr
+extern tcp_accept_raw(server: ptr) -> ptr
 extern tcp_server_close(server: ptr) -> int
+
+// string_concat used to duplicate the borrowed receive buffer so the
+// caller's copy outlives the underlying malloc.
+extern string_concat(a: string, b: string) -> string
+
+// Connect to host:port. Returns (socket, "") on success, (null, error)
+// on failure. Caller must tcp.close the returned socket.
+connect(host: string, port: int) -> {
+    sock = tcp_connect_raw(host, port)
+    if sock == null {
+        return null, "connect failed"
+    }
+    return sock, ""
+}
+
+// Send data on a socket. Returns (bytes_sent, "") on success,
+// (0, error) on failure.
+send(sock: ptr, data: string) -> {
+    n = tcp_send_raw(sock, data)
+    if n < 0 {
+        return 0, "send failed"
+    }
+    return n, ""
+}
+
+// Receive up to max_bytes from a socket. Returns (data, "") on success,
+// ("", error) on transport failure or connection close.
+receive(sock: ptr, max_bytes: int) -> {
+    data = tcp_receive_raw(sock, max_bytes)
+    if data == null {
+        return "", "connection closed or receive failed"
+    }
+    data_copy = string_concat(data, "")
+    return data_copy, ""
+}
+
+// Listen on a port. Returns (server, "") on success, (null, error) on
+// failure. Caller must tcp.server_close the returned server.
+listen(port: int) -> {
+    server = tcp_listen_raw(port)
+    if server == null {
+        return null, "listen failed"
+    }
+    return server, ""
+}
+
+// Accept an incoming connection. Returns (socket, "") on success,
+// (null, error) on failure or shutdown.
+accept(server: ptr) -> {
+    sock = tcp_accept_raw(server)
+    if sock == null {
+        return null, "accept failed"
+    }
+    return sock, ""
+}

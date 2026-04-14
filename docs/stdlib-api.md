@@ -328,12 +328,29 @@ import std.http
 
 main() {
     response = http.get("http://example.com")
-    if (response != 0) {
-        println("Got response")
-        http.response_free(response)
+
+    // http.get always returns a non-null response unless out of memory,
+    // so `response != 0` is NOT a success check. Use http.response_ok
+    // (true when transport succeeded AND status is 2xx) or inspect the
+    // error accessor directly.
+    if http.response_ok(response) == 1 {
+        status = http.response_status(response)
+        body = http.response_body(response)
+        println("ok (${status}): ${body}")
+    } else {
+        err = http.response_error(response)
+        if err != "" {
+            println("transport error: ${err}")
+        } else {
+            println("http error: ${http.response_status(response)}")
+        }
     }
+
+    http.response_free(response)
 }
 ```
+
+See `examples/stdlib/http-client.ae` for a runnable version.
 
 ### HTTP Functions
 
@@ -342,6 +359,11 @@ main() {
 - `http.put(url, body, content_type)` - HTTP PUT request
 - `http.delete(url)` - HTTP DELETE request
 - `http.response_free(response)` - Free response
+- `http.response_status(response)` - Read HTTP status code (0 on transport failure)
+- `http.response_body(response)` - Read response body as string ("" if none)
+- `http.response_headers(response)` - Read response headers as string ("" if none)
+- `http.response_error(response)` - Read transport error string ("" on success)
+- `http.response_ok(response)` - 1 if transport succeeded AND status is 2xx, else 0
 
 ### HTTP Server
 

@@ -192,7 +192,7 @@ static JsonValue* parse_value_depth(const char** json, int depth) {
     return NULL;
 }
 
-JsonValue* json_parse(const char* json_str) {
+JsonValue* json_parse_raw(const char* json_str) {
     if (!json_str) return NULL;
     const char* json = json_str;
     return parse_value_depth(&json, 0);
@@ -355,7 +355,7 @@ JsonValue* json_object_get(JsonValue* obj, const char* key) {
 
 void json_object_set(JsonValue* obj, const char* key, JsonValue* value) {
     if (!obj || obj->type != JSON_OBJECT || !key) return;
-    map_put(obj->data.object_value, key, value);
+    map_put_raw(obj->data.object_value, key, value);
 }
 
 int json_object_has(JsonValue* obj, const char* key) {
@@ -370,7 +370,7 @@ JsonValue* json_array_get(JsonValue* arr, int index) {
 
 void json_array_add(JsonValue* arr, JsonValue* value) {
     if (!arr || arr->type != JSON_ARRAY) return;
-    list_add(arr->data.array_value, value);
+    list_add_raw(arr->data.array_value, value);
 }
 
 int json_array_size(JsonValue* arr) {

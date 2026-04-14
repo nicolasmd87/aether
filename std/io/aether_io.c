@@ -9,16 +9,16 @@ void io_print(const char* s) { if (s) fputs(s, stdout); }
 void io_print_line(const char* s) { if (s) puts(s); else puts(""); }
 void io_print_int(int v) { printf("%d", v); }
 void io_print_float(double v) { printf("%g", v); }
-char* io_read_file(const char* p) { (void)p; return NULL; }
-int io_write_file(const char* p, const char* c) { (void)p; (void)c; return 0; }
-int io_append_file(const char* p, const char* c) { (void)p; (void)c; return 0; }
+char* io_read_file_raw(const char* p) { (void)p; return NULL; }
+int io_write_file_raw(const char* p, const char* c) { (void)p; (void)c; return 0; }
+int io_append_file_raw(const char* p, const char* c) { (void)p; (void)c; return 0; }
 int io_file_exists(const char* p) { (void)p; return 0; }
-int io_delete_file(const char* p) { (void)p; return 0; }
-FileInfo* io_file_info(const char* p) { (void)p; return NULL; }
+int io_delete_file_raw(const char* p) { (void)p; return 0; }
+FileInfo* io_file_info_raw(const char* p) { (void)p; return NULL; }
 void io_file_info_free(FileInfo* i) { (void)i; }
 char* io_getenv(const char* n) { (void)n; return NULL; }
-int io_setenv(const char* n, const char* v) { (void)n; (void)v; return 0; }
-int io_unsetenv(const char* n) { (void)n; return 0; }
+int io_setenv_raw(const char* n, const char* v) { (void)n; (void)v; return 0; }
+int io_unsetenv_raw(const char* n) { (void)n; return 0; }
 #else
 
 #include <stdio.h>
@@ -63,7 +63,7 @@ void io_print_float(double value) {
 }
 
 // File I/O
-char* io_read_file(const char* path) {
+char* io_read_file_raw(const char* path) {
     if (!path) return NULL;
 
     FILE* file = fopen(path, "rb");
@@ -85,7 +85,7 @@ char* io_read_file(const char* path) {
     return buffer;
 }
 
-int io_write_file(const char* path, const char* content) {
+int io_write_file_raw(const char* path, const char* content) {
     if (!path || !content) return 0;
 
     FILE* file = fopen(path, "wb");
@@ -98,7 +98,7 @@ int io_write_file(const char* path, const char* content) {
     return written == len ? 1 : 0;
 }
 
-int io_append_file(const char* path, const char* content) {
+int io_append_file_raw(const char* path, const char* content) {
     if (!path || !content) return 0;
 
     FILE* file = fopen(path, "ab");
@@ -122,13 +122,13 @@ int io_file_exists(const char* path) {
     return 0;
 }
 
-int io_delete_file(const char* path) {
+int io_delete_file_raw(const char* path) {
     if (!path) return 0;
     return remove(path) == 0 ? 1 : 0;
 }
 
 // File info
-FileInfo* io_file_info(const char* path) {
+FileInfo* io_file_info_raw(const char* path) {
     if (!path) return NULL;
 
     struct stat st;
@@ -153,7 +153,7 @@ char* io_getenv(const char* name) {
     return strdup(value);
 }
 
-int io_setenv(const char* name, const char* value) {
+int io_setenv_raw(const char* name, const char* value) {
     if (!name || !value) return 0;
 #ifdef _WIN32
     // Windows uses _putenv_s
@@ -164,7 +164,7 @@ int io_setenv(const char* name, const char* value) {
 #endif
 }
 
-int io_unsetenv(const char* name) {
+int io_unsetenv_raw(const char* name) {
     if (!name) return 0;
 #ifdef _WIN32
     return _putenv_s(name, "") == 0 ? 1 : 0;

@@ -4,7 +4,7 @@
 
 #if !AETHER_HAS_FILESYSTEM
 int os_system(const char* c) { (void)c; return -1; }
-char* os_exec(const char* c) { (void)c; return NULL; }
+char* os_exec_raw(const char* c) { (void)c; return NULL; }
 char* os_getenv(const char* n) { (void)n; return NULL; }
 #else
 
@@ -18,7 +18,7 @@ int os_system(const char* cmd) {
     return system(cmd);
 }
 
-char* os_exec(const char* cmd) {
+char* os_exec_raw(const char* cmd) {
     if (!cmd) return NULL;
     if (!aether_sandbox_check("exec", cmd)) return NULL;
 

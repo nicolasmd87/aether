@@ -2,7 +2,7 @@
 #include "../../std/json/aether_json.h"
 
 TEST_CATEGORY(json_parse_null, TEST_CATEGORY_STDLIB) {
-    JsonValue* value = json_parse("null");
+    JsonValue* value = json_parse_raw("null");
 
     ASSERT_NOT_NULL(value);
     ASSERT_TRUE(json_is_null(value));
@@ -12,11 +12,11 @@ TEST_CATEGORY(json_parse_null, TEST_CATEGORY_STDLIB) {
 }
 
 TEST_CATEGORY(json_parse_bool, TEST_CATEGORY_STDLIB) {
-    JsonValue* val_true = json_parse("true");
+    JsonValue* val_true = json_parse_raw("true");
     ASSERT_EQ(JSON_BOOL, json_type(val_true));
     ASSERT_EQ(1, json_get_bool(val_true));
 
-    JsonValue* val_false = json_parse("false");
+    JsonValue* val_false = json_parse_raw("false");
     ASSERT_EQ(JSON_BOOL, json_type(val_false));
     ASSERT_EQ(0, json_get_bool(val_false));
 
@@ -25,7 +25,7 @@ TEST_CATEGORY(json_parse_bool, TEST_CATEGORY_STDLIB) {
 }
 
 TEST_CATEGORY(json_parse_number, TEST_CATEGORY_STDLIB) {
-    JsonValue* value = json_parse("42.5");
+    JsonValue* value = json_parse_raw("42.5");
 
     ASSERT_NOT_NULL(value);
     ASSERT_EQ(JSON_NUMBER, json_type(value));
@@ -35,7 +35,7 @@ TEST_CATEGORY(json_parse_number, TEST_CATEGORY_STDLIB) {
 }
 
 TEST_CATEGORY(json_parse_string, TEST_CATEGORY_STDLIB) {
-    JsonValue* value = json_parse("\"hello world\"");
+    JsonValue* value = json_parse_raw("\"hello world\"");
 
     ASSERT_NOT_NULL(value);
     ASSERT_EQ(JSON_STRING, json_type(value));
@@ -48,7 +48,7 @@ TEST_CATEGORY(json_parse_string, TEST_CATEGORY_STDLIB) {
 }
 
 TEST_CATEGORY(json_parse_array, TEST_CATEGORY_STDLIB) {
-    JsonValue* value = json_parse("[1, 2, 3]");
+    JsonValue* value = json_parse_raw("[1, 2, 3]");
 
     ASSERT_NOT_NULL(value);
     ASSERT_EQ(JSON_ARRAY, json_type(value));
@@ -61,7 +61,7 @@ TEST_CATEGORY(json_parse_array, TEST_CATEGORY_STDLIB) {
 }
 
 TEST_CATEGORY(json_parse_object, TEST_CATEGORY_STDLIB) {
-    JsonValue* value = json_parse("{\"name\":\"Alice\",\"age\":30}");
+    JsonValue* value = json_parse_raw("{\"name\":\"Alice\",\"age\":30}");
 
     ASSERT_NOT_NULL(value);
     ASSERT_EQ(JSON_OBJECT, json_type(value));

@@ -1320,44 +1320,21 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
 
                     // Handle stdlib imports: import std.X
                     if (strncmp(module_path, "std.", 4) == 0) {
-                        const char* mod_name = module_path + 4;
-                        char mod_prefix[128];
-                        snprintf(mod_prefix, sizeof(mod_prefix), "%s_", mod_name);
-                        int mod_prefix_len = (int)strlen(mod_prefix);
-
                         // Look up cached module from orchestrator
                         AetherModule* mod_entry = module_find(module_path);
                         ASTNode* mod_ast = mod_entry ? mod_entry->ast : NULL;
                         if (mod_ast) {
-                            // Generate extern declarations for imported functions
+                            // Generate extern declarations for every extern
+                            // in the module, regardless of any selective-
+                            // import list. Merged Aether-native stdlib
+                            // wrappers may depend on externs not directly
+                            // named by the user, and the emitted C needs
+                            // all of them declared or the call sites
+                            // reference undeclared functions.
                             for (int j = 0; j < mod_ast->child_count; j++) {
                                 ASTNode* decl = mod_ast->children[j];
                                 if (decl->type == AST_EXTERN_FUNCTION && decl->value) {
-                                    // Check if selective import
-                                    int should_import = 1;
-                                    if (child->child_count > 0) {
-                                        ASTNode* first = child->children[0];
-                                        if (first && first->type == AST_IDENTIFIER) {
-                                            should_import = 0;
-                                            // Strip module prefix: "math_sqrt" -> "sqrt"
-                                            const char* short_name = decl->value;
-                                            if (strncmp(decl->value, mod_prefix, mod_prefix_len) == 0) {
-                                                short_name = decl->value + mod_prefix_len;
-                                            }
-                                            for (int k = 0; k < child->child_count; k++) {
-                                                ASTNode* sel = child->children[k];
-                                                if (sel && sel->type == AST_IDENTIFIER &&
-                                                    strcmp(sel->value, short_name) == 0) {
-                                                    should_import = 1;
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-
-                                    if (should_import) {
-                                        generate_extern_declaration(gen, decl);
-                                    }
+                                    generate_extern_declaration(gen, decl);
                                 }
                             }
                             // NOTE: do NOT free mod_ast — registry owns it
@@ -1503,15 +1480,35 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                         }
                     }
                     
-                    // Build field list for registry
+                    // Build field list for registry. We store the resolved
+                    // C type for each field so downstream codegen (receive
+                    // destructuring, struct-literal send-side) can emit the
+                    // correct type without re-deriving it from type_kind,
+                    // which loses information for composite types like
+                    // `string[]` (element type) and structs (struct name).
                     for (int i = 0; i < child->child_count; i++) {
                         ASTNode* field = child->children[i];
                         if (field && field->type == AST_MESSAGE_FIELD) {
                             MessageFieldDef* field_def = (MessageFieldDef*)malloc(sizeof(MessageFieldDef));
                             field_def->name = strdup(field->value);
                             field_def->type_kind = field->node_type ? field->node_type->kind : TYPE_UNKNOWN;
+                            field_def->c_type = NULL;
+                            field_def->element_c_type = NULL;
+                            if (field->node_type) {
+                                const char* resolved = get_c_type(field->node_type);
+                                if (resolved) {
+                                    field_def->c_type = strdup(resolved);
+                                }
+                                if (field->node_type->kind == TYPE_ARRAY &&
+                                    field->node_type->element_type) {
+                                    const char* elem = get_c_type(field->node_type->element_type);
+                                    if (elem) {
+                                        field_def->element_c_type = strdup(elem);
+                                    }
+                                }
+                            }
                             field_def->next = NULL;
-                            
+
                             if (!first_field) {
                                 first_field = field_def;
                                 last_field = field_def;

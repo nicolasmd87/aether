@@ -2,11 +2,16 @@
 #include "../../runtime/config/aether_optimization_config.h"
 
 #if !AETHER_HAS_NETWORKING
-HttpResponse* http_get(const char* u) { (void)u; return NULL; }
-HttpResponse* http_post(const char* u, const char* b, const char* c) { (void)u; (void)b; (void)c; return NULL; }
-HttpResponse* http_put(const char* u, const char* b, const char* c) { (void)u; (void)b; (void)c; return NULL; }
-HttpResponse* http_delete(const char* u) { (void)u; return NULL; }
+HttpResponse* http_get_raw(const char* u) { (void)u; return NULL; }
+HttpResponse* http_post_raw(const char* u, const char* b, const char* c) { (void)u; (void)b; (void)c; return NULL; }
+HttpResponse* http_put_raw(const char* u, const char* b, const char* c) { (void)u; (void)b; (void)c; return NULL; }
+HttpResponse* http_delete_raw(const char* u) { (void)u; return NULL; }
 void http_response_free(HttpResponse* r) { (void)r; }
+int http_response_status(HttpResponse* r) { (void)r; return 0; }
+const char* http_response_body(HttpResponse* r) { (void)r; return ""; }
+const char* http_response_headers(HttpResponse* r) { (void)r; return ""; }
+const char* http_response_error(HttpResponse* r) { (void)r; return "networking disabled at build time"; }
+int http_response_ok(HttpResponse* r) { (void)r; return 0; }
 #else
 
 #include <stdio.h>
@@ -203,19 +208,19 @@ static HttpResponse* http_request(const char* method, const char* url, const cha
     return response;
 }
 
-HttpResponse* http_get(const char* url) {
+HttpResponse* http_get_raw(const char* url) {
     return http_request("GET", url, NULL, NULL);
 }
 
-HttpResponse* http_post(const char* url, const char* body, const char* content_type) {
+HttpResponse* http_post_raw(const char* url, const char* body, const char* content_type) {
     return http_request("POST", url, body, content_type);
 }
 
-HttpResponse* http_put(const char* url, const char* body, const char* content_type) {
+HttpResponse* http_put_raw(const char* url, const char* body, const char* content_type) {
     return http_request("PUT", url, body, content_type);
 }
 
-HttpResponse* http_delete(const char* url) {
+HttpResponse* http_delete_raw(const char* url) {
     return http_request("DELETE", url, NULL, NULL);
 }
 
@@ -225,6 +230,38 @@ void http_response_free(HttpResponse* response) {
     if (response->headers) string_release(response->headers);
     if (response->error) string_release(response->error);
     free(response);
+}
+
+// Response accessors. All NULL-safe: callers can pass a NULL response
+// (e.g. from an out-of-memory path) without crashing.
+
+int http_response_status(HttpResponse* response) {
+    if (!response) return 0;
+    return response->status_code;
+}
+
+const char* http_response_body(HttpResponse* response) {
+    if (!response || !response->body) return "";
+    const char* s = string_to_cstr(response->body);
+    return s ? s : "";
+}
+
+const char* http_response_headers(HttpResponse* response) {
+    if (!response || !response->headers) return "";
+    const char* s = string_to_cstr(response->headers);
+    return s ? s : "";
+}
+
+const char* http_response_error(HttpResponse* response) {
+    if (!response || !response->error) return "";
+    const char* s = string_to_cstr(response->error);
+    return s ? s : "";
+}
+
+int http_response_ok(HttpResponse* response) {
+    if (!response) return 0;
+    if (response->error) return 0;
+    return response->status_code >= 200 && response->status_code < 300;
 }
 
 #endif // AETHER_HAS_NETWORKING

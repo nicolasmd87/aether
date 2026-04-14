@@ -5,8 +5,11 @@
 // JSON_NULL = 0, JSON_BOOL = 1, JSON_NUMBER = 2
 // JSON_STRING = 3, JSON_ARRAY = 4, JSON_OBJECT = 5
 
-// Parsing and serialization
-extern json_parse(json_str: string) -> ptr
+// Parsing and serialization.
+// `json_parse_raw` is the raw ptr-returning extern (escape hatch for
+// advanced callers). Most code should use the Go-style `json.parse`
+// wrapper below.
+extern json_parse_raw(json_str: string) -> ptr
 extern json_stringify(value: ptr) -> string
 extern json_free(value: ptr)
 
@@ -37,3 +40,14 @@ extern json_create_number(value: float) -> ptr
 extern json_create_string(value: string) -> ptr
 extern json_create_array() -> ptr
 extern json_create_object() -> ptr
+
+// Parse a JSON string. Returns (value, "") on success, (null, error)
+// on failure. Caller owns the returned value and must free with
+// json.free.
+parse(json_str: string) -> {
+    value = json_parse_raw(json_str)
+    if value == null {
+        return null, "invalid json"
+    }
+    return value, ""
+}

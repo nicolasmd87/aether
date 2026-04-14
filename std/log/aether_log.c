@@ -76,8 +76,11 @@ static void get_timestamp(char* buffer, size_t size) {
     strftime(buffer, size, "%Y-%m-%d %H:%M:%S", &tm_buf);
 }
 
-// Initialize logging
-void log_init(const char* filename, LogLevel min_level) {
+// Initialize logging. Returns 1 on success, 0 if the requested log
+// file could not be opened (logging still works, falling back to stderr).
+// The Aether wrapper `log.init` turns 0 into an error string.
+int log_init_raw(const char* filename, LogLevel min_level) {
+    int ok = 1;
     if (g_log.initialized && g_log.config.output_file) {
         fclose(g_log.config.output_file);
     }
@@ -87,6 +90,7 @@ void log_init(const char* filename, LogLevel min_level) {
         if (!g_log.config.output_file) {
             fprintf(stderr, "[LOG] Failed to open log file: %s\n", filename);
             g_log.config.output_file = stderr;
+            ok = 0;
         }
     } else {
         g_log.config.output_file = stderr;
@@ -94,6 +98,7 @@ void log_init(const char* filename, LogLevel min_level) {
 
     g_log.config.min_level = min_level;
     g_log.initialized = 1;
+    return ok;
 }
 
 void log_init_with_config(LogConfig* config) {
@@ -121,7 +126,7 @@ void log_shutdown() {
 // Core logging function
 void log_write(LogLevel level, const char* fmt, ...) {
     if (!g_log.initialized) {
-        log_init(NULL, LOG_LEVEL_INFO);
+        log_init_raw(NULL, LOG_LEVEL_INFO);
     }
 
     if (level < g_log.config.min_level) {
@@ -170,7 +175,7 @@ void log_write(LogLevel level, const char* fmt, ...) {
 void log_with_location(LogLevel level, const char* file, int line,
                        const char* func, const char* fmt, ...) {
     if (!g_log.initialized) {
-        log_init(NULL, LOG_LEVEL_INFO);
+        log_init_raw(NULL, LOG_LEVEL_INFO);
     }
 
     if (level < g_log.config.min_level) {

@@ -41,8 +41,60 @@ extern string_to_cstr(str: string) -> string
 extern string_from_int(value: int) -> ptr
 extern string_from_float(value: float) -> ptr
 
-// Parsing
-extern string_to_int(str: string, out_value: ptr) -> int
-extern string_to_long(str: string, out_value: ptr) -> int
-extern string_to_float(str: string, out_value: ptr) -> int
-extern string_to_double(str: string, out_value: ptr) -> int
+// Parsing — raw externs (escape hatch)
+extern string_to_int_raw(str: string, out_value: ptr) -> int
+extern string_to_long_raw(str: string, out_value: ptr) -> int
+extern string_to_float_raw(str: string, out_value: ptr) -> int
+extern string_to_double_raw(str: string, out_value: ptr) -> int
+
+// Parsing — split-return helpers for the Go-style wrappers.
+extern string_try_int(s: string) -> int
+extern string_get_int(s: string) -> int
+extern string_try_long(s: string) -> int
+extern string_get_long(s: string) -> long
+extern string_try_float(s: string) -> int
+extern string_get_float(s: string) -> float
+extern string_try_double(s: string) -> int
+extern string_get_double(s: string) -> float
+
+// Parse a string to an integer. Returns (value, "") on success,
+// (0, error) on invalid input. Handles leading whitespace, sign,
+// base-10 digits. Trailing whitespace is ignored; trailing garbage
+// produces an error.
+to_int(s: string) -> {
+    ok = string_try_int(s)
+    if ok == 0 {
+        return 0, "invalid integer"
+    }
+    return string_get_int(s), ""
+}
+
+// Parse a string to a long (int64). Returns (value, "") on success,
+// (0, error) on invalid input.
+to_long(s: string) -> {
+    ok = string_try_long(s)
+    if ok == 0 {
+        return 0, "invalid long"
+    }
+    return string_get_long(s), ""
+}
+
+// Parse a string to a float. Returns (value, "") on success,
+// (0.0, error) on invalid input.
+to_float(s: string) -> {
+    ok = string_try_float(s)
+    if ok == 0 {
+        return 0.0, "invalid float"
+    }
+    return string_get_float(s), ""
+}
+
+// Parse a string to a double. Returns (value, "") on success,
+// (0.0, error) on invalid input.
+to_double(s: string) -> {
+    ok = string_try_double(s)
+    if ok == 0 {
+        return 0.0, "invalid double"
+    }
+    return string_get_double(s), ""
+}

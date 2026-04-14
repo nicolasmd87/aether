@@ -18,6 +18,8 @@ void free_message_registry(MessageRegistry* registry) {
         while (field) {
             MessageFieldDef* next_field = field->next;
             free(field->name);
+            free(field->c_type);
+            free(field->element_c_type);
             free(field);
             field = next_field;
         }

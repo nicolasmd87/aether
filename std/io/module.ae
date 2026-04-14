@@ -1,24 +1,99 @@
 // std.io - Input/Output Module
 // Import with: import std.io
+//
+// Raw externs end in `_raw` and return the C-style NULL/0/1 convention.
+// The Aether-native wrappers (below) use Go-style `(value, err)` tuples.
 
-// Console I/O
+// Console I/O — infallible in practice
 extern io_print(str: string)
 extern io_print_line(str: string)
 extern io_print_int(value: int)
 extern io_print_float(value: float)
 
-// File I/O
-extern io_read_file(path: string) -> string
-extern io_write_file(path: string, content: string) -> int
-extern io_append_file(path: string, content: string) -> int
+// File I/O — raw externs
+extern io_read_file_raw(path: string) -> string
+extern io_write_file_raw(path: string, content: string) -> int
+extern io_append_file_raw(path: string, content: string) -> int
 extern io_file_exists(path: string) -> int
-extern io_delete_file(path: string) -> int
+extern io_delete_file_raw(path: string) -> int
 
 // File info
-extern io_file_info(path: string) -> ptr
+extern io_file_info_raw(path: string) -> ptr
 extern io_file_info_free(info: ptr)
 
 // Environment variables
 extern io_getenv(name: string) -> string
-extern io_setenv(name: string, value: string) -> int
-extern io_unsetenv(name: string) -> int
+extern io_setenv_raw(name: string, value: string) -> int
+extern io_unsetenv_raw(name: string) -> int
+
+// string_concat for owned-copy duplication
+extern string_concat(a: string, b: string) -> string
+
+// Read the entire contents of a file at `path`.
+// Returns (content, "") on success, ("", error) on failure.
+read_file(path: string) -> {
+    content = io_read_file_raw(path)
+    if content == null {
+        return "", "cannot read file"
+    }
+    content_copy = string_concat(content, "")
+    return content_copy, ""
+}
+
+// Write `content` to a file at `path`. Overwrites if exists.
+// Returns "" on success, error string on failure.
+write_file(path: string, content: string) -> {
+    ok = io_write_file_raw(path, content)
+    if ok == 0 {
+        return "cannot write file"
+    }
+    return ""
+}
+
+// Append `content` to a file at `path`. Creates if missing.
+// Returns "" on success, error string on failure.
+append_file(path: string, content: string) -> {
+    ok = io_append_file_raw(path, content)
+    if ok == 0 {
+        return "cannot append to file"
+    }
+    return ""
+}
+
+// Delete the file at `path`. Returns "" on success, error on failure.
+delete_file(path: string) -> {
+    ok = io_delete_file_raw(path)
+    if ok == 0 {
+        return "cannot delete file"
+    }
+    return ""
+}
+
+// Get file info (FileInfo ptr with size, is_directory, modified_time).
+// Returns (info, "") on success, (null, error) on failure.
+// Caller must free the returned ptr with io.file_info_free.
+file_info(path: string) -> {
+    info = io_file_info_raw(path)
+    if info == null {
+        return null, "cannot stat file"
+    }
+    return info, ""
+}
+
+// Set an environment variable. Returns "" on success, error on failure.
+setenv(name: string, value: string) -> {
+    ok = io_setenv_raw(name, value)
+    if ok == 0 {
+        return "cannot set env var"
+    }
+    return ""
+}
+
+// Unset an environment variable. Returns "" on success, error on failure.
+unsetenv(name: string) -> {
+    ok = io_unsetenv_raw(name)
+    if ok == 0 {
+        return "cannot unset env var"
+    }
+    return ""
+}

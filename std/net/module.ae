@@ -6,28 +6,40 @@
 // - http_*        : HTTP client operations
 // - http_server_* : HTTP server operations
 
-// TCP Client
-extern tcp_connect(host: string, port: int) -> ptr
-extern tcp_send(sock: ptr, data: string) -> int
-extern tcp_receive(sock: ptr, max_bytes: int) -> string
+// TCP Client - raw externs (escape hatch)
+extern tcp_connect_raw(host: string, port: int) -> ptr
+extern tcp_send_raw(sock: ptr, data: string) -> int
+extern tcp_receive_raw(sock: ptr, max_bytes: int) -> string
 extern tcp_close(sock: ptr) -> int
 
-// TCP Server
-extern tcp_listen(port: int) -> ptr
-extern tcp_accept(server: ptr) -> ptr
+// TCP Server - raw externs
+extern tcp_listen_raw(port: int) -> ptr
+extern tcp_accept_raw(server: ptr) -> ptr
 extern tcp_server_close(server: ptr) -> int
 
-// HTTP Client
-extern http_get(url: string) -> ptr
-extern http_post(url: string, body: string, content_type: string) -> ptr
-extern http_put(url: string, body: string, content_type: string) -> ptr
-extern http_delete(url: string) -> ptr
+// HTTP Client — raw ptr-returning externs (escape hatch).
+// Most callers should use the Go-style wrappers in std.http which provide
+// (body, err) tuple returns and auto-free the response.
+extern http_get_raw(url: string) -> ptr
+extern http_post_raw(url: string, body: string, content_type: string) -> ptr
+extern http_put_raw(url: string, body: string, content_type: string) -> ptr
+extern http_delete_raw(url: string) -> ptr
 extern http_response_free(response: ptr)
+
+// HTTP Client - response accessors
+// Use these to read fields out of the response returned by http_get/post/etc.
+// http_get always returns a non-null response (unless out of memory); inspect
+// the error accessor or use http_response_ok to check for success.
+extern http_response_status(response: ptr) -> int
+extern http_response_body(response: ptr) -> string
+extern http_response_headers(response: ptr) -> string
+extern http_response_error(response: ptr) -> string
+extern http_response_ok(response: ptr) -> int
 
 // HTTP Server - lifecycle
 extern http_server_create(port: int) -> ptr
-extern http_server_bind(server: ptr, host: string, port: int) -> int
-extern http_server_start(server: ptr) -> int
+extern http_server_bind_raw(server: ptr, host: string, port: int) -> int
+extern http_server_start_raw(server: ptr) -> int
 extern http_server_stop(server: ptr)
 extern http_server_free(server: ptr)
 

@@ -9,12 +9,12 @@ void io_print_line(const char* str);
 void io_print_int(int value);
 void io_print_float(double value);
 
-// File I/O
-char* io_read_file(const char* path);
-int io_write_file(const char* path, const char* content);
-int io_append_file(const char* path, const char* content);
+// File I/O (raw)
+char* io_read_file_raw(const char* path);
+int io_write_file_raw(const char* path, const char* content);
+int io_append_file_raw(const char* path, const char* content);
 int io_file_exists(const char* path);
-int io_delete_file(const char* path);
+int io_delete_file_raw(const char* path);
 
 // File info
 typedef struct {
@@ -23,13 +23,13 @@ typedef struct {
     long modified_time;
 } FileInfo;
 
-FileInfo* io_file_info(const char* path);
+FileInfo* io_file_info_raw(const char* path);
 void io_file_info_free(FileInfo* info);
 
 // Environment variables
 char* io_getenv(const char* name);
-int io_setenv(const char* name, const char* value);
-int io_unsetenv(const char* name);
+int io_setenv_raw(const char* name, const char* value);
+int io_unsetenv_raw(const char* name);
 
 #endif // AETHER_IO_H
 

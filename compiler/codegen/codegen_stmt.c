@@ -1701,7 +1701,8 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                             if (field_init && field_init->type == AST_FIELD_INIT) {
                                 fprintf(gen->output, ", .%s = ", field_init->value);
                                 if (field_init->child_count > 0) {
-                                    generate_expression(gen, field_init->children[0]);
+                                    MessageFieldDef* fdef = find_msg_field(msg_def, field_init->value);
+                                    emit_message_field_init(gen, fdef, field_init->children[0]);
                                 }
                             }
                         }

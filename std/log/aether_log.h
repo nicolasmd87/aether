@@ -23,8 +23,9 @@ typedef struct {
     const char* format_string;  // e.g., "[{time}] {level}: {message}"
 } LogConfig;
 
-// Initialize logging system
-void log_init(const char* filename, LogLevel min_level);
+// Initialize logging system. Returns 1 on success, 0 if the requested
+// log file could not be opened (logging still works via stderr).
+int log_init_raw(const char* filename, LogLevel min_level);
 void log_init_with_config(LogConfig* config);
 void log_shutdown();
 

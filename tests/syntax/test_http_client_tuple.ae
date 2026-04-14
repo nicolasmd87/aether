@@ -1,0 +1,52 @@
+// Test: HTTP client Go-style tuple wrappers from std.http.
+//
+// Exercises the transport error path for each verb. Uses the .invalid
+// TLD (RFC 2606) so DNS resolution fails immediately without hitting
+// the network.
+
+import std.http
+
+main() {
+    // GET
+    body, err = http.get("http://aether-test-invalid.invalid")
+    if err == "" {
+        println("FAIL: http.get should return error for invalid host")
+        exit(1)
+    }
+    if body != "" {
+        println("FAIL: http.get should return empty body on error")
+        exit(1)
+    }
+
+    // POST
+    pbody, perr = http.post("http://aether-test-invalid.invalid", "hello", "text/plain")
+    if perr == "" {
+        println("FAIL: http.post should return error for invalid host")
+        exit(1)
+    }
+    if pbody != "" {
+        println("FAIL: http.post should return empty body on error")
+        exit(1)
+    }
+
+    // PUT
+    ubody, uerr = http.put("http://aether-test-invalid.invalid", "hello", "text/plain")
+    if uerr == "" {
+        println("FAIL: http.put should return error for invalid host")
+        exit(1)
+    }
+
+    // DELETE
+    dbody, derr = http.delete("http://aether-test-invalid.invalid")
+    if derr == "" {
+        println("FAIL: http.delete should return error for invalid host")
+        exit(1)
+    }
+
+    // Quiet unused-variable warnings; we assert on err above and body is
+    // intentionally ignored for verbs that don't return a useful body.
+    _ = ubody
+    _ = dbody
+
+    println("http client tuple wrappers ok")
+}

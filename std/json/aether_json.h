@@ -14,7 +14,7 @@ typedef enum {
 
 typedef struct JsonValue JsonValue;
 
-JsonValue* json_parse(const char* json_str);
+JsonValue* json_parse_raw(const char* json_str);
 char* json_stringify(JsonValue* value);
 void json_free(JsonValue* value);
 

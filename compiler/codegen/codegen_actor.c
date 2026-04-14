@@ -122,6 +122,9 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
 
                         // Extract pattern fields with correct types from message definition.
                         // Single-int-field messages use intptr_t (matches payload_int width).
+                        // Composite-type fields (arrays, structs) use the resolved c_type
+                        // stored on MessageFieldDef at registration time, which preserves
+                        // element type info that the bare type_kind drops.
                         const char* single_int_name = get_single_int_field(msg_def);
                         for (int k = 0; k < pattern->child_count; k++) {
                             ASTNode* field = pattern->children[k];
@@ -133,6 +136,8 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
                                         if (strcmp(fdef->name, field->value) == 0) {
                                             if (single_int_name && fdef->type_kind == TYPE_INT) {
                                                 c_type = "intptr_t";
+                                            } else if (fdef->c_type) {
+                                                c_type = fdef->c_type;
                                             } else {
                                                 Type temp_type = { .kind = fdef->type_kind, .element_type = NULL, .array_size = 0, .struct_name = NULL };
                                                 c_type = get_c_type(&temp_type);

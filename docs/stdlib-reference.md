@@ -434,9 +434,14 @@ import std.http
 main() {
     // HTTP Client
     response = http.get("http://example.com")
-    if response != 0 {
-        http.response_free(response)
+    if http.response_ok(response) == 1 {
+        body = http.response_body(response)
+        println("got: ${body}")
+    } else {
+        err = http.response_error(response)
+        println("failed: ${err}")
     }
+    http.response_free(response)
 
     // HTTP Server
     server = http.server_create(8080)
@@ -452,6 +457,16 @@ main() {
 - `http.put(url, body, content_type)` - HTTP PUT
 - `http.delete(url)` - HTTP DELETE
 - `http.response_free(response)` - Free response
+- `http.response_ok(response)` - 1 if request succeeded (no transport error, 2xx status), else 0
+- `http.response_status(response)` - Read HTTP status code (0 on transport failure)
+- `http.response_body(response)` - Read body as string
+- `http.response_headers(response)` - Read headers as string
+- `http.response_error(response)` - Read transport error, empty string on success
+
+> **Important:** `http.get` always returns a non-null response unless out of memory,
+> so `response != 0` is NOT a success check. Use `http.response_ok` or inspect
+> `http.response_error` directly. See `examples/stdlib/http-client.ae` for a full
+> runnable example.
 
 **Server Lifecycle:**
 - `http.server_create(port)` - Create server
