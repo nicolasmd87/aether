@@ -15,6 +15,7 @@ int os_system(const char* c) { (void)c; return -1; }
 char* os_exec_raw(const char* c) { (void)c; return NULL; }
 char* os_getenv(const char* n) { (void)n; return NULL; }
 int os_execv(const char* p, void* a) { (void)p; (void)a; return -1; }
+char* os_which(const char* n) { (void)n; return NULL; }
 #else
 
 #include <stdio.h>
@@ -162,6 +163,63 @@ int os_execv(const char* prog, void* argv_list) {
     execvp(prog, argv);
     free(argv);
     return -1;
+#endif
+}
+
+// Search PATH for an executable. POSIX semantics:
+//   1. If `name` contains a '/', it's treated as a path (absolute or
+//      relative to cwd). Return it as-is if executable, else NULL.
+//   2. Otherwise iterate through colon-separated entries in $PATH (or a
+//      sensible default if PATH isn't set), looking for `<dir>/<name>`
+//      that's executable. Return the first hit.
+//
+// Caller owns the returned string.
+char* os_which(const char* name) {
+    if (!name || !*name) return NULL;
+    if (!aether_sandbox_check("env", "PATH")) return NULL;
+
+#ifdef _WIN32
+    // Windows uses ';' as PATH separator and PATHEXT to choose extensions.
+    // Stub for now; a follow-up can implement the full Windows lookup.
+    (void)name;
+    return NULL;
+#else
+    if (strchr(name, '/')) {
+        if (access(name, X_OK) == 0) return strdup(name);
+        return NULL;
+    }
+
+    const char* path = getenv("PATH");
+    if (!path || !*path) path = "/usr/local/bin:/usr/bin:/bin";
+
+    size_t name_len = strlen(name);
+    char buf[4096];
+    const char* p = path;
+    while (*p) {
+        const char* end = strchr(p, ':');
+        size_t dirlen = end ? (size_t)(end - p) : strlen(p);
+        // Empty entry means current directory (POSIX).
+        if (dirlen == 0) {
+            // Guard: we write "./" (2 bytes) plus name_len+1 bytes
+            // (including null terminator) starting at buf+2. The last
+            // written byte is at index (2 + name_len), which must be
+            // strictly less than sizeof(buf) for validity.
+            if (2 + name_len < sizeof(buf)) {
+                buf[0] = '.';
+                buf[1] = '/';
+                memcpy(buf + 2, name, name_len + 1);
+                if (access(buf, X_OK) == 0) return strdup(buf);
+            }
+        } else if (dirlen + 1 + name_len < sizeof(buf)) {
+            memcpy(buf, p, dirlen);
+            buf[dirlen] = '/';
+            memcpy(buf + dirlen + 1, name, name_len + 1);
+            if (access(buf, X_OK) == 0) return strdup(buf);
+        }
+        if (!end) break;
+        p = end + 1;
+    }
+    return NULL;
 #endif
 }
 

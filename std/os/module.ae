@@ -11,6 +11,11 @@ extern os_exec_raw(cmd: string) -> string
 // Get environment variable, returns string or NULL if not set
 extern os_getenv(name: string) -> string
 
+// Search PATH for an executable. Returns the absolute path to the
+// first hit, or "" if not found. If `name` already contains '/', it's
+// returned as-is when it's executable.
+extern os_which(name: string) -> string
+
 // Command-line arguments
 extern aether_args_count() -> int
 extern aether_args_get(index: int) -> string

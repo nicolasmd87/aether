@@ -1,0 +1,71 @@
+// Test: os_which — search PATH for an executable.
+//
+// Windows note: os_which is stubbed on Windows pending PATHEXT-aware
+// lookup and `;` separator handling. The test detects Windows via $OS
+// and prints SKIP there — the POSIX sub-cases reference /bin/true and
+// /bin/sh which don't exist on Windows anyway.
+
+import std.os
+
+extern println(s: string)
+extern string_concat(a: string, b: string) -> string
+extern string_length(s: string) -> int
+extern string_starts_with(s: string, prefix: string) -> int
+extern exit(code: int)
+
+fail(msg: string) {
+    println(string_concat("FAIL: ", msg))
+    exit(1)
+}
+
+main() {
+    os_name = os_getenv("OS")
+    if os_name == "Windows_NT" {
+        println("SKIP os_which: Windows backend not yet implemented")
+        return
+    }
+
+    // 1. Look up a program that exists on every POSIX box. The result
+    //    should be an absolute path (starts with '/') and end in "true".
+    found = os_which("true")
+    if string_length(found) == 0 {
+        fail("os_which('true') should find a hit on PATH")
+    }
+    if string_starts_with(found, "/") != 1 {
+        fail("os_which result should be an absolute path")
+    }
+
+    // 2. Same for /bin/sh — POSIX guarantees this.
+    sh = os_which("sh")
+    if string_length(sh) == 0 {
+        fail("os_which('sh') should find a hit")
+    }
+    if string_starts_with(sh, "/") != 1 {
+        fail("os_which('sh') should be absolute")
+    }
+
+    // 3. Absolute path passthrough — `os_which("/bin/ls")` returns the
+    //    path as-is when it's executable, without iterating PATH.
+    abs = os_which("/bin/ls")
+    if abs != "/bin/ls" {
+        // Some systems put ls in /usr/bin instead. Try that.
+        abs2 = os_which("/usr/bin/ls")
+        if abs2 != "/usr/bin/ls" {
+            fail("os_which should accept absolute paths to existing executables")
+        }
+    }
+
+    // 4. Missing program returns "" (NULL → empty string in Aether).
+    missing = os_which("definitely-not-on-anyones-path-9k3jf2")
+    if string_length(missing) != 0 {
+        fail("os_which on a missing name should return empty")
+    }
+
+    // 5. Absolute path to a non-existent program also returns empty.
+    missing_abs = os_which("/this/program/does/not/exist")
+    if string_length(missing_abs) != 0 {
+        fail("os_which on a missing absolute path should return empty")
+    }
+
+    println("PASS os_which")
+}

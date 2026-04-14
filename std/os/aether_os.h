@@ -20,4 +20,11 @@ char* os_getenv(const char* name);
 // Not available on Windows (returns -1).
 int os_execv(const char* prog, void* argv_list);
 
+// Search PATH for an executable named `name`. Returns the absolute
+// path to the first executable hit, or NULL if not found. If `name`
+// already contains '/', it's returned as-is when it's executable
+// (matches POSIX `command -v` semantics for absolute/relative paths).
+// Caller owns the returned string.
+char* os_which(const char* name);
+
 #endif
