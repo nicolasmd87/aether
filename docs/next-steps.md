@@ -6,9 +6,14 @@ Planned features and improvements for upcoming Aether releases.
 
 ## Language Features
 
-### Stdlib Migration to Result Types
+### Structured Error Types (`std.errors`)
 
-Result types (`a, err = func()`) are implemented in the language. The stdlib I/O functions (`file.open`, `io.read_file`, `file.write`, etc.) still use the old `int` return convention. Migrating them to `(value, error)` returns is a breaking change planned for a future release.
+Stdlib wrappers currently return error *strings*. A follow-up step is a
+structured error type so callers can programmatically discriminate
+between error kinds (file-not-found vs permission-denied vs OOM) without
+parsing English. Likely shape: `err.kind` + `err.message` + optional
+`err.cause`. Non-breaking — existing `err != ""` checks would still work
+for the common "did it fail?" case.
 
 ## Quick Wins
 
@@ -18,7 +23,7 @@ Result types (`a, err = func()`) are implemented in the language. The stdlib I/O
 
 ### `or` Keyword for Error Defaults
 
-Sugar for defaulting on error: `content = io.read_file("config.txt") or "default"`. Requires result types to be fully adopted in stdlib first.
+Sugar for defaulting on error: `content = io.read_file("config.txt") or "default"`. The stdlib now uses Go-style tuple returns throughout, so this syntactic sugar can be built on top of the existing `(value, err)` convention.
 
 ## Future
 
@@ -64,7 +69,7 @@ Ariel's PR proposes dispatching incoming HTTP connections as file descriptors di
 
 **What's needed:**
 - `ae version list` columns: version, status (active/installed/available)
-- `ae version use` should preserve the initial install in `versions/` before switching (currently loses it on Windows; POSIX needs same fix)
+- Windows: `ae version use` should preserve the initial install in `versions/` before switching (POSIX side shipped with the macOS Gatekeeper fix).
 
 ## Tooling
 

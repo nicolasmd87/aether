@@ -1,0 +1,17 @@
+// Test: std.tcp Go-style tuple wrappers.
+// Uses a port that refuses connections to exercise the error path
+// without hanging.
+
+import std.tcp
+
+main() {
+    sock, err = tcp.connect("127.0.0.1", 1)
+    if err == "" {
+        println("FAIL: connect to :1 should error")
+        exit(1)
+    }
+    if sock != null {
+        tcp.close(sock)
+    }
+    println("tcp tuple wrappers ok")
+}

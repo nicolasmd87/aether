@@ -27,9 +27,13 @@ connect(host: string, port: int) -> {
     return sock, ""
 }
 
-// Send data on a socket. Returns (bytes_sent, "") on success,
+// Write data to a socket. Returns (bytes_sent, "") on success,
 // (0, error) on failure.
-send(sock: ptr, data: string) -> {
+//
+// Note: named `write`/`read` (not `send`/`receive`) because `send` and
+// `receive` are reserved actor keywords in Aether. The `tcp.send_raw`
+// extern is still available under the old name for direct use.
+write(sock: ptr, data: string) -> {
     n = tcp_send_raw(sock, data)
     if n < 0 {
         return 0, "send failed"
@@ -37,9 +41,9 @@ send(sock: ptr, data: string) -> {
     return n, ""
 }
 
-// Receive up to max_bytes from a socket. Returns (data, "") on success,
+// Read up to max_bytes from a socket. Returns (data, "") on success,
 // ("", error) on transport failure or connection close.
-receive(sock: ptr, max_bytes: int) -> {
+read(sock: ptr, max_bytes: int) -> {
     data = tcp_receive_raw(sock, max_bytes)
     if data == null {
         return "", "connection closed or receive failed"

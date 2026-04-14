@@ -4,7 +4,18 @@
 
 Aether provides a standard library for strings, I/O, math, file system, networking, and actor concurrency. The library is automatically linked when you compile Aether programs.
 
-> **Note:** Stdlib functions currently use `int` returns (1 = success, 0 = failure). The language supports Go-style result types (`val, err = func()`) for user-defined functions — stdlib migration is planned. See the [error handling example](../examples/basics/error-handling.ae).
+> **Go-style result types.** Every stdlib function that can fail returns a `(value, err)` tuple. Check `err` first, then use `value`. The raw C-style externs are preserved under a `_raw` suffix for advanced callers who need direct access to the underlying pointer or int:
+>
+> ```aether
+> body, err = http.get("http://example.com")
+> if err != "" {
+>     println("failed: ${err}")
+>     return
+> }
+> println(body)
+> ```
+>
+> See the [error handling example](../examples/basics/error-handling.ae) for the user-function pattern, and `examples/stdlib/http-client.ae` for the stdlib pattern.
 
 ## Namespace Calling Convention
 
@@ -120,13 +131,26 @@ typedef struct AetherString {
 
 #### Conversion
 
-- `string_to_cstr(AetherString* str)` - Get C string pointer
-- `string_from_int(int value)` - Convert int to string
-- `string_from_float(float value)` - Convert float to string
-- `string_to_int(str, out_ptr)` - Parse integer (returns 1 on success, 0 on failure)
-- `string_to_long(str, out_ptr)` - Parse 64-bit integer (returns 1 on success, 0 on failure)
-- `string_to_float(str, out_ptr)` - Parse float (returns 1 on success, 0 on failure)
-- `string_to_double(str, out_ptr)` - Parse double (returns 1 on success, 0 on failure)
+- `string.to_cstr(str)` - Get C string pointer
+- `string.from_int(value)` - Convert int to string
+- `string.from_float(value)` - Convert float to string
+
+#### Parsing (Go-style)
+
+All parsers return `(value, err)` tuples. Empty `err` means success.
+
+```aether
+n, err = string.to_int("42")
+if err != "" { println("bad: ${err}"); return }
+println(n)
+```
+
+- `string.to_int(s)` → `(int, string)` - Parse base-10 integer
+- `string.to_long(s)` → `(long, string)` - Parse 64-bit integer
+- `string.to_float(s)` → `(float, string)` - Parse float
+- `string.to_double(s)` → `(float, string)` - Parse double
+
+Raw out-parameter externs are preserved as `string_to_int_raw`, `string_to_long_raw`, `string_to_float_raw`, `string_to_double_raw` for code that needs to distinguish zero from parse failure without a tuple.
 
 #### Memory Management
 
@@ -150,35 +174,56 @@ import std.file
 import std.dir
 
 main() {
-    if (file.exists("data.txt") == 1) {
-        print("File exists!\n")
-        size = file.size("data.txt")
-        print("Size: ")
-        print(size)
-        print(" bytes\n")
+    // Read a file in one call (opens, reads, closes)
+    content, err = file.read("data.txt")
+    if err != "" {
+        println("cannot read: ${err}")
+        return
+    }
+    println(content)
+
+    // Write a file
+    werr = file.write("output.txt", "hello")
+    if werr != "" {
+        println("cannot write: ${werr}")
+        return
     }
 
-    dir.create("output")
+    // Get size
+    size, serr = file.size("data.txt")
+    if serr == "" {
+        println("size: ${size} bytes")
+    }
+
+    // Create a directory
+    derr = dir.create("output")
+    if derr != "" {
+        println("cannot mkdir: ${derr}")
+    }
 }
 ```
 
-### File Operations
+### File Operations (Go-style)
 
-- `file.open(path, mode)` - Open a file (returns File*)
-- `file.close(file)` - Close a file
-- `file.read_all(file)` - Read entire file contents
-- `file.write(file, data, length)` - Write data to file
-- `file.exists(path)` - Check if file exists (returns 1 or 0)
-- `file.size(path)` - Get file size in bytes
-- `file.delete(path)` - Delete a file
+- `file.read(path)` → `(string, string)` - Read entire file (opens, reads, closes)
+- `file.write(path, content)` → `string` - Write content, return error string
+- `file.open(path, mode)` → `(ptr, string)` - Low-level open (caller must `file.close`)
+- `file.close(handle)` - Close a file handle
+- `file.size(path)` → `(int, string)` - Get file size in bytes
+- `file.delete(path)` → `string` - Delete a file, return error string
+- `file.exists(path)` → `int` - 1 if exists, 0 otherwise (infallible predicate)
 
-### Directory Operations
+Raw externs: `file_open_raw`, `file_read_all_raw`, `file_write_raw`, `file_delete_raw`, `file_size_raw`.
 
-- `dir.exists(path)` - Check if directory exists
-- `dir.create(path)` - Create a directory
-- `dir.delete(path)` - Delete an empty directory
-- `dir.list(path)` - List directory contents (returns DirList*)
-- `dir.list_free(list)` - Free directory listing
+### Directory Operations (Go-style)
+
+- `dir.create(path)` → `string` - Create directory, return error string
+- `dir.delete(path)` → `string` - Delete empty directory, return error string
+- `dir.list(path)` → `(ptr, string)` - List contents (caller must `dir.list_free`)
+- `dir.exists(path)` → `int` - 1 if exists, 0 otherwise
+- `dir.list_count(list)` / `dir.list_get(list, i)` / `dir.list_free(list)` - DirList accessors
+
+Raw externs: `dir_create_raw`, `dir_delete_raw`, `dir_list_raw`.
 
 ### Path Utilities
 
@@ -203,22 +248,38 @@ println("Value: ${x}")         // string interpolation
 println("Float: ${pi}")
 ```
 
-### Additional I/O
+### Console Output (infallible)
 
 - `io.print(str)` - Print string
 - `io.print_line(str)` - Print string with newline
 - `io.print_int(value)` - Print integer
 - `io.print_float(value)` - Print float
-- `io.read_file(path)` - Read entire file as a string (print directly with `println(content)`)
-- `io.write_file(path, content)` - Write to file
-- `io.append_file(path, content)` - Append to file
-- `io.file_exists(path)` - Check if file exists (returns 1/0)
-- `io.delete_file(path)` - Delete file
-- `io.file_info(path)` - Get file metadata (returns ptr)
-- `io.file_info_free(info)` - Free file info
-- `io.getenv(name)` - Get environment variable as a string (print directly with `println(value)`)
-- `io.setenv(name, value)` - Set environment variable
-- `io.unsetenv(name)` - Unset environment variable
+
+### File I/O (Go-style)
+
+All operations that can fail return an error string ("" on success).
+
+```aether
+content, err = io.read_file("data.txt")
+if err != "" { println("failed: ${err}"); return }
+
+werr = io.write_file("output.txt", "hello")
+```
+
+- `io.read_file(path)` → `(string, string)` - Read entire file
+- `io.write_file(path, content)` → `string` - Write (overwrites)
+- `io.append_file(path, content)` → `string` - Append to file
+- `io.delete_file(path)` → `string` - Delete file
+- `io.file_info(path)` → `(ptr, string)` - Get file metadata (caller must `io.file_info_free`)
+- `io.file_exists(path)` → `int` - 1 if exists, 0 otherwise
+
+### Environment variables
+
+- `io.getenv(name)` → `string` - Returns the value, or null if unset (infallible)
+- `io.setenv(name, value)` → `string` - Set env var, return error string
+- `io.unsetenv(name)` → `string` - Unset env var, return error string
+
+Raw externs: `io_read_file_raw`, `io_write_file_raw`, `io_append_file_raw`, `io_delete_file_raw`, `io_file_info_raw`, `io_setenv_raw`, `io_unsetenv_raw`.
 
 ---
 
@@ -288,9 +349,11 @@ main() {
 
 ### JSON Functions
 
-- `json.parse(str)` - Parse JSON string
-- `json.stringify(value)` - Convert to JSON string
+- `json.parse(str)` → `(ptr, string)` - Parse JSON, returns `(value, err)` tuple. Caller owns the returned value and must `json.free` it.
+- `json.stringify(value)` → `string` - Convert to JSON string (infallible)
 - `json.free(value)` - Free JSON value
+
+Raw extern: `json_parse_raw`.
 - `json.create_object()` - Create empty object
 - `json.create_array()` - Create empty array
 - `json.create_string(str)` - Create string value
@@ -321,49 +384,49 @@ main() {
 
 ## Networking Library
 
-### HTTP Client
+### HTTP Client (Go-style)
 
 ```aether
 import std.http
 
 main() {
-    response = http.get("http://example.com")
-
-    // http.get always returns a non-null response unless out of memory,
-    // so `response != 0` is NOT a success check. Use http.response_ok
-    // (true when transport succeeded AND status is 2xx) or inspect the
-    // error accessor directly.
-    if http.response_ok(response) == 1 {
-        status = http.response_status(response)
-        body = http.response_body(response)
-        println("ok (${status}): ${body}")
-    } else {
-        err = http.response_error(response)
-        if err != "" {
-            println("transport error: ${err}")
-        } else {
-            println("http error: ${http.response_status(response)}")
-        }
+    body, err = http.get("http://example.com")
+    if err != "" {
+        println("failed: ${err}")
+        return
     }
-
-    http.response_free(response)
+    println(body)
 }
 ```
 
 See `examples/stdlib/http-client.ae` for a runnable version.
 
-### HTTP Functions
+### HTTP Client Functions
 
-- `http.get(url)` - HTTP GET request
-- `http.post(url, body, content_type)` - HTTP POST request
-- `http.put(url, body, content_type)` - HTTP PUT request
-- `http.delete(url)` - HTTP DELETE request
-- `http.response_free(response)` - Free response
+- `http.get(url)` → `(string, string)` - HTTP GET, auto-frees response
+- `http.post(url, body, content_type)` → `(string, string)` - HTTP POST
+- `http.put(url, body, content_type)` → `(string, string)` - HTTP PUT
+- `http.delete(url)` → `(string, string)` - HTTP DELETE
+
+All wrappers return `("", err)` for transport failures and for any non-2xx HTTP status. If you need status codes or headers, use the raw extern + accessor pattern:
+
+```aether
+response = http.get_raw(url)
+status = http.response_status(response)
+body = http.response_body(response)
+http.response_free(response)
+```
+
+Raw externs: `http_get_raw`, `http_post_raw`, `http_put_raw`, `http_delete_raw`.
+
+Response accessors (used with the raw API):
+
 - `http.response_status(response)` - Read HTTP status code (0 on transport failure)
-- `http.response_body(response)` - Read response body as string ("" if none)
-- `http.response_headers(response)` - Read response headers as string ("" if none)
-- `http.response_error(response)` - Read transport error string ("" on success)
+- `http.response_body(response)` - Read response body as string
+- `http.response_headers(response)` - Read response headers as string
+- `http.response_error(response)` - Read transport error string
 - `http.response_ok(response)` - 1 if transport succeeded AND status is 2xx, else 0
+- `http.response_free(response)` - Free response
 
 ### HTTP Server
 
@@ -372,17 +435,26 @@ import std.http
 
 main() {
     server = http.server_create(8080)
-    http.server_bind(server, "127.0.0.1", 8080)
-    http.server_start(server)  // Blocks
+
+    berr = http.server_bind(server, "127.0.0.1", 8080)
+    if berr != "" {
+        println("bind failed: ${berr}")
+        return
+    }
+
+    serr = http.server_start(server)  // Blocks
+    if serr != "" {
+        println("start failed: ${serr}")
+    }
     http.server_free(server)
 }
 ```
 
 ### Server Functions
 
-- `http.server_create(port)` - Create server
-- `http.server_bind(server, host, port)` - Bind to address
-- `http.server_start(server)` - Start serving (blocking)
+- `http.server_create(port)` - Create server (never fails)
+- `http.server_bind(server, host, port)` → `string` - Bind to address, return error string
+- `http.server_start(server)` → `string` - Start serving (blocking), return error string
 - `http.server_stop(server)` - Stop server
 - `http.server_free(server)` - Free server
 - `http.server_get(server, path, handler, data)` - Register GET handler
@@ -391,15 +463,23 @@ main() {
 - `http.response_set_status(res, code)` - Set status code
 - `http.response_set_header(res, name, value)` - Set header
 
-### TCP Sockets
+Raw externs: `http_server_bind_raw`, `http_server_start_raw`.
 
-- `tcp.connect(host, port)` - Connect to server
-- `tcp.send(sock, data)` - Send data
-- `tcp.receive(sock, max_bytes)` - Receive data
-- `tcp.close(sock)` - Close socket
-- `tcp.listen(port)` - Create listening server socket
-- `tcp.accept(server)` - Accept connection
+### TCP Sockets (Go-style)
+
+> Note: `send` and `receive` are reserved actor keywords in Aether, so
+> the TCP wrappers use `write`/`read` instead. The raw externs retain
+> the `send_raw`/`receive_raw` naming.
+
+- `tcp.connect(host, port)` → `(ptr, string)` - Connect, return `(socket, err)`
+- `tcp.write(sock, data)` → `(int, string)` - Write, return `(bytes, err)`
+- `tcp.read(sock, max_bytes)` → `(string, string)` - Read, return `(data, err)`
+- `tcp.listen(port)` → `(ptr, string)` - Create listening socket
+- `tcp.accept(server)` → `(ptr, string)` - Accept connection
+- `tcp.close(sock)` - Close socket (infallible)
 - `tcp.server_close(server)` - Close server socket
+
+Raw externs: `tcp_connect_raw`, `tcp_send_raw`, `tcp_receive_raw`, `tcp_listen_raw`, `tcp_accept_raw`.
 
 ---
 
@@ -422,14 +502,16 @@ main() {
 
 ### ArrayList Functions
 
-- `list.new()` - Create new list
-- `list.add(list, item)` - Add item
-- `list.get(list, index)` - Get item
-- `list.set(list, index, item)` - Set item
-- `list.remove(list, index)` - Remove item
+- `list.new()` - Create new list (never fails)
+- `list.add(list, item)` → `string` - Append item, return error string (non-empty on resize/OOM)
+- `list.get(list, index)` - Get item (returns null for out-of-bounds)
+- `list.set(list, index, item)` - Set item at index
+- `list.remove(list, index)` - Remove item at index
 - `list.size(list)` - Get size
 - `list.clear(list)` - Clear all items
 - `list.free(list)` - Free list
+
+Raw extern: `list_add_raw` (returns 1/0).
 
 ### HashMap
 
@@ -448,14 +530,16 @@ main() {
 
 ### HashMap Functions
 
-- `map.new()` - Create new map
-- `map.put(map, key, value)` - Put key-value pair
-- `map.get(map, key)` - Get value by key
+- `map.new()` - Create new map (never fails)
+- `map.put(map, key, value)` → `string` - Put key-value pair, return error string (non-empty on resize/OOM)
+- `map.get(map, key)` - Get value by key (returns null if missing)
 - `map.remove(map, key)` - Remove key
 - `map.has(map, key)` - Check if key exists
 - `map.size(map)` - Get number of entries
 - `map.clear(map)` - Clear all entries
 - `map.free(map)` - Free map
+
+Raw extern: `map_put_raw` (returns 1/0).
 
 ---
 
@@ -465,7 +549,11 @@ main() {
 import std.log
 
 main() {
-    log.init("app.log", 0)  // 0 = DEBUG level
+    err = log.init("app.log", 0)  // 0 = DEBUG level
+    if err != "" {
+        println("cannot open log file: ${err}")
+        // falls back to stderr automatically
+    }
 
     log.write(0, "Debug message")
     log.write(1, "Info message")
@@ -479,7 +567,7 @@ main() {
 
 ### Logging Functions
 
-- `log.init(filename, level)` - Initialize logging to file with minimum level
+- `log.init(filename, level)` → `string` - Initialize logging, return error string if the log file could not be opened (logging still falls back to stderr)
 - `log.shutdown()` - Shutdown logging
 - `log.write(level, message)` - Write a log message at the given level
 - `log.set_level(level)` - Set minimum level
@@ -487,6 +575,8 @@ main() {
 - `log.set_timestamps(enabled)` - Enable/disable timestamps (1/0)
 - `log.get_stats()` - Get logging statistics
 - `log.print_stats()` - Print logging statistics
+
+Raw extern: `log_init_raw` (returns 1/0).
 
 ### Log Levels
 

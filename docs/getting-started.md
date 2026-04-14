@@ -275,22 +275,33 @@ main() {
 ```
 
 Functions are called using **namespace-style syntax**: `namespace.function()`.
+Stdlib functions that can fail return Go-style `(value, err)` tuples —
+check `err` first, then use `value`:
+
+```aether
+body, err = http.get("http://example.com")
+if err != "" { println("failed: ${err}"); return }
+println(body)
+```
 
 | Import | Namespace | Example |
 |--------|-----------|---------|
-| `import std.string` | `string` | `string.new("hello")`, `string.length(s)` |
-| `import std.file` | `file` | `file.open("f", "r")`, `file.exists("f")` |
-| `import std.dir` | `dir` | `dir.create("d")`, `dir.exists("d")` |
+| `import std.string` | `string` | `string.new("hello")`, `n, err = string.to_int("42")` |
+| `import std.file` | `file` | `content, err = file.read("f")`, `file.exists("f")` |
+| `import std.dir` | `dir` | `err = dir.create("d")`, `dir.exists("d")` |
 | `import std.path` | `path` | `path.join("a", "b")`, `path.basename("a/b")` |
-| `import std.list` | `list` | `list.new()`, `list.add()`, `list.get()` |
-| `import std.map` | `map` | `map.new()`, `map.put()`, `map.get()` |
-| `import std.json` | `json` | `json.parse(str)`, `json.create_object()` |
+| `import std.list` | `list` | `list.new()`, `err = list.add(l, item)` |
+| `import std.map` | `map` | `map.new()`, `err = map.put(m, k, v)` |
+| `import std.json` | `json` | `v, err = json.parse(str)`, `json.create_object()` |
 | `import std.math` | `math` | `math.abs_int(x)`, `math.sqrt(x)` |
-| `import std.http` | `http` | `http.get(url)`, `http.server_create(port)` |
-| `import std.tcp` | `tcp` | `tcp.connect(host, port)`, `tcp.send()` |
-| `import std.log` | `log` | `log.init("app")`, `log.write()` |
-| `import std.io` | `io` | `io.read_file("f")`, `io.getenv("HOME")` |
-| `import std.os` | `os` | `os.exec("ls")`, `os.system("cmd")` |
+| `import std.http` | `http` | `body, err = http.get(url)`, `http.server_create(port)` |
+| `import std.tcp` | `tcp` | `sock, err = tcp.connect(host, port)`, `tcp.write(sock, data)` |
+| `import std.log` | `log` | `err = log.init("app.log", 0)`, `log.write(0, msg)` |
+| `import std.io` | `io` | `content, err = io.read_file("f")`, `io.getenv("HOME")` |
+| `import std.os` | `os` | `out, err = os.exec("ls")`, `os.system("cmd")` |
+
+Raw externs are preserved under a `_raw` suffix (e.g. `http.get_raw`) for
+advanced callers who need direct access to the underlying ptr or status code.
 
 ### Creating Your Own Modules
 
@@ -356,27 +367,38 @@ See [stdlib-api.md](stdlib-api.md) for the full API reference.
 > regular string — you can `print()` it, use it in `"${interpolation}"`, or pass it in messages
 > directly. No conversion needed.
 
-### Memory Management
+### Error Handling and Memory
 
-Some stdlib functions return heap-allocated strings (`io.getenv()`, `io.read_file()`, `os.exec()`, `os.getenv()`, `file.read_all()`, `json.stringify()`, `json.get_string()`, etc.). Use `defer free()` to release them:
+Stdlib functions that can fail return a Go-style `(value, err)` tuple.
+Check the error string first, then use the value. The wrappers auto-free
+any heap allocations, so you don't need `defer free()` for stdlib returns:
 
 ```aether
 import std.io
 
 main() {
+    // io.getenv is infallible; returns null if unset
     home = io.getenv("HOME")
-    defer free(home)
-    println(home)
+    if home != 0 {
+        println(home)
+    }
 
-    content = io.read_file("data.txt")
-    defer free(content)
+    // io.read_file is Go-style
+    content, err = io.read_file("data.txt")
+    if err != "" {
+        println("cannot read: ${err}")
+        return
+    }
     println(content)
 }
 ```
 
-`free()` is a language builtin — no import needed. `defer` ensures the memory is released when the enclosing scope exits, even if the function returns early.
+`free()` is still a language builtin for manually-allocated memory
+(e.g. `make`, `list.new`, `map.new`). `defer free(...)` or `defer
+list.free(...)` ensure cleanup on scope exit.
 
-For `std.string` managed strings (`string.new()`, `string.to_upper()`, etc.), use `defer string.release(s)` instead.
+For `std.string` managed strings (`string.new()`, `string.to_upper()`, etc.),
+use `defer string.release(s)` for reference counting.
 
 ## Pattern Matching
 

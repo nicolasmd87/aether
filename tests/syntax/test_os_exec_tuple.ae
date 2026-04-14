@@ -1,0 +1,35 @@
+// Test: std.os.exec Go-style tuple wrapper.
+
+import std.os
+
+main() {
+    // Happy path: echo is universally available
+    output, err = os.exec("echo hello")
+    if err != "" {
+        println("FAIL: echo failed: ${err}")
+        exit(1)
+    }
+    if output == "" {
+        println("FAIL: echo produced empty output")
+        exit(1)
+    }
+
+    // Command with arguments
+    output2, err2 = os.exec("echo -n aether")
+    if err2 != "" {
+        println("FAIL: echo -n: ${err2}")
+        exit(1)
+    }
+
+    // Nonexistent command: popen typically succeeds (forks shell) and
+    // returns empty output. The wrapper returns ("", "") in this case,
+    // which is OK — we can't reliably detect command-not-found via popen.
+    // Just verify it doesn't crash.
+    _, _ = os.exec("aether_nonexistent_cmd_12345_xyz")
+
+    // Silence unused-var warning
+    _ = output
+    _ = output2
+
+    println("os exec tuple ok")
+}

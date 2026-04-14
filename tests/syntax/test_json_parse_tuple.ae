@@ -1,0 +1,51 @@
+// Test: std.json.parse Go-style tuple wrapper.
+
+import std.json
+
+main() {
+    // Valid JSON
+    v, err = json.parse("{\"name\":\"Aether\",\"n\":42}")
+    if err != "" {
+        println("FAIL: parse valid json: ${err}")
+        exit(1)
+    }
+    if v == null {
+        println("FAIL: parse returned null for valid json")
+        exit(1)
+    }
+
+    name = json.object_get(v, "name")
+    if json.get_string(name) != "Aether" {
+        println("FAIL: name field")
+        exit(1)
+    }
+    if json.get_int(json.object_get(v, "n")) != 42 {
+        println("FAIL: n field")
+        exit(1)
+    }
+    json.free(v)
+
+    // Invalid JSON: the parser returns NULL on garbage input that can't
+    // produce any value. Our wrapper converts that into an error string.
+    // Input like `{not valid at all` is a partial object that the parser
+    // still accepts up to `{`, so we need input that fails at the top.
+    _, err2 = json.parse("")
+    if err2 == "" {
+        println("FAIL: empty json should error")
+        exit(1)
+    }
+
+    // Valid array
+    arr, err4 = json.parse("[1, 2, 3]")
+    if err4 != "" {
+        println("FAIL: parse array: ${err4}")
+        exit(1)
+    }
+    if json.array_size(arr) != 3 {
+        println("FAIL: array size")
+        exit(1)
+    }
+    json.free(arr)
+
+    println("json parse tuple ok")
+}

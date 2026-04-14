@@ -5,11 +5,11 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under the topmost `## [X.Y.Z]` section. When a
-PR merges to `main`, the release pipeline bumps the version placeholder to
-the next version before tagging the release.
+**Workflow**: New changes go under `## [current]`. When a PR merges to
+`main`, the release pipeline automatically replaces `[current]` with the
+next version number before tagging the release.
 
-## [0.51.0]
+## [current]
 
 ### Changed (breaking)
 
@@ -20,7 +20,7 @@ the next version before tagging the release.
   - `std.string`: `value, err = string.to_int(s)` and the same for `to_long`, `to_float`, `to_double`. Replaces the out-parameter anti-pattern (`string_to_int(str, &out)`). Raw externs renamed: `string_to_int_raw`, `string_to_long_raw`, `string_to_float_raw`, `string_to_double_raw`. Supporting C shims `string_try_int`/`string_get_int` (and the four variants) split the parse into a validity check plus a value extractor so the wrapper can use tuple returns.
   - `std.json`: `value, err = json.parse(json_str)`. Raw extern renamed: `json_parse_raw`.
   - `std.os`: `output, err = os.exec(cmd)`. Raw extern renamed: `os_exec_raw`. `os_system` still returns an exit code by the POSIX convention.
-  - `std.tcp` / `std.net`: `sock, err = tcp.connect(host, port)`, `n, err = tcp.send(sock, data)`, `data, err = tcp.receive(sock, max)`, `server, err = tcp.listen(port)`, `sock, err = tcp.accept(server)`. Raw externs renamed: `tcp_connect_raw`, `tcp_send_raw`, `tcp_receive_raw`, `tcp_listen_raw`, `tcp_accept_raw`.
+  - `std.tcp` / `std.net`: `sock, err = tcp.connect(host, port)`, `n, err = tcp.write(sock, data)`, `data, err = tcp.read(sock, max)`, `server, err = tcp.listen(port)`, `sock, err = tcp.accept(server)`. Raw externs renamed: `tcp_connect_raw`, `tcp_send_raw`, `tcp_receive_raw`, `tcp_listen_raw`, `tcp_accept_raw`. (Byte-transfer wrappers are named `write`/`read` because `send` and `receive` are reserved actor keywords in Aether.)
   - `std.dir` / `std.fs`: `err = dir.create(path)`, `err = dir.delete(path)`, `list, err = dir.list(path)`. Raw externs renamed: `dir_create_raw`, `dir_delete_raw`, `dir_list_raw`.
   - `std.fs`: `list, err = fs.glob(pattern)`, `list, err = fs.glob_multi(patterns)`. Raw externs renamed: `fs_glob_raw`, `fs_glob_multi_raw`.
   - `std.list` / `std.collections`: `err = list.add(list, item)`. Previously silent void; now returns an error string on resize/OOM failure. Raw extern renamed: `list_add_raw` (returns `int` 1/0 for success/failure).

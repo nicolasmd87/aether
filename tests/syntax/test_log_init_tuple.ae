@@ -1,0 +1,26 @@
+// Test: std.log.init Go-style wrapper.
+
+import std.log
+
+main() {
+    // Init with a writable path succeeds
+    err = log.init("/tmp/aether_test_log_init_tuple.log", 1)
+    if err != "" {
+        println("FAIL: init with writable path: ${err}")
+        exit(1)
+    }
+
+    log.write(1, "test message")
+    log.shutdown()
+
+    // Init with an unwritable path (nonexistent directory) should report
+    // an error but logging still falls back to stderr under the hood.
+    err2 = log.init("/nonexistent/aether/path/log.log", 1)
+    if err2 == "" {
+        println("FAIL: init with unwritable path should error")
+        exit(1)
+    }
+    log.shutdown()
+
+    println("log init tuple ok")
+}
