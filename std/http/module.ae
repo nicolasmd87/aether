@@ -14,6 +14,9 @@ extern http_post(url: string, body: string, content_type: string) -> ptr
 extern http_put(url: string, body: string, content_type: string) -> ptr
 extern http_delete(url: string) -> ptr
 extern http_response_free(response: ptr)
+extern http_response_status_code(response: ptr) -> int
+extern http_response_body_str(response: ptr) -> string
+extern http_response_headers_str(response: ptr) -> string
 
 // HTTP Server - lifecycle
 extern http_server_create(port: int) -> ptr
@@ -23,6 +26,7 @@ extern http_server_stop(server: ptr)
 extern http_server_free(server: ptr)
 
 // HTTP Server - routing
+extern http_server_add_route(server: ptr, method: string, path: string, handler: ptr, user_data: ptr)
 extern http_server_get(server: ptr, path: string, handler: ptr, user_data: ptr)
 extern http_server_post(server: ptr, path: string, handler: ptr, user_data: ptr)
 extern http_server_put(server: ptr, path: string, handler: ptr, user_data: ptr)
@@ -53,3 +57,8 @@ extern http_request_method(req: ptr) -> string
 extern http_request_path(req: ptr) -> string
 extern http_request_body(req: ptr) -> string
 extern http_request_query(req: ptr) -> string
+
+// Static file serving
+extern http_serve_static(req: ptr, res: ptr, base_dir: string)
+extern http_serve_file(res: ptr, filepath: string)
+extern http_mime_type(path: string) -> string

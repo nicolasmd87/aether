@@ -1,0 +1,41 @@
+// Static File Serving Example — MIME detection, traversal protection, index.html fallback
+
+import contrib.tinyweb
+
+main() {
+    println("=== TinyWeb Static File Server ===\n")
+
+    server = web_server_host("localhost", 8080) {
+
+        serve_static("/static", ".")
+
+        end_point(GET, "/") |req: ptr, res: ptr, ctx: ptr| {
+            response_set_header(res, "Content-Type", "text/html")
+            response_write(res, "<!DOCTYPE html>
+<html>
+<head><title>Static File Server</title></head>
+<body>
+  <h1>TinyWeb Static File Server</h1>
+  <p>Try these links:</p>
+  <ul>
+    <li><a href=\"/static/README.md\">/static/README.md</a></li>
+    <li><a href=\"/static/module.ae\">/static/module.ae</a></li>
+  </ul>
+</body>
+</html>")
+        }
+
+        end_point(GET, "/api/health") |req: ptr, res: ptr, ctx: ptr| {
+            response_json(res, "{\"status\":\"ok\"}")
+        }
+    }
+
+    println("Starting server on localhost:8080...")
+    println("  http://localhost:8080/              — index page")
+    println("  http://localhost:8080/static/...    — static files from cwd")
+    println("  http://localhost:8080/api/health    — JSON health check")
+
+    result = server_start(server)
+    if result != 0 { println("ERROR: Failed to start server") }
+    server_stop(server)
+}

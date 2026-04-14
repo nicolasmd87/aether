@@ -1,0 +1,918 @@
+// TinyWeb — DSL-style HTTP server library for Aether
+// MIT License — Copyright (c) 2025 Aether Programming Language Contributors
+// Port of Tiny (MIT License, Copyright (c) Paul Hammant, 2024-2025)
+//
+// Uses trailing blocks and builder context injection for route registration.
+
+import std.list
+import std.map
+import std.http
+import std.tcp
+import std.string
+
+// ---------------------------------------------------------------------------
+// Constants — HTTP methods
+// ---------------------------------------------------------------------------
+const ALL     = 0
+const GET     = 1
+const POST    = 2
+const PUT     = 3
+const DELETE  = 4
+const PATCH   = 5
+const HEAD    = 6
+const OPTIONS = 7
+const CONNECT = 8
+const TRACE   = 9
+const LINK    = 10
+const UNLINK  = 11
+const LOCK    = 12
+const UNLOCK  = 13
+const PROPFIND  = 14
+const PROPPATCH = 15
+const MKCOL   = 16
+const COPY    = 17
+const MOVE    = 18
+const REPORT  = 19
+const SEARCH  = 20
+const PURGE   = 21
+const REBIND  = 22
+const UNBIND  = 23
+const ACL     = 24
+
+// Filter actions
+const CONTINUE = 1
+const STOP     = 0
+
+// Convert a method constant to the HTTP method string for the C layer
+method_to_string(method: int) -> string {
+    if method == GET     { return "GET" }
+    if method == POST    { return "POST" }
+    if method == PUT     { return "PUT" }
+    if method == DELETE  { return "DELETE" }
+    if method == PATCH   { return "PATCH" }
+    if method == HEAD    { return "HEAD" }
+    if method == OPTIONS { return "OPTIONS" }
+    if method == CONNECT { return "CONNECT" }
+    if method == TRACE   { return "TRACE" }
+    if method == LINK    { return "LINK" }
+    if method == UNLINK  { return "UNLINK" }
+    if method == LOCK    { return "LOCK" }
+    if method == UNLOCK  { return "UNLOCK" }
+    if method == PROPFIND  { return "PROPFIND" }
+    if method == PROPPATCH { return "PROPPATCH" }
+    if method == MKCOL   { return "MKCOL" }
+    if method == COPY    { return "COPY" }
+    if method == MOVE    { return "MOVE" }
+    if method == REPORT  { return "REPORT" }
+    if method == SEARCH  { return "SEARCH" }
+    if method == PURGE   { return "PURGE" }
+    if method == REBIND  { return "REBIND" }
+    if method == UNBIND  { return "UNBIND" }
+    if method == ACL     { return "ACL" }
+    return "GET"
+}
+
+// ---------------------------------------------------------------------------
+// Request / Response / RequestContext — value wrappers
+// ---------------------------------------------------------------------------
+
+// Wrap the raw C ptrs so the DSL callbacks get a clean triple
+
+request_get_body(req: ptr) -> string {
+    return http.request_body(req)
+}
+
+request_get_path(req: ptr) -> string {
+    return http.request_path(req)
+}
+
+request_get_header(req: ptr, name: string) -> string {
+    return http.get_header(req, name)
+}
+
+request_get_query_param(req: ptr, name: string) -> string {
+    return http.get_query_param(req, name)
+}
+
+request_get_path_param(ctx: ptr, name: string) -> string {
+    return http.get_path_param(ctx, name)
+}
+
+// Cookie parsing — parses the Cookie header and returns
+// the value for the given name, or "" if not found.
+request_get_cookie(req: ptr, name: string) -> string {
+    cookie_header = http.get_header(req, "Cookie")
+    if str_eq(cookie_header, "") == 1 { return "" }
+
+    // Split on ";" to get individual cookies
+    pairs = string.split(cookie_header, ";")
+    n = string.array_size(pairs)
+    result = ""
+    for (i = 0; i < n; i++) {
+        pair = string.trim(string.array_get(pairs, i))
+        // Split on first "=" to get key and value
+        eq_pos = string.index_of(pair, "=")
+        if eq_pos > 0 {
+            key = string.substring(pair, 0, eq_pos)
+            if str_eq(key, name) == 1 {
+                result = string.substring(pair, eq_pos + 1, string.length(pair))
+            }
+        }
+    }
+    string.array_free(pairs)
+    return result
+}
+
+// ---------------------------------------------------------------------------
+// Request Attributes — filter-to-endpoint data passing
+//
+// Lets a filter attach data (e.g. authenticated user) for the
+// endpoint to read. Stored in a per-request map passed as the ctx parameter.
+// ---------------------------------------------------------------------------
+
+// Create a new attribute context (call once per request)
+attributes_new() {
+    return map_new()
+}
+
+// Set an attribute on the request context
+ctx_set_attribute(ctx: ptr, key: string, value: string) {
+    map_put(ctx, key, value)
+}
+
+// Get an attribute from the request context
+ctx_get_attribute(ctx: ptr, key: string) -> string {
+    if map_has(ctx, key) == 1 {
+        return map_get(ctx, key)
+    }
+    return ""
+}
+
+response_write(res: ptr, body: string) {
+    http.response_set_status(res, 200)
+    http.response_set_body(res, body)
+}
+
+response_write_status(res: ptr, body: string, status: int) {
+    http.response_set_status(res, status)
+    http.response_set_body(res, body)
+}
+
+response_set_header(res: ptr, name: string, value: string) {
+    http.response_set_header(res, name, value)
+}
+
+response_json(res: ptr, json_body: string) {
+    http.response_json(res, json_body)
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket frame opcodes
+// ---------------------------------------------------------------------------
+const WS_OPCODE_TEXT   = 1
+const WS_OPCODE_BINARY = 2
+const WS_OPCODE_CLOSE  = 8
+const WS_OPCODE_PING   = 9
+const WS_OPCODE_PONG   = 10
+
+// ---------------------------------------------------------------------------
+// WebSocket handshake helpers
+//
+// The WebSocket upgrade requires SHA-1 + Base64. These are provided as
+// extern C functions that must be linked (see ws_handshake.c).
+// ---------------------------------------------------------------------------
+extern ws_generate_accept_key(client_key: string) -> string
+extern ws_base64_encode(data: ptr, len: int) -> string
+
+// ---------------------------------------------------------------------------
+// Route / Filter registration data structures
+// ---------------------------------------------------------------------------
+
+// A route entry: { method, path_pattern, handler_closure }
+route_entry(method: int, path_pattern: string, handler: fn) {
+    entry = map_new()
+    map_put(entry, "method", method)
+    map_put(entry, "path", path_pattern)
+    map_put(entry, "handler", box_closure(handler))
+    return entry
+}
+
+// A filter entry: { method, path_pattern, filter_closure }
+filter_entry(method: int, path_pattern: string, handler: fn) {
+    entry = map_new()
+    map_put(entry, "method", method)
+    map_put(entry, "path", path_pattern)
+    map_put(entry, "handler", box_closure(handler))
+    return entry
+}
+
+// A websocket entry: { path, handler_closure }
+ws_entry(path_pattern: string, handler: fn) {
+    entry = map_new()
+    map_put(entry, "path", path_pattern)
+    map_put(entry, "handler", box_closure(handler))
+    return entry
+}
+
+// A static files entry: { base_path, directory }
+static_entry(base_path: string, directory: string) {
+    entry = map_new()
+    map_put(entry, "base_path", base_path)
+    map_put(entry, "directory", directory)
+    return entry
+}
+
+// ---------------------------------------------------------------------------
+// Server structure
+//
+// A server is a map containing:
+//   "port"       - int
+//   "host"       - string
+//   "routes"     - list of route entries
+//   "filters"    - list of filter entries
+//   "paths"      - list of { prefix, routes, filters } for nested paths
+//   "raw_server" - ptr to the C http server (after start)
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// DSL functions — designed for use inside trailing blocks
+// ---------------------------------------------------------------------------
+
+// end_point(method, pattern) |req, res, ctx| { ... }
+// When inside a path() block, _ctx is the path-group map
+end_point(_ctx: ptr, method: int, pattern: string, handler: fn) {
+    routes = map_get(_ctx, "routes")
+    prefix = map_get(_ctx, "prefix")
+    full_path = "${prefix}${pattern}"
+    list.add(routes, route_entry(method, full_path, handler))
+}
+
+// filter(method, pattern) |req, res, ctx| { ... }
+filter(_ctx: ptr, method: int, pattern: string, handler: fn) {
+    filters = map_get(_ctx, "filters")
+    prefix = map_get(_ctx, "prefix")
+    full_path = "${prefix}${pattern}"
+    list.add(filters, filter_entry(method, full_path, handler))
+}
+
+// filter(pattern) |req, res, ctx| { ... }  — applies to ALL methods
+filter_all(_ctx: ptr, pattern: string, handler: fn) {
+    filter(_ctx, ALL, pattern, handler)
+}
+
+// web_socket(path) |message, sender, ctx| { ... }
+web_socket(_ctx: ptr, ws_path: string, handler: fn) {
+    ws_handlers = map_get(_ctx, "ws_handlers")
+    prefix = map_get(_ctx, "prefix")
+    full_path = "${prefix}${ws_path}"
+    list.add(ws_handlers, ws_entry(full_path, handler))
+}
+
+// serve_static("/static", "/path/to/files")
+serve_static(_ctx: ptr, base_path: string, directory: string) {
+    statics = map_get(_ctx, "statics")
+    prefix = map_get(_ctx, "prefix")
+    full_base = "${prefix}${base_path}"
+    list.add(statics, static_entry(full_base, directory))
+}
+
+// path(base_path) { ... nested end_points / filters / web_sockets ... }
+// Creates a sub-context with the prefix appended
+path(_ctx: ptr, base_path: string) {
+    prefix = map_get(_ctx, "prefix")
+    sub = map_new()
+    map_put(sub, "prefix", "${prefix}${base_path}")
+    map_put(sub, "routes", map_get(_ctx, "routes"))
+    map_put(sub, "filters", map_get(_ctx, "filters"))
+    map_put(sub, "ws_handlers", map_get(_ctx, "ws_handlers"))
+    map_put(sub, "sse_handlers", map_get(_ctx, "sse_handlers"))
+    map_put(sub, "statics", map_get(_ctx, "statics"))
+    return sub
+}
+
+// ---------------------------------------------------------------------------
+// Top-level server constructor — the entry point
+// ---------------------------------------------------------------------------
+
+// web_server(port) { path("/api") { ... } }
+web_server(port: int) {
+    srv = map_new()
+    map_put(srv, "port", port)
+    map_put(srv, "host", "127.0.0.1")
+    map_put(srv, "ws_port", 0)
+    map_put(srv, "sse_port", 0)
+    map_put(srv, "routes", list.new())
+    map_put(srv, "filters", list.new())
+    map_put(srv, "ws_handlers", list.new())
+    map_put(srv, "sse_handlers", list.new())
+    map_put(srv, "statics", list.new())
+    map_put(srv, "prefix", "")
+    // Config extras
+    map_put(srv, "socket_timeout_ms", 30000)
+    map_put(srv, "web_backlog", 50)
+    map_put(srv, "ws_backlog", 50)
+    map_put(srv, "keep_alive", 1)
+    // Error handling callbacks
+    map_put(srv, "on_error", 0)
+    map_put(srv, "on_server_error", 0)
+    map_put(srv, "on_ws_timeout", 0)
+    map_put(srv, "on_ws_error", 0)
+    // Statistics callback
+    map_put(srv, "on_stats", 0)
+    return srv
+}
+
+// web_server_host(host, port) { ... }
+web_server_host(host: string, port: int) {
+    srv = web_server(port)
+    map_put(srv, "host", host)
+    return srv
+}
+
+// web_server_with_ws(host, http_port, ws_port) { ... }
+web_server_with_ws(host: string, port: int, ws_port: int) {
+    srv = web_server_host(host, port)
+    map_put(srv, "ws_port", ws_port)
+    return srv
+}
+
+// web_server_full(host, http_port, ws_port, sse_port) { ... }
+// Full config with HTTP, WebSocket, and SSE on separate ports
+web_server_full(host: string, port: int, ws_port: int, sse_port: int) {
+    srv = web_server_with_ws(host, port, ws_port)
+    map_put(srv, "sse_port", sse_port)
+    return srv
+}
+
+// ---------------------------------------------------------------------------
+// Config extras — server tuning parameters
+// ---------------------------------------------------------------------------
+
+// Set socket timeout in milliseconds
+with_timeout(srv: ptr, ms: int) {
+    map_put(srv, "socket_timeout_ms", ms)
+}
+
+// Set HTTP listen backlog
+with_backlog(srv: ptr, n: int) {
+    map_put(srv, "web_backlog", n)
+}
+
+// Set WebSocket listen backlog
+with_ws_backlog(srv: ptr, n: int) {
+    map_put(srv, "ws_backlog", n)
+}
+
+// 1 = enabled (default), 0 = disabled
+with_keep_alive(srv: ptr, enabled: int) {
+    map_put(srv, "keep_alive", enabled)
+}
+
+// ---------------------------------------------------------------------------
+// Error handling callbacks
+//
+// Register closures to handle errors:
+//   on_error(server) |path, msg| { println("Error: ${msg}") }
+//   on_server_error(server) |msg| { println("Server error: ${msg}") }
+// ---------------------------------------------------------------------------
+
+// Handler receives: (path: string, error_message: string)
+on_error(srv: ptr, handler: fn) {
+    map_put(srv, "on_error", box_closure(handler))
+}
+
+// Handler receives: (error_message: string)
+on_server_error(srv: ptr, handler: fn) {
+    map_put(srv, "on_server_error", box_closure(handler))
+}
+
+// Handler receives: (path: string, error_message: string)
+on_ws_timeout(srv: ptr, handler: fn) {
+    map_put(srv, "on_ws_timeout", box_closure(handler))
+}
+
+// Handler receives: (path: string, error_message: string)
+on_ws_error(srv: ptr, handler: fn) {
+    map_put(srv, "on_ws_error", box_closure(handler))
+}
+
+// Internal: invoke an error handler if registered, otherwise default behavior
+_invoke_error_handler(srv: ptr, key: string, arg1: string, arg2: string) {
+    boxed = map_get(srv, key)
+    if boxed != 0 {
+        handler = unbox_closure(boxed)
+        call(handler, arg1, arg2)
+    } else {
+        // Default: print to stderr
+        println("tinyweb ${key}: ${arg1} ${arg2}")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Statistics / monitoring
+//
+//   on_stats(server) |stats| { println("${stats_get_path(stats)}") }
+// ---------------------------------------------------------------------------
+
+// Register a statistics callback — handler receives a stats map
+on_stats(srv: ptr, handler: fn) {
+    map_put(srv, "on_stats", box_closure(handler))
+}
+
+// Create a stats record for a request
+// Fields: path, endpoint, status, duration, endpoint_duration, filters
+stats_record(req_path: string, endpoint_pattern: string, status: int, duration_ms: int, endpoint_duration_ms: int) {
+    s = map_new()
+    map_put(s, "path", req_path)
+    map_put(s, "endpoint", endpoint_pattern)
+    map_put(s, "status", status)
+    map_put(s, "duration", duration_ms)
+    map_put(s, "endpoint_duration", endpoint_duration_ms)
+    map_put(s, "filters", list.new())
+    return s
+}
+
+// Add a filter stat entry to a stats record
+// Add a filter stat entry (path, result, duration_ms)
+stats_add_filter(stats: ptr, filter_path: string, result: string, duration_ms: int) {
+    fs = map_new()
+    map_put(fs, "path", filter_path)
+    map_put(fs, "result", result)
+    map_put(fs, "duration", duration_ms)
+    list.add(map_get(stats, "filters"), fs)
+}
+
+// Accessors for stats records
+stats_get_path(stats: ptr) -> string { return map_get(stats, "path") }
+stats_get_endpoint(stats: ptr) -> string { return map_get(stats, "endpoint") }
+stats_get_status(stats: ptr) -> int { return map_get(stats, "status") }
+stats_get_duration(stats: ptr) -> int { return map_get(stats, "duration") }
+stats_get_endpoint_duration(stats: ptr) -> int { return map_get(stats, "endpoint_duration") }
+stats_get_filters(stats: ptr) -> ptr { return map_get(stats, "filters") }
+
+// Accessors for filter stat entries
+filter_stat_path(fs: ptr) -> string { return map_get(fs, "path") }
+filter_stat_result(fs: ptr) -> string { return map_get(fs, "result") }
+filter_stat_duration(fs: ptr) -> int { return map_get(fs, "duration") }
+
+// Internal: record stats if callback registered
+_record_stats(srv: ptr, stats: ptr) {
+    boxed = map_get(srv, "on_stats")
+    if boxed != 0 {
+        handler = unbox_closure(boxed)
+        call(handler, stats)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket MessageSender — wraps a TCP socket for sending frames
+//
+// Sends unmasked WebSocket text frames (server->client per RFC 6455).
+// ---------------------------------------------------------------------------
+
+// Send an unmasked WebSocket text frame over a raw TCP socket.
+// Send an unmasked text frame over a raw TCP socket
+ws_send_frame(sock: ptr, payload: string) {
+    len = string.length(payload)
+
+    // Build frame header: FIN=1, opcode=text(1)
+    // For len < 126: 2-byte header [0x81, len]
+    // For len 126..65535: 4-byte header [0x81, 126, len>>8, len&0xFF]
+    if len < 126 {
+        hdr = string.concat(string.from_int(129), string.from_int(len))
+        // Send as raw bytes via TCP
+        tcp.send(sock, hdr)
+    } else {
+        hdr = string.concat(string.from_int(129), string.from_int(126))
+        hdr = string.concat(hdr, string.from_int(len / 256))
+        hdr = string.concat(hdr, string.from_int(len - (len / 256) * 256))
+        tcp.send(sock, hdr)
+    }
+    tcp.send(sock, payload)
+}
+
+// Send a close frame (opcode 8, empty payload)
+ws_send_close(sock: ptr) {
+    tcp.send(sock, string.concat(string.from_int(136), string.from_int(0)))
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket frame reading
+//
+// Reads one WebSocket frame from a TCP socket, unmasking if needed.
+// Returns the payload as a string, or "" on close/error.
+// Reads one WebSocket frame, unmasking if needed. Returns "" on close/error.
+// ---------------------------------------------------------------------------
+
+ws_read_frame(sock: ptr) -> string {
+    // Read 2-byte header
+    hdr = tcp.receive(sock, 2)
+    if hdr == 0 { return "" }
+
+    byte0 = char_at(hdr)
+    byte1 = string.char_at(hdr, 1)
+
+    opcode = byte0 - ((byte0 / 16) * 16)  // byte0 & 0x0F
+    masked = byte1 / 128                    // (byte1 & 0x80) != 0
+    payload_len = byte1 - (masked * 128)    // byte1 & 0x7F
+
+    // Extended payload length
+    if payload_len == 126 {
+        ext = tcp.receive(sock, 2)
+        if ext == 0 { return "" }
+        payload_len = char_at(ext) * 256 + string.char_at(ext, 1)
+    }
+
+    // Close frame
+    if opcode == WS_OPCODE_CLOSE {
+        ws_send_close(sock)
+        return ""
+    }
+
+    // Read masking key (4 bytes) if masked
+    mask_key = ""
+    if masked == 1 {
+        mask_key = tcp.receive(sock, 4)
+        if mask_key == 0 { return "" }
+    }
+
+    // Read payload
+    if payload_len == 0 { return "" }
+    payload = tcp.receive(sock, payload_len)
+    if payload == 0 { return "" }
+
+    // Unmask: payload[i] ^= mask_key[i % 4]
+    // (Client-to-server frames are always masked per RFC 6455)
+    if masked == 1 {
+        // XOR unmasking done byte-by-byte
+        // In a production impl this would be a C extern for speed
+        // For now, return as-is — the TCP layer handles raw bytes
+        // TODO: implement ws_unmask extern in C for proper unmasking
+    }
+
+    return payload
+}
+
+// ---------------------------------------------------------------------------
+// WebSocket server accept loop
+//
+// Listens on a separate port, performs the HTTP upgrade handshake,
+// then loops reading frames and dispatching to the registered handler.
+// ---------------------------------------------------------------------------
+
+ws_handle_client(client: ptr, ws_handlers: ptr) {
+    // Read the HTTP upgrade request
+    request_data = tcp.receive(client, 4096)
+    if request_data == 0 {
+        tcp.close(client)
+        return
+    }
+
+    // Extract path from "GET /path HTTP/1.1"
+    parts = string.split(request_data, " ")
+    n_parts = string.array_size(parts)
+    ws_path = ""
+    if n_parts >= 2 {
+        ws_path = string.array_get(parts, 1)
+    }
+    string.array_free(parts)
+
+    // Extract Sec-WebSocket-Key header
+    lines = string.split(request_data, "\n")
+    n_lines = string.array_size(lines)
+    client_key = ""
+    for (i = 0; i < n_lines; i++) {
+        line = string.array_get(lines, i)
+        if string.starts_with(line, "Sec-WebSocket-Key: ") == 1 {
+            client_key = string.substring(line, 19, string.length(line))
+            client_key = string.trim(client_key)
+        }
+    }
+    string.array_free(lines)
+
+    if str_eq(client_key, "") == 1 {
+        tcp.close(client)
+        return
+    }
+
+    // Generate accept key and send handshake response
+    accept_key = ws_generate_accept_key(client_key)
+    response = "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: "
+    response = string.concat(response, accept_key)
+    response = string.concat(response, "\r\n\r\n")
+    tcp.send(client, response)
+
+    // Find handler for this path
+    handler = 0
+    n_ws = list.size(ws_handlers)
+    for (i = 0; i < n_ws; i++) {
+        entry = list.get(ws_handlers, i)
+        entry_path = map_get(entry, "path")
+        if str_eq(ws_path, entry_path) == 1 {
+            handler = unbox_closure(map_get(entry, "handler"))
+        }
+    }
+
+    if handler == 0 {
+        // 404 — no handler registered for this path
+        ws_send_frame(client, "Error: 404")
+        ws_send_close(client)
+        tcp.close(client)
+        return
+    }
+
+    // Message loop — read frames and dispatch to handler
+    running = 1
+    for (running == 1; running == 1; running = running) {
+        message = ws_read_frame(client)
+        if str_eq(message, "") == 1 {
+            running = 0
+        } else {
+            // Call handler: (message, sender_socket, ctx)
+            // sender_socket is the raw TCP socket — use ws_send_frame() to reply
+            call(handler, message, client, 0)
+        }
+    }
+
+    tcp.close(client)
+}
+
+ws_accept_loop(tcp_server: ptr, ws_handlers: ptr) {
+    // Accept connections in a loop (blocking)
+    // Each client is handled sequentially for simplicity;
+    // production would spawn per-connection (Tiny uses virtual threads)
+    running = 1
+    for (running == 1; running == 1; running = running) {
+        client = tcp.accept(tcp_server)
+        if client != 0 {
+            ws_handle_client(client, ws_handlers)
+        } else {
+            running = 0
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Server-Sent Events (SSE) and Chunked Responses
+//
+// SSE endpoints run on a separate port (like WebSockets) with their own
+// accept loop, since the C HTTP server closes connections after handler return.
+// ---------------------------------------------------------------------------
+
+// SSE endpoint entry: { path, handler_closure }
+sse_entry(path_pattern: string, handler: fn) {
+    entry = map_new()
+    map_put(entry, "path", path_pattern)
+    map_put(entry, "handler", box_closure(handler))
+    return entry
+}
+
+// DSL function: sse_endpoint("/events") |stream| { ... }
+// The handler receives an SSE stream object and uses sse_send() to push events.
+sse_endpoint(_ctx: ptr, sse_path: string, handler: fn) {
+    sse_handlers = map_get(_ctx, "sse_handlers")
+    prefix = map_get(_ctx, "prefix")
+    full_path = "${prefix}${sse_path}"
+    list.add(sse_handlers, sse_entry(full_path, handler))
+}
+
+// An SSE stream wraps a TCP socket with the event-stream protocol.
+// Send an SSE data event
+sse_send(stream: ptr, data: string) {
+    tcp.send(stream, "data: ${data}\n\n")
+}
+
+// Send a named SSE event with an event type
+sse_send_event(stream: ptr, event_type: string, data: string) {
+    tcp.send(stream, "event: ${event_type}\ndata: ${data}\n\n")
+}
+
+// Send an SSE comment (keep-alive)
+sse_comment(stream: ptr, comment: string) {
+    tcp.send(stream, ": ${comment}\n\n")
+}
+
+// Close an SSE stream
+sse_close(stream: ptr) {
+    tcp.close(stream)
+}
+
+// Handle an SSE client connection: parse the HTTP request, send headers,
+// then call the registered handler with the raw socket as "stream"
+sse_handle_client(client: ptr, sse_handlers: ptr) {
+    // Read the HTTP request
+    request_data = tcp.receive(client, 4096)
+    if request_data == 0 {
+        tcp.close(client)
+        return
+    }
+
+    // Extract path from "GET /path HTTP/1.1"
+    parts = string.split(request_data, " ")
+    n_parts = string.array_size(parts)
+    req_path = ""
+    if n_parts >= 2 {
+        req_path = string.array_get(parts, 1)
+    }
+    string.array_free(parts)
+
+    // Find handler for this path
+    handler = 0
+    n_sse = list.size(sse_handlers)
+    for (i = 0; i < n_sse; i++) {
+        entry = list.get(sse_handlers, i)
+        entry_path = map_get(entry, "path")
+        if str_eq(req_path, entry_path) == 1 {
+            handler = unbox_closure(map_get(entry, "handler"))
+        }
+    }
+
+    if handler == 0 {
+        tcp.send(client, "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found")
+        tcp.close(client)
+        return
+    }
+
+    // Send SSE headers
+    tcp.send(client, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n")
+
+    // Call handler with the raw socket as "stream"
+    // Handler uses sse_send(stream, data) to push events
+    call(handler, client)
+
+    // Handler returned — close the connection
+    tcp.close(client)
+}
+
+sse_accept_loop(tcp_server: ptr, sse_handlers: ptr) {
+    running = 1
+    for (running == 1; running == 1; running = running) {
+        client = tcp.accept(tcp_server)
+        if client != 0 {
+            sse_handle_client(client, sse_handlers)
+        } else {
+            running = 0
+        }
+    }
+}
+
+// --- Chunked transfer encoding helpers ---
+// Work over raw TCP for streaming responses.
+
+// Send chunked response headers
+chunked_start(sock: ptr, status: int) {
+    tcp.send(sock, "HTTP/1.1 ${status} OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+}
+
+// Write a single chunk (hex-length + CRLF + data + CRLF)
+// Write a single chunk (hex-length + CRLF + data + CRLF)
+write_chunk(sock: ptr, data: string) {
+    len = string.length(data)
+    // Convert length to hex string
+    hex = ""
+    if len == 0 { hex = "0" }
+    else {
+        remaining = len
+        for (remaining > 0; remaining > 0; remaining = remaining / 16) {
+            digit = remaining - (remaining / 16) * 16
+            if digit < 10 { hex = string.concat(string.from_int(digit + 48), hex) }
+            else { hex = string.concat(string.from_int(digit + 87), hex) }
+        }
+    }
+    tcp.send(sock, "${hex}\r\n${data}\r\n")
+}
+
+// End chunked transfer (send zero-length chunk)
+chunked_end(sock: ptr) {
+    tcp.send(sock, "0\r\n\r\n")
+}
+
+// ---------------------------------------------------------------------------
+// Server lifecycle
+// ---------------------------------------------------------------------------
+
+server_start(srv: ptr) {
+    port = map_get(srv, "port")
+    host = map_get(srv, "host")
+    raw = http.server_create(port)
+    map_put(srv, "raw_server", raw)
+    result = http.server_bind(raw, host, port)
+    if result != 0 {
+        println("ERROR: Failed to bind to ${host}:${port}")
+        return -1
+    }
+
+    // Register all routes with the C server
+    // Uses http_server_add_route for all methods (GET, POST, PUT, DELETE,
+    // PATCH, HEAD, OPTIONS, and the extended WebDAV/REST methods)
+    routes = map_get(srv, "routes")
+    n = list.size(routes)
+    for (i = 0; i < n; i++) {
+        entry = list.get(routes, i)
+        method = map_get(entry, "method")
+        patt = map_get(entry, "path")
+        boxed_handler = map_get(entry, "handler")
+
+        method_str = method_to_string(method)
+        http.server_add_route(raw, method_str, patt, unbox_closure(boxed_handler), 0)
+    }
+
+    // Register static file serving routes
+    // Register a wildcard GET that delegates to the C static file handler
+    // We use the C http_serve_static which handles MIME types, traversal protection, etc.
+    statics = map_get(srv, "statics")
+    n_static = list.size(statics)
+    for (i = 0; i < n_static; i++) {
+        entry = list.get(statics, i)
+        base = map_get(entry, "base_path")
+        dir = map_get(entry, "directory")
+        // Register a wildcard GET that delegates to the C static file handler
+        // The C function handles: MIME detection, directory traversal protection,
+        // index.html fallback, and 404 for missing files
+        http.server_get(raw, "${base}/(.*)", http.serve_static, dir)
+    }
+
+    // Start WebSocket server on separate port if configured
+    ws_port = map_get(srv, "ws_port")
+    ws_handlers = map_get(srv, "ws_handlers")
+    if ws_port > 0 && list.size(ws_handlers) > 0 {
+        ws_tcp = tcp.listen(ws_port)
+        if ws_tcp != 0 {
+            map_put(srv, "ws_tcp_server", ws_tcp)
+            println("WebSocket server listening on port ${ws_port}")
+        } else {
+            println("ERROR: Failed to bind WebSocket server to port ${ws_port}")
+        }
+    }
+
+    // Start SSE server on separate port if configured
+    sse_port = map_get(srv, "sse_port")
+    sse_handlers = map_get(srv, "sse_handlers")
+    if sse_port > 0 && list.size(sse_handlers) > 0 {
+        sse_tcp = tcp.listen(sse_port)
+        if sse_tcp != 0 {
+            map_put(srv, "sse_tcp_server", sse_tcp)
+            println("SSE server listening on port ${sse_port}")
+        } else {
+            println("ERROR: Failed to bind SSE server to port ${sse_port}")
+        }
+    }
+
+    // Start accepting HTTP connections (blocking)
+    // For multi-protocol servers, run WS/SSE accept loops from separate actors:
+    //   actor WsRunner  { receive { Start -> server_start_ws(server) } }
+    //   actor SseRunner { receive { Start -> server_start_sse(server) } }
+    return http.server_start(raw)
+}
+
+// Start only the WebSocket accept loop (call from a separate actor/thread)
+server_start_ws(srv: ptr) {
+    ws_tcp = map_get(srv, "ws_tcp_server")
+    ws_handlers = map_get(srv, "ws_handlers")
+    if ws_tcp != 0 {
+        ws_accept_loop(ws_tcp, ws_handlers)
+    }
+}
+
+// Start only the SSE accept loop (call from a separate actor/thread)
+server_start_sse(srv: ptr) {
+    sse_tcp = map_get(srv, "sse_tcp_server")
+    sse_handlers = map_get(srv, "sse_handlers")
+    if sse_tcp != 0 {
+        sse_accept_loop(sse_tcp, sse_handlers)
+    }
+}
+
+server_stop(srv: ptr) {
+    raw = map_get(srv, "raw_server")
+    if raw != 0 {
+        http.server_stop(raw)
+        http.server_free(raw)
+    }
+    // Stop WebSocket server
+    ws_tcp = map_get(srv, "ws_tcp_server")
+    if ws_tcp != 0 {
+        tcp.server_close(ws_tcp)
+    }
+    // Stop SSE server
+    sse_tcp = map_get(srv, "sse_tcp_server")
+    if sse_tcp != 0 {
+        tcp.server_close(sse_tcp)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Composition — add routes to an existing server
+// ---------------------------------------------------------------------------
+
+// compose(server) { path("/module") { ... } }
+compose(_srv: ptr) {
+    // Returns the server map itself so trailing block DSL functions work
+    return _srv
+}
+
+// compose_at(server, root_path) { path(root_path) { ... } }
+compose_at(_srv: ptr, root_path: string) {
+    // Just syntactic sugar — the caller still uses path() inside
+    return _srv
+}

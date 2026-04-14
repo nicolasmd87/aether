@@ -1,4 +1,104 @@
 #include "codegen_internal.h"
+#include <string.h>
+
+// Helper: given the receive-arm pattern, return 1 if the identifier name `rhs_name`
+// binds a pattern field whose message-def type_kind is TYPE_PTR or TYPE_STRING.
+// "Bound name" is either pf->value or its first PATTERN_VARIABLE child's value
+// (when explicit `Field as alias` rebinding is used).
+static int rhs_ident_is_ptr_pattern_field(CodeGenerator* gen, ASTNode* pattern,
+                                          const char* rhs_name) {
+    if (!pattern || pattern->type != AST_MESSAGE_PATTERN || !pattern->value || !rhs_name) {
+        return 0;
+    }
+    MessageDef* msg_def = lookup_message(gen->message_registry, pattern->value);
+    if (!msg_def) return 0;
+    for (int k = 0; k < pattern->child_count; k++) {
+        ASTNode* pf = pattern->children[k];
+        if (!pf || pf->type != AST_PATTERN_FIELD || !pf->value) continue;
+        const char* bound = pf->value;
+        if (pf->child_count > 0 && pf->children[0] &&
+            pf->children[0]->type == AST_PATTERN_VARIABLE &&
+            pf->children[0]->value) {
+            bound = pf->children[0]->value;
+        }
+        if (strcmp(bound, rhs_name) != 0) continue;
+        MessageFieldDef* fdef = msg_def->fields;
+        while (fdef) {
+            if (strcmp(fdef->name, pf->value) == 0) {
+                return (fdef->type_kind == TYPE_PTR || fdef->type_kind == TYPE_STRING);
+            }
+            fdef = fdef->next;
+        }
+    }
+    return 0;
+}
+
+// Walk `body` looking for assignments of `field_name` whose RHS is a
+// ptr/string-typed pattern field of `pattern`. The parser may represent
+// `s = expr` inside a receive arm body as either AST_ASSIGNMENT
+// (children[0]=lhs ident, children[1]=rhs) or AST_VARIABLE_DECLARATION
+// (node->value=lhs name, children[0]=rhs); codegen_stmt later rewrites
+// the latter to `self->field = ...` when value matches a state var.
+static int body_assigns_field_from_ptr_pattern(CodeGenerator* gen, ASTNode* body,
+                                               ASTNode* pattern, const char* field_name) {
+    if (!body) return 0;
+    ASTNode* rhs = NULL;
+    if (body->type == AST_ASSIGNMENT && body->child_count >= 2) {
+        ASTNode* lhs = body->children[0];
+        if (lhs && lhs->type == AST_IDENTIFIER && lhs->value &&
+            strcmp(lhs->value, field_name) == 0) {
+            rhs = body->children[1];
+        }
+    } else if (body->type == AST_VARIABLE_DECLARATION && body->value &&
+               strcmp(body->value, field_name) == 0 && body->child_count > 0) {
+        rhs = body->children[0];
+    }
+    if (rhs && rhs->type == AST_IDENTIFIER && rhs->value &&
+        rhs_ident_is_ptr_pattern_field(gen, pattern, rhs->value)) {
+        return 1;
+    }
+    for (int i = 0; i < body->child_count; i++) {
+        if (body_assigns_field_from_ptr_pattern(gen, body->children[i], pattern, field_name)) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Returns 1 if any receive arm under `node` (recursively) assigns `field_name`
+// from a ptr/string pattern field. Handles both V2 (AST_RECEIVE_ARM) and V1
+// (AST_BLOCK containing an AST_MESSAGE_PATTERN whose last child is the body) shapes.
+static int state_field_assigned_ptr(CodeGenerator* gen, ASTNode* node, const char* field_name) {
+    if (!node) return 0;
+
+    if (node->type == AST_RECEIVE_ARM && node->child_count >= 2) {
+        ASTNode* pattern = node->children[0];
+        ASTNode* body = node->children[1];
+        if (body_assigns_field_from_ptr_pattern(gen, body, pattern, field_name)) return 1;
+    }
+
+    if (node->type == AST_BLOCK) {
+        ASTNode* pattern = NULL;
+        for (int k = 0; k < node->child_count; k++) {
+            if (node->children[k] && node->children[k]->type == AST_MESSAGE_PATTERN) {
+                pattern = node->children[k];
+                break;
+            }
+        }
+        if (pattern && pattern->child_count > 0) {
+            ASTNode* last = pattern->children[pattern->child_count - 1];
+            if (last && last->type == AST_BLOCK &&
+                body_assigns_field_from_ptr_pattern(gen, last, pattern, field_name)) {
+                return 1;
+            }
+        }
+    }
+
+    for (int i = 0; i < node->child_count; i++) {
+        if (state_field_assigned_ptr(gen, node->children[i], field_name)) return 1;
+    }
+    return 0;
+}
 
 void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
     if (!actor || actor->type != AST_ACTOR_DEFINITION) return;
@@ -58,6 +158,12 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
             // Check if field name ends with "_ref" - these are actor references stored as void*
             size_t name_len = strlen(child->value);
             if (name_len > 4 && strcmp(child->value + name_len - 4, "_ref") == 0) {
+                fprintf(gen->output, "void* %s;\n", child->value);
+            } else if (state_field_assigned_ptr(gen, actor, child->value)) {
+                // The state field is reassigned from a pointer-typed message
+                // payload somewhere in the receive arms — widen to void* so
+                // the assignment compiles. The initializer (typically `0`)
+                // still works as a null pointer constant.
                 fprintf(gen->output, "void* %s;\n", child->value);
             } else {
                 // Use atomic types for numeric fields to enable safe concurrent access

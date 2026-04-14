@@ -1,0 +1,51 @@
+// Test: trailing blocks on variable reassignment
+// Guards compiler fix: trailing blocks were silently dropped on reassignment
+// (only worked on first declaration). The codegen now handles both paths.
+
+import std.list
+import std.map
+
+add_item(_ctx: ptr, val: int) {
+    list.add(map_get(_ctx, "items"), val)
+}
+
+make_container(name: string) {
+    c = map_new()
+    map_put(c, "name", name)
+    map_put(c, "items", list.new())
+    return c
+}
+
+main() {
+    // First use: variable declaration with trailing block — always worked
+    c = make_container("first") {
+        add_item(1)
+        add_item(2)
+    }
+    if list.size(map_get(c, "items")) != 2 {
+        println("FAIL: first declaration trailing block")
+        exit(1)
+    }
+
+    // Second use: reassignment with trailing block — was broken (block dropped)
+    c = make_container("second") {
+        add_item(10)
+        add_item(20)
+        add_item(30)
+    }
+    if list.size(map_get(c, "items")) != 3 {
+        println("FAIL: reassignment trailing block")
+        exit(1)
+    }
+
+    // Third use: another reassignment to verify consistency
+    c = make_container("third") {
+        add_item(100)
+    }
+    if list.size(map_get(c, "items")) != 1 {
+        println("FAIL: third reassignment trailing block")
+        exit(1)
+    }
+
+    println("trailing block reassign ok")
+}
