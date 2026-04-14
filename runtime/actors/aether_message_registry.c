@@ -2,6 +2,13 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Reserved system message ID shared with the runtime scheduler.
+// Must match MSG_IO_READY in runtime/scheduler/multicore_scheduler.h.
+// When a user defines `message IoReady { fd: int, events: int }`, the
+// registry assigns this ID so the generated dispatch table routes
+// scheduler-delivered I/O readiness notifications to the user's handler.
+#define AETHER_RESERVED_ID_IO_READY 255
+
 MessageRegistry* create_message_registry(void) {
     MessageRegistry* registry = (MessageRegistry*)malloc(sizeof(MessageRegistry));
     registry->messages = NULL;
@@ -36,16 +43,31 @@ int register_message_type(MessageRegistry* registry, const char* name, MessageFi
     if (existing) {
         return existing->message_id;
     }
-    
+
     MessageDef* def = (MessageDef*)malloc(sizeof(MessageDef));
     if (!def) return -1;
     def->name = strdup(name);
     if (!def->name) { free(def); return -1; }
-    def->message_id = registry->next_id++;
+
+    // Reserved system IDs: `IoReady` must land on the scheduler's
+    // MSG_IO_READY slot so await_io()-driven notifications dispatch
+    // through the user's receive handler.
+    if (strcmp(name, "IoReady") == 0) {
+        def->message_id = AETHER_RESERVED_ID_IO_READY;
+    } else {
+        // Skip any reserved slot so user messages never collide with
+        // system IDs. With only one reserved slot (255), user IDs top out
+        // at 254, which is far beyond any realistic program.
+        if (registry->next_id == AETHER_RESERVED_ID_IO_READY) {
+            registry->next_id++;
+        }
+        def->message_id = registry->next_id++;
+    }
+
     def->fields = fields;
     def->next = registry->messages;
     registry->messages = def;
-    
+
     return def->message_id;
 }
 

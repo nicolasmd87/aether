@@ -30,5 +30,11 @@ const char* http_response_error(HttpResponse* response);
 // common "did it work?" check instead of chaining error/status calls.
 int http_response_ok(HttpResponse* response);
 
+// Legacy accessor aliases kept for callers that used the older
+// `_code` / `_str` names. Prefer the short names above.
+int http_response_status_code(HttpResponse* response);
+const char* http_response_body_str(HttpResponse* response);
+const char* http_response_headers_str(HttpResponse* response);
+
 #endif
 

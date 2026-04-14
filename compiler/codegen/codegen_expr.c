@@ -276,14 +276,97 @@ MessageFieldDef* find_msg_field(MessageDef* msg_def, const char* name) {
     return NULL;
 }
 
-// Emit a message field initializer RHS. Handles the composite case where
-// an array-literal RHS is assigned to an array-typed field: C won't accept
-// `.sites = {"a", "b"}` inside a designated initializer, so we wrap it as
-// a compound literal `(const char*[]){"a", "b"}` which decays to a valid
-// pointer. For all other cases this behaves exactly like generate_expression.
+// Emit a message field initializer RHS.
+//
+// Array-literal RHS assigned to an array-typed field needs special
+// handling: a compound literal `(T[]){...}` has block-scoped lifetime,
+// which dies when the enclosing send-expression block exits. Messages
+// are queued for later processing, so the receiver would dereference
+// freed memory. Instead, we hoist the array to a `static` local
+// variable allocated before the struct init — static storage has
+// program lifetime and the send can safely copy the pointer.
+//
+// The hoist is driven by `emit_message_array_hoists`, which pre-walks
+// the field inits and writes one `static const T _aether_arr_N[] = {...};`
+// declaration per array field at the start of the send-expression block.
+// `emit_message_field_init` then emits the corresponding `_aether_arr_N`
+// name instead of the compound literal.
+//
+// For any non-array or non-literal cases, this behaves exactly like
+// `generate_expression`.
+//
+// The msg_arr_id_for_field map is stored on the gen state as a sparse
+// per-send table (reset via `reset_msg_arr_map`).
+
+#define MAX_MSG_ARR_FIELDS 16
+static int msg_arr_ids[MAX_MSG_ARR_FIELDS];
+static const char* msg_arr_field_names[MAX_MSG_ARR_FIELDS];
+static int msg_arr_count = 0;
+
+static void reset_msg_arr_map(void) {
+    msg_arr_count = 0;
+}
+
+static int lookup_msg_arr_id(const char* field_name) {
+    for (int i = 0; i < msg_arr_count; i++) {
+        if (msg_arr_field_names[i] && strcmp(msg_arr_field_names[i], field_name) == 0) {
+            return msg_arr_ids[i];
+        }
+    }
+    return -1;
+}
+
+// Pre-walk: for each AST_FIELD_INIT in the message constructor whose RHS
+// is an AST_ARRAY_LITERAL and whose target field is a composite-type
+// message field (has element_c_type), emit a static local declaration
+// and record the hoisted variable ID. Call this after opening the
+// send-expression block, before emitting the `Msg _msg = {...}` line.
+void emit_message_array_hoists(CodeGenerator* gen, ASTNode* message, MessageDef* msg_def) {
+    reset_msg_arr_map();
+    if (!message || !msg_def) return;
+
+    for (int i = 0; i < message->child_count; i++) {
+        ASTNode* field_init = message->children[i];
+        if (!field_init || field_init->type != AST_FIELD_INIT || field_init->child_count == 0) {
+            continue;
+        }
+        ASTNode* rhs = field_init->children[0];
+        if (!rhs || rhs->type != AST_ARRAY_LITERAL) continue;
+
+        MessageFieldDef* fdef = find_msg_field(msg_def, field_init->value);
+        if (!fdef || !fdef->element_c_type) continue;
+
+        // Hoist to a static local. Static storage class gives program
+        // lifetime, so the receiver can safely read through the pointer.
+        int id = gen->msg_arr_counter++;
+        fprintf(gen->output, "static %s _aether_arr_%d[] = {", fdef->element_c_type, id);
+        for (int j = 0; j < rhs->child_count; j++) {
+            if (j > 0) fprintf(gen->output, ", ");
+            generate_expression(gen, rhs->children[j]);
+        }
+        fprintf(gen->output, "}; ");
+
+        if (msg_arr_count < MAX_MSG_ARR_FIELDS) {
+            msg_arr_ids[msg_arr_count] = id;
+            msg_arr_field_names[msg_arr_count] = field_init->value;
+            msg_arr_count++;
+        }
+    }
+}
+
 void emit_message_field_init(CodeGenerator* gen, MessageFieldDef* fdef, ASTNode* rhs) {
-    if (rhs && rhs->type == AST_ARRAY_LITERAL &&
-        fdef && fdef->element_c_type) {
+    // If this field was hoisted by emit_message_array_hoists, emit the
+    // hoisted variable name instead of inlining the compound literal.
+    // (Requires the pre-walk to have populated the map for this field.)
+    if (rhs && rhs->type == AST_ARRAY_LITERAL && fdef && fdef->element_c_type) {
+        int id = lookup_msg_arr_id(fdef->name);
+        if (id >= 0) {
+            fprintf(gen->output, "_aether_arr_%d", id);
+            return;
+        }
+        // Fall-through: no hoist set up (e.g. reply statement). Use a
+        // compound literal — still wrong for cross-thread sends, but
+        // fine for synchronous ask/reply where the sender stays alive.
         fprintf(gen->output, "(%s[])", fdef->element_c_type);
     }
     generate_expression(gen, rhs);
@@ -1411,8 +1494,12 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                 fprintf(gen->output, "scheduler_send_remote(_send_target, _imsg, current_core_id); } }");
                             }
                         } else {
-                            // Heap-allocated path (2+ fields or non-scalar types)
-                            fprintf(gen->output, "{ %s _msg = { ._message_id = %d",
+                            // Heap-allocated path (2+ fields or non-scalar types).
+                            // Hoist any array literals to static locals first so
+                            // their storage outlives the send-expression block.
+                            fprintf(gen->output, "{ ");
+                            emit_message_array_hoists(gen, message, msg_def);
+                            fprintf(gen->output, "%s _msg = { ._message_id = %d",
                                     message->value, msg_def->message_id);
                             for (int i = 0; i < message->child_count; i++) {
                                 ASTNode* field_init = message->children[i];

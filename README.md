@@ -55,6 +55,7 @@ The Aether runtime implements a native actor system with optimized message passi
 ### Advanced Features
 - **Actor timeouts** — `receive { ... } after N -> { ... }` fires handler if no message arrives within N ms
 - **Cooperative preemption** (opt-in) — `AETHER_PREEMPT=1` breaks long handlers, `--preempt` yields at loop back-edges
+- **Reactor-pattern async I/O** — `net.await_io(fd)` suspends an actor on a file descriptor without blocking any scheduler thread; the runtime's per-core I/O poller (epoll/kqueue/poll) delivers an `IoReady { fd, events }` message when the fd becomes readable
 - **SIMD batch processing** with AVX2 support
 - **NUMA-aware allocation** for multi-socket systems
 - **CPU feature detection** for runtime optimization selection

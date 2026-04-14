@@ -1,0 +1,282 @@
+// TinyWeb unit tests — validates DSL registration layer
+//
+// Uses plain Aether test pattern (print + exit) because deeply nested
+// trailing blocks inside callbacks currently hit a compiler codegen
+// limitation (callback → function → trailing block → closure handler).
+// TODO: Migrate to Aeocha once nested block codegen is fixed.
+
+import std.list
+import std.map
+import std.string
+
+// ---- TinyWeb DSL (inline) ----
+
+const GET = 1
+const POST = 2
+const PUT = 3
+const DELETE = 4
+const PATCH = 5
+const HEAD = 6
+const OPTIONS = 7
+const ALL = 0
+const LOCK = 12
+const COPY = 17
+const MOVE = 18
+const CONTINUE = 1
+const STOP = 0
+
+method_to_string(method: int) {
+    if method == GET { return "GET" }
+    if method == POST { return "POST" }
+    if method == PUT { return "PUT" }
+    if method == DELETE { return "DELETE" }
+    if method == PATCH { return "PATCH" }
+    if method == HEAD { return "HEAD" }
+    if method == OPTIONS { return "OPTIONS" }
+    if method == LOCK { return "LOCK" }
+    if method == COPY { return "COPY" }
+    if method == MOVE { return "MOVE" }
+    return "GET"
+}
+
+route_entry(method: int, pp: string, handler: fn) {
+    e = map_new()
+    map_put(e, "method", method)
+    map_put(e, "path", pp)
+    map_put(e, "handler", box_closure(handler))
+    return e
+}
+
+filter_entry(method: int, pp: string, handler: fn) {
+    e = map_new()
+    map_put(e, "method", method)
+    map_put(e, "path", pp)
+    map_put(e, "handler", box_closure(handler))
+    return e
+}
+
+ws_entry(pp: string, handler: fn) {
+    e = map_new()
+    map_put(e, "path", pp)
+    map_put(e, "handler", box_closure(handler))
+    return e
+}
+
+static_entry(bp: string, dir: string) {
+    e = map_new()
+    map_put(e, "base_path", bp)
+    map_put(e, "directory", dir)
+    return e
+}
+
+sse_entry(pp: string, handler: fn) {
+    e = map_new()
+    map_put(e, "path", pp)
+    map_put(e, "handler", box_closure(handler))
+    return e
+}
+
+end_point(_ctx: ptr, method: int, pattern: string, handler: fn) {
+    list.add(map_get(_ctx, "routes"), route_entry(method, pattern, handler))
+}
+
+tw_filter(_ctx: ptr, method: int, pattern: string, handler: fn) {
+    list.add(map_get(_ctx, "filters"), filter_entry(method, pattern, handler))
+}
+
+web_socket(_ctx: ptr, ws_path: string, handler: fn) {
+    list.add(map_get(_ctx, "ws_handlers"), ws_entry(ws_path, handler))
+}
+
+serve_static(_ctx: ptr, bp: string, dir: string) {
+    list.add(map_get(_ctx, "statics"), static_entry(bp, dir))
+}
+
+sse_endpoint(_ctx: ptr, sp: string, handler: fn) {
+    list.add(map_get(_ctx, "sse_handlers"), sse_entry(sp, handler))
+}
+
+tw_path(_ctx: ptr, bp: string) {
+    sub = map_new()
+    map_put(sub, "prefix", bp)
+    map_put(sub, "routes", map_get(_ctx, "routes"))
+    map_put(sub, "filters", map_get(_ctx, "filters"))
+    map_put(sub, "ws_handlers", map_get(_ctx, "ws_handlers"))
+    map_put(sub, "sse_handlers", map_get(_ctx, "sse_handlers"))
+    map_put(sub, "statics", map_get(_ctx, "statics"))
+    return sub
+}
+
+web_server(port: int) {
+    srv = map_new()
+    map_put(srv, "port", port)
+    map_put(srv, "host", "127.0.0.1")
+    map_put(srv, "prefix", "")
+    map_put(srv, "routes", list.new())
+    map_put(srv, "filters", list.new())
+    map_put(srv, "ws_handlers", list.new())
+    map_put(srv, "sse_handlers", list.new())
+    map_put(srv, "statics", list.new())
+    map_put(srv, "socket_timeout_ms", 30000)
+    map_put(srv, "keep_alive", 1)
+    return srv
+}
+
+compose(_srv: ptr) { return _srv }
+
+_chk(cond: int, msg: string) {
+    if cond == 0 { print("FAIL: ${msg}\n"); exit(1) }
+}
+
+main() {
+    print("=== TinyWeb Unit Tests ===\n\n")
+
+    // Config defaults
+    print("Config defaults: ")
+    srv = web_server(8080)
+    _chk(map_get(srv, "port") == 8080, "port")
+    _chk(str_eq(map_get(srv, "host"), "127.0.0.1"), "host")
+    _chk(map_get(srv, "socket_timeout_ms") == 30000, "timeout")
+    _chk(map_get(srv, "keep_alive") == 1, "keep_alive")
+    println("PASS")
+
+    // Method constants
+    print("Method constants: ")
+    _chk(GET == 1, "GET")
+    _chk(POST == 2, "POST")
+    _chk(PUT == 3, "PUT")
+    _chk(DELETE == 4, "DELETE")
+    _chk(ALL == 0, "ALL")
+    _chk(CONTINUE == 1, "CONTINUE")
+    _chk(STOP == 0, "STOP")
+    println("PASS")
+
+    // method_to_string
+    print("method_to_string: ")
+    _chk(str_eq(method_to_string(GET), "GET"), "GET")
+    _chk(str_eq(method_to_string(POST), "POST"), "POST")
+    _chk(str_eq(method_to_string(PATCH), "PATCH"), "PATCH")
+    _chk(str_eq(method_to_string(LOCK), "LOCK"), "LOCK")
+    _chk(str_eq(method_to_string(COPY), "COPY"), "COPY")
+    println("PASS")
+
+    // Route registration
+    print("Route registration: ")
+    srv = web_server(8080) {
+        end_point(GET, "/hello") |req: ptr, res: ptr, rctx: ptr| { }
+    }
+    rts = map_get(srv, "routes")
+    print("(routes="); print(list.size(rts)); print(") ")
+    _chk(list.size(rts) == 1, "count")
+    e = list.get(map_get(srv, "routes"), 0)
+    _chk(str_eq(map_get(e, "path"), "/hello"), "path")
+    _chk(map_get(e, "method") == GET, "method")
+    println("PASS")
+
+    // Nested paths
+    print("Nested paths: ")
+    srv = web_server(8080) {
+        tw_path("/api") {
+            tw_path("/v1") {
+                end_point(GET, "/users") |req: ptr, res: ptr, rctx: ptr| { }
+            }
+        }
+    }
+    _chk(list.size(map_get(srv, "routes")) == 1, "count")
+    e = list.get(map_get(srv, "routes"), 0)
+    _chk(str_eq(map_get(e, "path"), "/users"), "path")
+    println("PASS")
+
+    // Multiple paths
+    print("Multiple paths: ")
+    srv = web_server(8080) {
+        tw_path("/foo") {
+            end_point(GET, "/bar") |req: ptr, res: ptr, rctx: ptr| { }
+        }
+        tw_path("/alpha") {
+            end_point(GET, "/gamma") |req: ptr, res: ptr, rctx: ptr| { }
+        }
+    }
+    _chk(list.size(map_get(srv, "routes")) == 2, "count")
+    println("PASS")
+
+    // Compose
+    print("Compose: ")
+    srv = web_server(8080) {
+        end_point(GET, "/orig") |req: ptr, res: ptr, rctx: ptr| { }
+    }
+    compose(srv) {
+        end_point(GET, "/added") |req: ptr, res: ptr, rctx: ptr| { }
+    }
+    _chk(list.size(map_get(srv, "routes")) == 2, "count")
+    println("PASS")
+
+    // Filters
+    print("Filters: ")
+    srv = web_server(8080) {
+        tw_filter(GET, "/.*") |req: ptr, res: ptr, rctx: ptr| { return 1 }
+    }
+    _chk(list.size(map_get(srv, "filters")) == 1, "count")
+    fe = list.get(map_get(srv, "filters"), 0)
+    _chk(map_get(fe, "method") == GET, "method")
+    println("PASS")
+
+    // Attributes
+    print("Attributes: ")
+    attrs = map_new()
+    map_put(attrs, "user", "alice")
+    _chk(str_eq(map_get(attrs, "user"), "alice"), "get")
+    _chk(map_has(attrs, "nope") == 0, "missing")
+    map_put(attrs, "r", "user")
+    map_put(attrs, "r", "admin")
+    _chk(str_eq(map_get(attrs, "r"), "admin"), "overwrite")
+    println("PASS")
+
+    // WebSocket
+    print("WebSocket: ")
+    srv = web_server(8080) {
+        web_socket("/echo") |msg: string, s: ptr, rctx: ptr| { }
+    }
+    _chk(list.size(map_get(srv, "ws_handlers")) == 1, "count")
+    _chk(str_eq(map_get(list.get(map_get(srv, "ws_handlers"), 0), "path"), "/echo"), "path")
+    println("PASS")
+
+    // SSE
+    print("SSE: ")
+    srv = web_server(8080) {
+        sse_endpoint("/events") |stream: ptr| { }
+    }
+    _chk(list.size(map_get(srv, "sse_handlers")) == 1, "count")
+    println("PASS")
+
+    // Static files
+    print("Static files: ")
+    srv = web_server(8080) {
+        serve_static("/static", "/var/www")
+    }
+    _chk(list.size(map_get(srv, "statics")) == 1, "count")
+    se = list.get(map_get(srv, "statics"), 0)
+    _chk(str_eq(map_get(se, "base_path"), "/static"), "base")
+    _chk(str_eq(map_get(se, "directory"), "/var/www"), "dir")
+    println("PASS")
+
+    // Full composition
+    print("Full ExampleApp: ")
+    srv = web_server(8080) {
+        tw_filter(GET, "/.*") |req: ptr, res: ptr, rctx: ptr| { return 1 }
+        end_point(GET, "/bar") |req: ptr, res: ptr, rctx: ptr| { }
+        web_socket("/eee") |msg: string, s: ptr, rctx: ptr| { }
+        serve_static("/static", ".")
+        end_point(GET, "/users") |req: ptr, res: ptr, rctx: ptr| { }
+        end_point(POST, "/echo") |req: ptr, res: ptr, rctx: ptr| { }
+        end_point(PUT, "/update") |req: ptr, res: ptr, rctx: ptr| { }
+        end_point(GET, "/test") |req: ptr, res: ptr, rctx: ptr| { }
+    }
+    _chk(list.size(map_get(srv, "routes")) == 5, "routes")
+    _chk(list.size(map_get(srv, "filters")) == 1, "filters")
+    _chk(list.size(map_get(srv, "ws_handlers")) == 1, "ws")
+    _chk(list.size(map_get(srv, "statics")) == 1, "statics")
+    println("PASS")
+
+    print("\n=== All TinyWeb Tests Passed ===\n")
+}

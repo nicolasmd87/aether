@@ -56,6 +56,13 @@ typedef struct {
     // MSVC compat: counter for ask-operator temp variables (_ask_result_N)
     int ask_temp_counter;
 
+    // Counter for message-send array hoist variables (_aether_arr_N). Every
+    // `msg ! Foo { field: [a, b, c] }` with a composite array field
+    // allocates a `static const T _aether_arr_N[] = {...}` at the send
+    // site so the array's storage outlives the send-expression block and
+    // the receiving actor can safely read through the pointer.
+    int msg_arr_counter;
+
     // Match-as-expression: when non-NULL, match arms assign to this variable
     const char* match_result_var;
 

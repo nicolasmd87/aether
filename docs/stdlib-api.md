@@ -481,6 +481,59 @@ Raw externs: `http_server_bind_raw`, `http_server_start_raw`.
 
 Raw externs: `tcp_connect_raw`, `tcp_send_raw`, `tcp_receive_raw`, `tcp_listen_raw`, `tcp_accept_raw`.
 
+### Reactor-Pattern Async I/O (`await_io`)
+
+Aether's scheduler has a per-core I/O reactor (epoll on Linux, kqueue
+on macOS/BSD, poll() elsewhere) that can suspend an actor on a file
+descriptor without blocking any OS thread. When the fd becomes ready,
+the scheduler delivers an `IoReady` message to the actor's mailbox
+and resumes it on any available core.
+
+```aether
+import std.net
+
+message IoReady { fd: int, events: int }
+message Connection { fd: int }
+
+actor Worker {
+    receive {
+        Connection(fd) -> {
+            req = ae_http_recv(fd)
+            http_response_json(res, "{\"hello\":\"world\"}")
+            net.await_io(fd)   // suspends — zero CPU until data arrives
+        }
+        IoReady(fd, events) -> {
+            // Resumed here when fd is readable again
+            req = ae_http_recv(fd)
+            http_response_json(res, "{\"hello\":\"world\"}")
+            net.await_io(fd)
+        }
+    }
+}
+```
+
+**The `IoReady` message name is reserved.** The Aether message
+registry assigns it the ID that the runtime scheduler uses for I/O
+readiness notifications, so any actor that defines `message IoReady {
+fd: int, events: int }` will receive scheduler-delivered events in
+that arm.
+
+Functions:
+
+- `net.await_io(fd)` → `string` — Register `fd` with the current
+  core's I/O poller and mark the calling actor as waiting. Returns
+  `""` on success, error string otherwise (invalid fd, no active
+  actor context, or scheduler refused the registration). One-shot:
+  the fd is automatically unregistered after the `IoReady` delivery.
+- `net.ae_io_cancel(fd)` — Abandon a prior `await_io` without waiting
+  for the message. Rare; the one-shot policy makes this unnecessary
+  in most flows.
+
+Performance note: PR #140 demonstrated the raw reactor pattern
+delivering a 5x throughput improvement (45K → 264K req/s) on the HTTP
+benchmark versus a blocking keep-alive worker. `await_io` is the
+Aether-language surface over that same machinery.
+
 ---
 
 ## Collections Library

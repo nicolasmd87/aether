@@ -264,4 +264,17 @@ int http_response_ok(HttpResponse* response) {
     return response->status_code >= 200 && response->status_code < 300;
 }
 
+// Legacy accessor aliases — thin wrappers over the short names above.
+int http_response_status_code(HttpResponse* response) {
+    return http_response_status(response);
+}
+
+const char* http_response_body_str(HttpResponse* response) {
+    return http_response_body(response);
+}
+
+const char* http_response_headers_str(HttpResponse* response) {
+    return http_response_headers(response);
+}
+
 #endif // AETHER_HAS_NETWORKING

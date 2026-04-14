@@ -5,7 +5,7 @@
 import std.file
 
 main() {
-    tmpfile = "/tmp/aether_test_file_tuple.txt"
+    tmpfile = "aether_test_file_tuple_tmp.txt"
 
     // Write: returns "" on success
     werr = file.write(tmpfile, "hello world")
@@ -37,14 +37,14 @@ main() {
     }
 
     // Read nonexistent: returns ("", error)
-    _, rerr2 = file.read("/tmp/aether_test_nonexistent_xyz_12345.txt")
+    _, rerr2 = file.read("aether_test_nonexistent_xyz_12345.txt")
     if rerr2 == "" {
         println("FAIL: reading nonexistent file should error")
         exit(1)
     }
 
     // Size nonexistent: returns (0, error)
-    _, serr2 = file.size("/tmp/aether_test_nonexistent_xyz_12345.txt")
+    _, serr2 = file.size("aether_test_nonexistent_xyz_12345.txt")
     if serr2 == "" {
         println("FAIL: size of nonexistent file should error")
         exit(1)
@@ -63,7 +63,7 @@ main() {
     file.close(handle)
 
     // Open nonexistent for read: returns (null, error)
-    _, oerr2 = file.open("/tmp/aether_test_nonexistent_xyz_12345.txt", "r")
+    _, oerr2 = file.open("aether_test_nonexistent_xyz_12345.txt", "r")
     if oerr2 == "" {
         println("FAIL: opening nonexistent for read should error")
         exit(1)
@@ -77,7 +77,7 @@ main() {
     }
 
     // Delete nonexistent: returns error
-    derr2 = file.delete("/tmp/aether_test_nonexistent_xyz_12345.txt")
+    derr2 = file.delete("aether_test_nonexistent_xyz_12345.txt")
     if derr2 == "" {
         println("FAIL: deleting nonexistent file should error")
         exit(1)

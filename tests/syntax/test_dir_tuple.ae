@@ -3,7 +3,7 @@
 import std.dir
 
 main() {
-    tmpdir = "/tmp/aether_test_dir_tuple_xyz"
+    tmpdir = "aether_test_dir_tuple_xyz_tmp"
 
     // Create: returns "" on success
     cerr = dir.create(tmpdir)
@@ -35,7 +35,7 @@ main() {
     // an empty DirList rather than returning NULL, so the wrapper can't
     // distinguish "missing" from "empty" without a C-side change. Just
     // verify the call doesn't crash and free whatever comes back.
-    empty_list, _ = dir.list("/tmp/aether_test_nonexistent_dir_xyz_12345")
+    empty_list, _ = dir.list("aether_test_nonexistent_dir_xyz_12345")
     if empty_list != null {
         dir.list_free(empty_list)
     }
@@ -48,7 +48,7 @@ main() {
     }
 
     // Delete nonexistent: returns error
-    derr2 = dir.delete("/tmp/aether_test_nonexistent_dir_xyz_12345")
+    derr2 = dir.delete("aether_test_nonexistent_dir_xyz_12345")
     if derr2 == "" {
         println("FAIL: deleting nonexistent dir should error")
         exit(1)

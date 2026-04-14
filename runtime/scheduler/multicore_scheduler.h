@@ -37,8 +37,19 @@ typedef struct {
     atomic_int         refcount;     // starts at 2 (asker + actor); freed when hits 0
 } ActorReplySlot;
 
-// I/O readiness message — delivered to actor when the poller reports fd ready
-#define MSG_IO_READY 300
+// I/O readiness message — delivered to actor when the poller reports fd ready.
+// Value must stay inside the 256-slot actor dispatch table (see codegen_actor.c).
+// 255 is the top of that range and is reserved for system messages; the Aether
+// message registry allocates user message IDs starting at 0 and never hands out 255.
+#define MSG_IO_READY 255
+
+// TLS pointer to the actor whose step() is currently running on this
+// thread. Set by generated *_step() functions at entry; read by the
+// reactor bridge (std/net/aether_actor_bridge.c) so await_io() can
+// identify the calling actor without a parameter. Unlike
+// g_sync_step_actor which is specific to main-thread sync mode, this
+// variable is set for every step call on every thread.
+extern AETHER_TLS void* g_current_step_actor;
 
 typedef struct {
     int type;       // MSG_IO_READY (must be first field)

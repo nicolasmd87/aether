@@ -87,6 +87,8 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->extern_registry_capacity = 0;
     // MSVC compat: counter for ask-operator temp variables
     gen->ask_temp_counter = 0;
+    // Counter for message-send array hoist variables
+    gen->msg_arr_counter = 0;
     gen->match_result_var = NULL;
     gen->preempt_loops = 0;
     gen->current_func_return_type = NULL;

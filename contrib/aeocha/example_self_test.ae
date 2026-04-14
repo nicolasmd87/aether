@@ -1,0 +1,199 @@
+// Aeocha self-test — validates the test framework itself
+
+import std.list
+import std.map
+import std.string
+
+// ---- Aeocha framework functions ----
+// Global state refs are created in main() and accessed via a
+// framework context that is passed through the _ctx builder chain.
+
+_suite_new(name: string, fw: ptr) {
+    s = map_new()
+    map_put(s, "name", name)
+    map_put(s, "befores", list.new())
+    map_put(s, "afters", list.new())
+    map_put(s, "fw", fw)
+    return s
+}
+
+before(_ctx: ptr, setup: fn) {
+    list.add(map_get(_ctx, "befores"), box_closure(setup))
+}
+
+after_each(_ctx: ptr, teardown: fn) {
+    list.add(map_get(_ctx, "afters"), box_closure(teardown))
+}
+
+it(_ctx: ptr, description: string, test_fn: fn) {
+    fw = map_get(_ctx, "fw")
+    passed_ref = map_get(fw, "passed")
+    failed_ref = map_get(fw, "failed")
+    depth_ref = map_get(fw, "depth")
+
+    // Run before hooks
+    befores = map_get(_ctx, "befores")
+    n = list.size(befores)
+    for (i = 0; i < n; i++) {
+        call(unbox_closure(list.get(befores, i)))
+    }
+
+    old_failed = ref_get(failed_ref)
+    call(test_fn)
+
+    // Print result with indentation
+    d = ref_get(depth_ref)
+    for (i = 0; i < d; i++) { print("  ") }
+    if ref_get(failed_ref) == old_failed {
+        print("\x1b[32m  ✓\x1b[0m ${description}\n")
+        ref_set(passed_ref, ref_get(passed_ref) + 1)
+    } else {
+        print("\x1b[31m  ✗\x1b[0m ${description}\n")
+    }
+
+    // Run after hooks
+    afters = map_get(_ctx, "afters")
+    n2 = list.size(afters)
+    for (i = 0; i < n2; i++) {
+        call(unbox_closure(list.get(afters, i)))
+    }
+}
+
+describe(_ctx: ptr, description: string) {
+    // Get fw from parent context
+    fw = _ctx
+    if map_has(_ctx, "fw") == 1 {
+        fw = map_get(_ctx, "fw")
+    }
+    depth_ref = map_get(fw, "depth")
+
+    d = ref_get(depth_ref)
+    for (i = 0; i < d; i++) { print("  ") }
+    println(description)
+    ref_set(depth_ref, d + 1)
+
+    s = _suite_new(description, fw)
+    return s
+}
+
+// Top-level suite entry point — call this once in main()
+// suite(fw) { describe("...") { ... } }
+suite(fw: ptr) {
+    return fw
+}
+
+// Assertions — they need the fw context to update failed counter.
+// We thread it through a global ref set up in main().
+
+_assert_fail(msg: string) {
+    // This is called from callbacks that capture fw_ref from main()
+    print("\x1b[31m      FAIL: ${msg}\x1b[0m\n")
+}
+
+run_summary(fw: ptr) {
+    passed = ref_get(map_get(fw, "passed"))
+    failed = ref_get(map_get(fw, "failed"))
+    println("")
+    if failed == 0 {
+        println("\x1b[32m  ${passed} passing\x1b[0m")
+    } else {
+        println("\x1b[32m  ${passed} passing\x1b[0m")
+        println("\x1b[31m  ${failed} failing\x1b[0m")
+    }
+    println("")
+    ref_free(map_get(fw, "passed"))
+    ref_free(map_get(fw, "failed"))
+    ref_free(map_get(fw, "depth"))
+    if failed > 0 { exit(1) }
+}
+
+// ---- Tests ----
+
+main() {
+    // Create framework context with counters
+    fw = map_new()
+    map_put(fw, "passed", ref(0))
+    map_put(fw, "failed", ref(0))
+    map_put(fw, "depth", ref(0))
+
+    // Shorthand ref for assertions inside callbacks
+    _fail = map_get(fw, "failed")
+
+    // Shared state for before/after hook tests — declared in main() scope
+    // so closures can safely capture it
+    hook_counter = ref(0)
+
+    suite(fw) {
+    describe("Aeocha framework") {
+        describe("assertions") {
+            it("assert_eq passes on equal values") callback {
+                if 42 != 42 { ref_set(_fail, ref_get(_fail) + 1); _assert_fail("42 == 42") }
+            }
+
+            it("assert_true passes on truthy") callback {
+                if 1 == 0 { ref_set(_fail, ref_get(_fail) + 1); _assert_fail("1 is true") }
+            }
+
+            it("assert_false passes on falsy") callback {
+                if 0 != 0 { ref_set(_fail, ref_get(_fail) + 1); _assert_fail("0 is false") }
+            }
+
+            it("string equality works") callback {
+                if str_eq("hello", "hello") == 0 {
+                    ref_set(_fail, ref_get(_fail) + 1)
+                    _assert_fail("hello == hello")
+                }
+            }
+
+            it("string contains works") callback {
+                if string.contains("hello world", "world") == 0 {
+                    ref_set(_fail, ref_get(_fail) + 1)
+                    _assert_fail("contains world")
+                }
+            }
+
+            it("not-equal works") callback {
+                if 1 == 2 { ref_set(_fail, ref_get(_fail) + 1); _assert_fail("1 != 2") }
+            }
+
+            it("greater-than works") callback {
+                if 10 <= 5 { ref_set(_fail, ref_get(_fail) + 1); _assert_fail("10 > 5") }
+            }
+        }
+
+        describe("before/after hooks") {
+            before() callback { ref_set(hook_counter, ref_get(hook_counter) + 1) }
+
+            it("first test sees counter incremented") callback {
+                if ref_get(hook_counter) != 1 {
+                    ref_set(_fail, ref_get(_fail) + 1)
+                    _assert_fail("counter should be 1")
+                }
+            }
+
+            it("second test sees counter incremented again") callback {
+                if ref_get(hook_counter) != 2 {
+                    ref_set(_fail, ref_get(_fail) + 1)
+                    _assert_fail("counter should be 2")
+                }
+            }
+        }
+
+        describe("nested describes") {
+            describe("level 2") {
+                it("works at depth 2") callback {
+                    if 1 == 0 { ref_set(_fail, ref_get(_fail) + 1); _assert_fail("nested") }
+                }
+
+                describe("level 3") {
+                    it("works at depth 3") callback {
+                        if 1 == 0 { ref_set(_fail, ref_get(_fail) + 1); _assert_fail("deep nested") }
+                    }
+                }
+            }
+        }
+    }
+    }
+
+    run_summary(fw)
+}

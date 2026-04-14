@@ -1,0 +1,65 @@
+// Cookie + Attribute Auth Example — filter reads cookie, validates,
+// passes user to endpoint via attributes
+
+import contrib.tinyweb
+
+validate_token(token: string) {
+    if str_eq(token, "valid-session-abc") == 1 { return "alice@example.com" }
+    if str_eq(token, "valid-session-xyz") == 1 { return "bob@example.com" }
+    return ""
+}
+
+main() {
+    println("=== TinyWeb Cookie + Attribute Auth Example ===\n")
+
+    server = web_server_host("localhost", 8080) {
+
+        path("/api") {
+            filter(ALL, "/.*") |req: ptr, res: ptr, ctx: ptr| {
+                token = request_get_cookie(req, "session")
+                user = validate_token(token)
+
+                if str_eq(user, "") == 1 {
+                    response_write_status(res, "Try logging in again", 403)
+                    return STOP
+                }
+
+                ctx_set_attribute(ctx, "user", user)
+                return CONTINUE
+            }
+
+            end_point(GET, "/profile") |req: ptr, res: ptr, ctx: ptr| {
+                user = ctx_get_attribute(ctx, "user")
+                response_write(res, "User is logged in: ${user}")
+            }
+
+            end_point(GET, "/dashboard") |req: ptr, res: ptr, ctx: ptr| {
+                user = ctx_get_attribute(ctx, "user")
+                response_json(res, "{\"user\":\"${user}\",\"dashboard\":true}")
+            }
+        }
+
+        end_point(GET, "/") |req: ptr, res: ptr, ctx: ptr| {
+            response_write(res, "Welcome! Login at /login")
+        }
+
+        end_point(POST, "/login") |req: ptr, res: ptr, ctx: ptr| {
+            body = request_get_body(req)
+            response_set_header(res, "Set-Cookie", "session=valid-session-abc; Path=/; HttpOnly")
+            response_write(res, "Logged in!")
+        }
+    }
+
+    println("Starting server on localhost:8080...")
+    println("")
+    println("Test the auth flow:")
+    println("  curl http://localhost:8080/api/profile")
+    println("    -> 403 Try logging in again")
+    println("")
+    println("  curl -H 'Cookie: session=valid-session-abc' http://localhost:8080/api/profile")
+    println("    -> 200 User is logged in: alice@example.com")
+
+    result = server_start(server)
+    if result != 0 { println("ERROR: Failed to start server") }
+    server_stop(server)
+}

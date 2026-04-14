@@ -41,6 +41,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr);
 /* Message field helpers (codegen_expr.c) — shared with codegen_stmt.c */
 MessageFieldDef* find_msg_field(MessageDef* msg_def, const char* name);
 void emit_message_field_init(CodeGenerator* gen, MessageFieldDef* fdef, ASTNode* rhs);
+void emit_message_array_hoists(CodeGenerator* gen, ASTNode* message, MessageDef* msg_def);
 
 /* Statement generation (codegen_stmt.c) */
 void generate_statement(CodeGenerator* gen, ASTNode* stmt);

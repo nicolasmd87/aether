@@ -564,6 +564,72 @@ main() {
 
 Raw externs: `tcp_connect_raw`, `tcp_send_raw`, `tcp_receive_raw`, `tcp_listen_raw`, `tcp_accept_raw`.
 
+### Reactor-pattern async I/O (`await_io`)
+
+Aether's runtime already owns a per-core I/O reactor (epoll on Linux,
+kqueue on macOS/BSD, poll() elsewhere). `net.await_io` exposes that
+reactor to Aether code so an actor can suspend on a file descriptor
+*without blocking any scheduler thread*. When the fd becomes ready,
+the scheduler delivers an `IoReady { fd, events }` message to the
+actor's mailbox and resumes it on any available core.
+
+```aether
+import std.net
+
+message IoReady { fd: int, events: int }
+message Begin { fd: int }
+
+actor Echo {
+    state my_fd = 0
+    receive {
+        Begin(fd) -> {
+            my_fd = fd
+            err = net.await_io(fd)
+            if err != "" {
+                println("await_io failed: ${err}")
+                exit(1)
+            }
+        }
+        IoReady(fd, events) -> {
+            // Resumed here — no OS thread was blocked while we waited.
+            data, rerr = tcp.read(/*...*/)
+            // ... process, then re-arm ...
+            net.await_io(fd)
+        }
+    }
+}
+```
+
+**The `IoReady` message name is reserved.** The runtime scheduler
+delivers I/O-readiness notifications under a fixed message ID; the
+Aether message registry assigns that same ID to any user message
+named `IoReady` so your handler sees the event as a normal receive
+arm.
+
+| Function | Returns | Description |
+|---|---|---|
+| `net.await_io(fd)` | `string` | Register `fd` with the current core's I/O poller and suspend the calling actor. Returns `""` on success, error string on failure. One-shot: the fd is automatically unregistered after the next `IoReady` delivery. |
+| `net.ae_io_cancel(fd)` | — | Abandon a pending `await_io` without waiting for the message. Rarely needed due to one-shot policy. |
+
+**Constraints:**
+
+- `await_io` must be called from inside an actor's `receive` handler
+  (not from `main()`). The bridge reads the current actor from a TLS
+  set at the top of every generated `_step()` function.
+- Single-actor programs run in main-thread mode which bypasses the
+  scheduler loop — and therefore the I/O reactor. Spawn at least two
+  actors to force multi-threaded scheduler mode if you want `await_io`
+  to function.
+- The fd must outlive the `await_io` registration. If you close the
+  fd before the `IoReady` fires, behavior depends on the backend
+  (epoll reports EPOLLHUP; kqueue silently drops the one-shot).
+
+**Performance:** PR #140 (C-level benchmark) demonstrated the raw
+reactor pattern delivering a 5x throughput improvement on the HTTP
+benchmark (45K → 264K req/s) versus a blocking keep-alive worker.
+`await_io` is the Aether-language surface over the same runtime
+machinery.
+
 ---
 
 ## Logging (`std.log`)

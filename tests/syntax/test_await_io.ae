@@ -1,0 +1,79 @@
+// Test: await_io reactor pattern — suspends an actor on a fd and
+// resumes it when data arrives, without blocking any scheduler thread.
+//
+// Flow:
+//   1. main creates a pipe and spawns a Reader actor
+//   2. main sends Start{r} with the read fd
+//   3. Reader calls net.await_io(r) and returns from the receive handler
+//   4. main writes "hello" to the pipe's write end
+//   5. the scheduler's I/O poller observes the fd is readable, delivers
+//      IoReady{fd, events} to Reader's mailbox
+//   6. Reader's IoReady handler runs, prints success, exits 0
+//
+// A Helper actor is spawned to force multi-threaded scheduler mode;
+// single-actor main-thread mode does not poll the I/O reactor.
+
+import std.net
+
+message Start { r: int }
+message IoReady { fd: int, events: int }
+message Noop {}
+
+actor Reader {
+    state got = 0
+    state read_fd = 0
+    receive {
+        Start(r) -> {
+            read_fd = r
+            err = net.await_io(r)
+            if err != "" {
+                println("FAIL: await_io returned error")
+                exit(1)
+            }
+        }
+        IoReady(fd, events) -> {
+            if fd != read_fd {
+                println("FAIL: IoReady fd mismatch")
+                exit(1)
+            }
+            got = 1
+            println("await_io reactor test ok")
+            exit(0)
+        }
+    }
+}
+
+actor Helper {
+    state x = 0
+    receive {
+        Noop() -> { x = 1 }
+    }
+}
+
+main() {
+    read_fd = net.pipe_open()
+    if read_fd < 0 {
+        println("SKIP: pipe() unavailable (non-POSIX platform)")
+        return
+    }
+    write_fd = net.pipe_write_fd()
+
+    spawn(Helper())
+    r = spawn(Reader())
+
+    r ! Start { r: read_fd }
+    sleep(150)
+
+    n = net.fd_write(write_fd, "hello")
+    if n < 0 {
+        println("FAIL: write to pipe")
+        exit(1)
+    }
+
+    sleep(500)
+
+    net.fd_close(write_fd)
+    net.fd_close(read_fd)
+    println("FAIL: timed out waiting for IoReady")
+    exit(1)
+}

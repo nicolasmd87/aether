@@ -1,0 +1,88 @@
+// Composition Example — modular route registration with nested paths and auth filters
+
+import contrib.tinyweb
+
+// Reusable handler function
+handle_greeting(req: ptr, res: ptr, ctx: ptr) {
+    first = request_get_path_param(ctx, "1")
+    last  = request_get_path_param(ctx, "2")
+    response_write(res, "Hello, ${first} ${last}!")
+}
+
+main() {
+    println("=== TinyWeb Composition Example ===\n")
+
+    server = web_server_host("localhost", 8080) {
+
+        // Module 1: Public API
+        path("/api") {
+            path("/v1") {
+                end_point(GET, "/health") |req: ptr, res: ptr, ctx: ptr| {
+                    response_write(res, "OK")
+                }
+
+                end_point(GET, "/greeting/(\\w+)/(\\w+)") |req: ptr, res: ptr, ctx: ptr| {
+                    handle_greeting(req, res, ctx)
+                }
+            }
+        }
+
+        // Module 2: Admin with auth filter
+        path("/admin") {
+            filter(GET, "/.*") |req: ptr, res: ptr, ctx: ptr| {
+                token = request_get_header(req, "X-Admin-Token")
+                if str_eq(token, "secret42") == 1 {
+                    return CONTINUE
+                }
+                response_write_status(res, "Forbidden", 403)
+                return STOP
+            }
+
+            end_point(GET, "/dashboard") |req: ptr, res: ptr, ctx: ptr| {
+                response_write(res, "Welcome to admin dashboard")
+            }
+
+            end_point(GET, "/users") |req: ptr, res: ptr, ctx: ptr| {
+                response_json(res, "[{\"name\":\"alice\"},{\"name\":\"bob\"}]")
+            }
+        }
+
+        // Module 3: Deeply nested paths
+        path("/shop") {
+            path("/catalog") {
+                path("/products") {
+                    end_point(GET, "/(\\d+)") |req: ptr, res: ptr, ctx: ptr| {
+                        id = request_get_path_param(ctx, "1")
+                        response_json(res, "{\"id\":${id},\"name\":\"Widget\"}")
+                    }
+                }
+            }
+        }
+    }
+
+    // Second composition block — adds routes to existing server
+    compose(server) {
+        path("/extra") {
+            end_point(GET, "/ping") |req: ptr, res: ptr, ctx: ptr| {
+                response_write(res, "pong")
+            }
+        }
+    }
+
+    println("Starting server on localhost:8080...")
+    result = server_start(server)
+
+    if result == 0 {
+        println("Server running! Try:")
+        println("  curl http://localhost:8080/api/v1/health")
+        println("  curl http://localhost:8080/api/v1/greeting/Jane/Doe")
+        println("  curl -H 'X-Admin-Token: secret42' http://localhost:8080/admin/dashboard")
+        println("  curl http://localhost:8080/admin/dashboard    # -> 403")
+        println("  curl http://localhost:8080/shop/catalog/products/99")
+        println("  curl http://localhost:8080/extra/ping")
+    } else {
+        println("ERROR: Failed to start server")
+    }
+
+    server_stop(server)
+}

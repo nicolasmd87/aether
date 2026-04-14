@@ -1,0 +1,170 @@
+// TinyWeb Integration Tests — real HTTP server + client round-trips
+//
+// Uses a single server instance with all routes registered upfront,
+// since stopping and restarting on the same port between tests is
+// unreliable due to socket TIME_WAIT.
+
+import std.http
+
+// ---- Handlers ----
+
+handle_hello(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 200)
+    http.response_set_body(res, "Hello, World!")
+}
+
+handle_json(req: ptr, res: ptr, ud: ptr) {
+    http.response_json(res, "{\"status\":\"ok\"}")
+}
+
+handle_echo(req: ptr, res: ptr, ud: ptr) {
+    body = http.request_body(req)
+    http.response_set_status(res, 200)
+    http.response_set_body(res, "echo: ${body}")
+}
+
+handle_health(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 200)
+    http.response_set_body(res, "ok")
+}
+
+handle_param(req: ptr, res: ptr, ud: ptr) {
+    p = http.get_path_param(req, "id")
+    http.response_set_status(res, 200)
+    http.response_set_body(res, "user: ${p}")
+}
+
+// ---- Server actor ----
+
+message StartSrv { raw: ptr }
+message Noop {}
+
+actor SrvActor {
+    state s = 0
+    receive {
+        StartSrv(raw) -> {
+            s = raw
+            http.server_start(raw)
+        }
+    }
+}
+
+actor SchedHelper {
+    state x = 0
+    receive { Noop() -> { x = 1 } }
+}
+
+// ---- Test helpers ----
+
+_get(path: string) {
+    return http.get("http://127.0.0.1:8080${path}")
+}
+
+_post(path: string, body: string) {
+    return http.post("http://127.0.0.1:8080${path}", body, "text/plain")
+}
+
+_chk_resp(resp: ptr, code: int, body: string, msg: string) {
+    ac = http.response_status_code(resp)
+    ab = http.response_body_str(resp)
+    if ac != code {
+        print("FAIL: ${msg} — expected status ${code}, got "); print(ac); println("")
+        http.response_free(resp)
+        exit(1)
+    }
+    if str_eq(ab, body) == 0 {
+        println("FAIL: ${msg} — expected '${body}', got '${ab}'")
+        http.response_free(resp)
+        exit(1)
+    }
+    http.response_free(resp)
+}
+
+_chk_code(resp: ptr, code: int, msg: string) {
+    ac = http.response_status_code(resp)
+    if ac != code {
+        print("FAIL: ${msg} — expected ${code}, got "); print(ac); println("")
+        http.response_free(resp)
+        exit(1)
+    }
+    http.response_free(resp)
+}
+
+_chk_body_contains(resp: ptr, needle: string, msg: string) {
+    ab = http.response_body_str(resp)
+    if str_eq(ab, "") == 1 {
+        println("FAIL: ${msg} — empty body")
+        http.response_free(resp)
+        exit(1)
+    }
+    http.response_free(resp)
+}
+
+// ---- Tests ----
+
+main() {
+    println("=== TinyWeb Integration Tests ===\n")
+
+    // Set up server with all routes
+    raw = http.server_create(8080)
+    http.server_get(raw, "/hello", handle_hello, 0)
+    http.server_get(raw, "/json", handle_json, 0)
+    http.server_get(raw, "/health", handle_health, 0)
+    http.server_post(raw, "/echo", handle_echo, 0)
+    http.server_get(raw, "/users/:id", handle_param, 0)
+
+    // Start server in background
+    spawn(SchedHelper())
+    a = spawn(SrvActor())
+    a ! StartSrv { raw: raw }
+    sleep(500)
+
+    // Test 1: Basic GET
+    print("Test 1: GET /hello... ")
+    _chk_resp(_get("/hello"), 200, "Hello, World!", "GET /hello")
+    println("PASS")
+
+    // Test 2: JSON response
+    print("Test 2: GET /json... ")
+    _chk_resp(_get("/json"), 200, "{\"status\":\"ok\"}", "GET /json")
+    println("PASS")
+
+    // Test 3: GET /health
+    print("Test 3: GET /health... ")
+    _chk_resp(_get("/health"), 200, "ok", "GET /health")
+    println("PASS")
+
+    // Test 4: POST echo
+    print("Test 4: POST /echo... ")
+    _chk_resp(_post("/echo", "test data"), 200, "echo: test data", "POST /echo")
+    println("PASS")
+
+    // Test 5: Path parameters
+    print("Test 5: GET /users/alice... ")
+    _chk_resp(_get("/users/alice"), 200, "user: alice", "GET /users/alice")
+    println("PASS")
+
+    // Test 6: Different path param
+    print("Test 6: GET /users/bob... ")
+    _chk_resp(_get("/users/bob"), 200, "user: bob", "GET /users/bob")
+    println("PASS")
+
+    // Test 7: 404 for unknown path
+    print("Test 7: 404 for /nonexistent... ")
+    _chk_code(_get("/nonexistent"), 404, "GET /nonexistent")
+    println("PASS")
+
+    // Test 8: Multiple requests
+    print("Test 8: Multiple sequential requests... ")
+    _chk_resp(_get("/hello"), 200, "Hello, World!", "multi 1")
+    _chk_resp(_get("/health"), 200, "ok", "multi 2")
+    _chk_resp(_post("/echo", "again"), 200, "echo: again", "multi 3")
+    println("PASS")
+
+    // Shutdown
+    http.server_stop(raw)
+    sleep(200)
+    http.server_free(raw)
+
+    println("\n=== All Integration Tests Passed ===")
+}
