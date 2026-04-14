@@ -277,17 +277,44 @@ test-ae: compiler ae stdlib
 	@echo "  Parallel: $(NPROC) jobs"
 	@echo "==================================="
 	@tmpdir=$$(mktemp -d); \
+	script="$$tmpdir/run_test.sh"; \
+	printf '#!/bin/sh\n'                                                                             > "$$script"; \
+	printf 'f="$$1"; tmpdir="$$2"; root="$$3"\n'                                                    >> "$$script"; \
+	printf 'name=$$(echo "$$f" | sed "s|tests/||;s|/|_|g;s|\\.ae$$||")\n'                         >> "$$script"; \
+	printf 'dir=$$(dirname "$$f")\n'                                                                >> "$$script"; \
+	printf 'base=$$(basename "$$f")\n'                                                              >> "$$script"; \
+	printf 'if [ -d "$$dir/lib" ]; then\n'                                                          >> "$$script"; \
+	printf '  cmd="cd $$dir && $$root/build/ae build $$base -o $$root/build/test_$$name"\n'         >> "$$script"; \
+	printf 'else\n'                                                                                 >> "$$script"; \
+	printf '  cmd="$$root/build/ae build $$f -o $$root/build/test_$$name"\n'                        >> "$$script"; \
+	printf 'fi\n'                                                                                   >> "$$script"; \
+	printf 'if eval "$$cmd" >"$$tmpdir/build_$$name.out" 2>"$$tmpdir/build_$$name.err"; then\n'     >> "$$script"; \
+	printf '  "$$root/build/test_$$name" >"$$tmpdir/run_$$name.out" 2>"$$tmpdir/run_$$name.err"\n'  >> "$$script"; \
+	printf '  rc=$$?\n'                                                                             >> "$$script"; \
+	printf '  if [ $$rc -eq 0 ]; then\n'                                                            >> "$$script"; \
+	printf '    echo "  [PASS] $$name"; touch "$$tmpdir/PASS_$$name"\n'                             >> "$$script"; \
+	printf '  else\n'                                                                               >> "$$script"; \
+	printf '    echo "  [FAIL] $$name (runtime error, exit $$rc)"\n'                                >> "$$script"; \
+	printf '    printf runtime > "$$tmpdir/phase_$$name.txt"\n'                                     >> "$$script"; \
+	printf '    printf %%s "$$rc" > "$$tmpdir/rc_$$name.txt"\n'                                     >> "$$script"; \
+	printf '    touch "$$tmpdir/FAIL_$$name"\n'                                                     >> "$$script"; \
+	printf '  fi\n'                                                                                 >> "$$script"; \
+	printf 'else\n'                                                                                 >> "$$script"; \
+	printf '  echo "  [FAIL] $$name (compile error)"\n'                                             >> "$$script"; \
+	printf '  printf compile > "$$tmpdir/phase_$$name.txt"\n'                                       >> "$$script"; \
+	printf '  touch "$$tmpdir/FAIL_$$name"\n'                                                       >> "$$script"; \
+	printf 'fi\n'                                                                                   >> "$$script"; \
+	chmod +x "$$script"; \
 	root=$$(pwd); \
-	script="$$root/tests/scripts/run_ae_test.sh"; \
 	find tests/syntax tests/compiler tests/integration -path '*/lib/*' -prune -o -path '*/custom_lib_dir/*' -prune -o -name '*.ae' -print 2>/dev/null | sort | \
-	xargs -P $(NPROC) -I{} sh "$$script" "{}" "$$tmpdir" "$$root"; \
+	xargs -P $(NPROC) -I{} "$$script" "{}" "$$tmpdir" "$$root"; \
 	for sh_test in $$(find tests/integration -name 'test_*.sh' 2>/dev/null | sort); do \
 		name=$$(echo "$$sh_test" | sed 's|tests/||;s|/|_|g;s|\.sh$$||'); \
 		if sh "$$sh_test" >"$$tmpdir/run_$$name.out" 2>"$$tmpdir/run_$$name.err"; then \
 			echo "  [PASS] $$name"; touch "$$tmpdir/PASS_$$name"; \
 		else \
 			echo "  [FAIL] $$name (shell test)"; \
-			printf 'shell\n' > "$$tmpdir/phase_$$name.txt"; \
+			printf 'shell' > "$$tmpdir/phase_$$name.txt"; \
 			touch "$$tmpdir/FAIL_$$name"; \
 		fi; \
 	done; \
@@ -309,7 +336,7 @@ test-ae: compiler ae stdlib
 				runtime) rc=$$(cat "$$tmpdir/rc_$$fname.txt" 2>/dev/null || echo '?'); \
 				         echo "  [FAIL] $$fname — runtime error (exit $$rc)" ;; \
 				shell)   echo "  [FAIL] $$fname — shell test failure" ;; \
-				*)       echo "  [FAIL] $$fname — unknown phase ($$phase)" ;; \
+				*)       echo "  [FAIL] $$fname — $$phase" ;; \
 			esac; \
 			echo "----------------------------------------------------------------"; \
 			if [ "$$phase" = "compile" ]; then \
@@ -321,7 +348,7 @@ test-ae: compiler ae stdlib
 					echo "  --- compile stdout ---"; \
 					sed 's/^/    /' "$$tmpdir/build_$$fname.out"; \
 				fi; \
-			elif [ "$$phase" = "runtime" ]; then \
+			else \
 				if [ -s "$$tmpdir/run_$$fname.out" ]; then \
 					echo "  --- stdout ---"; \
 					sed 's/^/    /' "$$tmpdir/run_$$fname.out"; \
@@ -331,16 +358,7 @@ test-ae: compiler ae stdlib
 					sed 's/^/    /' "$$tmpdir/run_$$fname.err"; \
 				fi; \
 				if [ ! -s "$$tmpdir/run_$$fname.out" ] && [ ! -s "$$tmpdir/run_$$fname.err" ]; then \
-					echo "  (no output captured — binary exited $$rc with no stdout/stderr)"; \
-				fi; \
-			else \
-				if [ -s "$$tmpdir/run_$$fname.out" ]; then \
-					echo "  --- stdout ---"; \
-					sed 's/^/    /' "$$tmpdir/run_$$fname.out"; \
-				fi; \
-				if [ -s "$$tmpdir/run_$$fname.err" ]; then \
-					echo "  --- stderr ---"; \
-					sed 's/^/    /' "$$tmpdir/run_$$fname.err"; \
+					echo "  (binary exited non-zero with no stdout/stderr)"; \
 				fi; \
 			fi; \
 		done; \
