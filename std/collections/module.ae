@@ -33,7 +33,7 @@ extern map_keys_free(keys: ptr)
 list_add(list: ptr, item: ptr) -> {
     ok = list_add_raw(list, item)
     if ok == 0 {
-        return "list_add failed"
+        return "list.add failed"
     }
     return ""
 }
@@ -42,7 +42,7 @@ list_add(list: ptr, item: ptr) -> {
 map_put(map: ptr, key: string, value: ptr) -> {
     ok = map_put_raw(map, key, value)
     if ok == 0 {
-        return "map_put failed"
+        return "map.put failed"
     }
     return ""
 }
