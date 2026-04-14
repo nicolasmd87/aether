@@ -59,13 +59,13 @@ try_read(path: string) {
 }
 
 try_exec(cmd: string) {
-    result = os_exec(cmd)
-    if result != null {
+    result, err = os.exec(cmd)
+    if err == "" {
         println("    \x1b[32m[ALLOW]\x1b[0m exec ${cmd}")
-        free(result)
     } else {
         println("    \x1b[31m[DENY]\x1b[0m  exec ${cmd}")
     }
+    _ = result
 }
 
 // ---- Demo ----
