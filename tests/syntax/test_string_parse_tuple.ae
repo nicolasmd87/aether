@@ -1,0 +1,70 @@
+// Test: string.to_int/to_long/to_float/to_double Go-style wrappers.
+// Replaces the out-parameter pattern (`string_to_int(s, &out)`) with
+// native tuple destructuring.
+
+import std.string
+
+main() {
+    // to_int success
+    n, err = string.to_int("42")
+    if err != "" {
+        println("FAIL: to_int(42) returned error: ${err}")
+        exit(1)
+    }
+    if n != 42 {
+        println("FAIL: to_int(42) returned ${n}")
+        exit(1)
+    }
+
+    // to_int failure
+    _, err2 = string.to_int("not a number")
+    if err2 == "" {
+        println("FAIL: to_int('not a number') should error")
+        exit(1)
+    }
+
+    // to_int with trailing garbage
+    _, err3 = string.to_int("42x")
+    if err3 == "" {
+        println("FAIL: to_int('42x') should error on trailing")
+        exit(1)
+    }
+
+    // to_int with negative
+    neg, nerr = string.to_int("-17")
+    if nerr != "" {
+        println("FAIL: to_int(-17) errored: ${nerr}")
+        exit(1)
+    }
+    if neg != -17 {
+        println("FAIL: to_int(-17) returned ${neg}")
+        exit(1)
+    }
+
+    // to_float success
+    f, ferr = string.to_float("3.14")
+    if ferr != "" {
+        println("FAIL: to_float(3.14) errored: ${ferr}")
+        exit(1)
+    }
+
+    // to_float failure
+    _, ferr2 = string.to_float("not a number")
+    if ferr2 == "" {
+        println("FAIL: to_float should error on bad input")
+        exit(1)
+    }
+
+    // to_double success
+    d, derr = string.to_double("2.71828")
+    if derr != "" {
+        println("FAIL: to_double errored: ${derr}")
+        exit(1)
+    }
+
+    // Silence unused-variable warnings for values we only need to exist.
+    _ = f
+    _ = d
+
+    println("string parse tuple wrappers ok")
+}

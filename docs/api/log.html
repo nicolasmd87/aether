@@ -15,7 +15,7 @@
   <input type="text" id="search" placeholder="Search log..." onkeyup="searchModule()">
   <h2>Functions</h2>
   <ul class="function-nav">
-    <li><a href="#log_init">log_init</a></li>
+    <li><a href="#log_init_raw">log_init_raw</a></li>
     <li><a href="#log_init_with_config">log_init_with_config</a></li>
     <li><a href="#log_shutdown">log_shutdown</a></li>
     <li><a href="#log_write">log_write</a></li>
@@ -33,6 +33,7 @@
     <li><a href="math.html">math</a></li>
     <li><a href="json.html">json</a></li>
     <li class="active"><a href="log.html">log</a></li>
+    <li><a href="os.html">os</a></li>
     <li><a href="string.html">string</a></li>
     <li><a href="collections.html">collections</a></li>
     <li><a href="fs.html">fs</a></li>
@@ -44,10 +45,10 @@
     <p class="module-desc">Logging and diagnostics</p>
   </div>
   <div class="functions" id="functions">
-    <div class="function" id="log_init" data-name="log_init">
-      <h3 class="function-name">log_init</h3>
-      <pre class="usage"><code>log_init(filename, min_level)</code></pre>
-      <p class="doc">Initialize logging system</p>
+    <div class="function" id="log_init_raw" data-name="log_init_raw">
+      <h3 class="function-name">log_init_raw</h3>
+      <pre class="usage"><code>log_init_raw(filename, min_level)</code></pre>
+      <p class="doc">Initialize logging system. Returns 1 on success, 0 if the requested log file could not be opened (logging still works via stderr).</p>
     </div>
     <div class="function" id="log_init_with_config" data-name="log_init_with_config">
       <h3 class="function-name">log_init_with_config</h3>

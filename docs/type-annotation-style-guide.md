@@ -90,7 +90,7 @@ int result = parse_number(input)  // Clarifies we want int, not float
 actor Counter {
     state count: int           // Explicit for clarity
     state name: string
-    state values: [int]
+    state values: int[]
     state users: ptr
     
     // ...
@@ -104,7 +104,7 @@ struct User {
     string name
     string email
     bool active
-    [string] tags
+    string[] tags
 }
 ```
 

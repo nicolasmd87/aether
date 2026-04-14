@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>os - Aether</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<nav class="sidebar">
+  <div class="sidebar-header">
+    <h1><a href="index.html">Aether</a></h1>
+    <p class="tagline">Standard Library</p>
+  </div>
+  <input type="text" id="search" placeholder="Search os..." onkeyup="searchModule()">
+  <h2>Functions</h2>
+  <ul class="function-nav">
+    <li><a href="#os_system">os_system</a></li>
+    <li><a href="#os_exec_raw">os_exec_raw</a></li>
+    <li><a href="#os_getenv">os_getenv</a></li>
+  </ul>
+  <hr>
+  <h2>Modules</h2>
+  <ul class="module-list">
+    <li><a href="net.html">net</a></li>
+    <li><a href="io.html">io</a></li>
+    <li><a href="math.html">math</a></li>
+    <li><a href="json.html">json</a></li>
+    <li><a href="log.html">log</a></li>
+    <li class="active"><a href="os.html">os</a></li>
+    <li><a href="string.html">string</a></li>
+    <li><a href="collections.html">collections</a></li>
+    <li><a href="fs.html">fs</a></li>
+  </ul>
+</nav>
+<main class="content">
+  <div class="module-header">
+    <h1>os</h1>
+    <p class="module-desc"></p>
+  </div>
+  <div class="functions" id="functions">
+    <div class="function" id="os_system" data-name="os_system">
+      <h3 class="function-name">os_system</h3>
+      <pre class="usage"><code>os_system(cmd)</code></pre>
+      <p class="doc">Run a shell command, return exit code</p>
+    </div>
+    <div class="function" id="os_exec_raw" data-name="os_exec_raw">
+      <h3 class="function-name">os_exec_raw</h3>
+      <pre class="usage"><code>os_exec_raw(cmd)</code></pre>
+      <p class="doc">Run a command and capture stdout as a string Returns heap-allocated string (caller must free), or NULL on failure</p>
+    </div>
+    <div class="function" id="os_getenv" data-name="os_getenv">
+      <h3 class="function-name">os_getenv</h3>
+      <pre class="usage"><code>os_getenv(name)</code></pre>
+      <p class="doc">Get environment variable, returns string or NULL if not set</p>
+    </div>
+  </div>
+</main>
+<script src="search.js"></script>
+</body>
+</html>

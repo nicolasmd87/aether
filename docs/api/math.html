@@ -15,14 +15,14 @@
   <input type="text" id="search" placeholder="Search math..." onkeyup="searchModule()">
   <h2>Functions</h2>
   <ul class="function-nav">
-    <li><a href="#abs_int">abs_int</a></li>
-    <li><a href="#abs_float">abs_float</a></li>
-    <li><a href="#min_int">min_int</a></li>
-    <li><a href="#max_int">max_int</a></li>
-    <li><a href="#min_float">min_float</a></li>
-    <li><a href="#max_float">max_float</a></li>
-    <li><a href="#clamp_int">clamp_int</a></li>
-    <li><a href="#clamp_float">clamp_float</a></li>
+    <li><a href="#math_abs_int">math_abs_int</a></li>
+    <li><a href="#math_abs_float">math_abs_float</a></li>
+    <li><a href="#math_min_int">math_min_int</a></li>
+    <li><a href="#math_max_int">math_max_int</a></li>
+    <li><a href="#math_min_float">math_min_float</a></li>
+    <li><a href="#math_max_float">math_max_float</a></li>
+    <li><a href="#math_clamp_int">math_clamp_int</a></li>
+    <li><a href="#math_clamp_float">math_clamp_float</a></li>
     <li><a href="#math_sqrt">math_sqrt</a></li>
     <li><a href="#math_pow">math_pow</a></li>
     <li><a href="#math_sin">math_sin</a></li>
@@ -38,9 +38,9 @@
     <li><a href="#math_log">math_log</a></li>
     <li><a href="#math_log10">math_log10</a></li>
     <li><a href="#math_exp">math_exp</a></li>
-    <li><a href="#random_seed">random_seed</a></li>
-    <li><a href="#random_int">random_int</a></li>
-    <li><a href="#random_float">random_float</a></li>
+    <li><a href="#math_random_seed">math_random_seed</a></li>
+    <li><a href="#math_random_int">math_random_int</a></li>
+    <li><a href="#math_random_float">math_random_float</a></li>
   </ul>
   <hr>
   <h2>Modules</h2>
@@ -50,6 +50,7 @@
     <li class="active"><a href="math.html">math</a></li>
     <li><a href="json.html">json</a></li>
     <li><a href="log.html">log</a></li>
+    <li><a href="os.html">os</a></li>
     <li><a href="string.html">string</a></li>
     <li><a href="collections.html">collections</a></li>
     <li><a href="fs.html">fs</a></li>
@@ -61,38 +62,38 @@
     <p class="module-desc">Mathematical functions</p>
   </div>
   <div class="functions" id="functions">
-    <div class="function" id="abs_int" data-name="abs_int">
-      <h3 class="function-name">abs_int</h3>
-      <pre class="usage"><code>abs_int(x)</code></pre>
+    <div class="function" id="math_abs_int" data-name="math_abs_int">
+      <h3 class="function-name">math_abs_int</h3>
+      <pre class="usage"><code>math_abs_int(x)</code></pre>
       <p class="doc">Basic math operations</p>
     </div>
-    <div class="function" id="abs_float" data-name="abs_float">
-      <h3 class="function-name">abs_float</h3>
-      <pre class="usage"><code>abs_float(x)</code></pre>
+    <div class="function" id="math_abs_float" data-name="math_abs_float">
+      <h3 class="function-name">math_abs_float</h3>
+      <pre class="usage"><code>math_abs_float(x)</code></pre>
     </div>
-    <div class="function" id="min_int" data-name="min_int">
-      <h3 class="function-name">min_int</h3>
-      <pre class="usage"><code>min_int(a, b)</code></pre>
+    <div class="function" id="math_min_int" data-name="math_min_int">
+      <h3 class="function-name">math_min_int</h3>
+      <pre class="usage"><code>math_min_int(a, b)</code></pre>
     </div>
-    <div class="function" id="max_int" data-name="max_int">
-      <h3 class="function-name">max_int</h3>
-      <pre class="usage"><code>max_int(a, b)</code></pre>
+    <div class="function" id="math_max_int" data-name="math_max_int">
+      <h3 class="function-name">math_max_int</h3>
+      <pre class="usage"><code>math_max_int(a, b)</code></pre>
     </div>
-    <div class="function" id="min_float" data-name="min_float">
-      <h3 class="function-name">min_float</h3>
-      <pre class="usage"><code>min_float(a, b)</code></pre>
+    <div class="function" id="math_min_float" data-name="math_min_float">
+      <h3 class="function-name">math_min_float</h3>
+      <pre class="usage"><code>math_min_float(a, b)</code></pre>
     </div>
-    <div class="function" id="max_float" data-name="max_float">
-      <h3 class="function-name">max_float</h3>
-      <pre class="usage"><code>max_float(a, b)</code></pre>
+    <div class="function" id="math_max_float" data-name="math_max_float">
+      <h3 class="function-name">math_max_float</h3>
+      <pre class="usage"><code>math_max_float(a, b)</code></pre>
     </div>
-    <div class="function" id="clamp_int" data-name="clamp_int">
-      <h3 class="function-name">clamp_int</h3>
-      <pre class="usage"><code>clamp_int(x, min, max)</code></pre>
+    <div class="function" id="math_clamp_int" data-name="math_clamp_int">
+      <h3 class="function-name">math_clamp_int</h3>
+      <pre class="usage"><code>math_clamp_int(x, min, max)</code></pre>
     </div>
-    <div class="function" id="clamp_float" data-name="clamp_float">
-      <h3 class="function-name">clamp_float</h3>
-      <pre class="usage"><code>clamp_float(x, min, max)</code></pre>
+    <div class="function" id="math_clamp_float" data-name="math_clamp_float">
+      <h3 class="function-name">math_clamp_float</h3>
+      <pre class="usage"><code>math_clamp_float(x, min, max)</code></pre>
     </div>
     <div class="function" id="math_sqrt" data-name="math_sqrt">
       <h3 class="function-name">math_sqrt</h3>
@@ -155,18 +156,18 @@
       <h3 class="function-name">math_exp</h3>
       <pre class="usage"><code>math_exp(x)</code></pre>
     </div>
-    <div class="function" id="random_seed" data-name="random_seed">
-      <h3 class="function-name">random_seed</h3>
-      <pre class="usage"><code>random_seed(seed)</code></pre>
+    <div class="function" id="math_random_seed" data-name="math_random_seed">
+      <h3 class="function-name">math_random_seed</h3>
+      <pre class="usage"><code>math_random_seed(seed)</code></pre>
       <p class="doc">Random numbers</p>
     </div>
-    <div class="function" id="random_int" data-name="random_int">
-      <h3 class="function-name">random_int</h3>
-      <pre class="usage"><code>random_int(min, max)</code></pre>
+    <div class="function" id="math_random_int" data-name="math_random_int">
+      <h3 class="function-name">math_random_int</h3>
+      <pre class="usage"><code>math_random_int(min, max)</code></pre>
     </div>
-    <div class="function" id="random_float" data-name="random_float">
-      <h3 class="function-name">random_float</h3>
-      <pre class="usage"><code>random_float()</code></pre>
+    <div class="function" id="math_random_float" data-name="math_random_float">
+      <h3 class="function-name">math_random_float</h3>
+      <pre class="usage"><code>math_random_float()</code></pre>
     </div>
   </div>
 </main>
