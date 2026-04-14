@@ -346,14 +346,23 @@ static void dirlist_add(DirList* list, const char* path) {
 }
 
 #ifndef _WIN32
-// Recursive walk for ** patterns (POSIX only)
+// Recursive walk for ** patterns (POSIX only).
+// Skips '.' and '..', and skips dot-prefixed directories (e.g. .git, .aeb)
+// from recursion — but matches dot-prefixed FILES against the suffix pattern.
+// Without this, patterns like "**/.build.ae" or "**/.*.ae" would never find
+// dot-prefixed config files.
 static void walk_recursive(const char* dir, const char* suffix_pattern, DirList* result) {
     DIR* d = opendir(dir);
     if (!d) return;
 
     struct dirent* entry;
     while ((entry = readdir(d)) != NULL) {
-        if (entry->d_name[0] == '.') continue;  // skip hidden + . and ..
+        // Always skip '.' and '..'
+        if (entry->d_name[0] == '.' &&
+            (entry->d_name[1] == '\0' ||
+             (entry->d_name[1] == '.' && entry->d_name[2] == '\0'))) {
+            continue;
+        }
 
         char fullpath[4096];
         snprintf(fullpath, sizeof(fullpath), "%s/%s", dir, entry->d_name);
@@ -362,11 +371,18 @@ static void walk_recursive(const char* dir, const char* suffix_pattern, DirList*
         if (stat(fullpath, &st) != 0) continue;
 
         if (S_ISDIR(st.st_mode)) {
-            // Recurse into subdirectory
+            // Skip dot-prefixed directories (.git, .aeb, .vscode, …) from
+            // recursion. Most build/config systems keep these as opaque
+            // metadata, and the existing aeb scan excluded them too.
+            if (entry->d_name[0] == '.') continue;
             walk_recursive(fullpath, suffix_pattern, result);
         } else {
-            // Check if filename matches the suffix pattern (e.g., "*.c")
-            if (fnmatch(suffix_pattern, entry->d_name, 0) == 0) {
+            // Match suffix pattern against the file name. Use FNM_PERIOD
+            // to require explicit leading-dot matching for dot-prefixed
+            // files — that matches POSIX shell-glob expectations and
+            // means a pattern like ".*.ae" picks up ".build.ae" while
+            // "*.ae" still doesn't.
+            if (fnmatch(suffix_pattern, entry->d_name, FNM_PERIOD) == 0) {
                 dirlist_add(result, fullpath);
             }
         }
