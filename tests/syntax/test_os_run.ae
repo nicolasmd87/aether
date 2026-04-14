@@ -1,0 +1,114 @@
+// Test: os_run / os_run_capture_raw argv-based child process launch.
+//
+// The point of os_run is that there is NO SHELL between us and the child:
+// argv items are passed verbatim, so paths-with-spaces, $variables, |, ;,
+// *, and other shell metacharacters are not interpreted.
+//
+// Windows note: os_run and os_run_capture_raw are stubbed on Windows
+// pending CreateProcessW. The test detects Windows via $OS and SKIPs.
+
+import std.os
+import std.list
+import std.string
+
+extern println(s: string)
+extern exit(code: int)
+
+fail(msg: string) {
+    println("FAIL: ${msg}")
+    exit(1)
+}
+
+main() {
+    if os_getenv("OS") == "Windows_NT" {
+        println("SKIP os_run: Windows backend not yet implemented")
+        return
+    }
+
+    // Hoist accumulators to function scope (codegen scopes block-introduced
+    // vars per C block, so reusing across sibling blocks needs hoisting).
+    rc = 0
+    out = string_concat("", "")
+    argv = list.new()
+    env = list.new()
+
+    // 1. /bin/true should exit 0
+    argv = list.new()
+    rc = os_run("/bin/true", argv, 0)
+    if rc != 0 { fail("/bin/true should return 0") }
+
+    // 2. /bin/false should exit 1
+    argv = list.new()
+    rc = os_run("/bin/false", argv, 0)
+    if rc != 1 { fail("/bin/false should return 1") }
+
+    // 3. /bin/echo with arguments, captured stdout
+    argv = list.new()
+    _a1 = list.add(argv, "hello")
+    _a2 = list.add(argv, "world")
+    out = os_run_capture_raw("/bin/echo", argv, 0)
+    if out != "hello world\n" {
+        fail("echo hello world produced unexpected output")
+    }
+
+    // 4. Special shell metacharacters in argv MUST NOT be interpreted.
+    argv = list.new()
+    _a3 = list.add(argv, "$HOME")
+    _a4 = list.add(argv, "|")
+    _a5 = list.add(argv, "*")
+    _a6 = list.add(argv, ";")
+    _a7 = list.add(argv, "rm -rf /")
+    out = os_run_capture_raw("/bin/echo", argv, 0)
+    if out != "$HOME | * ; rm -rf /\n" {
+        fail("shell metachars were interpreted instead of passed verbatim")
+    }
+
+    // 5. Arguments containing spaces — no shell quoting needed.
+    argv = list.new()
+    _a8 = list.add(argv, "two words")
+    _a9 = list.add(argv, "and another two")
+    out = os_run_capture_raw("/bin/echo", argv, 0)
+    if out != "two words and another two\n" {
+        fail("spaces in argv items were not preserved")
+    }
+
+    // 6. Custom env with explicit KEY=VALUE entries.
+    argv = list.new()
+    env = list.new()
+    _e1 = list.add(env, "FOO=bar")
+    _e2 = list.add(env, "BAZ=qux")
+    out = os_run_capture_raw("/usr/bin/env", argv, env)
+    if string_contains(out, "FOO=bar") == 0 { fail("FOO=bar not in env output") }
+    if string_contains(out, "BAZ=qux") == 0 { fail("BAZ=qux not in env output") }
+
+    // 7. NULL env inherits parent's environment.
+    argv = list.new()
+    out = os_run_capture_raw("/usr/bin/env", argv, 0)
+    if string_contains(out, "PATH=") == 0 {
+        fail("inherited env should include PATH")
+    }
+
+    // 8. PATH-resolved program name (no leading slash).
+    argv = list.new()
+    rc = os_run("true", argv, 0)
+    if rc != 0 { fail("PATH-resolved 'true' should return 0") }
+
+    // 9. Spawn failure: non-existent program returns nonzero.
+    argv = list.new()
+    rc = os_run("/this/program/definitely/does/not/exist", argv, 0)
+    if rc == 0 {
+        fail("missing program should not return 0")
+    }
+
+    // 10. Large captured output — forces several reallocs.
+    argv = list.new()
+    _a10 = list.add(argv, "1")
+    _a11 = list.add(argv, "2000")
+    out = os_run_capture_raw("/usr/bin/seq", argv, 0)
+    if string_length(out) < 5 { fail("seq output too short") }
+    if string_index_of(out, "2000\n") < 0 {
+        fail("seq output missing terminal '2000\\n'")
+    }
+
+    println("PASS os_run")
+}
