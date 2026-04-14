@@ -288,7 +288,7 @@ test-ae: compiler ae stdlib
 	printf 'else\n'                                                                                 >> "$$script"; \
 	printf '  cmd="$$root/build/ae build $$f -o $$root/build/test_$$name"\n'                        >> "$$script"; \
 	printf 'fi\n'                                                                                   >> "$$script"; \
-	printf 'if eval "$$cmd" >"$$tmpdir/build_$$name.out" 2>"$$tmpdir/build_$$name.err"; then\n'     >> "$$script"; \
+	printf 'if eval "$$cmd" 2>"$$tmpdir/build_$$name.err"; then\n'                                  >> "$$script"; \
 	printf '  "$$root/build/test_$$name" >"$$tmpdir/run_$$name.out" 2>"$$tmpdir/run_$$name.err"\n'  >> "$$script"; \
 	printf '  rc=$$?\n'                                                                             >> "$$script"; \
 	printf '  if [ $$rc -eq 0 ]; then\n'                                                            >> "$$script"; \
@@ -303,6 +303,7 @@ test-ae: compiler ae stdlib
 	printf '  echo "  [FAIL] $$name (compile error)"\n'                                             >> "$$script"; \
 	printf '  printf compile > "$$tmpdir/phase_$$name.txt"\n'                                       >> "$$script"; \
 	printf '  touch "$$tmpdir/FAIL_$$name"\n'                                                       >> "$$script"; \
+	printf '  head -5 "$$tmpdir/build_$$name.err" 2>/dev/null\n'                                    >> "$$script"; \
 	printf 'fi\n'                                                                                   >> "$$script"; \
 	chmod +x "$$script"; \
 	root=$$(pwd); \
@@ -323,47 +324,32 @@ test-ae: compiler ae stdlib
 	total=$$((passed + failed)); \
 	echo ""; \
 	if [ "$$failed" -gt 0 ]; then \
-		echo "================================================================"; \
-		echo "  FAILURE DETAILS"; \
-		echo "================================================================"; \
+		echo "=== FAILURE DETAILS ==="; \
 		for fail_file in "$$tmpdir"/FAIL_*; do \
 			fname=$$(basename "$$fail_file" | sed 's/^FAIL_//'); \
 			phase=$$(cat "$$tmpdir/phase_$$fname.txt" 2>/dev/null || echo unknown); \
-			echo ""; \
-			echo "----------------------------------------------------------------"; \
 			case "$$phase" in \
-				compile) echo "  [FAIL] $$fname — compile error" ;; \
+				compile) echo "--- $$fname (compile error) ---" ;; \
 				runtime) rc=$$(cat "$$tmpdir/rc_$$fname.txt" 2>/dev/null || echo '?'); \
-				         echo "  [FAIL] $$fname — runtime error (exit $$rc)" ;; \
-				shell)   echo "  [FAIL] $$fname — shell test failure" ;; \
-				*)       echo "  [FAIL] $$fname — $$phase" ;; \
+				         echo "--- $$fname (runtime error, exit $$rc) ---" ;; \
+				shell)   echo "--- $$fname (shell test) ---" ;; \
+				*)       echo "--- $$fname ---" ;; \
 			esac; \
-			echo "----------------------------------------------------------------"; \
 			if [ "$$phase" = "compile" ]; then \
-				if [ -s "$$tmpdir/build_$$fname.err" ]; then \
-					echo "  --- compile stderr ---"; \
-					sed 's/^/    /' "$$tmpdir/build_$$fname.err"; \
-				fi; \
-				if [ -s "$$tmpdir/build_$$fname.out" ]; then \
-					echo "  --- compile stdout ---"; \
-					sed 's/^/    /' "$$tmpdir/build_$$fname.out"; \
-				fi; \
+				cat "$$tmpdir/build_$$fname.err" 2>/dev/null || echo "(no error output)"; \
 			else \
 				if [ -s "$$tmpdir/run_$$fname.out" ]; then \
-					echo "  --- stdout ---"; \
-					sed 's/^/    /' "$$tmpdir/run_$$fname.out"; \
+					echo "(stdout)"; cat "$$tmpdir/run_$$fname.out"; \
 				fi; \
 				if [ -s "$$tmpdir/run_$$fname.err" ]; then \
-					echo "  --- stderr ---"; \
-					sed 's/^/    /' "$$tmpdir/run_$$fname.err"; \
+					echo "(stderr)"; cat "$$tmpdir/run_$$fname.err"; \
 				fi; \
 				if [ ! -s "$$tmpdir/run_$$fname.out" ] && [ ! -s "$$tmpdir/run_$$fname.err" ]; then \
-					echo "  (binary exited non-zero with no stdout/stderr)"; \
+					echo "(no output)"; \
 				fi; \
 			fi; \
+			echo ""; \
 		done; \
-		echo ""; \
-		echo "================================================================"; \
 	fi; \
 	echo "Aether Tests: $$passed passed, $$failed failed, $$total total"; \
 	rm -rf "$$tmpdir"; \
