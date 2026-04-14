@@ -159,7 +159,7 @@ always visible inside that block, regardless of what's hidden:
    *constructing* every reference through capability objects. `hide`
    achieves "only what you didn't decline" by *subtracting* from
    lexical scope. Cheaper, weaker, available today.
-4. **The DI-flip-side of dependency injection.** DI delivers
+4. **The DI flip-side of dependency injection.** DI delivers
    capabilities to a handler. Without `hide`, the handler can always
    reach around the injection and grab ambient state — the DI is
    convention. With `hide`/`seal except`, the handler is a closed
@@ -229,3 +229,230 @@ boundary crossing into outer scopes.
 
 There is no runtime overhead. There is no codegen change. The feature
 is a pure compile-time hygiene check.
+
+---
+
+# Worked example: a solid IoC alternative to Java-style DI
+
+> Up to here is the language reference. The rest of this document is a
+> long-form worked example showing how `hide` / `seal except` enables
+> a dependency-injection story that's smaller, simpler, and **more
+> enforcing** than the Java `DependencyManager` / `ComponentCache`
+> hierarchy that the `contrib/tinyweb/` Aether port deliberately left
+> behind. Skip if you only wanted the language reference.
+
+## Q. Do we now have a solid IoC alternative to Java-style DI?
+
+> *In the `contrib/tinyweb/` Aether conversion of the Java TinyWeb thing
+> (`~/scm/tiny`) we left out `DependencyManager` and `Cache` — do we now
+> have a solid inversion-of-control alternative to that Java hackery?*
+
+Yes — with `hide` / `seal except` we now have a **better** alternative
+than the Java pattern, and it's smaller too.
+
+## The key insight
+
+The Java `DependencyManager` exists to solve a problem Java has and
+Aether (now) doesn't:
+
+> *"How do I make sure a request handler can only reach the things I
+>  deliberately handed it?"*
+
+Java's default is: every static method, every singleton, every
+classpath-reachable type is one keystroke away from any handler. The DI
+container is a *convention layer* on top of that — it organizes
+construction order, caches instances, and handles transitive deps, but
+**it cannot stop a handler from reaching around it**. `static
+Foo.INSTANCE.doStuff()` always wins. The container is fundamentally
+polite, not enforcing.
+
+Aether with `seal except` flips this. The handler **declares its
+dependency surface in one line**, and the compiler enforces it. You
+don't need a framework to give you containment — you have a language
+feature. The "container" is just ~80 lines of map plumbing.
+
+## What it looks like
+
+Registration at server-build time:
+
+```aether
+srv = web_server(8080) {
+
+    // Three scopes — the factory's scope determines its cache lifetime.
+    app_factory("inventory") callback { return new_inventory() }
+    app_factory("db") callback { return open_db() }
+
+    session_factory("cart") callback { return new_cart() }
+    session_factory("user_prefs") callback {
+        // Factories can themselves use `dep` to ask for other things.
+        // The resolver walks app → session → request looking for them.
+        u = dep(ctx, "user")
+        return load_prefs(u)
+    }
+
+    request_factory("logger") callback {
+        return new_request_logger(dep(ctx, "request_id"))
+    }
+
+    path("/cart") {
+        end_point(POST, "/add") |req, res, ctx| {
+            seal except req, res, ctx, dep, response_write, response_status
+
+            inventory = dep(ctx, "inventory")   // app-scoped (cached for server lifetime)
+            cart      = dep(ctx, "cart")        // session-scoped (cached per session)
+
+            sku = request_get_query(req, "sku")
+            if map_has(inventory, sku) == 0 {
+                response_status(res, 404)
+                response_write(res, "unknown sku")
+                return 0
+            }
+            cart_add(cart, sku)
+            response_write(res, "added")
+        }
+    }
+}
+```
+
+The `seal except` line is **the entire dependency surface** of that
+handler. A reviewer reads it and knows: this handler can touch `req`,
+`res`, `ctx`, `dep`, `response_write`, `response_status`. Nothing else
+from any outer scope. If someone later edits the handler to grab `db`
+directly, the compiler refuses.
+
+## What you give up vs. Java
+
+| Java DM | Aether equivalent | Trade |
+|---|---|---|
+| `dep(Cart.class)` returns typed `Cart` | `dep(ctx, "cart")` returns generic `ptr` | Lose compile-time type safety on lookups. Mitigate with typed wrappers: `cart(ctx)` that internally does `(Cart*) dep(ctx, "cart")`. One line per type. |
+| Constructor-injection static graph analysis at startup | Name-based lookup deferred to first request | Mitigate with a `validate(srv)` pass at `server_start` that walks every registered factory's body and ensures every name it asks for has a registration somewhere. ~30 lines of compile-time-ish reflection over the closure registry. |
+| `@Inject` / `@Component` / `@Singleton` / `@RequestScoped` annotations | Three explicit functions: `app_factory`, `session_factory`, `request_factory` | Aether's wins — you can see at the registration site exactly what scope it's in. No "where is this annotation processed?" hunt. |
+| `ComponentCache` / `DefaultComponentCache` / `UseOnceComponentCache` interface hierarchy | Three maps carried in `ctx`: `app_cache`, `session_cache`, `request_cache` | Aether's wins — no interface, no implementation classes, no factory pattern, just maps. |
+| `DependencyException` when resolution fails | `dep(ctx, name)` returns null + a runtime check, or `validate(srv)` catches it at startup | Comparable. |
+| `RequestContext.dep()` interface | A `dep(ctx, name)` function | Same. |
+
+The biggest real loss is **type safety on lookups**. The fix is one
+wrapper function per type:
+
+```aether
+inventory(ctx) { return dep(ctx, "inventory") }   // returns ptr but named-as-inventory
+cart(ctx)      { return dep(ctx, "cart") }
+db(ctx)        { return dep(ctx, "db") }
+```
+
+Now handlers say `cart(ctx)` instead of `dep(ctx, "cart")`, and a typo
+on the dep name is caught at startup by `validate(srv)` walking the
+factory closures. Type errors on USING the result are caught the moment
+you try to pass it to a function expecting the wrong shape.
+
+## What you GAIN over Java
+
+1. **The `seal except` line IS the constructor injection list.** No
+   `@Inject final Cart cart;`, no constructor, no field declaration.
+   Five names on one line.
+
+2. **The handler is a closure, not a class.** No `new
+   CartAddHandler(deps...)` boilerplate, no class file per endpoint, no
+   inheritance from `AbstractHandler`. The handler IS the trailing
+   block.
+
+3. **Compile-time enforced containment.** Java's DM is a convention —
+   `Foo.INSTANCE` always wins. Aether's `seal except` is enforced — the
+   compiler refuses to resolve `Foo.INSTANCE` at all if it's not
+   whitelisted.
+
+4. **Factories ARE closures.** They capture their lexical scope at
+   registration time, so a factory that needs config can just close
+   over it:
+
+   ```aether
+   load_config_first()    // returns a config object
+   app_factory("db") callback {
+       return open_db(config.db_url)   // closes over config
+   }
+   ```
+
+   No `@ConfigurationProperties`, no `Environment` injection, no
+   `@Value("${db.url}")`. Just a captured variable.
+
+5. **Scopes are just maps in a parent chain.** `request_cache →
+   session_cache → app_cache → null`. Resolution walks upward. Same
+   shape as `SymbolTable`'s parent chain in the compiler's
+   `lookup_symbol()`. Nice symmetry — IoC is name resolution at runtime,
+   exactly as `lookup_symbol` is name resolution at compile time. The
+   same parent-chain pattern carries the same idea.
+
+6. **Lifetimes are explicit at the call site.** `app_factory(...)`
+   reads as "this lives for the server's life". `session_factory(...)`
+   reads as "this is per session". You don't have to look up an
+   annotation processor or a Spring config class to understand a
+   component's lifetime.
+
+## What it'd take to ship in `contrib/tinyweb/`
+
+Roughly **80 lines** of additions to `module.ae`:
+
+- `app_factory(_ctx, name, factory_fn)` — register at server scope
+  (uses the `_ctx` builder context that `web_server { … }` creates)
+- `session_factory(_ctx, name, factory_fn)` — same
+- `request_factory(_ctx, name, factory_fn)` — same
+- `dep(ctx, name)` — walk request → session → app, build via factory
+  if not cached, store in the right cache, return
+- cycle detection — small set on the resolution stack
+- `validate(srv)` — optional: walk all factory closures looking for
+  `dep(ctx, …)` calls and assert each name resolves to a registered
+  factory
+
+Plus session-cache lifecycle hooks on the WebSocket / cookie session
+id. That's another ~20 lines, and most of it is already implied by
+TinyWeb's existing session handling (which it doesn't yet expose, but
+the hooks are there).
+
+## Solid alternative — verdict
+
+**Yes, solidly.** The combination of:
+
+1. `seal except` enforced at compile time = real containment
+2. `app_factory` / `session_factory` / `request_factory` = explicit lifetimes
+3. `dep(ctx, name)` walking a parent chain of maps = trivial runtime resolution
+4. Optional `validate(srv)` at startup = catches most type-safety regressions
+5. Optional one-line typed wrappers per dep name = restore most Java-like ergonomics
+
+…gets you everything Java's DM gives you, **plus enforcement**,
+**minus the framework**. The `DependencyManager` / `ComponentCache` /
+`UseOnceComponentCache` / `DefaultComponentCache` four-class hierarchy
+in Java collapses into "a map and a function that walks a parent
+chain." That's the Aether way.
+
+The Java version was load-bearing because Java needed it. Aether
+doesn't — it has `seal except` in the language, which is the
+load-bearing primitive. Everything else is sugar.
+
+## Test coverage that would ship with the implementation
+
+When this lands in `contrib/tinyweb/`, the test coverage should be
+comparable in shape to the `hide` / `seal except` implementation
+(though smaller — it's all userland Aether, no compiler changes):
+
+- The six-cell matrix of (scope × created-on-first-touch /
+  cached-thereafter / cleared-on-session-expiry):
+  - app: created on first dep call, cached for server lifetime
+  - session: created on first dep call within a session, cached per
+    session id, cleared when the session expires
+  - request: created on first dep call within a request, cleared at
+    response end
+- "Compile-time enforcement of dependency surface" tests showing that
+  an `end_point` with `seal except req, res, dep` literally cannot
+  reach an unfactored global (these reuse the existing
+  `tests/integration/hide_seal_directives/` reject-test pattern
+  introduced with the `hide` / `seal except` PR).
+- Cycle detection: `factory A` calls `dep(ctx, "B")`, `factory B` calls
+  `dep(ctx, "A")`, resolution should fail at first attempt rather than
+  stack-overflow.
+- `validate(srv)` startup pass: a server with a missing factory should
+  fail to start with a clear error pointing at the factory closure that
+  asked for the missing name, not silently succeed and fail at first
+  request.
+- Closure-captured config: a factory that reads a `let config = …`
+  defined before it should still resolve `config` at factory-call time
+  even though many requests have happened in between.
