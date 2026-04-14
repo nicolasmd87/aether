@@ -15,9 +15,21 @@ typedef struct Symbol {
     struct Symbol* next;
 } Symbol;
 
+// Linked list of identifier names, used for hide / seal-except sets.
+typedef struct NameNode {
+    char* name;
+    struct NameNode* next;
+} NameNode;
+
 typedef struct SymbolTable {
     Symbol* symbols;
     struct SymbolTable* parent;
+    // Hide / seal directives that apply to this scope. They affect
+    // lookups that would otherwise resolve to the parent chain — local
+    // bindings in `symbols` are always visible regardless.
+    NameNode* hidden_names;       // names blocked from outer scopes
+    NameNode* seal_whitelist;     // if non-NULL, ONLY these names may resolve to outer scopes
+    int is_sealed;                // 1 if a `seal except` directive is in effect (whitelist may be empty)
 } SymbolTable;
 
 // Symbol table functions
@@ -26,6 +38,12 @@ void free_symbol_table(SymbolTable* table);
 void add_symbol(SymbolTable* table, const char* name, Type* type, int is_actor, int is_function, int is_state);
 Symbol* lookup_symbol(SymbolTable* table, const char* name);
 Symbol* lookup_symbol_local(SymbolTable* table, const char* name);
+
+// Hide / seal directive helpers
+void scope_hide_name(SymbolTable* table, const char* name);
+void scope_seal_except(SymbolTable* table, const char* name);
+int  scope_name_is_hidden(SymbolTable* table, const char* name);
+int  scope_name_in_whitelist(SymbolTable* table, const char* name);
 
 // Module alias functions
 void add_module_alias(SymbolTable* table, const char* alias, const char* module_name);

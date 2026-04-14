@@ -26,7 +26,19 @@ SymbolTable* create_symbol_table(SymbolTable* parent) {
     SymbolTable* table = malloc(sizeof(SymbolTable));
     table->symbols = NULL;
     table->parent = parent;
+    table->hidden_names = NULL;
+    table->seal_whitelist = NULL;
+    table->is_sealed = 0;
     return table;
+}
+
+static void free_name_list(NameNode* head) {
+    while (head) {
+        NameNode* next = head->next;
+        if (head->name) free(head->name);
+        free(head);
+        head = next;
+    }
 }
 
 void free_symbol_table(SymbolTable* table) {
@@ -42,7 +54,70 @@ void free_symbol_table(SymbolTable* table) {
         current = next;
     }
 
+    free_name_list(table->hidden_names);
+    free_name_list(table->seal_whitelist);
+
     free(table);
+}
+
+// --- hide / seal directive helpers ---
+
+static int name_list_contains(NameNode* head, const char* name) {
+    for (NameNode* n = head; n; n = n->next) {
+        if (strcmp(n->name, name) == 0) return 1;
+    }
+    return 0;
+}
+
+void scope_hide_name(SymbolTable* table, const char* name) {
+    if (!table || !name) return;
+    if (name_list_contains(table->hidden_names, name)) return;
+    NameNode* n = malloc(sizeof(NameNode));
+    n->name = strdup(name);
+    n->next = table->hidden_names;
+    table->hidden_names = n;
+}
+
+void scope_seal_except(SymbolTable* table, const char* name) {
+    if (!table || !name) return;
+    table->is_sealed = 1;
+    if (name_list_contains(table->seal_whitelist, name)) return;
+    NameNode* n = malloc(sizeof(NameNode));
+    n->name = strdup(name);
+    n->next = table->seal_whitelist;
+    table->seal_whitelist = n;
+}
+
+int scope_name_is_hidden(SymbolTable* table, const char* name) {
+    if (!table || !name) return 0;
+    return name_list_contains(table->hidden_names, name);
+}
+
+int scope_name_in_whitelist(SymbolTable* table, const char* name) {
+    if (!table || !name) return 0;
+    return name_list_contains(table->seal_whitelist, name);
+}
+
+// Returns 1 if `name` was blocked by a `hide` or `seal except` directive
+// somewhere in the scope chain AND a real binding for it exists farther
+// up (above the blocking scope). Used to give a better error message than
+// "undefined variable" when the user actually meant to reach a hidden one.
+static int name_blocked_by_hide(SymbolTable* table, const char* name) {
+    if (!table || !name) return 0;
+    SymbolTable* t = table;
+    while (t) {
+        int blocked_here = scope_name_is_hidden(t, name) ||
+                           (t->is_sealed && !scope_name_in_whitelist(t, name));
+        if (blocked_here) {
+            // Walk upward from the parent looking for a real binding.
+            for (SymbolTable* check = t->parent; check; check = check->parent) {
+                if (lookup_symbol_local(check, name)) return 1;
+            }
+            return 0;
+        }
+        t = t->parent;
+    }
+    return 0;
 }
 
 void add_symbol(SymbolTable* table, const char* name, Type* type, int is_actor, int is_function, int is_state) {
@@ -60,13 +135,28 @@ void add_symbol(SymbolTable* table, const char* name, Type* type, int is_actor, 
 }
 
 Symbol* lookup_symbol(SymbolTable* table, const char* name) {
+    if (!table || !name) return NULL;
+
+    // Local bindings always win — `hide` and `seal except` only block
+    // resolution that would walk OUT of this scope into a parent.
     Symbol* symbol = lookup_symbol_local(table, name);
     if (symbol) return symbol;
-    
+
+    // Crossing the scope boundary upward: enforce hide / seal directives.
+    // - `hide foo` blocks any name in the hidden_names list.
+    // - `seal except a, b` blocks anything that isn't in the whitelist.
+    // Either way, return NULL so the caller sees an undefined identifier.
+    if (scope_name_is_hidden(table, name)) {
+        return NULL;
+    }
+    if (table->is_sealed && !scope_name_in_whitelist(table, name)) {
+        return NULL;
+    }
+
     if (table->parent) {
         return lookup_symbol(table->parent, name);
     }
-    
+
     return NULL;
 }
 
@@ -290,6 +380,8 @@ Symbol* lookup_qualified_symbol(SymbolTable* table, const char* qualified_name) 
 void type_error(const char* message, int line, int column) {
     AetherErrorCode code = AETHER_ERR_TYPE_MISMATCH;
     if (strstr(message, "not exported")) code = AETHER_ERR_NOT_EXPORTED;
+    else if (strstr(message, "is hidden in this scope") ||
+             strstr(message, "it is hidden in this scope")) code = AETHER_ERR_HIDDEN_NAME;
     else if (strstr(message, "Undefined variable")) code = AETHER_ERR_UNDEFINED_VAR;
     else if (strstr(message, "Undefined function") || strstr(message, "Unknown function"))
         code = AETHER_ERR_UNDEFINED_FUNC;
@@ -1611,6 +1703,17 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
 
         case AST_CONST_DECLARATION:
         case AST_VARIABLE_DECLARATION: {
+            // Forbid declaring a name that's been hidden in this scope —
+            // shadowing a hidden binding would re-introduce position-sensitive
+            // semantics. If you want a fresh name, pick a different one.
+            if (stmt->value && scope_name_is_hidden(table, stmt->value)) {
+                char error_msg[256];
+                snprintf(error_msg, sizeof(error_msg),
+                         "cannot declare '%s' — it is hidden in this scope by `hide`",
+                         stmt->value);
+                type_error(error_msg, stmt->line, stmt->column);
+                return 0;
+            }
             if (stmt->child_count > 0) {
                 // Has initializer
                 ASTNode* init = stmt->children[0];
@@ -1648,7 +1751,13 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                 Symbol* symbol = lookup_symbol(table, left->value);
                 if (!symbol) {
                     char error_msg[256];
-                    snprintf(error_msg, sizeof(error_msg), "Undefined variable '%s'", left->value ? left->value : "?");
+                    if (left->value && name_blocked_by_hide(table, left->value)) {
+                        snprintf(error_msg, sizeof(error_msg),
+                                 "'%s' is hidden in this scope by `hide` or `seal except`",
+                                 left->value);
+                    } else {
+                        snprintf(error_msg, sizeof(error_msg), "Undefined variable '%s'", left->value ? left->value : "?");
+                    }
                     type_error(error_msg, left->line, left->column);
                     return 0;
                 }
@@ -1675,7 +1784,13 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                 Symbol* symbol = lookup_symbol(table, stmt->value);
                 if (!symbol) {
                     char error_msg[256];
-                    snprintf(error_msg, sizeof(error_msg), "Undefined variable '%s'", stmt->value ? stmt->value : "?");
+                    if (stmt->value && name_blocked_by_hide(table, stmt->value)) {
+                        snprintf(error_msg, sizeof(error_msg),
+                                 "'%s' is hidden in this scope by `hide` or `seal except`",
+                                 stmt->value);
+                    } else {
+                        snprintf(error_msg, sizeof(error_msg), "Undefined variable '%s'", stmt->value ? stmt->value : "?");
+                    }
                     type_error(error_msg, stmt->line, stmt->column);
                     return 0;
                 }
@@ -1769,11 +1884,39 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
         
         case AST_BLOCK: {
             SymbolTable* block_table = create_symbol_table(table);
-            
+
+            // PRE-PASS: collect hide / seal directives BEFORE processing any
+            // other statements, so they're scope-level (position within the
+            // block doesn't matter) and apply to every other statement here.
             for (int i = 0; i < stmt->child_count; i++) {
-                typecheck_statement(stmt->children[i], block_table);
+                ASTNode* child = stmt->children[i];
+                if (!child) continue;
+                if (child->type == AST_HIDE_DIRECTIVE) {
+                    for (int j = 0; j < child->child_count; j++) {
+                        ASTNode* id = child->children[j];
+                        if (id && id->value) scope_hide_name(block_table, id->value);
+                    }
+                } else if (child->type == AST_SEAL_DIRECTIVE) {
+                    block_table->is_sealed = 1;
+                    for (int j = 0; j < child->child_count; j++) {
+                        ASTNode* id = child->children[j];
+                        if (id && id->value) scope_seal_except(block_table, id->value);
+                    }
+                }
             }
-            
+
+            for (int i = 0; i < stmt->child_count; i++) {
+                ASTNode* child = stmt->children[i];
+                // Skip the directive nodes themselves — they were already
+                // processed in the pre-pass above. Walking them as statements
+                // would just be a no-op, but we keep the block tidy.
+                if (child && (child->type == AST_HIDE_DIRECTIVE ||
+                              child->type == AST_SEAL_DIRECTIVE)) {
+                    continue;
+                }
+                typecheck_statement(child, block_table);
+            }
+
             free_symbol_table(block_table);
             return 1;
         }
@@ -1994,7 +2137,13 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
             Symbol* symbol = lookup_symbol(table, expr->value);
             if (!symbol) {
                 char error_msg[256];
-                snprintf(error_msg, sizeof(error_msg), "Undefined variable '%s'", expr->value ? expr->value : "?");
+                if (expr->value && name_blocked_by_hide(table, expr->value)) {
+                    snprintf(error_msg, sizeof(error_msg),
+                             "'%s' is hidden in this scope by `hide` or `seal except`",
+                             expr->value);
+                } else {
+                    snprintf(error_msg, sizeof(error_msg), "Undefined variable '%s'", expr->value ? expr->value : "?");
+                }
                 type_error(error_msg, expr->line, expr->column);
                 return 0;
             }

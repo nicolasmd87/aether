@@ -334,6 +334,9 @@ Token* read_identifier() {
     else if (strcmp(buffer, "in") == 0) token = create_token(TOKEN_IN, buffer, current_line, current_column);
     else if (strcmp(buffer, "after") == 0) token = create_token(TOKEN_AFTER, buffer, current_line, current_column);
     else if (strcmp(buffer, "callback") == 0) token = create_token(TOKEN_CALLBACK, buffer, current_line, current_column);
+    else if (strcmp(buffer, "hide") == 0) token = create_token(TOKEN_HIDE, buffer, current_line, current_column);
+    else if (strcmp(buffer, "seal") == 0) token = create_token(TOKEN_SEAL, buffer, current_line, current_column);
+    else if (strcmp(buffer, "except") == 0) token = create_token(TOKEN_EXCEPT, buffer, current_line, current_column);
     else if (strcmp(buffer, "ptr") == 0) token = create_token(TOKEN_PTR, buffer, current_line, current_column);
     else if (strcmp(buffer, "int") == 0) token = create_token(TOKEN_INT, buffer, current_line, current_column);
     else if (strcmp(buffer, "long") == 0) token = create_token(TOKEN_INT64, buffer, current_line, current_column);

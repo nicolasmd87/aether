@@ -47,7 +47,9 @@ typedef enum {
     AST_SEND_STATEMENT,
     AST_SPAWN_ACTOR_STATEMENT,
     AST_STATE_DECLARATION,
-    
+    AST_HIDE_DIRECTIVE,        // hide name1, name2  — block named outer bindings in this scope
+    AST_SEAL_DIRECTIVE,        // seal except a, b   — block all outer bindings except whitelist
+
     // Actor V2 - Message system
     AST_MESSAGE_DEFINITION,
     AST_MESSAGE_FIELD,

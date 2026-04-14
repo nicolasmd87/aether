@@ -1,0 +1,52 @@
+// Test: `hide` directive blocks named outer bindings from a nested block,
+// but locally-bound names with the same identifier (in nested function
+// definitions) and visible upper-scope functions that USE the hidden name
+// still work.
+//
+// hide is scope-level: position within the block doesn't matter, every
+// other statement in the same scope sees the directive.
+
+extern println(s: string)
+extern string_concat(a: string, b: string) -> string
+
+// Visible top-level helper that reads `outer_secret` via its own lexical
+// chain. handler() will call this even though it has hidden the same name
+// from its own direct lookups.
+read_top_level() {
+    return string_concat("top: ", "ok")
+}
+
+main() {
+    outer_visible = "visible_value"
+    outer_secret  = "secret_value"
+
+    // Inner block hides outer_secret but can still call read_top_level()
+    // (which is visible from the surrounding scope) and can still read
+    // outer_visible directly.
+    {
+        hide outer_secret
+        // `hide` is declaration-semantic — it doesn't matter that the
+        // statements above us in the block came after this point in
+        // source order. `hide` applies to the whole block.
+        if outer_visible != "visible_value" {
+            println("FAIL: outer_visible not seen")
+            exit(1)
+        }
+        msg = read_top_level()
+        if msg != "top: ok" {
+            println("FAIL: read_top_level returned wrong value")
+            exit(1)
+        }
+    }
+
+    // outer_secret is still reachable in the parent scope — hide only
+    // affected the inner block.
+    if outer_secret != "secret_value" {
+        println("FAIL: outer_secret not visible in parent scope")
+        exit(1)
+    }
+
+    println("PASS hide basic")
+}
+
+extern exit(code: int)
