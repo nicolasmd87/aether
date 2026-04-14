@@ -345,8 +345,78 @@ static void dirlist_add(DirList* list, const char* path) {
     list->count++;
 }
 
-#ifndef _WIN32
-// Recursive walk for ** patterns (POSIX only).
+#ifdef _WIN32
+// Simple glob-style pattern match for Windows (replaces fnmatch).
+// Supports '*' (any sequence) and '?' (any single char).
+// When the pattern does NOT start with '.', a leading dot in the name
+// is not matched by '*' — mirroring FNM_PERIOD / POSIX semantics.
+static int win_fnmatch(const char* pattern, const char* name) {
+    const char* p = pattern;
+    const char* n = name;
+    const char* star_p = NULL;
+    const char* star_n = NULL;
+
+    // FNM_PERIOD semantics: if pattern doesn't start with '.',
+    // a leading dot in name must not be matched by '*' or '?'.
+    if (n[0] == '.' && p[0] != '.') return 0;
+
+    while (*n) {
+        if (*p == '*') {
+            star_p = ++p;
+            star_n = n;
+            continue;
+        }
+        if (*p == '?' || *p == *n) {
+            p++;
+            n++;
+            continue;
+        }
+        if (star_p) {
+            p = star_p;
+            n = ++star_n;
+            continue;
+        }
+        return 0;
+    }
+    while (*p == '*') p++;
+    return *p == '\0';
+}
+
+// Recursive walk for ** patterns (Windows).
+static void walk_recursive(const char* dir, const char* suffix_pattern, DirList* result) {
+    char search[MAX_PATH];
+    snprintf(search, sizeof(search), "%s\\*", dir);
+
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(search, &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+
+    do {
+        // Skip '.' and '..'
+        if (fd.cFileName[0] == '.' &&
+            (fd.cFileName[1] == '\0' ||
+             (fd.cFileName[1] == '.' && fd.cFileName[2] == '\0'))) {
+            continue;
+        }
+
+        char fullpath[4096];
+        snprintf(fullpath, sizeof(fullpath), "%s/%s", dir, fd.cFileName);
+
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+            // Skip dot-prefixed directories (.git, .aeb, .vscode, …)
+            if (fd.cFileName[0] == '.') continue;
+            walk_recursive(fullpath, suffix_pattern, result);
+        } else {
+            if (win_fnmatch(suffix_pattern, fd.cFileName)) {
+                dirlist_add(result, fullpath);
+            }
+        }
+    } while (FindNextFileA(h, &fd));
+
+    FindClose(h);
+}
+#else
+// Recursive walk for ** patterns (POSIX).
 // Skips '.' and '..', and skips dot-prefixed directories (e.g. .git, .aeb)
 // from recursion — but matches dot-prefixed FILES against the suffix pattern.
 // Without this, patterns like "**/.build.ae" or "**/.*.ae" would never find
@@ -389,7 +459,7 @@ static void walk_recursive(const char* dir, const char* suffix_pattern, DirList*
     }
     closedir(d);
 }
-#endif // !_WIN32
+#endif
 
 DirList* fs_glob_raw(const char* pattern) {
     if (!pattern) return NULL;
@@ -400,16 +470,51 @@ DirList* fs_glob_raw(const char* pattern) {
     result->count = 0;
 
 #ifdef _WIN32
-    // Windows: basic glob via FindFirstFile (no ** support)
-    WIN32_FIND_DATAA fd;
-    HANDLE h = FindFirstFileA(pattern, &fd);
-    if (h != INVALID_HANDLE_VALUE) {
-        do {
-            if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
-                dirlist_add(result, fd.cFileName);
-            }
-        } while (FindNextFileA(h, &fd));
-        FindClose(h);
+    // Check for ** (recursive glob)
+    const char* dstar = strstr(pattern, "/**/");
+    if (dstar) {
+        char dir[4096];
+        int dirlen = (int)(dstar - pattern);
+        if (dirlen == 0) {
+            strcpy(dir, ".");
+        } else {
+            strncpy(dir, pattern, dirlen);
+            dir[dirlen] = '\0';
+        }
+        const char* suffix = dstar + 4;  // skip "/**/"
+
+        // Match files directly in the base directory
+        char search[MAX_PATH];
+        snprintf(search, sizeof(search), "%s\\*", dir);
+        WIN32_FIND_DATAA fd;
+        HANDLE h = FindFirstFileA(search, &fd);
+        if (h != INVALID_HANDLE_VALUE) {
+            do {
+                if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                    if (win_fnmatch(suffix, fd.cFileName)) {
+                        char fullpath[4096];
+                        snprintf(fullpath, sizeof(fullpath), "%s/%s", dir, fd.cFileName);
+                        dirlist_add(result, fullpath);
+                    }
+                }
+            } while (FindNextFileA(h, &fd));
+            FindClose(h);
+        }
+
+        // Recursive walk
+        walk_recursive(dir, suffix, result);
+    } else {
+        // Simple glob (no **)
+        WIN32_FIND_DATAA fd;
+        HANDLE h = FindFirstFileA(pattern, &fd);
+        if (h != INVALID_HANDLE_VALUE) {
+            do {
+                if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
+                    dirlist_add(result, fd.cFileName);
+                }
+            } while (FindNextFileA(h, &fd));
+            FindClose(h);
+        }
     }
 #else
     // Check for ** (recursive glob)
