@@ -118,6 +118,50 @@ The same caveat applies to closures captured into local variables:
 If you don't want the closure's mutation to land, don't expose the
 closure into the hiding scope.
 
+### Applies to qualified (dotted) names
+
+`hide` and `seal except` apply to the prefix of qualified names. If you
+hide a namespace, all member access through that namespace is blocked:
+
+```aether
+import std.string
+{
+    hide string
+    x = string.new("hello")   // E0304: string is hidden
+}
+```
+
+This prevents a name from being accessed indirectly through dotted
+syntax when you've explicitly denied it.
+
+### Works inside actor receive arms
+
+Receive handler bodies are block scopes, so `hide` and `seal except`
+work exactly as in any other block:
+
+```aether
+actor Server {
+    state secret = "do not touch"
+    state public_val = "ok"
+
+    receive {
+        Ping() -> {
+            hide secret
+            // public_val is still visible; secret is not.
+            println(public_val)
+        }
+        Greet(name) -> {
+            seal except name, greeting, println
+            // Only name, greeting, and println are visible from
+            // outer scopes. Other state variables are sealed out.
+        }
+    }
+}
+```
+
+This is particularly useful for actors with multiple state variables
+where individual receive arms should only touch a subset of state.
+
 ### Local bindings are always visible
 
 `hide` only affects lookups that walk OUT of the current block into a
@@ -217,13 +261,18 @@ This is consistent with normal lexical shadowing and means
 | `hide x` then a nested block declaring `var x = …` | OK — fresh binding in the child scope. |
 | `hide x` then calling a visible function that reads `x` from its own scope | OK — name resolution at the call site doesn't touch `x`. |
 | `seal except printf, malloc` then trying to call `free` | Compile error — `free` is not in the whitelist. |
+| `hide string` then `string.new("x")` | Compile error — qualified access blocked because the prefix is hidden. |
+| `hide` or `seal except` inside an actor receive arm | Works — receive arm bodies are block scopes like any other. |
 
 ## Implementation note
 
 `hide` and `seal except` are enforced entirely at compile time, in
-`compiler/analysis/typechecker.c`'s `lookup_symbol()`. When a name is
-not found in the current scope, the lookup checks the scope's
-`hidden_names` list and `seal_whitelist` before walking to the parent.
+`compiler/analysis/typechecker.c`'s `lookup_symbol()` and
+`lookup_qualified_symbol()`. When a name is not found in the current
+scope, `lookup_symbol()` checks the scope's `hidden_names` list and
+`seal_whitelist` before walking to the parent.
+`lookup_qualified_symbol()` checks hide/seal on the dotted prefix
+before namespace resolution, so `hide http` blocks `http.get()` too.
 Local bindings always win — the hide/seal sets only affect the
 boundary crossing into outer scopes.
 

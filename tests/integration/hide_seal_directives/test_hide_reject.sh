@@ -117,6 +117,64 @@ main() {
 EOF
 run_accept "calling visible helper while hiding the var" /tmp/ae_hide_via_helper.ae
 
+# Case 7: hide inside actor receive arm blocks outer state
+cat > /tmp/ae_hide_actor_receive.ae << 'EOF'
+extern println(s: string)
+message Ping {}
+actor Server {
+    state secret = "do not touch"
+    state public_val = "ok"
+    receive {
+        Ping() -> {
+            hide secret
+            println(secret)   // E0304: secret is hidden
+        }
+    }
+}
+main() {
+    s = spawn(Server())
+    s ! Ping {}
+    wait_for_idle()
+}
+EOF
+run_reject "hide inside actor receive arm" /tmp/ae_hide_actor_receive.ae
+
+# Case 8: seal except inside actor receive arm blocks unlisted state
+cat > /tmp/ae_seal_actor_receive.ae << 'EOF'
+extern println(s: string)
+message Greet { name: string }
+actor Greeter {
+    state secret = "do not touch"
+    state greeting = "hello"
+    receive {
+        Greet(name) -> {
+            seal except name, greeting, println
+            println(secret)   // E0304: secret is sealed out
+        }
+    }
+}
+main() {
+    g = spawn(Greeter())
+    g ! Greet { name: "world" }
+    wait_for_idle()
+}
+EOF
+run_reject "seal except inside actor receive arm" /tmp/ae_seal_actor_receive.ae
+
+# Case 9: hide on qualified name blocks prefix.member access
+cat > /tmp/ae_hide_qualified.ae << 'EOF'
+import std.string
+extern println(s: string)
+main() {
+    {
+        hide string
+        x = string.new("hello")   // E0304: string is hidden
+        println(x)
+    }
+}
+EOF
+run_reject "hide blocks qualified name access" /tmp/ae_hide_qualified.ae
+
 # Cleanup
 rm -f /tmp/ae_hide_*.ae /tmp/ae_seal_*.ae /tmp/ae_hide_out
 

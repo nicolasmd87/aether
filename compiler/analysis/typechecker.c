@@ -338,6 +338,14 @@ Symbol* lookup_qualified_symbol(SymbolTable* table, const char* qualified_name) 
         const char* prefix = name_copy;
         const char* suffix = dot + 1;
 
+        // Enforce hide / seal on the prefix before any namespace resolution.
+        // `hide http` must block both bare `http` AND `http.get(url)`.
+        if (scope_name_is_hidden(table, prefix) ||
+            (table->is_sealed && !scope_name_in_whitelist(table, prefix))) {
+            free(name_copy);
+            return NULL;
+        }
+
         // Check if prefix is a module alias
         Symbol* alias_sym = resolve_module_alias(table, prefix);
         if (alias_sym && alias_sym->alias_target) {
