@@ -417,30 +417,6 @@ The benchmark runner is written in Aether (`run_benchmarks.ae`), dogfooding the 
 
 Aether is under active development. The compiler, runtime, and standard library are functional and tested.
 
-**What works today:**
-- Full compiler pipeline with Rust-style diagnostics (file, line, column, source context, caret, hints)
-- Multi-core actor runtime with locality-aware placement, message-driven migration, and work-stealing fallback
-- Main-thread actor mode — single-actor programs bypass the scheduler entirely (zero-overhead path)
-- Batch fan-out send for main-to-many patterns
-- Lock-free message passing with adaptive optimizations
-- Module system with pure Aether modules, export visibility, and namespace-qualified calls
-- Standard library (collections, networking, JSON, file I/O, math, OS/shell)
-- Interactive REPL (`ae repl`) with session persistence and error recovery
-- C embedding via `--emit-header`
-- IDE support (VS Code, Cursor) with syntax highlighting
-- Cross-platform (macOS, Linux, Windows) with cooperative scheduler for WASM and embedded targets
-- Platform portability layer with compile-time feature detection and graceful degradation
-- Docker CI for cross-platform verification (Emscripten WASM, ARM embedded)
-
-**Known Limitations:**
-- Package registry supports any git host but lacks transitive dependency resolution and lock file integrity checking
-- Stdlib still uses `int` returns for error handling (migration to result types planned)
-
-**Roadmap:**
-- Stdlib migration to result types
-- Async I/O (io_uring/kqueue/IOCP)
-- WebAssembly Phase 2 (Web Workers)
-
 ## Contributing
 
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.

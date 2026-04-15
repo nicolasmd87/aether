@@ -146,6 +146,14 @@ int os_execv(const char* prog, void* argv_list) {
     }
     argv[ai] = NULL;
 
+    // Flush stdio before replacing the process image. execvp destroys
+    // the caller's stdio buffers, so anything println'd but not yet
+    // flushed would be silently lost. Line-buffered output already on
+    // a terminal is safe, but redirected / pipe output is typically
+    // fully-buffered — without this flush, pre-exec diagnostics vanish.
+    fflush(stdout);
+    fflush(stderr);
+
     // execvp honours PATH if `prog` does not contain a slash. On
     // success this call never returns; on failure we free scratch and
     // report -1. We intentionally do not touch errno — callers that

@@ -10,16 +10,13 @@
 import std.os
 import std.string
 
-extern string_length(s: string) -> int
 extern println(s: string)
 extern exit(code: int)
 
 main() {
-    println("start argv0 test")
     // Raw extern: should never be null in a compiled program because
     // main's runtime init always runs before user code.
     raw = aether_argv0()
-    println("got raw")
     if raw == null {
         println("FAIL: aether_argv0() returned null inside main")
         exit(1)
@@ -27,26 +24,31 @@ main() {
 
     // Wrapper: returns "" on null, otherwise a fresh copy.
     wrapped = os.argv0()
-    if string_length(wrapped) == 0 {
+    wlen = string.length(wrapped)
+    if wlen == 0 {
         println("FAIL: os.argv0() returned empty inside main")
         exit(1)
     }
 
-    // Must agree byte-for-byte with aether_args_get(0).
+    // Must agree with aether_args_get(0) — both read the same slot.
     via_get = aether_args_get(0)
     if via_get == null {
         println("FAIL: aether_args_get(0) returned null")
         exit(1)
     }
+    // Raw pointer equality: both externs return the same OS argv[0] slot.
     if raw != via_get {
-        println("FAIL: aether_argv0 != aether_args_get(0)")
+        println("FAIL: aether_argv0() != aether_args_get(0)")
         exit(1)
     }
 
     // The wrapped copy must have the same length as the raw string —
-    // cheap proxy for "same contents" that avoids depending on
-    // string comparison operators.
-    if string_length(wrapped) != string_length(raw) {
+    // cheap proxy for "same contents" that avoids depending on string
+    // comparison operators or external hash helpers. Computed into
+    // locals first because string.length() inside a combined comparison
+    // expression tickled an unrelated codegen quirk.
+    rlen = string.length(raw)
+    if wlen != rlen {
         println("FAIL: os.argv0() length mismatch")
         exit(1)
     }
