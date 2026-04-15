@@ -29,6 +29,24 @@ extern dir_exists(path: string) -> int
 extern dir_create_raw(path: string) -> int
 extern dir_delete_raw(path: string) -> int
 extern dir_list_raw(path: string) -> ptr
+
+// `mkdir -p` semantics: create `path` and any missing parent directories.
+// Treats already-existing directories as success. Raw extern — use the
+// `mkdir_p` wrapper below in most code.
+extern fs_mkdir_p_raw(path: string) -> int
+
+// Symbolic-link operations (raw externs).
+//   fs_symlink_raw   — create a symlink at `link_path` pointing to `target`.
+//                      `target` is recorded verbatim (relative stays relative).
+//   fs_readlink_raw  — read a symlink's target. Returns null if not a symlink.
+//   fs_is_symlink    — does NOT follow; returns 1 only for the link itself.
+//                      Pure boolean query, no wrapper (matches file_exists).
+//   fs_unlink_raw    — remove a file or symlink (NOT a directory).
+extern fs_symlink_raw(target: string, link_path: string) -> int
+extern fs_readlink_raw(path: string) -> string
+extern fs_is_symlink(path: string) -> int
+extern fs_unlink_raw(path: string) -> int
+
 extern dir_list_count(list: ptr) -> int
 extern dir_list_get(list: ptr, index: int) -> string
 extern dir_list_free(list: ptr)
@@ -125,6 +143,49 @@ delete_dir(path: string) -> {
     ok = dir_delete_raw(path)
     if ok == 0 {
         return "cannot delete directory"
+    }
+    return ""
+}
+
+// `mkdir -p`: create `path` and any missing parent directories. Treats
+// already-existing directories as success. Returns "" on success, error
+// on failure.
+mkdir_p(path: string) -> {
+    ok = fs_mkdir_p_raw(path)
+    if ok == 0 {
+        return "cannot mkdir -p"
+    }
+    return ""
+}
+
+// Create a symbolic link at `link_path` pointing to `target`. The target
+// is recorded verbatim — relative targets stay relative. Returns "" on
+// success, error on failure (e.g. `link_path` already exists).
+symlink(target: string, link_path: string) -> {
+    ok = fs_symlink_raw(target, link_path)
+    if ok == 0 {
+        return "cannot create symlink"
+    }
+    return ""
+}
+
+// Read a symbolic link. Returns (target, "") on success,
+// ("", error) if `path` is not a symlink or can't be read.
+readlink(path: string) -> {
+    target = fs_readlink_raw(path)
+    if target == null {
+        return "", "not a symlink"
+    }
+    target_copy = string_concat(target, "")
+    return target_copy, ""
+}
+
+// Remove a file or symlink. Refuses to remove a directory — use
+// `delete_dir` for that. Returns "" on success, error on failure.
+unlink(path: string) -> {
+    ok = fs_unlink_raw(path)
+    if ok == 0 {
+        return "cannot unlink"
     }
     return ""
 }

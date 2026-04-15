@@ -56,6 +56,15 @@ next version number before tagging the release.
 ### Added
 
 - **`hide` and `seal except` scope directives** — declare at the top of any block that one or more identifiers from outer scopes are unreachable from this block (and every nested block within it). `hide name1, name2` blocks specific outer bindings. `seal except name1, name2` is the inverse — blocks ALL outer bindings except the listed whitelist. Both directives are scope-level (position within the block doesn't matter), apply to reads and writes, propagate to all nested blocks, and don't reach through call boundaries (a visible function defined in an outer scope can still use the names via its own lexical chain). Forbids redeclaring a hidden name in the same scope. New error code `E0304` ("`X` is hidden in this scope by `hide` or `seal except`"). See `docs/hide-and-seal.md` for the full design rationale and edge cases. Tests: `tests/syntax/test_hide_basic.ae`, `tests/syntax/test_seal_except.ae`, `tests/integration/hide_seal_directives/test_hide_reject.sh`.
+- **Filesystem stdlib bundle in `std.fs`**: five small POSIX wrappers that let Aether programs stop shelling out for routine filesystem operations, each following the 0.55.0 `_raw` + Go-style wrapper convention:
+  - `fs_mkdir_p_raw(path)` / `err = fs.mkdir_p(path)` — `mkdir -p` semantics: creates the path and any missing parent directories, treats already-existing directories as success.
+  - `fs_symlink_raw(target, link_path)` / `err = fs.symlink(target, link_path)` — create a symbolic link. The target string is recorded verbatim, so relative targets stay relative.
+  - `fs_readlink_raw(path)` / `target, err = fs.readlink(path)` — read a symlink's target. Returns `("", "not a symlink")` when `path` isn't a symlink.
+  - `fs_is_symlink(path)` — pure boolean query: returns 1 if `path` is itself a symlink, 0 otherwise. Does NOT follow the link. No Go-style wrapper (matches `file_exists` / `dir_exists` shape).
+  - `fs_unlink_raw(path)` / `err = fs.unlink(path)` — remove a file or symlink. Refuses to remove directories (use `dir.delete` for that).
+  Windows symlink ops (`fs_symlink_raw` / `fs_readlink_raw` / `fs_is_symlink`) are stubbed pending `CreateSymbolicLinkW` + a junction fallback for directories; `fs_mkdir_p_raw` and `fs_unlink_raw` work on Windows via `_mkdir` / `_unlink`. Tests: `tests/syntax/test_fs_stdlib_bundle.ae` (14 sub-cases including nested-dir creation, idempotent `mkdir_p`, symlink/readlink/is_symlink round-trip, refuse-to-unlink-a-directory, refuse-to-unlink-missing-path).
+
+- **`os_which` in `std.os`**: search `$PATH` for an executable. Returns the absolute path to the first hit, or `""` if not found. Kept as a plain extern (not `_raw` + wrapper) because "not found" is a valid answer, not a failure — matches how `file_exists` / `dir_exists` are modelled. If `name` already contains `/`, it's returned as-is when it's executable (matches POSIX `command -v`). Empty `PATH` entries match the current directory (POSIX). Windows is stubbed pending PATHEXT-aware lookup. Tests: `tests/syntax/test_os_which.ae` (5 sub-cases).
 
 ### Fixed
 

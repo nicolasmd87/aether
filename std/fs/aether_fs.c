@@ -16,6 +16,11 @@ int file_mtime(const char* p) { (void)p; return 0; }
 int dir_exists(const char* p) { (void)p; return 0; }
 int dir_create_raw(const char* p) { (void)p; return 0; }
 int dir_delete_raw(const char* p) { (void)p; return 0; }
+int fs_mkdir_p_raw(const char* p) { (void)p; return 0; }
+int fs_symlink_raw(const char* t, const char* l) { (void)t; (void)l; return 0; }
+char* fs_readlink_raw(const char* p) { (void)p; return NULL; }
+int fs_is_symlink(const char* p) { (void)p; return 0; }
+int fs_unlink_raw(const char* p) { (void)p; return 0; }
 char* path_join(const char* a, const char* b) { (void)a; (void)b; return NULL; }
 char* path_dirname(const char* p) { (void)p; return NULL; }
 char* path_basename(const char* p) { (void)p; return NULL; }
@@ -32,10 +37,15 @@ DirList* fs_glob_multi_raw(void* l) { (void)l; return NULL; }
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <sys/stat.h>
+#ifndef _WIN32
+#include <unistd.h>
+#endif
 
 #ifdef _WIN32
     #include <direct.h>
+    #include <io.h>            // _unlink (for fs_unlink_raw on Windows)
     #include <windows.h>
     #define mkdir(path, mode) _mkdir(path)
     #define rmdir _rmdir
@@ -154,6 +164,101 @@ int dir_delete_raw(const char* path) {
     if (!path) return 0;
     return rmdir(path) == 0 ? 1 : 0;
 }
+
+// `mkdir -p` semantics: walk through each '/' in `path`, creating each
+// intermediate directory if it doesn't already exist. Treats EEXIST as
+// success at every step. Returns 1 on success, 0 on failure (e.g. path
+// too long, or one of the components exists but isn't a directory).
+int fs_mkdir_p_raw(const char* path) {
+    if (!path || !*path) return 0;
+    if (!aether_sandbox_check("fs_write", path)) return 0;
+
+    char buf[4096];
+    size_t len = strlen(path);
+    if (len >= sizeof(buf)) return 0;
+    memcpy(buf, path, len + 1);
+
+    // Step through each '/' in the interior of the path, creating each
+    // prefix as we go. Skip a leading slash so we don't try to mkdir("").
+    for (size_t i = 1; i < len; i++) {
+        if (buf[i] == '/') {
+            buf[i] = '\0';
+            if (mkdir(buf, 0755) != 0) {
+                // Tolerate already-exists. Anything else is a real failure.
+                if (errno != EEXIST) return 0;
+                struct stat st;
+                if (stat(buf, &st) != 0 || !S_ISDIR(st.st_mode)) return 0;
+            }
+            buf[i] = '/';
+        }
+    }
+    // Final component (if not already covered by a trailing slash)
+    if (mkdir(buf, 0755) != 0) {
+        if (errno != EEXIST) return 0;
+        struct stat st;
+        if (stat(buf, &st) != 0 || !S_ISDIR(st.st_mode)) return 0;
+    }
+    return 1;
+}
+
+#ifndef _WIN32
+
+// Create a symbolic link at `link_path` pointing to `target`. The target
+// is recorded verbatim — relative targets stay relative.
+int fs_symlink_raw(const char* target, const char* link_path) {
+    if (!target || !link_path) return 0;
+    if (!aether_sandbox_check("fs_write", link_path)) return 0;
+    return symlink(target, link_path) == 0 ? 1 : 0;
+}
+
+// Read a symbolic link. Returns the target as a heap-allocated string,
+// or NULL if `path` isn't a symlink or can't be read.
+char* fs_readlink_raw(const char* path) {
+    if (!path) return NULL;
+    if (!aether_sandbox_check("fs_read", path)) return NULL;
+
+    char buf[4096];
+    ssize_t n = readlink(path, buf, sizeof(buf) - 1);
+    if (n < 0) return NULL;
+    buf[n] = '\0';
+    return strdup(buf);
+}
+
+// Returns 1 if `path` is a symlink (does NOT follow the link to check
+// the target). Returns 0 otherwise — including when the path doesn't
+// exist.
+int fs_is_symlink(const char* path) {
+    if (!path) return 0;
+    if (!aether_sandbox_check("fs_read", path)) return 0;
+
+    struct stat st;
+    if (lstat(path, &st) != 0) return 0;
+    return S_ISLNK(st.st_mode) ? 1 : 0;
+}
+
+// Remove a file or symlink. Will NOT remove a directory — use dir_delete
+// for that. Returns 1 on success, 0 on failure.
+int fs_unlink_raw(const char* path) {
+    if (!path) return 0;
+    if (!aether_sandbox_check("fs_write", path)) return 0;
+    return unlink(path) == 0 ? 1 : 0;
+}
+
+#else // _WIN32
+
+// Windows symlinks need elevation or developer mode and use a different
+// API surface. For now these are stubs returning failure; a follow-up
+// PR can add CreateSymbolicLinkW + a junction fallback for directories.
+int fs_symlink_raw(const char* t, const char* l) { (void)t; (void)l; return 0; }
+char* fs_readlink_raw(const char* p) { (void)p; return NULL; }
+int fs_is_symlink(const char* p) { (void)p; return 0; }
+int fs_unlink_raw(const char* path) {
+    if (!path) return 0;
+    if (!aether_sandbox_check("fs_write", path)) return 0;
+    return _unlink(path) == 0 ? 1 : 0;
+}
+
+#endif // !_WIN32
 
 // Path operations
 char* path_join(const char* path1, const char* path2) {
