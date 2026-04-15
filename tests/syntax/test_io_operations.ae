@@ -1,5 +1,6 @@
 // Test std.io module operations
-// Covers: write_file, read_file, append_file, file_exists, delete_file, getenv
+// Covers the Go-style wrappers: read_file, write_file, append_file,
+// delete_file, file_info, setenv, unsetenv, plus infallible helpers.
 
 import std.io
 
@@ -17,15 +18,13 @@ main() {
         exit(1)
     }
 
-    // Test 2: write_file
+    // Test 2: write_file returns "" on success
     print("\nTest 2: write_file\n")
-    result = io.write_file(tmpfile, "hello aether")
-    if result == 1 {
-        print("  PASS: write_file returned 1\n")
+    err = io.write_file(tmpfile, "hello aether")
+    if err == "" {
+        print("  PASS: write_file returned no error\n")
     } else {
-        print("  FAIL: returned ")
-        print(result)
-        print("\n")
+        print("  FAIL: ${err}\n")
         exit(1)
     }
 
@@ -38,10 +37,10 @@ main() {
         exit(1)
     }
 
-    // Test 4: read_file returns a printable string directly
+    // Test 4: read_file returns (content, "") on success
     print("\nTest 4: read_file\n")
-    content = io.read_file(tmpfile)
-    if content != 0 {
+    content, rerr = io.read_file(tmpfile)
+    if rerr == "" {
         if content == "hello aether" {
             print("  PASS: read back 'hello aether'\n")
         } else {
@@ -49,15 +48,19 @@ main() {
             exit(1)
         }
     } else {
-        print("  FAIL: read_file returned null\n")
+        print("  FAIL: ${rerr}\n")
         exit(1)
     }
 
     // Test 5: append_file
     print("\nTest 5: append_file\n")
-    io.append_file(tmpfile, "!")
-    content2 = io.read_file(tmpfile)
-    if content2 != 0 {
+    aerr = io.append_file(tmpfile, "!")
+    if aerr != "" {
+        print("  FAIL: ${aerr}\n")
+        exit(1)
+    }
+    content2, rerr2 = io.read_file(tmpfile)
+    if rerr2 == "" {
         if content2 == "hello aether!" {
             print("  PASS: content after append correct\n")
         } else {
@@ -65,13 +68,17 @@ main() {
             exit(1)
         }
     } else {
-        print("  FAIL: read_file returned null\n")
+        print("  FAIL: ${rerr2}\n")
         exit(1)
     }
 
     // Test 6: delete_file
     print("\nTest 6: delete_file\n")
-    io.delete_file(tmpfile)
+    derr = io.delete_file(tmpfile)
+    if derr != "" {
+        print("  FAIL: ${derr}\n")
+        exit(1)
+    }
     if io.file_exists(tmpfile) == 0 {
         print("  PASS: file deleted\n")
     } else {

@@ -14,8 +14,8 @@ TEST_CATEGORY(list_add_and_get, TEST_CATEGORY_COLLECTIONS) {
 
     int val1 = 42;
     int val2 = 100;
-    list_add(list, &val1);
-    list_add(list, &val2);
+    list_add_raw(list, &val1);
+    list_add_raw(list, &val2);
 
     ASSERT_EQ(2, list_size(list));
     ASSERT_EQ(&val1, list_get(list, 0));
@@ -28,9 +28,9 @@ TEST_CATEGORY(list_set_and_remove, TEST_CATEGORY_COLLECTIONS) {
     ArrayList* list = list_new();
 
     int val1 = 1, val2 = 2, val3 = 3;
-    list_add(list, &val1);
-    list_add(list, &val2);
-    list_add(list, &val3);
+    list_add_raw(list, &val1);
+    list_add_raw(list, &val2);
+    list_add_raw(list, &val3);
 
     int val4 = 99;
     list_set(list, 1, &val4);
@@ -56,8 +56,8 @@ TEST_CATEGORY(map_put_and_get, TEST_CATEGORY_COLLECTIONS) {
     int val1 = 42;
     int val2 = 100;
 
-    map_put(map, "name", &val1);
-    map_put(map, "age", &val2);
+    map_put_raw(map, "name", &val1);
+    map_put_raw(map, "age", &val2);
 
     ASSERT_EQ(2, map_size(map));
     ASSERT_EQ(&val1, map_get(map, "name"));
@@ -71,7 +71,7 @@ TEST_CATEGORY(map_has_and_remove, TEST_CATEGORY_COLLECTIONS) {
 
     int val = 123;
 
-    map_put(map, "test", &val);
+    map_put_raw(map, "test", &val);
     ASSERT_TRUE(map_has(map, "test"));
 
     map_remove(map, "test");
@@ -85,8 +85,8 @@ TEST_CATEGORY(map_keys, TEST_CATEGORY_COLLECTIONS) {
     HashMap* map = map_new();
 
     int val = 1;
-    map_put(map, "a", &val);
-    map_put(map, "b", &val);
+    map_put_raw(map, "a", &val);
+    map_put_raw(map, "b", &val);
 
     MapKeys* keys = map_keys(map);
     ASSERT_NOT_NULL(keys);

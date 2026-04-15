@@ -122,6 +122,11 @@ COMPILER_SRC = compiler/aetherc.c compiler/parser/lexer.c compiler/parser/parser
 COMPILER_LIB_SRC = compiler/parser/lexer.c compiler/parser/parser.c compiler/ast.c compiler/analysis/typechecker.c compiler/codegen/codegen.c compiler/codegen/codegen_expr.c compiler/codegen/codegen_stmt.c compiler/codegen/codegen_actor.c compiler/codegen/codegen_func.c compiler/aether_error.c compiler/aether_module.c compiler/analysis/type_inference.c compiler/codegen/optimizer.c compiler/aether_diagnostics.c runtime/actors/aether_message_registry.c
 RUNTIME_SRC = $(SCHEDULER_SRC) runtime/scheduler/scheduler_optimizations.c runtime/scheduler/aether_io_poller_epoll.c runtime/scheduler/aether_io_poller_kqueue.c runtime/scheduler/aether_io_poller_poll.c runtime/config/aether_optimization_config.c runtime/memory/memory.c runtime/memory/aether_arena.c runtime/memory/aether_pool.c runtime/memory/aether_memory_stats.c runtime/utils/aether_tracing.c runtime/utils/aether_bounds_check.c runtime/utils/aether_test.c runtime/memory/aether_arena_optimized.c runtime/aether_runtime_types.c runtime/utils/aether_cpu_detect.c runtime/memory/aether_batch.c runtime/utils/aether_simd_vectorized.c runtime/aether_runtime.c runtime/aether_numa.c runtime/aether_sandbox.c runtime/aether_spawn_sandboxed.c runtime/aether_shared_map.c runtime/actors/aether_send_buffer.c runtime/actors/aether_send_message.c runtime/actors/aether_actor_thread.c
 STD_SRC = std/string/aether_string.c std/math/aether_math.c std/net/aether_http.c std/net/aether_http_server.c std/net/aether_net.c std/collections/aether_collections.c std/json/aether_json.c std/fs/aether_fs.c std/log/aether_log.c std/io/aether_io.c std/os/aether_os.c
+# Stdlib sources that reference scheduler internals (scheduler_io_register,
+# g_sync_step_actor, current_core_id). Excluded from the compiler binary
+# because aetherc does not link the runtime scheduler, but included in
+# libaether.a and user programs where the runtime is present.
+STD_REACTOR_SRC = std/net/aether_actor_bridge.c
 COLLECTIONS_SRC = std/collections/aether_hashmap.c std/collections/aether_set.c std/collections/aether_vector.c std/collections/aether_pqueue.c
 
 # I/O poller backends (needed by both compiler and runtime targets)
@@ -133,6 +138,7 @@ COMPILER_LIB_OBJS = $(COMPILER_LIB_SRC:%.c=$(OBJ_DIR)/%.o)
 RUNTIME_OBJS = $(RUNTIME_SRC:%.c=$(OBJ_DIR)/%.o)
 IO_POLLER_OBJS = $(IO_POLLER_SRC:%.c=$(OBJ_DIR)/%.o)
 STD_OBJS = $(STD_SRC:%.c=$(OBJ_DIR)/%.o)
+STD_REACTOR_OBJS = $(STD_REACTOR_SRC:%.c=$(OBJ_DIR)/%.o)
 COLLECTIONS_OBJS = $(COLLECTIONS_SRC:%.c=$(OBJ_DIR)/%.o)
 TEST_OBJS = $(TEST_SRC:%.c=$(OBJ_DIR)/%.o)
 
@@ -200,12 +206,12 @@ else
 endif
 	$(CC) $(CFLAGS) $(COMPILER_SRC) $(STD_SRC) $(COLLECTIONS_SRC) $(IO_POLLER_SRC) -o build/aetherc$(EXE_EXT) $(LDFLAGS)
 
-test: $(TEST_OBJS) $(COMPILER_LIB_OBJS) $(RUNTIME_OBJS) $(STD_OBJS) $(COLLECTIONS_OBJS)
+test: $(TEST_OBJS) $(COMPILER_LIB_OBJS) $(RUNTIME_OBJS) $(STD_OBJS) $(STD_REACTOR_OBJS) $(COLLECTIONS_OBJS)
 	@echo "==================================="
 	@echo "Building Test Suite ($(DETECTED_OS))"
 	@echo "==================================="
 	@echo "Linking test runner..."
-	@$(CC) $(TEST_OBJS) $(COMPILER_LIB_OBJS) $(RUNTIME_OBJS) $(STD_OBJS) $(COLLECTIONS_OBJS) -o build/test_runner$(EXE_EXT) $(LDFLAGS)
+	@$(CC) $(TEST_OBJS) $(COMPILER_LIB_OBJS) $(RUNTIME_OBJS) $(STD_OBJS) $(STD_REACTOR_OBJS) $(COLLECTIONS_OBJS) -o build/test_runner$(EXE_EXT) $(LDFLAGS)
 	@echo ""
 	@echo "==================================="
 	@echo "Running Tests"
@@ -223,7 +229,7 @@ test-fast: compiler-fast
 	@echo "==================================="
 	@echo "Building Test Suite ($(DETECTED_OS))"
 	@echo "==================================="
-	$(CC) $(CFLAGS) $(TEST_SRC) $(COMPILER_LIB_SRC) $(RUNTIME_SRC) $(STD_SRC) $(COLLECTIONS_SRC) -Icompiler -Istd -Istd/collections -o build/test_runner$(EXE_EXT) $(LDFLAGS)
+	$(CC) $(CFLAGS) $(TEST_SRC) $(COMPILER_LIB_SRC) $(RUNTIME_SRC) $(STD_SRC) $(STD_REACTOR_SRC) $(COLLECTIONS_SRC) -Icompiler -Istd -Istd/collections -o build/test_runner$(EXE_EXT) $(LDFLAGS)
 	@echo ""
 	@echo "==================================="
 	@echo "Running Tests"
@@ -234,21 +240,21 @@ test-valgrind: compiler
 	@echo "==================================="
 	@echo "Running Tests with Valgrind"
 	@echo "==================================="
-	$(CC) $(CFLAGS) -O0 -g $(TEST_SRC) $(COMPILER_SRC) $(RUNTIME_SRC) $(STD_SRC) -Icompiler -Istd -o build/test_runner$(EXE_EXT) $(LDFLAGS)
+	$(CC) $(CFLAGS) -O0 -g $(TEST_SRC) $(COMPILER_SRC) $(RUNTIME_SRC) $(STD_SRC) $(STD_REACTOR_SRC) -Icompiler -Istd -o build/test_runner$(EXE_EXT) $(LDFLAGS)
 	valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1 ./build/test_runner$(EXE_EXT)
 
 test-asan: compiler
 	@echo "==================================="
 	@echo "Running Tests with AddressSanitizer"
 	@echo "==================================="
-	$(CC) -fsanitize=address -fsanitize=leak -fno-omit-frame-pointer -O1 -g $(TEST_SRC) $(COMPILER_SRC) $(RUNTIME_SRC) $(STD_SRC) -Icompiler -Istd -o build/test_runner_asan$(EXE_EXT) -lpthread -lm
+	$(CC) -fsanitize=address -fsanitize=leak -fno-omit-frame-pointer -O1 -g $(TEST_SRC) $(COMPILER_SRC) $(RUNTIME_SRC) $(STD_SRC) $(STD_REACTOR_SRC) -Icompiler -Istd -o build/test_runner_asan$(EXE_EXT) -lpthread -lm
 	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 ./build/test_runner_asan$(EXE_EXT)
 
 test-memory: compiler
 	@echo "==================================="
 	@echo "Running Memory Tracking Tests"
 	@echo "==================================="
-	$(CC) $(CFLAGS) -DAETHER_MEMORY_TRACKING $(TEST_SRC) $(COMPILER_SRC) $(RUNTIME_SRC) $(STD_SRC) -Icompiler -Istd -o build/test_runner_mem$(EXE_EXT) $(LDFLAGS)
+	$(CC) $(CFLAGS) -DAETHER_MEMORY_TRACKING $(TEST_SRC) $(COMPILER_SRC) $(RUNTIME_SRC) $(STD_SRC) $(STD_REACTOR_SRC) -Icompiler -Istd -o build/test_runner_mem$(EXE_EXT) $(LDFLAGS)
 	./build/test_runner_mem$(EXE_EXT)
 
 test-manual-runtime: compiler
@@ -272,36 +278,45 @@ test-ae: compiler ae stdlib
 	@echo "==================================="
 	@tmpdir=$$(mktemp -d); \
 	script="$$tmpdir/run_test.sh"; \
-	printf '#!/bin/sh\n'                                                                        > "$$script"; \
-	printf 'f="$$1"; tmpdir="$$2"; root="$$3"\n'                                               >> "$$script"; \
-	printf 'name=$$(echo "$$f" | sed "s|tests/||;s|/|_|g;s|\\.ae$$||")\n'                    >> "$$script"; \
-	printf 'dir=$$(dirname "$$f")\n'                                                           >> "$$script"; \
-	printf 'base=$$(basename "$$f")\n'                                                         >> "$$script"; \
-	printf 'if [ -d "$$dir/lib" ]; then\n'                                                     >> "$$script"; \
-	printf '  cmd="cd $$dir && $$root/build/ae build $$base -o $$root/build/test_$$name"\n'    >> "$$script"; \
-	printf 'else\n'                                                                            >> "$$script"; \
-	printf '  cmd="$$root/build/ae build $$f -o $$root/build/test_$$name"\n'                   >> "$$script"; \
-	printf 'fi\n'                                                                              >> "$$script"; \
-	printf 'if eval "$$cmd" 2>"$$tmpdir/err_$$name.txt"; then\n'                                >> "$$script"; \
-	printf '  if "$$root/build/test_$$name" >/dev/null 2>&1; then\n'                           >> "$$script"; \
-	printf '    echo "  [PASS] $$name"; touch "$$tmpdir/PASS_$$name"\n'                        >> "$$script"; \
-	printf '  else\n'                                                                          >> "$$script"; \
-	printf '    echo "  [FAIL] $$name (runtime error)"; touch "$$tmpdir/FAIL_$$name"\n'        >> "$$script"; \
-	printf '  fi\n'                                                                            >> "$$script"; \
-	printf 'else\n'                                                                            >> "$$script"; \
-	printf '  echo "  [FAIL] $$name (compile error)"; touch "$$tmpdir/FAIL_$$name"\n'          >> "$$script"; \
-	printf '  head -5 "$$tmpdir/err_$$name.txt" 2>/dev/null\n'                                 >> "$$script"; \
-	printf 'fi\n'                                                                              >> "$$script"; \
+	printf '#!/bin/sh\n'                                                                             > "$$script"; \
+	printf 'f="$$1"; tmpdir="$$2"; root="$$3"\n'                                                    >> "$$script"; \
+	printf 'name=$$(echo "$$f" | sed "s|tests/||;s|/|_|g;s|\\.ae$$||")\n'                         >> "$$script"; \
+	printf 'dir=$$(dirname "$$f")\n'                                                                >> "$$script"; \
+	printf 'base=$$(basename "$$f")\n'                                                              >> "$$script"; \
+	printf 'if [ -d "$$dir/lib" ]; then\n'                                                          >> "$$script"; \
+	printf '  cmd="cd $$dir && $$root/build/ae build $$base -o $$root/build/test_$$name"\n'         >> "$$script"; \
+	printf 'else\n'                                                                                 >> "$$script"; \
+	printf '  cmd="$$root/build/ae build $$f -o $$root/build/test_$$name"\n'                        >> "$$script"; \
+	printf 'fi\n'                                                                                   >> "$$script"; \
+	printf 'if eval "$$cmd" 2>"$$tmpdir/build_$$name.err"; then\n'                                  >> "$$script"; \
+	printf '  "$$root/build/test_$$name" >"$$tmpdir/run_$$name.out" 2>"$$tmpdir/run_$$name.err"\n'  >> "$$script"; \
+	printf '  rc=$$?\n'                                                                             >> "$$script"; \
+	printf '  if [ $$rc -eq 0 ]; then\n'                                                            >> "$$script"; \
+	printf '    echo "  [PASS] $$name"; touch "$$tmpdir/PASS_$$name"\n'                             >> "$$script"; \
+	printf '  else\n'                                                                               >> "$$script"; \
+	printf '    echo "  [FAIL] $$name (runtime error, exit $$rc)"\n'                                >> "$$script"; \
+	printf '    printf runtime > "$$tmpdir/phase_$$name.txt"\n'                                     >> "$$script"; \
+	printf '    printf %%s "$$rc" > "$$tmpdir/rc_$$name.txt"\n'                                     >> "$$script"; \
+	printf '    touch "$$tmpdir/FAIL_$$name"\n'                                                     >> "$$script"; \
+	printf '  fi\n'                                                                                 >> "$$script"; \
+	printf 'else\n'                                                                                 >> "$$script"; \
+	printf '  echo "  [FAIL] $$name (compile error)"\n'                                             >> "$$script"; \
+	printf '  printf compile > "$$tmpdir/phase_$$name.txt"\n'                                       >> "$$script"; \
+	printf '  touch "$$tmpdir/FAIL_$$name"\n'                                                       >> "$$script"; \
+	printf '  head -5 "$$tmpdir/build_$$name.err" 2>/dev/null\n'                                    >> "$$script"; \
+	printf 'fi\n'                                                                                   >> "$$script"; \
 	chmod +x "$$script"; \
 	root=$$(pwd); \
 	find tests/syntax tests/compiler tests/integration -path '*/lib/*' -prune -o -path '*/custom_lib_dir/*' -prune -o -name '*.ae' -print 2>/dev/null | sort | \
 	xargs -P $(NPROC) -I{} "$$script" "{}" "$$tmpdir" "$$root"; \
 	for sh_test in $$(find tests/integration -name 'test_*.sh' 2>/dev/null | sort); do \
 		name=$$(echo "$$sh_test" | sed 's|tests/||;s|/|_|g;s|\.sh$$||'); \
-		if sh "$$sh_test" >/dev/null 2>&1; then \
+		if sh "$$sh_test" >"$$tmpdir/run_$$name.out" 2>"$$tmpdir/run_$$name.err"; then \
 			echo "  [PASS] $$name"; touch "$$tmpdir/PASS_$$name"; \
 		else \
-			echo "  [FAIL] $$name"; touch "$$tmpdir/FAIL_$$name"; \
+			echo "  [FAIL] $$name (shell test)"; \
+			printf 'shell' > "$$tmpdir/phase_$$name.txt"; \
+			touch "$$tmpdir/FAIL_$$name"; \
 		fi; \
 	done; \
 	passed=$$(ls "$$tmpdir"/PASS_* 2>/dev/null | wc -l | tr -d ' '); \
@@ -312,8 +327,27 @@ test-ae: compiler ae stdlib
 		echo "=== FAILURE DETAILS ==="; \
 		for fail_file in "$$tmpdir"/FAIL_*; do \
 			fname=$$(basename "$$fail_file" | sed 's/^FAIL_//'); \
-			echo "--- $$fname ---"; \
-			cat "$$tmpdir/err_$$fname.txt" 2>/dev/null || echo "(no error output)"; \
+			phase=$$(cat "$$tmpdir/phase_$$fname.txt" 2>/dev/null || echo unknown); \
+			case "$$phase" in \
+				compile) echo "--- $$fname (compile error) ---" ;; \
+				runtime) rc=$$(cat "$$tmpdir/rc_$$fname.txt" 2>/dev/null || echo '?'); \
+				         echo "--- $$fname (runtime error, exit $$rc) ---" ;; \
+				shell)   echo "--- $$fname (shell test) ---" ;; \
+				*)       echo "--- $$fname ---" ;; \
+			esac; \
+			if [ "$$phase" = "compile" ]; then \
+				cat "$$tmpdir/build_$$fname.err" 2>/dev/null || echo "(no error output)"; \
+			else \
+				if [ -s "$$tmpdir/run_$$fname.out" ]; then \
+					echo "(stdout)"; cat "$$tmpdir/run_$$fname.out"; \
+				fi; \
+				if [ -s "$$tmpdir/run_$$fname.err" ]; then \
+					echo "(stderr)"; cat "$$tmpdir/run_$$fname.err"; \
+				fi; \
+				if [ ! -s "$$tmpdir/run_$$fname.out" ] && [ ! -s "$$tmpdir/run_$$fname.err" ]; then \
+					echo "(no output)"; \
+				fi; \
+			fi; \
 			echo ""; \
 		done; \
 	fi; \
@@ -456,7 +490,7 @@ examples: compiler
 			echo "FAIL (aetherc)"; \
 			cat /tmp/ae_err.txt 2>/dev/null | head -5; \
 			fail=$$((fail + 1)); \
-		elif ! $(CC) $(CFLAGS) $$out_c $$extra_c $(RUNTIME_SRC) $(STD_SRC) $(COLLECTIONS_SRC) \
+		elif ! $(CC) $(CFLAGS) $$out_c $$extra_c $(RUNTIME_SRC) $(STD_SRC) $(STD_REACTOR_SRC) $(COLLECTIONS_SRC) \
 		         -o $(BUILD_DIR)/examples/$$name$(EXE_EXT) $(LDFLAGS) 2>/tmp/cc_err.txt; then \
 			echo "FAIL (gcc)"; \
 			cat /tmp/cc_err.txt 2>/dev/null | head -20; \
@@ -488,7 +522,7 @@ lsp: compiler
 	@echo "==================================="
 	@echo "Building Aether LSP Server ($(DETECTED_OS))"
 	@echo "==================================="
-	$(CC) $(CFLAGS) lsp/main.c lsp/aether_lsp.c $(COMPILER_LIB_SRC) $(RUNTIME_SRC) $(STD_SRC) $(LDFLAGS) -Icompiler -Istd -o build/aether-lsp$(EXE_EXT)
+	$(CC) $(CFLAGS) lsp/main.c lsp/aether_lsp.c $(COMPILER_LIB_SRC) $(RUNTIME_SRC) $(STD_SRC) $(STD_REACTOR_SRC) $(LDFLAGS) -Icompiler -Istd -o build/aether-lsp$(EXE_EXT)
 	@echo "✓ LSP Server built successfully: build/aether-lsp$(EXE_EXT)"
 
 apkg:
@@ -537,7 +571,7 @@ docs-server: compiler
 	@echo "==================================="
 	@./build/aetherc$(EXE_EXT) tools/docgen/server.ae build/docs_server_gen.c
 	@$(CC) -O2 -o build/docs-server$(EXE_EXT) build/docs_server_gen.c tools/docgen/server_ffi.c \
-		$(RUNTIME_SRC) $(STD_SRC) $(COLLECTIONS_SRC) $(LDFLAGS)
+		$(RUNTIME_SRC) $(STD_SRC) $(STD_REACTOR_SRC) $(COLLECTIONS_SRC) $(LDFLAGS)
 	@rm -f build/docs_server_gen.c
 	@echo "✓ Documentation server built: build/docs-server$(EXE_EXT)"
 
@@ -556,9 +590,9 @@ docs-serve: docs docs-server
 	./build/docs-server$(EXE_EXT)
 
 # Precompiled stdlib archive
-stdlib: $(STD_OBJS) $(COLLECTIONS_OBJS) $(RUNTIME_OBJS)
+stdlib: $(STD_OBJS) $(STD_REACTOR_OBJS) $(COLLECTIONS_OBJS) $(RUNTIME_OBJS)
 	@echo "Creating precompiled stdlib archive..."
-	@ar rcs build/libaether.a $(STD_OBJS) $(COLLECTIONS_OBJS) $(RUNTIME_OBJS)
+	@ar rcs build/libaether.a $(STD_OBJS) $(STD_REACTOR_OBJS) $(COLLECTIONS_OBJS) $(RUNTIME_OBJS)
 	@echo "✓ Stdlib archive created: build/libaether.a"
 ifeq ($(shell uname -s),Linux)
 	@echo "Building sandbox preload library..."
@@ -660,7 +694,7 @@ endif
 	@echo "Compiling $(FILE) to C..."
 	@./build/aetherc$(EXE_EXT) $(FILE) build/output.c
 	@echo "Building executable..."
-	@$(CC) $(CFLAGS) build/output.c $(RUNTIME_SRC) $(STD_SRC) $(COLLECTIONS_SRC) -o build/output$(EXE_EXT) $(LDFLAGS)
+	@$(CC) $(CFLAGS) build/output.c $(RUNTIME_SRC) $(STD_SRC) $(STD_REACTOR_SRC) $(COLLECTIONS_SRC) -o build/output$(EXE_EXT) $(LDFLAGS)
 	@echo "Running..."
 	@./build/output$(EXE_EXT)
 
@@ -677,7 +711,7 @@ endif
 	@echo "Compiling $(FILE) to C..."
 	@./build/aetherc$(EXE_EXT) $(FILE) build/$(OUTPUT).c
 	@echo "Building executable..."
-	@$(CC) $(CFLAGS) build/$(OUTPUT).c $(RUNTIME_SRC) $(STD_SRC) $(COLLECTIONS_SRC) -o build/$(OUTPUT)$(EXE_EXT) $(LDFLAGS)
+	@$(CC) $(CFLAGS) build/$(OUTPUT).c $(RUNTIME_SRC) $(STD_SRC) $(STD_REACTOR_SRC) $(COLLECTIONS_SRC) -o build/$(OUTPUT)$(EXE_EXT) $(LDFLAGS)
 	@echo "✓ Built: build/$(OUTPUT)$(EXE_EXT)"
 
 # Benchmark computed goto dispatch
@@ -854,9 +888,9 @@ help:
 	@echo "Platform: $(DETECTED_OS)"
 	@echo "Compiler: $(CC)"
 
-test-build: $(TEST_OBJS) $(COMPILER_LIB_OBJS) $(RUNTIME_OBJS) $(STD_OBJS) $(COLLECTIONS_OBJS)
+test-build: $(TEST_OBJS) $(COMPILER_LIB_OBJS) $(RUNTIME_OBJS) $(STD_OBJS) $(STD_REACTOR_OBJS) $(COLLECTIONS_OBJS)
 	@echo "Building test runner..."
-	@$(CC) $(TEST_OBJS) $(COMPILER_LIB_OBJS) $(RUNTIME_OBJS) $(STD_OBJS) $(COLLECTIONS_OBJS) -o build/test_runner$(EXE_EXT) $(LDFLAGS)
+	@$(CC) $(TEST_OBJS) $(COMPILER_LIB_OBJS) $(RUNTIME_OBJS) $(STD_OBJS) $(STD_REACTOR_OBJS) $(COLLECTIONS_OBJS) -o build/test_runner$(EXE_EXT) $(LDFLAGS)
 
 # Docker CI/CD targets
 docker-build-ci:
@@ -1125,7 +1159,8 @@ ci-wasm: clean compiler ae
 		runtime/actors/aether_send_buffer.c runtime/actors/aether_send_message.c \
 		runtime/actors/aether_actor_thread.c \
 		std/string/aether_string.c std/math/aether_math.c std/net/aether_http.c \
-		std/net/aether_http_server.c std/net/aether_net.c std/collections/aether_collections.c \
+		std/net/aether_http_server.c std/net/aether_net.c std/net/aether_actor_bridge.c \
+		std/collections/aether_collections.c \
 		std/json/aether_json.c std/fs/aether_fs.c std/log/aether_log.c std/io/aether_io.c \
 		std/os/aether_os.c std/collections/aether_hashmap.c std/collections/aether_set.c \
 		std/collections/aether_vector.c std/collections/aether_pqueue.c"; \

@@ -1,16 +1,85 @@
 // std.file - File Operations (alias for std.fs)
 //
 // This is a convenience module that re-exports file functions from std.fs.
-// You can use either:
-//   import std.file   (this module)
-//   import std.fs     (consolidated filesystem module)
+// The implementations are in std/fs/aether_fs.c.
 //
-// The implementations are in std/fs/aether_fs.c which is compiled into libaether.a
+// API shape:
+//   - Raw externs end in `_raw` and return ptr/int in the old C-style
+//     convention. Use them only for low-level access.
+//   - Aether-native wrappers (below) use Go-style `(value, err)` tuple
+//     returns and are the idiomatic way to call file operations.
 
-extern file_open(path: string, mode: string) -> ptr
+// Raw ptr/int externs (escape hatch).
+extern file_open_raw(path: string, mode: string) -> ptr
 extern file_close(file: ptr) -> int
-extern file_read_all(file: ptr) -> string
-extern file_write(file: ptr, data: string, length: int) -> int
+extern file_read_all_raw(file: ptr) -> string
+extern file_write_raw(file: ptr, data: string, length: int) -> int
 extern file_exists(path: string) -> int
-extern file_delete(path: string) -> int
-extern file_size(path: string) -> int
+extern file_delete_raw(path: string) -> int
+extern file_size_raw(path: string) -> int
+
+// string_concat used to duplicate borrowed strings across free boundaries.
+extern string_concat(a: string, b: string) -> string
+extern string_length(str: string) -> int
+
+// Open a file. Returns (handle, "") on success, (null, error) on failure.
+open(path: string, mode: string) -> {
+    handle = file_open_raw(path, mode)
+    if handle == null {
+        return null, "cannot open file"
+    }
+    return handle, ""
+}
+
+// Read the entire contents of a file at `path`. Opens, reads, closes.
+// Returns (content, "") on success, ("", error) on failure.
+// This is the convenience form most callers want.
+read(path: string) -> {
+    handle = file_open_raw(path, "r")
+    if handle == 0 {
+        return "", "cannot open file"
+    }
+    content = file_read_all_raw(handle)
+    if content == 0 {
+        file_close(handle)
+        return "", "cannot read file"
+    }
+    content_copy = string_concat(content, "")
+    file_close(handle)
+    return content_copy, ""
+}
+
+// Write `content` to a file at `path`. Opens in write mode, writes, closes.
+// Returns "" on success, error string on failure.
+write(path: string, content: string) -> {
+    handle = file_open_raw(path, "w")
+    if handle == 0 {
+        return "cannot open file for writing"
+    }
+    length = string_length(content)
+    ok = file_write_raw(handle, content, length)
+    file_close(handle)
+    if ok == 0 {
+        return "write failed"
+    }
+    return ""
+}
+
+// Delete the file at `path`. Returns "" on success, error on failure.
+delete(path: string) -> {
+    ok = file_delete_raw(path)
+    if ok == 0 {
+        return "cannot delete file"
+    }
+    return ""
+}
+
+// Return the size of the file at `path` in bytes.
+// Returns (size, "") on success, (0, error) on failure.
+size(path: string) -> {
+    s = file_size_raw(path)
+    if s < 0 {
+        return 0, "cannot stat file"
+    }
+    return s, ""
+}

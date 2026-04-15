@@ -27,6 +27,7 @@ atomic_int next_actor_id = 0;
 AETHER_TLS int current_core_id = 0;  // Always core 0
 AETHER_TLS void* g_pending_reply_slot = NULL;
 AETHER_TLS void* g_current_reply_slot = NULL;
+AETHER_TLS void* g_current_step_actor = NULL;
 
 // Defined in aether_send_message.c
 extern AETHER_TLS ActorBase* g_sync_step_actor;

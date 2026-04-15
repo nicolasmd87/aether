@@ -8,22 +8,174 @@
 // The implementations are in std/net/aether_http.c and std/net/aether_http_server.c
 // which are compiled into libaether.a
 
-// HTTP Client
-extern http_get(url: string) -> ptr
-extern http_post(url: string, body: string, content_type: string) -> ptr
-extern http_put(url: string, body: string, content_type: string) -> ptr
-extern http_delete(url: string) -> ptr
+// HTTP Client — raw ptr-returning externs.
+// These are the escape hatch for code that needs direct access to the
+// underlying HttpResponse struct (e.g. to inspect headers and body
+// together, or to implement custom retry logic). Most callers should
+// use the Go-style wrappers below.
+extern http_get_raw(url: string) -> ptr
+extern http_post_raw(url: string, body: string, content_type: string) -> ptr
+extern http_put_raw(url: string, body: string, content_type: string) -> ptr
+extern http_delete_raw(url: string) -> ptr
 extern http_response_free(response: ptr)
 extern http_response_status_code(response: ptr) -> int
 extern http_response_body_str(response: ptr) -> string
 extern http_response_headers_str(response: ptr) -> string
 
+// HTTP Client - response accessors (used by both raw callers and the
+// Go-style wrappers below).
+extern http_response_status(response: ptr) -> int
+extern http_response_body(response: ptr) -> string
+extern http_response_headers(response: ptr) -> string
+extern http_response_error(response: ptr) -> string
+extern http_response_ok(response: ptr) -> int
+
+// string_concat used internally to duplicate borrowed strings before the
+// backing response is freed. The concat of any string with "" produces a
+// new heap-allocated copy that outlives the source.
+extern string_concat(a: string, b: string) -> string
+
+// HTTP Client — Go-style result-type wrappers. These are the idiomatic
+// Aether-facing API: they auto-free the underlying response and return
+// `(body, err)` or `(status, err)` tuples.
+//
+// On success, the error string is empty ("") and the value is valid.
+// On failure, the value is a zero-value ("" or 0) and the error string
+// describes what went wrong. Errors include both transport-level
+// failures (DNS, connect, send) and non-2xx HTTP status codes.
+
+// GET a URL and return the response body. Most common case.
+get(url: string) -> {
+    response = http_get_raw(url)
+    if response == null {
+        return "", "out of memory"
+    }
+    err = http_response_error(response)
+    if err != "" {
+        err_copy = string_concat(err, "")
+        http_response_free(response)
+        return "", err_copy
+    }
+    status = http_response_status(response)
+    if status < 200 {
+        http_response_free(response)
+        return "", "unexpected status"
+    }
+    if status >= 300 {
+        http_response_free(response)
+        return "", "http error"
+    }
+    body = http_response_body(response)
+    body_copy = string_concat(body, "")
+    http_response_free(response)
+    return body_copy, ""
+}
+
+// POST a body and return the response body.
+post(url: string, body: string, content_type: string) -> {
+    response = http_post_raw(url, body, content_type)
+    if response == null {
+        return "", "out of memory"
+    }
+    err = http_response_error(response)
+    if err != "" {
+        err_copy = string_concat(err, "")
+        http_response_free(response)
+        return "", err_copy
+    }
+    status = http_response_status(response)
+    if status < 200 {
+        http_response_free(response)
+        return "", "unexpected status"
+    }
+    if status >= 300 {
+        http_response_free(response)
+        return "", "http error"
+    }
+    result = http_response_body(response)
+    result_copy = string_concat(result, "")
+    http_response_free(response)
+    return result_copy, ""
+}
+
+// PUT a body and return the response body.
+put(url: string, body: string, content_type: string) -> {
+    response = http_put_raw(url, body, content_type)
+    if response == null {
+        return "", "out of memory"
+    }
+    err = http_response_error(response)
+    if err != "" {
+        err_copy = string_concat(err, "")
+        http_response_free(response)
+        return "", err_copy
+    }
+    status = http_response_status(response)
+    if status < 200 {
+        http_response_free(response)
+        return "", "unexpected status"
+    }
+    if status >= 300 {
+        http_response_free(response)
+        return "", "http error"
+    }
+    result = http_response_body(response)
+    result_copy = string_concat(result, "")
+    http_response_free(response)
+    return result_copy, ""
+}
+
+// DELETE a URL and return the response body.
+delete(url: string) -> {
+    response = http_delete_raw(url)
+    if response == null {
+        return "", "out of memory"
+    }
+    err = http_response_error(response)
+    if err != "" {
+        err_copy = string_concat(err, "")
+        http_response_free(response)
+        return "", err_copy
+    }
+    status = http_response_status(response)
+    if status < 200 {
+        http_response_free(response)
+        return "", "unexpected status"
+    }
+    if status >= 300 {
+        http_response_free(response)
+        return "", "http error"
+    }
+    result = http_response_body(response)
+    result_copy = string_concat(result, "")
+    http_response_free(response)
+    return result_copy, ""
+}
+
 // HTTP Server - lifecycle
 extern http_server_create(port: int) -> ptr
-extern http_server_bind(server: ptr, host: string, port: int) -> int
-extern http_server_start(server: ptr) -> int
+extern http_server_bind_raw(server: ptr, host: string, port: int) -> int
+extern http_server_start_raw(server: ptr) -> int
 extern http_server_stop(server: ptr)
 extern http_server_free(server: ptr)
+
+// Go-style wrappers for server lifecycle. Return "" on success, error
+// string on failure.
+server_bind(server: ptr, host: string, port: int) -> {
+    rc = http_server_bind_raw(server, host, port)
+    if rc < 0 {
+        return "bind failed"
+    }
+    return ""
+}
+
+server_start(server: ptr) -> {
+    rc = http_server_start_raw(server)
+    if rc < 0 {
+        return "server start failed"
+    }
+    return ""
+}
 
 // HTTP Server - routing
 extern http_server_add_route(server: ptr, method: string, path: string, handler: ptr, user_data: ptr)
@@ -62,3 +214,18 @@ extern http_request_query(req: ptr) -> string
 extern http_serve_static(req: ptr, res: ptr, base_dir: string)
 extern http_serve_file(res: ptr, filepath: string)
 extern http_mime_type(path: string) -> string
+
+// Reactor-pattern async I/O. See std/net/module.ae for full docs.
+// Suspends the current actor until fd is readable. On wake, the
+// scheduler delivers `IoReady { fd: int, events: int }` to the
+// actor's mailbox.
+extern ae_io_await(fd: int) -> int
+extern ae_io_cancel(fd: int)
+
+await_io(fd: int) -> {
+    rc = ae_io_await(fd)
+    if rc < 0 {
+        return "await_io failed"
+    }
+    return ""
+}

@@ -890,8 +890,14 @@ void module_merge_into_program(ASTNode* program) {
 
         const char* module_path = child->value;
 
-        // Skip stdlib imports — they have C backing
-        if (strncmp(module_path, "std.", 4) == 0) continue;
+        // Merge function and constant declarations from every module,
+        // including stdlib modules. Stdlib used to be skipped under the
+        // assumption that it only contained externs, but stdlib can now
+        // carry Aether-native wrappers (e.g. Go-style result-type wrappers
+        // over the raw externs), which need to be cloned into the program
+        // AST just like user modules. collect_module_func_names only
+        // collects AST_FUNCTION_DEFINITION nodes, so externs are untouched
+        // by this path.
 
         AetherModule* mod = module_find(module_path);
         if (!mod || !mod->ast) continue;

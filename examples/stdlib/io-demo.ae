@@ -1,7 +1,8 @@
 // I/O Module Demo - console output, environment variables, file operations
 // Run with: ae run examples/stdlib/io-demo.ae
 //
-// io.getenv() and io.read_file() return malloc'd strings — free with defer free().
+// File/env operations use Go-style `value, err = func()` tuple returns.
+// io.getenv still returns a plain string (null when unset) as documented.
 
 import std.io
 
@@ -19,77 +20,74 @@ main() {
     io.print_float(3.14)
     io.print_line("")
 
-    // Environment variables — io.getenv() returns a malloc'd string
+    // Environment variables — io.getenv returns a raw char* or null
     print("\n2. Environment variables:\n")
     path_str = io.getenv("PATH")
-    defer free(path_str)
     if path_str != 0 {
         io.print_line("   PATH is set")
     } else {
         io.print_line("   PATH not set")
     }
 
-    // Try HOME (Unix/macOS) then USERPROFILE (Windows)
     home = io.getenv("HOME")
-    defer free(home)
     if home != 0 {
         print("   HOME = ")
         println(home)
     } else {
-        home = io.getenv("USERPROFILE")
-        defer free(home)
-        if home != 0 {
+        home2 = io.getenv("USERPROFILE")
+        if home2 != 0 {
             print("   USERPROFILE = ")
-            println(home)
+            println(home2)
         } else {
             io.print_line("   No home directory variable found")
         }
     }
 
-    // String interpolation works directly with getenv results
     user = io.getenv("USER")
-    defer free(user)
     if user != 0 {
         println("   Hello, ${user}!")
     }
 
-    // File operations
+    // File operations (Go-style)
     print("\n3. File operations:\n")
     tmpfile = "aether_io_test_tmp.txt"
 
-    // Write
-    io.write_file(tmpfile, "Hello from Aether!")
+    werr = io.write_file(tmpfile, "Hello from Aether!")
+    if werr != "" {
+        println("   write failed: ${werr}")
+        exit(1)
+    }
     io.print_line("   Wrote temp file")
 
-    // Read back — returns a malloc'd string
-    content = io.read_file(tmpfile)
-    defer free(content)
-    if content != 0 {
-        print("   Read back: ")
-        println(content)
-        println("   Interpolated: ${content}")
+    content, rerr = io.read_file(tmpfile)
+    if rerr != "" {
+        println("   read failed: ${rerr}")
+        exit(1)
     }
+    print("   Read back: ")
+    println(content)
 
-    // Append
-    io.append_file(tmpfile, "\nSecond line")
+    aerr = io.append_file(tmpfile, "\nSecond line")
+    if aerr != "" {
+        println("   append failed: ${aerr}")
+        exit(1)
+    }
     io.print_line("   Appended to file")
 
-    // Read again
-    content2 = io.read_file(tmpfile)
-    defer free(content2)
-    if content2 != 0 {
+    content2, rerr2 = io.read_file(tmpfile)
+    if rerr2 == "" {
         print("   Full content:\n")
         println(content2)
     }
 
-    // Check existence
     if io.file_exists(tmpfile) == 1 {
         io.print_line("   File exists: yes")
     }
 
-    // Clean up
-    io.delete_file(tmpfile)
-    io.print_line("   Cleaned up temp file")
+    derr = io.delete_file(tmpfile)
+    if derr == "" {
+        io.print_line("   Cleaned up temp file")
+    }
 
     if io.file_exists(tmpfile) == 0 {
         io.print_line("   File exists after delete: no")

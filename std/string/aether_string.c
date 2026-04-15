@@ -309,8 +309,11 @@ AetherString* string_from_float(float value) {
     return string_new(buffer);
 }
 
-// Parsing functions - convert string to numbers
-int string_to_int(const void* str, int* out_value) {
+// Parsing functions - convert string to numbers.
+// The `_raw` variants take an out-parameter and return 1/0 for ok/fail.
+// The Aether-native Go-style wrappers `string.to_int` etc. in module.ae
+// call the `_try`/`_get` pairs below for a cleaner tuple-return shape.
+int string_to_int_raw(const void* str, int* out_value) {
     const char* data = str_data(str);
     if (!str || !data[0] || !out_value) return 0;
 
@@ -331,7 +334,7 @@ int string_to_int(const void* str, int* out_value) {
     return 1;
 }
 
-int string_to_long(const void* str, long* out_value) {
+int string_to_long_raw(const void* str, long* out_value) {
     const char* data = str_data(str);
     if (!str || !data[0] || !out_value) return 0;
 
@@ -350,7 +353,7 @@ int string_to_long(const void* str, long* out_value) {
     return 1;
 }
 
-int string_to_float(const void* str, float* out_value) {
+int string_to_float_raw(const void* str, float* out_value) {
     const char* data = str_data(str);
     if (!str || !data[0] || !out_value) return 0;
 
@@ -369,7 +372,7 @@ int string_to_float(const void* str, float* out_value) {
     return 1;
 }
 
-int string_to_double(const void* str, double* out_value) {
+int string_to_double_raw(const void* str, double* out_value) {
     const char* data = str_data(str);
     if (!str || !data[0] || !out_value) return 0;
 
@@ -386,6 +389,35 @@ int string_to_double(const void* str, double* out_value) {
 
     *out_value = val;
     return 1;
+}
+
+// Split-return helpers for Aether's Go-style tuple wrappers. Each `_try`
+// function returns 1 if the parse would succeed, 0 otherwise. The `_get`
+// function returns the parsed value (or 0/0.0 if unparseable). Callers
+// pair them: `if (try) return get(), ""; else return 0, "invalid"`.
+int string_try_int(const void* s) {
+    int v; return string_to_int_raw(s, &v);
+}
+int string_get_int(const void* s) {
+    int v = 0; string_to_int_raw(s, &v); return v;
+}
+int string_try_long(const void* s) {
+    long v; return string_to_long_raw(s, &v);
+}
+long string_get_long(const void* s) {
+    long v = 0; string_to_long_raw(s, &v); return v;
+}
+int string_try_float(const void* s) {
+    float v; return string_to_float_raw(s, &v);
+}
+float string_get_float(const void* s) {
+    float v = 0.0f; string_to_float_raw(s, &v); return v;
+}
+int string_try_double(const void* s) {
+    double v; return string_to_double_raw(s, &v);
+}
+double string_get_double(const void* s) {
+    double v = 0.0; string_to_double_raw(s, &v); return v;
 }
 
 // Printf-style string formatting

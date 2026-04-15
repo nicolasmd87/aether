@@ -121,6 +121,7 @@ static atomic_int g_threads_started = 0;
 static atomic_int g_threads_ready = 0;
 
 AETHER_TLS int current_core_id = -1;
+AETHER_TLS void* g_current_step_actor = NULL;
 
 // ── Deferred sends (back-pressure relief) ─────────────────────────────────
 // When a scheduler thread's cross-core enqueue fails after a bounded retry,

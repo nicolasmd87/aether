@@ -118,8 +118,8 @@ typedef struct {
 
 // Server lifecycle
 HttpServer* http_server_create(int port);
-int http_server_bind(HttpServer* server, const char* host, int port);
-int http_server_start(HttpServer* server);
+int http_server_bind_raw(HttpServer* server, const char* host, int port);
+int http_server_start_raw(HttpServer* server);
 void http_server_stop(HttpServer* server);
 void http_server_free(HttpServer* server);
 

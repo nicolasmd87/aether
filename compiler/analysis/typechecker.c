@@ -144,6 +144,85 @@ void register_namespace(const char* ns) {
     }
 }
 
+// Per-module selective-import filter.
+//
+// When a user writes `import std.math (sqrt)`, only `sqrt` should be
+// callable via the qualified form `math.sqrt(...)`. Previously this was
+// enforced by filtering externs out of the symbol table entirely, but
+// that broke Aether-native stdlib wrappers (like `http.get` calling
+// `http_get_raw` internally) which need every extern from their own
+// module visible in the symbol table regardless of the user's selection.
+//
+// The fix is two-layer: externs are always added to the symbol table so
+// merged module functions can resolve them, and a separate visibility
+// filter enforces the user's selection list at qualified-call sites only.
+// Unqualified calls from within merged stdlib functions bypass the filter
+// because they're implementation detail, not user-facing surface.
+typedef struct {
+    char* namespace;   // e.g. "math"
+    char* func_name;   // short name as written in the user's selection list
+} SelectiveImportEntry;
+
+#define MAX_SELECTIVE_IMPORTS 256
+static SelectiveImportEntry selective_imports[MAX_SELECTIVE_IMPORTS];
+static int selective_import_count = 0;
+static int selective_import_modules_count = 0;
+// Tracks which namespaces had a selection list at all. Namespace without
+// an entry here means "no filter — everything allowed", which matches
+// the non-selective import semantics.
+static char* selective_import_modules[MAX_SELECTIVE_IMPORTS];
+
+static void selective_import_reset(void) {
+    for (int i = 0; i < selective_import_count; i++) {
+        free(selective_imports[i].namespace);
+        free(selective_imports[i].func_name);
+    }
+    selective_import_count = 0;
+    for (int i = 0; i < selective_import_modules_count; i++) {
+        free(selective_import_modules[i]);
+    }
+    selective_import_modules_count = 0;
+}
+
+static void selective_import_mark_module(const char* ns) {
+    for (int i = 0; i < selective_import_modules_count; i++) {
+        if (strcmp(selective_import_modules[i], ns) == 0) return;
+    }
+    if (selective_import_modules_count < MAX_SELECTIVE_IMPORTS) {
+        selective_import_modules[selective_import_modules_count++] = strdup(ns);
+    }
+}
+
+static void selective_import_add(const char* ns, const char* func_name) {
+    selective_import_mark_module(ns);
+    if (selective_import_count < MAX_SELECTIVE_IMPORTS) {
+        selective_imports[selective_import_count].namespace = strdup(ns);
+        selective_imports[selective_import_count].func_name = strdup(func_name);
+        selective_import_count++;
+    }
+}
+
+static int module_has_selective_filter(const char* ns) {
+    for (int i = 0; i < selective_import_modules_count; i++) {
+        if (strcmp(selective_import_modules[i], ns) == 0) return 1;
+    }
+    return 0;
+}
+
+// Returns 1 if the user wrote a selective import for `ns` AND `func_name`
+// is not in the selection list. Returns 0 when there's no filter or when
+// the name is in the list. Used only at qualified-call sites.
+static int is_selective_import_blocked(const char* ns, const char* func_name) {
+    if (!module_has_selective_filter(ns)) return 0;
+    for (int i = 0; i < selective_import_count; i++) {
+        if (strcmp(selective_imports[i].namespace, ns) == 0 &&
+            strcmp(selective_imports[i].func_name, func_name) == 0) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
 // Check if a symbol is blocked by export visibility.
 // Returns 1 if blocked (module has exports and symbol isn't one), 0 if allowed.
 static int is_export_blocked(const char* namespace, const char* symbol) {
@@ -185,6 +264,14 @@ Symbol* lookup_qualified_symbol(SymbolTable* table, const char* qualified_name) 
         if (is_imported_namespace(prefix)) {
             // Enforce export visibility
             if (is_export_blocked(prefix, suffix)) {
+                free(name_copy);
+                return NULL;
+            }
+            // Enforce selective-import visibility: if the user wrote
+            // `import std.math (sqrt)` then `math.pow` must be rejected
+            // even though `math_pow` is in the symbol table (so that
+            // merged stdlib wrappers can call it internally).
+            if (is_selective_import_blocked(prefix, suffix)) {
                 free(name_copy);
                 return NULL;
             }
@@ -819,6 +906,7 @@ int typecheck_program(ASTNode* program) {
     error_count = 0;
     warning_count = 0;
     namespace_count = 0;  // Reset imported namespaces
+    selective_import_reset();  // Reset per-module selective-import filters
 
     SymbolTable* global_table = create_symbol_table(NULL);
     
@@ -1030,47 +1118,47 @@ int typecheck_program(ASTNode* program) {
                     // Register namespace for qualified calls (e.g., string.new)
                     register_namespace(module_name);
 
+                    // If this is a selective import, record the allow list
+                    // so qualified calls to functions not in it get rejected.
+                    // Does not affect unqualified resolution inside merged
+                    // stdlib function bodies.
+                    if (child->child_count > 0) {
+                        ASTNode* first_sel = child->children[0];
+                        if (first_sel && first_sel->type == AST_IDENTIFIER) {
+                            for (int sk = 0; sk < child->child_count; sk++) {
+                                ASTNode* sel = child->children[sk];
+                                if (sel && sel->type == AST_IDENTIFIER && sel->value) {
+                                    selective_import_add(module_name, sel->value);
+                                }
+                            }
+                        }
+                    }
+
                     // Look up cached module from orchestrator
                     AetherModule* mod = module_find(module_path);
                     ASTNode* mod_ast = mod ? mod->ast : NULL;
                     if (mod_ast) {
-                        // Build prefix for stripping: "math_" from module "math"
-                        char prefix[128];
-                        snprintf(prefix, sizeof(prefix), "%s_", module_name);
-                        int prefix_len = (int)strlen(prefix);
-
-                        // Extract extern declarations from the module
+                        // Extract extern declarations from the module.
+                        //
+                        // Externs are always registered regardless of the
+                        // user's selective-import list. This is because
+                        // merged Aether-native stdlib wrappers (like
+                        // `http.get` calling `http_get_raw` internally)
+                        // need every extern from their own module visible
+                        // in the global symbol table to compile, even when
+                        // the user only selectively imported the wrapper.
+                        //
+                        // The selective-import filter is applied instead
+                        // at qualified-call sites via
+                        // is_selective_import_blocked(), so user code that
+                        // writes `math.pow` is still rejected when only
+                        // `sqrt` is imported.
                         for (int j = 0; j < mod_ast->child_count; j++) {
                             ASTNode* decl = mod_ast->children[j];
                             if (decl->type == AST_EXTERN_FUNCTION && decl->value) {
-                                // Check if selective import - only import specified functions
-                                int should_import = 1;
-                                if (child->child_count > 0) {
-                                    ASTNode* first = child->children[0];
-                                    if (first && first->type == AST_IDENTIFIER) {
-                                        should_import = 0;
-                                        // Strip module prefix for comparison:
-                                        // decl->value is "math_sqrt", sel->value is "sqrt"
-                                        const char* short_name = decl->value;
-                                        if (strncmp(decl->value, prefix, prefix_len) == 0) {
-                                            short_name = decl->value + prefix_len;
-                                        }
-                                        for (int k = 0; k < child->child_count; k++) {
-                                            ASTNode* sel = child->children[k];
-                                            if (sel && sel->type == AST_IDENTIFIER &&
-                                                strcmp(sel->value, short_name) == 0) {
-                                                should_import = 1;
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-
-                                if (should_import) {
-                                    if (!lookup_symbol_local(global_table, decl->value)) {
-                                        add_symbol(global_table, decl->value,
-                                                   clone_type(decl->node_type), 0, 1, 0);
-                                    }
+                                if (!lookup_symbol_local(global_table, decl->value)) {
+                                    add_symbol(global_table, decl->value,
+                                               clone_type(decl->node_type), 0, 1, 0);
                                 }
                             }
                         }
@@ -2010,7 +2098,12 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
         }
 
         case AST_ARRAY_ACCESS:
-            // Type check array access — validate index is integer
+            // Type check array access — validate index is integer and
+            // propagate the element type onto this node so downstream
+            // consumers (print format specifiers, string interpolation,
+            // further expressions) know what type an access yields. Without
+            // this, arr[i] has no node_type and defaults to %d even when
+            // arr is string[], producing wrong format specifiers and UB.
             if (expr->child_count >= 2) {
                 typecheck_expression(expr->children[0], table);
                 typecheck_expression(expr->children[1], table);
@@ -2024,6 +2117,14 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
                     type_error(error_msg, expr->line, expr->column);
                 }
                 if (idx_type) free_type(idx_type);
+
+                // Propagate element type from the array expression.
+                Type* arr_type = expr->children[0]->node_type;
+                if (arr_type && arr_type->kind == TYPE_ARRAY && arr_type->element_type &&
+                    (!expr->node_type || expr->node_type->kind == TYPE_UNKNOWN)) {
+                    if (expr->node_type) free_type(expr->node_type);
+                    expr->node_type = clone_type(arr_type->element_type);
+                }
             }
             return 1;
 

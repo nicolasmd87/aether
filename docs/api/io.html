@@ -19,16 +19,15 @@
     <li><a href="#io_print_line">io_print_line</a></li>
     <li><a href="#io_print_int">io_print_int</a></li>
     <li><a href="#io_print_float">io_print_float</a></li>
-    <li><a href="#io_read_file">io_read_file</a></li>
-    <li><a href="#io_write_file">io_write_file</a></li>
-    <li><a href="#io_append_file">io_append_file</a></li>
+    <li><a href="#io_read_file_raw">io_read_file_raw</a></li>
+    <li><a href="#io_write_file_raw">io_write_file_raw</a></li>
+    <li><a href="#io_append_file_raw">io_append_file_raw</a></li>
     <li><a href="#io_file_exists">io_file_exists</a></li>
-    <li><a href="#io_delete_file">io_delete_file</a></li>
-    <li><a href="#io_file_info">io_file_info</a></li>
+    <li><a href="#io_delete_file_raw">io_delete_file_raw</a></li>
     <li><a href="#io_file_info_free">io_file_info_free</a></li>
     <li><a href="#io_getenv">io_getenv</a></li>
-    <li><a href="#io_setenv">io_setenv</a></li>
-    <li><a href="#io_unsetenv">io_unsetenv</a></li>
+    <li><a href="#io_setenv_raw">io_setenv_raw</a></li>
+    <li><a href="#io_unsetenv_raw">io_unsetenv_raw</a></li>
   </ul>
   <hr>
   <h2>Modules</h2>
@@ -38,6 +37,7 @@
     <li><a href="math.html">math</a></li>
     <li><a href="json.html">json</a></li>
     <li><a href="log.html">log</a></li>
+    <li><a href="os.html">os</a></li>
     <li><a href="string.html">string</a></li>
     <li><a href="collections.html">collections</a></li>
     <li><a href="fs.html">fs</a></li>
@@ -66,30 +66,26 @@
       <h3 class="function-name">io_print_float</h3>
       <pre class="usage"><code>io_print_float(value)</code></pre>
     </div>
-    <div class="function" id="io_read_file" data-name="io_read_file">
-      <h3 class="function-name">io_read_file</h3>
-      <pre class="usage"><code>io_read_file(path)</code></pre>
-      <p class="doc">File I/O</p>
+    <div class="function" id="io_read_file_raw" data-name="io_read_file_raw">
+      <h3 class="function-name">io_read_file_raw</h3>
+      <pre class="usage"><code>io_read_file_raw(path)</code></pre>
+      <p class="doc">File I/O (raw)</p>
     </div>
-    <div class="function" id="io_write_file" data-name="io_write_file">
-      <h3 class="function-name">io_write_file</h3>
-      <pre class="usage"><code>io_write_file(path, content)</code></pre>
+    <div class="function" id="io_write_file_raw" data-name="io_write_file_raw">
+      <h3 class="function-name">io_write_file_raw</h3>
+      <pre class="usage"><code>io_write_file_raw(path, content)</code></pre>
     </div>
-    <div class="function" id="io_append_file" data-name="io_append_file">
-      <h3 class="function-name">io_append_file</h3>
-      <pre class="usage"><code>io_append_file(path, content)</code></pre>
+    <div class="function" id="io_append_file_raw" data-name="io_append_file_raw">
+      <h3 class="function-name">io_append_file_raw</h3>
+      <pre class="usage"><code>io_append_file_raw(path, content)</code></pre>
     </div>
     <div class="function" id="io_file_exists" data-name="io_file_exists">
       <h3 class="function-name">io_file_exists</h3>
       <pre class="usage"><code>io_file_exists(path)</code></pre>
     </div>
-    <div class="function" id="io_delete_file" data-name="io_delete_file">
-      <h3 class="function-name">io_delete_file</h3>
-      <pre class="usage"><code>io_delete_file(path)</code></pre>
-    </div>
-    <div class="function" id="io_file_info" data-name="io_file_info">
-      <h3 class="function-name">io_file_info</h3>
-      <pre class="usage"><code>io_file_info(path)</code></pre>
+    <div class="function" id="io_delete_file_raw" data-name="io_delete_file_raw">
+      <h3 class="function-name">io_delete_file_raw</h3>
+      <pre class="usage"><code>io_delete_file_raw(path)</code></pre>
     </div>
     <div class="function" id="io_file_info_free" data-name="io_file_info_free">
       <h3 class="function-name">io_file_info_free</h3>
@@ -100,13 +96,13 @@
       <pre class="usage"><code>io_getenv(name)</code></pre>
       <p class="doc">Environment variables</p>
     </div>
-    <div class="function" id="io_setenv" data-name="io_setenv">
-      <h3 class="function-name">io_setenv</h3>
-      <pre class="usage"><code>io_setenv(name, value)</code></pre>
+    <div class="function" id="io_setenv_raw" data-name="io_setenv_raw">
+      <h3 class="function-name">io_setenv_raw</h3>
+      <pre class="usage"><code>io_setenv_raw(name, value)</code></pre>
     </div>
-    <div class="function" id="io_unsetenv" data-name="io_unsetenv">
-      <h3 class="function-name">io_unsetenv</h3>
-      <pre class="usage"><code>io_unsetenv(name)</code></pre>
+    <div class="function" id="io_unsetenv_raw" data-name="io_unsetenv_raw">
+      <h3 class="function-name">io_unsetenv_raw</h3>
+      <pre class="usage"><code>io_unsetenv_raw(name)</code></pre>
     </div>
   </div>
 </main>

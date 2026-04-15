@@ -1,0 +1,87 @@
+// Test: std.file Go-style tuple wrappers (file.read, file.write, file.delete,
+// file.size, file.open). Covers happy path + error paths end to end using a
+// /tmp file so it's hermetic and portable.
+
+import std.file
+
+main() {
+    tmpfile = "aether_test_file_tuple_tmp.txt"
+
+    // Write: returns "" on success
+    werr = file.write(tmpfile, "hello world")
+    if werr != "" {
+        println("FAIL: write error: ${werr}")
+        exit(1)
+    }
+
+    // Size: returns (int, "")
+    size, serr = file.size(tmpfile)
+    if serr != "" {
+        println("FAIL: size error: ${serr}")
+        exit(1)
+    }
+    if size != 11 {
+        println("FAIL: expected size 11, got ${size}")
+        exit(1)
+    }
+
+    // Read: returns (content, "")
+    content, rerr = file.read(tmpfile)
+    if rerr != "" {
+        println("FAIL: read error: ${rerr}")
+        exit(1)
+    }
+    if content != "hello world" {
+        println("FAIL: content mismatch, got '${content}'")
+        exit(1)
+    }
+
+    // Read nonexistent: returns ("", error)
+    _, rerr2 = file.read("aether_test_nonexistent_xyz_12345.txt")
+    if rerr2 == "" {
+        println("FAIL: reading nonexistent file should error")
+        exit(1)
+    }
+
+    // Size nonexistent: returns (0, error)
+    _, serr2 = file.size("aether_test_nonexistent_xyz_12345.txt")
+    if serr2 == "" {
+        println("FAIL: size of nonexistent file should error")
+        exit(1)
+    }
+
+    // Open for read: returns (handle, "")
+    handle, oerr = file.open(tmpfile, "r")
+    if oerr != "" {
+        println("FAIL: open error: ${oerr}")
+        exit(1)
+    }
+    if handle == null {
+        println("FAIL: open returned null handle")
+        exit(1)
+    }
+    file.close(handle)
+
+    // Open nonexistent for read: returns (null, error)
+    _, oerr2 = file.open("aether_test_nonexistent_xyz_12345.txt", "r")
+    if oerr2 == "" {
+        println("FAIL: opening nonexistent for read should error")
+        exit(1)
+    }
+
+    // Delete: returns "" on success
+    derr = file.delete(tmpfile)
+    if derr != "" {
+        println("FAIL: delete error: ${derr}")
+        exit(1)
+    }
+
+    // Delete nonexistent: returns error
+    derr2 = file.delete("aether_test_nonexistent_xyz_12345.txt")
+    if derr2 == "" {
+        println("FAIL: deleting nonexistent file should error")
+        exit(1)
+    }
+
+    println("file tuple wrappers ok")
+}

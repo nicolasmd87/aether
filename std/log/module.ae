@@ -5,8 +5,8 @@
 // LOG_LEVEL_DEBUG = 0, LOG_LEVEL_INFO = 1, LOG_LEVEL_WARN = 2
 // LOG_LEVEL_ERROR = 3, LOG_LEVEL_FATAL = 4
 
-// Initialize and shutdown
-extern log_init(filename: string, min_level: int)
+// Initialize and shutdown. Raw init returns 1/0 for ok/file-open-failed.
+extern log_init_raw(filename: string, min_level: int) -> int
 extern log_shutdown()
 
 // Core logging (variadic not fully supported, use with format string)
@@ -20,3 +20,14 @@ extern log_set_timestamps(enabled: int)
 // Statistics
 extern log_get_stats() -> ptr
 extern log_print_stats()
+
+// Initialize logging. Returns "" on success, error string if the
+// requested log file could not be opened (in which case logging still
+// works via stderr as a fallback).
+init(filename: string, min_level: int) -> {
+    ok = log_init_raw(filename, min_level)
+    if ok == 0 {
+        return "cannot open log file"
+    }
+    return ""
+}

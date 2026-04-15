@@ -1,14 +1,10 @@
 // std.map - HashMap Operations (alias for std.collections)
 //
-// This is a convenience module that re-exports map functions from std.collections.
-// You can use either:
-//   import std.map          (this module)
-//   import std.collections  (consolidated collections module)
-//
-// The implementations are in std/collections/aether_collections.c which is compiled into libaether.a
+// Raw externs end in `_raw`. The Aether-native `map.put` wrapper below
+// uses Go-style `(error)` return that reports resize/OOM failures.
 
 extern map_new() -> ptr
-extern map_put(map: ptr, key: string, value: ptr)
+extern map_put_raw(map: ptr, key: string, value: ptr) -> int
 extern map_get(map: ptr, key: string) -> ptr
 extern map_has(map: ptr, key: string) -> int
 extern map_remove(map: ptr, key: string)
@@ -17,3 +13,14 @@ extern map_clear(map: ptr)
 extern map_free(map: ptr)
 extern map_keys(map: ptr) -> ptr
 extern map_keys_free(keys: ptr)
+
+// Insert or update a key-value pair. Returns "" on success, error on
+// failure (null map/key or OOM). Previously this was a silent void
+// return that hid allocation failures.
+put(map: ptr, key: string, value: ptr) -> {
+    ok = map_put_raw(map, key, value)
+    if ok == 0 {
+        return "map.put failed"
+    }
+    return ""
+}

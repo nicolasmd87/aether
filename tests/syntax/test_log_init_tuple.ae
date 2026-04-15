@@ -1,0 +1,28 @@
+// Test: std.log.init Go-style wrapper.
+
+import std.log
+
+main() {
+    // Init with a writable path in the current working directory.
+    // Relative paths are portable across Linux/macOS/Windows.
+    err = log.init("aether_test_log_init_tuple_tmp.log", 1)
+    if err != "" {
+        println("FAIL: init with writable path: ${err}")
+        exit(1)
+    }
+
+    log.write(1, "test message")
+    log.shutdown()
+
+    // Init with an unwritable path (nonexistent directory) should report
+    // an error but logging still falls back to stderr under the hood.
+    // Use a deeply nested nonexistent path that doesn't exist on any OS.
+    err2 = log.init("aether_nonexistent_dir_xyz_12345/subdir/log.log", 1)
+    if err2 == "" {
+        println("FAIL: init with unwritable path should error")
+        exit(1)
+    }
+    log.shutdown()
+
+    println("log init tuple ok")
+}

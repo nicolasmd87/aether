@@ -3,12 +3,12 @@
 #include "../../runtime/aether_sandbox.h"
 
 #if !AETHER_HAS_NETWORKING
-TcpSocket* tcp_connect(const char* h, int p) { (void)h; (void)p; return NULL; }
-int tcp_send(TcpSocket* s, const char* d) { (void)s; (void)d; return 0; }
-char* tcp_receive(TcpSocket* s, int m) { (void)s; (void)m; return NULL; }
+TcpSocket* tcp_connect_raw(const char* h, int p) { (void)h; (void)p; return NULL; }
+int tcp_send_raw(TcpSocket* s, const char* d) { (void)s; (void)d; return -1; }
+char* tcp_receive_raw(TcpSocket* s, int m) { (void)s; (void)m; return NULL; }
 int tcp_close(TcpSocket* s) { (void)s; return 0; }
-TcpServer* tcp_listen(int p) { (void)p; return NULL; }
-TcpSocket* tcp_accept(TcpServer* s) { (void)s; return NULL; }
+TcpServer* tcp_listen_raw(int p) { (void)p; return NULL; }
+TcpSocket* tcp_accept_raw(TcpServer* s) { (void)s; return NULL; }
 int tcp_server_close(TcpServer* s) { (void)s; return 0; }
 #else
 
@@ -68,7 +68,7 @@ static void net_set_socket_timeouts(int fd, int timeout_sec) {
 #endif
 }
 
-TcpSocket* tcp_connect(const char* host, int port) {
+TcpSocket* tcp_connect_raw(const char* host, int port) {
     // Sandbox check: is TCP connect to this host allowed?
     if (!aether_sandbox_check("tcp", host)) return NULL;
 
@@ -104,14 +104,14 @@ TcpSocket* tcp_connect(const char* host, int port) {
     return sock;
 }
 
-int tcp_send(TcpSocket* sock, const char* data) {
+int tcp_send_raw(TcpSocket* sock, const char* data) {
     if (!sock || !sock->connected || !data) return -1;
 
     int sent = send(sock->fd, data, strlen(data), 0);
     return sent;
 }
 
-char* tcp_receive(TcpSocket* sock, int max_bytes) {
+char* tcp_receive_raw(TcpSocket* sock, int max_bytes) {
     if (!sock || !sock->connected || max_bytes <= 0) return NULL;
 
     char* buffer = (char*)malloc(max_bytes + 1);
@@ -140,7 +140,7 @@ int tcp_close(TcpSocket* sock) {
     return 0;
 }
 
-TcpServer* tcp_listen(int port) {
+TcpServer* tcp_listen_raw(int port) {
     // Sandbox check: is listening on this port allowed?
     if (!aether_sandbox_check("tcp_listen", "*")) return NULL;
 
@@ -182,7 +182,7 @@ TcpServer* tcp_listen(int port) {
     return server;
 }
 
-TcpSocket* tcp_accept(TcpServer* server) {
+TcpSocket* tcp_accept_raw(TcpServer* server) {
     if (!server) return NULL;
 
     struct sockaddr_in cli_addr;

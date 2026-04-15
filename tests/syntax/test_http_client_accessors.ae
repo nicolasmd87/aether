@@ -1,0 +1,46 @@
+// Test: HTTP client raw response accessors cover the error path end to end.
+//
+// This test exercises the low-level `http.get_raw` API that returns the
+// HttpResponse ptr directly. Most user code should use the Go-style
+// wrappers in std.http (`body, err = http.get(url)`), which are covered
+// by `tests/syntax/test_http_client_tuple.ae`. The raw API is for cases
+// where callers need direct access to status code, headers, and body
+// together without the tuple marshalling cost.
+//
+// Uses the .invalid TLD (RFC 2606) so DNS resolution fails immediately
+// without hitting the network.
+
+import std.http
+
+main() {
+    response = http.get_raw("http://aether-test-invalid-host.invalid")
+
+    if response == 0 {
+        println("FAIL: http.get returned null (out of memory or bug)")
+        exit(1)
+    }
+
+    ok = http.response_ok(response)
+    if ok != 0 {
+        println("FAIL: response_ok returned non-zero for invalid host")
+        http.response_free(response)
+        exit(1)
+    }
+
+    err = http.response_error(response)
+    if err == "" {
+        println("FAIL: response_error was empty for invalid host")
+        http.response_free(response)
+        exit(1)
+    }
+
+    status = http.response_status(response)
+    if status != 0 {
+        println("FAIL: expected status 0 for failed transport, got ${status}")
+        http.response_free(response)
+        exit(1)
+    }
+
+    http.response_free(response)
+    println("http client accessors ok")
+}

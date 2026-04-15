@@ -41,8 +41,10 @@ main() {
     a ! Go { raw: raw }
     sleep(300)
 
-    // Make request
-    resp = http.get("http://127.0.0.1:8080/test")
+    // Make request via the raw ptr API (this test specifically guards
+    // the ptr-based accessor functions; the Go-style http.get wrapper
+    // returns a (body, err) tuple instead).
+    resp = http.get_raw("http://127.0.0.1:8080/test")
 
     // Test 1: status code accessor
     print("Test 1: http_response_status_code... ")
@@ -92,7 +94,7 @@ main() {
 
     // Test 6: 404 response has correct status
     print("Test 6: 404 status code... ")
-    resp2 = http.get("http://127.0.0.1:8080/nonexistent")
+    resp2 = http.get_raw("http://127.0.0.1:8080/nonexistent")
     code2 = http.response_status_code(resp2)
     if code2 != 404 {
         print("FAIL: expected 404, got "); print(code2); println("")

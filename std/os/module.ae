@@ -4,8 +4,9 @@
 // Run a shell command, returns exit code (0 = success)
 extern os_system(cmd: string) -> int
 
-// Run a command and capture stdout as a string
-extern os_exec(cmd: string) -> string
+// Run a command and capture stdout as a string. Raw extern returns
+// NULL on failure. Use the Go-style wrapper `os.exec` below in most code.
+extern os_exec_raw(cmd: string) -> string
 
 // Get environment variable, returns string or NULL if not set
 extern os_getenv(name: string) -> string
@@ -13,3 +14,18 @@ extern os_getenv(name: string) -> string
 // Command-line arguments
 extern aether_args_count() -> int
 extern aether_args_get(index: int) -> string
+
+// string_concat used to detach the borrowed output string from the
+// internal popen buffer.
+extern string_concat(a: string, b: string) -> string
+
+// Execute a shell command and capture stdout. Returns (output, "")
+// on success, ("", error) on failure.
+exec(cmd: string) -> {
+    output = os_exec_raw(cmd)
+    if output == null {
+        return "", "command failed"
+    }
+    output_copy = string_concat(output, "")
+    return output_copy, ""
+}

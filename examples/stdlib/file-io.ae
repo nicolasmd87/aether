@@ -1,7 +1,9 @@
-// File I/O - Demonstrates file operations using namespace calls
+// File I/O - Demonstrates file operations with Go-style result types.
 // Run with: ae run examples/stdlib/file-io.ae
 //
-// file.read_all() returns a malloc'd string — free with defer free().
+// file.read, file.write, file.delete, file.size, dir.create, dir.delete
+// all use `value, err = func()` tuple returns. Check err first, then use
+// the value. file.read owns the returned string — no manual free needed.
 
 import std.file
 import std.dir
@@ -11,58 +13,61 @@ main() {
 
     // Write a file
     print("Writing test file:\n")
-    f = file.open("aether_test_output.txt", "w")
-    file.write(f, "Hello from Aether!\nLine two.\nLine three.", 41)
-    file.close(f)
+    werr = file.write("aether_test_output.txt", "Hello from Aether!\nLine two.\nLine three.")
+    if werr != "" {
+        println("  FAIL: ${werr}")
+        exit(1)
+    }
     println("  Wrote aether_test_output.txt")
 
     // Check existence and size
     print("\nChecking files:\n")
-    if (file.exists("aether_test_output.txt") == 1) {
-        size = file.size("aether_test_output.txt")
-        println("  aether_test_output.txt: ${size} bytes")
+    if file.exists("aether_test_output.txt") == 1 {
+        size, serr = file.size("aether_test_output.txt")
+        if serr != "" {
+            println("  size error: ${serr}")
+        } else {
+            println("  aether_test_output.txt: ${size} bytes")
+        }
     }
 
-    if (file.exists("nonexistent.txt") == 0) {
+    if file.exists("nonexistent.txt") == 0 {
         println("  nonexistent.txt: does not exist (expected)")
     }
 
     // Read the file back and print it
     print("\nReading file:\n")
-    f = file.open("aether_test_output.txt", "r")
-    if (f != 0) {
-        content = file.read_all(f)
-        defer free(content)
-        file.close(f)
-        println("  Content:")
-        println(content)
-        println("  Interpolated: ${content}")
+    content, rerr = file.read("aether_test_output.txt")
+    if rerr != "" {
+        println("  read failed: ${rerr}")
+        exit(1)
     }
+    println("  Content:")
+    println(content)
 
     // Overwrite with new content
     print("\nOverwriting file:\n")
-    f = file.open("aether_test_output.txt", "w")
-    file.write(f, "Updated content", 15)
-    file.close(f)
+    werr2 = file.write("aether_test_output.txt", "Updated content")
+    if werr2 != "" {
+        println("  write failed: ${werr2}")
+        exit(1)
+    }
 
     // Read back to verify
-    f = file.open("aether_test_output.txt", "r")
-    if (f != 0) {
-        content2 = file.read_all(f)
-        defer free(content2)
-        file.close(f)
+    content2, rerr2 = file.read("aether_test_output.txt")
+    if rerr2 == "" {
         println("  New content: ${content2}")
     }
 
     // Check directories
     print("\nChecking directories:\n")
-    if (dir.exists("examples") == 1) {
+    if dir.exists("examples") == 1 {
         println("  examples/ directory exists")
     }
 
     // Create and clean up test directory
-    result = dir.create("aether_test_dir")
-    if (result == 0) {
+    derr = dir.create("aether_test_dir")
+    if derr == "" {
         println("  Created aether_test_dir/")
         dir.delete("aether_test_dir")
         println("  Deleted aether_test_dir/")

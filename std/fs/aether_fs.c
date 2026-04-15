@@ -5,28 +5,28 @@
 
 #if !AETHER_HAS_FILESYSTEM
 // Stubs when filesystem is unavailable (WASM, embedded)
-File* file_open(const char* p, const char* m) { (void)p; (void)m; return NULL; }
-char* file_read_all(File* f) { (void)f; return NULL; }
-int file_write(File* f, const char* d, int l) { (void)f; (void)d; (void)l; return 0; }
+File* file_open_raw(const char* p, const char* m) { (void)p; (void)m; return NULL; }
+char* file_read_all_raw(File* f) { (void)f; return NULL; }
+int file_write_raw(File* f, const char* d, int l) { (void)f; (void)d; (void)l; return 0; }
 int file_close(File* f) { (void)f; return 0; }
 int file_exists(const char* p) { (void)p; return 0; }
-int file_delete(const char* p) { (void)p; return 0; }
-int file_size(const char* p) { (void)p; return -1; }
+int file_delete_raw(const char* p) { (void)p; return 0; }
+int file_size_raw(const char* p) { (void)p; return -1; }
 int file_mtime(const char* p) { (void)p; return 0; }
 int dir_exists(const char* p) { (void)p; return 0; }
-int dir_create(const char* p) { (void)p; return 0; }
-int dir_delete(const char* p) { (void)p; return 0; }
+int dir_create_raw(const char* p) { (void)p; return 0; }
+int dir_delete_raw(const char* p) { (void)p; return 0; }
 char* path_join(const char* a, const char* b) { (void)a; (void)b; return NULL; }
 char* path_dirname(const char* p) { (void)p; return NULL; }
 char* path_basename(const char* p) { (void)p; return NULL; }
 char* path_extension(const char* p) { (void)p; return NULL; }
 int path_is_absolute(const char* p) { (void)p; return 0; }
-DirList* dir_list(const char* p) { (void)p; return NULL; }
+DirList* dir_list_raw(const char* p) { (void)p; return NULL; }
 int dir_list_count(DirList* l) { (void)l; return 0; }
 const char* dir_list_get(DirList* l, int i) { (void)l; (void)i; return NULL; }
 void dir_list_free(DirList* l) { (void)l; }
-DirList* fs_glob(const char* p) { (void)p; return NULL; }
-DirList* fs_glob_multi(void* l) { (void)l; return NULL; }
+DirList* fs_glob_raw(const char* p) { (void)p; return NULL; }
+DirList* fs_glob_multi_raw(void* l) { (void)l; return NULL; }
 #else
 
 #include <stdio.h>
@@ -47,7 +47,7 @@ DirList* fs_glob_multi(void* l) { (void)l; return NULL; }
 #endif
 
 // File operations
-File* file_open(const char* path, const char* mode) {
+File* file_open_raw(const char* path, const char* mode) {
     if (!path || !mode) return NULL;
 
     // Sandbox check: determine read vs write from mode
@@ -68,7 +68,7 @@ File* file_open(const char* path, const char* mode) {
     return file;
 }
 
-char* file_read_all(File* file) {
+char* file_read_all_raw(File* file) {
     if (!file || !file->is_open) return NULL;
 
     FILE* fp = (FILE*)file->handle;
@@ -85,7 +85,7 @@ char* file_read_all(File* file) {
     return buffer;
 }
 
-int file_write(File* file, const char* data, int length) {
+int file_write_raw(File* file, const char* data, int length) {
     if (!file || !file->is_open || !data) return 0;
 
     FILE* fp = (FILE*)file->handle;
@@ -114,18 +114,18 @@ int file_exists(const char* path) {
     return (stat(path, &st) == 0 && !S_ISDIR(st.st_mode));
 }
 
-int file_delete(const char* path) {
+int file_delete_raw(const char* path) {
     if (!path) return 0;
     if (!aether_sandbox_check("fs_write", path)) return 0;
     return remove(path) == 0 ? 1 : 0;
 }
 
-int file_size(const char* path) {
+int file_size_raw(const char* path) {
     if (!path) return 0;
     if (!aether_sandbox_check("fs_read", path)) return 0;
 
     struct stat st;
-    if (stat(path, &st) != 0) return 0;
+    if (stat(path, &st) != 0) return -1;
     return (int)st.st_size;
 }
 
@@ -145,12 +145,12 @@ int dir_exists(const char* path) {
     return (stat(path, &st) == 0 && S_ISDIR(st.st_mode));
 }
 
-int dir_create(const char* path) {
+int dir_create_raw(const char* path) {
     if (!path) return 0;
     return mkdir(path, 0755) == 0 ? 1 : 0;
 }
 
-int dir_delete(const char* path) {
+int dir_delete_raw(const char* path) {
     if (!path) return 0;
     return rmdir(path) == 0 ? 1 : 0;
 }
@@ -257,7 +257,7 @@ int path_is_absolute(const char* path) {
 }
 
 // Directory listing
-DirList* dir_list(const char* path) {
+DirList* dir_list_raw(const char* path) {
     if (!path) return NULL;
 
     DirList* list = (DirList*)malloc(sizeof(DirList));
@@ -375,7 +375,7 @@ static void walk_recursive(const char* dir, const char* suffix_pattern, DirList*
 }
 #endif // !_WIN32
 
-DirList* fs_glob(const char* pattern) {
+DirList* fs_glob_raw(const char* pattern) {
     if (!pattern) return NULL;
 
     DirList* result = (DirList*)malloc(sizeof(DirList));
@@ -444,7 +444,7 @@ DirList* fs_glob(const char* pattern) {
 extern int list_size(void*);
 extern void* list_get(void*, int);
 
-DirList* fs_glob_multi(void* pattern_list) {
+DirList* fs_glob_multi_raw(void* pattern_list) {
     if (!pattern_list) return NULL;
 
     DirList* result = (DirList*)malloc(sizeof(DirList));
@@ -457,7 +457,7 @@ DirList* fs_glob_multi(void* pattern_list) {
         const char* pattern = (const char*)list_get(pattern_list, i);
         if (!pattern) continue;
 
-        DirList* partial = fs_glob(pattern);
+        DirList* partial = fs_glob_raw(pattern);
         if (!partial) continue;
 
         for (int j = 0; j < partial->count; j++) {

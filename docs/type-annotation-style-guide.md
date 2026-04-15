@@ -90,7 +90,7 @@ int result = parse_number(input)  // Clarifies we want int, not float
 actor Counter {
     state count: int           // Explicit for clarity
     state name: string
-    state values: [int]
+    state values: int[]
     state users: ptr
     
     // ...
@@ -104,7 +104,7 @@ struct User {
     string name
     string email
     bool active
-    [string] tags
+    string[] tags
 }
 ```
 
@@ -181,14 +181,19 @@ subtract(a, b) {
 ### Arrays
 
 ```aether
-// Explicit array type
-[int] numbers = [1, 2, 3, 4, 5]
-[string] names = ["Alice", "Bob"]
+// Explicit array type (suffix form)
+int[] numbers = [1, 2, 3, 4, 5]
+string[] names = ["Alice", "Bob"]
 
 // Type inference from elements
-numbers = [1, 2, 3, 4, 5]  // Inferred as [int]
-names = ["Alice", "Bob"]   // Inferred as [string]
+numbers = [1, 2, 3, 4, 5]  // Inferred as int[]
+names = ["Alice", "Bob"]   // Inferred as string[]
 ```
+
+> **Note:** The array type syntax is the C-style suffix `T[]`, not the prefix
+> `[T]`. Earlier drafts of this guide used the prefix form; the parser has
+> never accepted it. If you see `[string]` in older code or docs, replace it
+> with `string[]`.
 
 ### Complex Types
 

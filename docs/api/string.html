@@ -15,6 +15,7 @@
   <input type="text" id="search" placeholder="Search string..." onkeyup="searchModule()">
   <h2>Functions</h2>
   <ul class="function-nav">
+    <li><a href="#=">=</a></li>
     <li><a href="#string_new">string_new</a></li>
     <li><a href="#string_from_cstr">string_from_cstr</a></li>
     <li><a href="#string_from_literal">string_from_literal</a></li>
@@ -37,14 +38,23 @@
     <li><a href="#string_to_lower">string_to_lower</a></li>
     <li><a href="#string_trim">string_trim</a></li>
     <li><a href="#string_split">string_split</a></li>
+    <li><a href="#string_array_size">string_array_size</a></li>
+    <li><a href="#string_array_get">string_array_get</a></li>
     <li><a href="#string_array_free">string_array_free</a></li>
     <li><a href="#string_to_cstr">string_to_cstr</a></li>
     <li><a href="#string_from_int">string_from_int</a></li>
     <li><a href="#string_from_float">string_from_float</a></li>
-    <li><a href="#string_to_int">string_to_int</a></li>
-    <li><a href="#string_to_long">string_to_long</a></li>
-    <li><a href="#string_to_float">string_to_float</a></li>
-    <li><a href="#string_to_double">string_to_double</a></li>
+    <li><a href="#string_to_int_raw">string_to_int_raw</a></li>
+    <li><a href="#string_to_long_raw">string_to_long_raw</a></li>
+    <li><a href="#string_to_float_raw">string_to_float_raw</a></li>
+    <li><a href="#string_to_double_raw">string_to_double_raw</a></li>
+    <li><a href="#string_try_int">string_try_int</a></li>
+    <li><a href="#string_get_int">string_get_int</a></li>
+    <li><a href="#string_try_long">string_try_long</a></li>
+    <li><a href="#string_try_float">string_try_float</a></li>
+    <li><a href="#string_get_float">string_get_float</a></li>
+    <li><a href="#string_try_double">string_try_double</a></li>
+    <li><a href="#string_get_double">string_get_double</a></li>
     <li><a href="#string_format">string_format</a></li>
   </ul>
   <hr>
@@ -55,6 +65,7 @@
     <li><a href="math.html">math</a></li>
     <li><a href="json.html">json</a></li>
     <li><a href="log.html">log</a></li>
+    <li><a href="os.html">os</a></li>
     <li class="active"><a href="string.html">string</a></li>
     <li><a href="collections.html">collections</a></li>
     <li><a href="fs.html">fs</a></li>
@@ -66,6 +77,10 @@
     <p class="module-desc">String manipulation and formatting</p>
   </div>
   <div class="functions" id="functions">
+    <div class="function" id="=" data-name="=">
+      <h3 class="function-name">=</h3>
+      <pre class="usage"><code>=()</code></pre>
+    </div>
     <div class="function" id="string_new" data-name="string_new">
       <h3 class="function-name">string_new</h3>
       <pre class="usage"><code>string_new(cstr)</code></pre>
@@ -90,7 +105,7 @@
     <div class="function" id="string_retain" data-name="string_retain">
       <h3 class="function-name">string_retain</h3>
       <pre class="usage"><code>string_retain(str)</code></pre>
-      <p class="doc">Reference counting</p>
+      <p class="doc">Reference counting — safe to call with plain char* (no-op)</p>
     </div>
     <div class="function" id="string_release" data-name="string_release">
       <h3 class="function-name">string_release</h3>
@@ -103,7 +118,7 @@
     <div class="function" id="string_concat" data-name="string_concat">
       <h3 class="function-name">string_concat</h3>
       <pre class="usage"><code>string_concat(a, b)</code></pre>
-      <p class="doc">String operations</p>
+      <p class="doc">String operations — accept both AetherString* and plain char*</p>
     </div>
     <div class="function" id="string_length" data-name="string_length">
       <h3 class="function-name">string_length</h3>
@@ -124,7 +139,7 @@
     <div class="function" id="string_starts_with" data-name="string_starts_with">
       <h3 class="function-name">string_starts_with</h3>
       <pre class="usage"><code>string_starts_with(str, prefix)</code></pre>
-      <p class="doc">String methods</p>
+      <p class="doc">String methods — accept both AetherString* and plain char* Return plain char* (caller owns memory, free with free())</p>
     </div>
     <div class="function" id="string_ends_with" data-name="string_ends_with">
       <h3 class="function-name">string_ends_with</h3>
@@ -158,6 +173,14 @@
       <h3 class="function-name">string_split</h3>
       <pre class="usage"><code>string_split(str, delimiter)</code></pre>
     </div>
+    <div class="function" id="string_array_size" data-name="string_array_size">
+      <h3 class="function-name">string_array_size</h3>
+      <pre class="usage"><code>string_array_size(arr)</code></pre>
+    </div>
+    <div class="function" id="string_array_get" data-name="string_array_get">
+      <h3 class="function-name">string_array_get</h3>
+      <pre class="usage"><code>string_array_get(arr, index)</code></pre>
+    </div>
     <div class="function" id="string_array_free" data-name="string_array_free">
       <h3 class="function-name">string_array_free</h3>
       <pre class="usage"><code>string_array_free(arr)</code></pre>
@@ -175,22 +198,51 @@
       <h3 class="function-name">string_from_float</h3>
       <pre class="usage"><code>string_from_float(value)</code></pre>
     </div>
-    <div class="function" id="string_to_int" data-name="string_to_int">
-      <h3 class="function-name">string_to_int</h3>
-      <pre class="usage"><code>string_to_int(str, out_value)</code></pre>
-      <p class="doc">Parsing (string -&gt; number) Returns 1 on success, 0 on failure. Result stored in out_value.</p>
+    <div class="function" id="string_to_int_raw" data-name="string_to_int_raw">
+      <h3 class="function-name">string_to_int_raw</h3>
+      <pre class="usage"><code>string_to_int_raw(str, out_value)</code></pre>
+      <p class="doc">Parsing (string -&gt; number) — raw form with out-parameter. Returns 1 on success, 0 on failure. Result stored in out_value. Aether code should prefer the Go-style wrappers in std.string (`string.to_int`, etc.) which return `(value, error)` tuples.</p>
     </div>
-    <div class="function" id="string_to_long" data-name="string_to_long">
-      <h3 class="function-name">string_to_long</h3>
-      <pre class="usage"><code>string_to_long(str, out_value)</code></pre>
+    <div class="function" id="string_to_long_raw" data-name="string_to_long_raw">
+      <h3 class="function-name">string_to_long_raw</h3>
+      <pre class="usage"><code>string_to_long_raw(str, out_value)</code></pre>
     </div>
-    <div class="function" id="string_to_float" data-name="string_to_float">
-      <h3 class="function-name">string_to_float</h3>
-      <pre class="usage"><code>string_to_float(str, out_value)</code></pre>
+    <div class="function" id="string_to_float_raw" data-name="string_to_float_raw">
+      <h3 class="function-name">string_to_float_raw</h3>
+      <pre class="usage"><code>string_to_float_raw(str, out_value)</code></pre>
     </div>
-    <div class="function" id="string_to_double" data-name="string_to_double">
-      <h3 class="function-name">string_to_double</h3>
-      <pre class="usage"><code>string_to_double(str, out_value)</code></pre>
+    <div class="function" id="string_to_double_raw" data-name="string_to_double_raw">
+      <h3 class="function-name">string_to_double_raw</h3>
+      <pre class="usage"><code>string_to_double_raw(str, out_value)</code></pre>
+    </div>
+    <div class="function" id="string_try_int" data-name="string_try_int">
+      <h3 class="function-name">string_try_int</h3>
+      <pre class="usage"><code>string_try_int(s)</code></pre>
+      <p class="doc">Split-return helpers used by the Go-style wrappers. `_try` returns 1 if parseable, 0 otherwise. `_get` returns the parsed value or zero-value on failure.</p>
+    </div>
+    <div class="function" id="string_get_int" data-name="string_get_int">
+      <h3 class="function-name">string_get_int</h3>
+      <pre class="usage"><code>string_get_int(s)</code></pre>
+    </div>
+    <div class="function" id="string_try_long" data-name="string_try_long">
+      <h3 class="function-name">string_try_long</h3>
+      <pre class="usage"><code>string_try_long(s)</code></pre>
+    </div>
+    <div class="function" id="string_try_float" data-name="string_try_float">
+      <h3 class="function-name">string_try_float</h3>
+      <pre class="usage"><code>string_try_float(s)</code></pre>
+    </div>
+    <div class="function" id="string_get_float" data-name="string_get_float">
+      <h3 class="function-name">string_get_float</h3>
+      <pre class="usage"><code>string_get_float(s)</code></pre>
+    </div>
+    <div class="function" id="string_try_double" data-name="string_try_double">
+      <h3 class="function-name">string_try_double</h3>
+      <pre class="usage"><code>string_try_double(s)</code></pre>
+    </div>
+    <div class="function" id="string_get_double" data-name="string_get_double">
+      <h3 class="function-name">string_get_double</h3>
+      <pre class="usage"><code>string_get_double(s)</code></pre>
     </div>
     <div class="function" id="string_format" data-name="string_format">
       <h3 class="function-name">string_format</h3>

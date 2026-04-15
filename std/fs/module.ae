@@ -1,36 +1,160 @@
 // std.fs - File System Module
 // Import with: import std.fs
+//
+// Provides file, directory, path, and glob operations.
+//
+// API shape:
+//   - Raw externs end in `_raw` and return ptr/int in the old C-style
+//     convention. They are the escape hatch for advanced callers.
+//   - Aether-native wrappers (below) use Go-style `(value, err)` tuple
+//     returns and are the idiomatic way to call fs operations.
 
-// File operations
-extern file_open(path: string, mode: string) -> ptr
+// File operations - raw externs
+extern file_open_raw(path: string, mode: string) -> ptr
 extern file_close(file: ptr) -> int
-extern file_read_all(file: ptr) -> string
-extern file_write(file: ptr, data: string, length: int) -> int
+extern file_read_all_raw(file: ptr) -> string
+extern file_write_raw(file: ptr, data: string, length: int) -> int
 extern file_exists(path: string) -> int
-extern file_delete(path: string) -> int
-extern file_size(path: string) -> int
+extern file_delete_raw(path: string) -> int
+extern file_size_raw(path: string) -> int
+
+// Get file modification time as a Unix timestamp. Infallible — returns
+// 0 for missing files, null paths, or stat failure. Kept as a raw
+// extern with no Go-style wrapper because callers already use the 0
+// sentinel for "no mtime".
 extern file_mtime(path: string) -> int
 
-// Directory operations
+// Directory operations - raw externs
 extern dir_exists(path: string) -> int
-extern dir_create(path: string) -> int
-extern dir_delete(path: string) -> int
-extern dir_list(path: string) -> ptr
+extern dir_create_raw(path: string) -> int
+extern dir_delete_raw(path: string) -> int
+extern dir_list_raw(path: string) -> ptr
 extern dir_list_count(list: ptr) -> int
 extern dir_list_get(list: ptr, index: int) -> string
 extern dir_list_free(list: ptr)
 
-// Path utilities
+// Path utilities - pure functions, never fail
 extern path_join(path1: string, path2: string) -> string
 extern path_dirname(path: string) -> string
 extern path_basename(path: string) -> string
 extern path_extension(path: string) -> string
 extern path_is_absolute(path: string) -> int
 
-// Glob: match files by pattern
-// Supports * (any file), *.ext, and **/ (recursive)
-// Returns a DirList pointer — iterate with dir_list, free with dir_list_free
-extern fs_glob(pattern: string) -> ptr
+// Glob: match files by pattern. Raw externs return ptr, NULL on failure.
+extern fs_glob_raw(pattern: string) -> ptr
+extern fs_glob_multi_raw(patterns: ptr) -> ptr
 
-// Multi-pattern glob: takes a list of patterns, returns merged results
-extern fs_glob_multi(patterns: ptr) -> ptr
+// string_concat used for duplicating borrowed strings.
+extern string_concat(a: string, b: string) -> string
+extern string_length(str: string) -> int
+
+// ---- Go-style wrappers ----
+
+// Open a file. Returns (handle, "") on success, (null, error) on failure.
+open(path: string, mode: string) -> {
+    handle = file_open_raw(path, mode)
+    if handle == null {
+        return null, "cannot open file"
+    }
+    return handle, ""
+}
+
+// Read the entire contents of a file at `path`. Opens, reads, closes.
+// Returns (content, "") on success, ("", error) on failure.
+read(path: string) -> {
+    handle = file_open_raw(path, "r")
+    if handle == 0 {
+        return "", "cannot open file"
+    }
+    content = file_read_all_raw(handle)
+    if content == 0 {
+        file_close(handle)
+        return "", "cannot read file"
+    }
+    content_copy = string_concat(content, "")
+    file_close(handle)
+    return content_copy, ""
+}
+
+// Write `content` to a file at `path`. Opens in write mode, writes, closes.
+// Returns "" on success, error string on failure.
+write(path: string, content: string) -> {
+    handle = file_open_raw(path, "w")
+    if handle == 0 {
+        return "cannot open file for writing"
+    }
+    length = string_length(content)
+    ok = file_write_raw(handle, content, length)
+    file_close(handle)
+    if ok == 0 {
+        return "write failed"
+    }
+    return ""
+}
+
+// Delete the file at `path`. Returns "" on success, error on failure.
+delete(path: string) -> {
+    ok = file_delete_raw(path)
+    if ok == 0 {
+        return "cannot delete file"
+    }
+    return ""
+}
+
+// Return the size of the file at `path` in bytes.
+// Returns (size, "") on success, (0, error) on failure.
+size(path: string) -> {
+    s = file_size_raw(path)
+    if s < 0 {
+        return 0, "cannot stat file"
+    }
+    return s, ""
+}
+
+// Create a directory. Returns "" on success, error on failure.
+create_dir(path: string) -> {
+    ok = dir_create_raw(path)
+    if ok == 0 {
+        return "cannot create directory"
+    }
+    return ""
+}
+
+// Delete a directory. Returns "" on success, error on failure.
+delete_dir(path: string) -> {
+    ok = dir_delete_raw(path)
+    if ok == 0 {
+        return "cannot delete directory"
+    }
+    return ""
+}
+
+// List directory contents.
+// Returns (DirList ptr, "") on success, (null, error) on failure.
+// Caller must free the returned ptr with dir_list_free.
+list_dir(path: string) -> {
+    list = dir_list_raw(path)
+    if list == null {
+        return null, "cannot list directory"
+    }
+    return list, ""
+}
+
+// Glob for files matching a pattern.
+// Returns (DirList ptr, "") on success, (null, error) on failure.
+glob(pattern: string) -> {
+    list = fs_glob_raw(pattern)
+    if list == null {
+        return null, "glob failed"
+    }
+    return list, ""
+}
+
+// Multi-pattern glob.
+glob_multi(patterns: ptr) -> {
+    list = fs_glob_multi_raw(patterns)
+    if list == null {
+        return null, "glob failed"
+    }
+    return list, ""
+}

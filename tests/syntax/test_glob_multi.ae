@@ -10,7 +10,7 @@ main() {
     list.add(patterns, "tests/syntax/test_glob*.ae")
     list.add(patterns, "tests/syntax/test_args*.ae")
 
-    results = fs_glob_multi(patterns)
+    results = fs_glob_multi_raw(patterns)
     count = dir_list_count(results)
     if count >= 2 {
         println("multi-pattern found files")
@@ -42,7 +42,7 @@ main() {
     // Single pattern in list — same as fs_glob but via list
     single = list.new()
     list.add(single, "tests/syntax/test_glob_multi.ae")
-    single_results = fs_glob_multi(single)
+    single_results = fs_glob_multi_raw(single)
     if dir_list_count(single_results) == 1 {
         println("single pattern works")
     }
@@ -51,7 +51,7 @@ main() {
 
     // Empty list
     empty_patterns = list.new()
-    empty_results = fs_glob_multi(empty_patterns)
+    empty_results = fs_glob_multi_raw(empty_patterns)
     if dir_list_count(empty_results) == 0 {
         println("empty patterns returns empty")
     }
@@ -59,7 +59,7 @@ main() {
     list.free(empty_patterns)
 
     // Null list
-    null_results = fs_glob_multi(null)
+    null_results = fs_glob_multi_raw(null)
     if null_results == null {
         println("null list returns null")
     }

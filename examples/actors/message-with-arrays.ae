@@ -1,0 +1,59 @@
+// Message fields with composite types (arrays).
+// Run with: ae run examples/actors/message-with-arrays.ae
+//
+// Messages can carry arrays just like scalar fields. The compiler handles
+// the C marshalling for you: the struct field is typed correctly, the
+// receive pattern destructures to the right element type, and array
+// literals at the send site are wrapped in a compound literal so the
+// generated C is valid.
+//
+// Use this pattern any time you want to hand an actor a list of things
+// to work on without needing a pointer escape hatch.
+
+message ProcessBatch { items: string[], batch_id: int }
+message Summarize { totals: int[], label: string }
+
+actor Worker {
+    state processed = 0
+
+    receive {
+        ProcessBatch(items, batch_id) -> {
+            println("worker: batch ${batch_id}")
+            // items[0], items[1], ... are typed as string inside the
+            // receive arm, so string interpolation works cleanly.
+            println("  first: ${items[0]}")
+            println("  second: ${items[1]}")
+            println("  third: ${items[2]}")
+            processed = processed + 3
+        }
+    }
+}
+
+actor Aggregator {
+    receive {
+        Summarize(totals, label) -> {
+            sum = totals[0] + totals[1] + totals[2]
+            println("aggregator: ${label} sum = ${sum}")
+        }
+    }
+}
+
+main() {
+    w = spawn(Worker())
+    a = spawn(Aggregator())
+
+    // Array literals get wrapped as compound literals at codegen time,
+    // so this is valid whether the array holds strings or ints.
+    w ! ProcessBatch {
+        items: ["alpha.example.com", "beta.example.com", "gamma.example.com"],
+        batch_id: 1
+    }
+
+    a ! Summarize {
+        totals: [100, 200, 300],
+        label: "q1"
+    }
+
+    wait_for_idle()
+    println("processed: ${w.processed}")
+}

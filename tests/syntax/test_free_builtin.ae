@@ -30,15 +30,16 @@ main() {
         passed = passed + 1
     }
 
-    // Test 3: free with os.exec (returns malloc'd string)
-    output = os.exec("echo test_free_works")
-    defer free(output)
-    if output != 0 {
+    // Test 3: os.exec returns (output, err) tuple. The body is owned
+    // and auto-freed by the wrapper; no defer needed.
+    output, exec_err = os.exec("echo test_free_works")
+    if exec_err == "" {
         passed = passed + 1
-        println("PASS: free with os.exec")
+        println("PASS: os.exec success")
     } else {
-        println("FAIL: os.exec returned null")
+        println("FAIL: os.exec returned error: ${exec_err}")
     }
+    _ = output
 
     // Test 4: free with string.concat (returns AetherString*)
     s = string.concat("hello", " world")

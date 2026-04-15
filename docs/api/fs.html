@@ -15,20 +15,23 @@
   <input type="text" id="search" placeholder="Search fs..." onkeyup="searchModule()">
   <h2>Functions</h2>
   <ul class="function-nav">
-    <li><a href="#file_read_all">file_read_all</a></li>
-    <li><a href="#file_write">file_write</a></li>
+    <li><a href="#file_read_all_raw">file_read_all_raw</a></li>
+    <li><a href="#file_write_raw">file_write_raw</a></li>
     <li><a href="#file_close">file_close</a></li>
     <li><a href="#file_exists">file_exists</a></li>
-    <li><a href="#file_delete">file_delete</a></li>
-    <li><a href="#file_size">file_size</a></li>
+    <li><a href="#file_delete_raw">file_delete_raw</a></li>
+    <li><a href="#file_size_raw">file_size_raw</a></li>
+    <li><a href="#file_mtime">file_mtime</a></li>
     <li><a href="#dir_exists">dir_exists</a></li>
-    <li><a href="#dir_create">dir_create</a></li>
-    <li><a href="#dir_delete">dir_delete</a></li>
+    <li><a href="#dir_create_raw">dir_create_raw</a></li>
+    <li><a href="#dir_delete_raw">dir_delete_raw</a></li>
     <li><a href="#path_join">path_join</a></li>
     <li><a href="#path_dirname">path_dirname</a></li>
     <li><a href="#path_basename">path_basename</a></li>
     <li><a href="#path_extension">path_extension</a></li>
     <li><a href="#path_is_absolute">path_is_absolute</a></li>
+    <li><a href="#dir_list_count">dir_list_count</a></li>
+    <li><a href="#dir_list_get">dir_list_get</a></li>
     <li><a href="#dir_list_free">dir_list_free</a></li>
   </ul>
   <hr>
@@ -39,6 +42,7 @@
     <li><a href="math.html">math</a></li>
     <li><a href="json.html">json</a></li>
     <li><a href="log.html">log</a></li>
+    <li><a href="os.html">os</a></li>
     <li><a href="string.html">string</a></li>
     <li><a href="collections.html">collections</a></li>
     <li class="active"><a href="fs.html">fs</a></li>
@@ -50,13 +54,13 @@
     <p class="module-desc">File system operations</p>
   </div>
   <div class="functions" id="functions">
-    <div class="function" id="file_read_all" data-name="file_read_all">
-      <h3 class="function-name">file_read_all</h3>
-      <pre class="usage"><code>file_read_all(file)</code></pre>
+    <div class="function" id="file_read_all_raw" data-name="file_read_all_raw">
+      <h3 class="function-name">file_read_all_raw</h3>
+      <pre class="usage"><code>file_read_all_raw(file)</code></pre>
     </div>
-    <div class="function" id="file_write" data-name="file_write">
-      <h3 class="function-name">file_write</h3>
-      <pre class="usage"><code>file_write(file, data, length)</code></pre>
+    <div class="function" id="file_write_raw" data-name="file_write_raw">
+      <h3 class="function-name">file_write_raw</h3>
+      <pre class="usage"><code>file_write_raw(file, data, length)</code></pre>
     </div>
     <div class="function" id="file_close" data-name="file_close">
       <h3 class="function-name">file_close</h3>
@@ -66,26 +70,30 @@
       <h3 class="function-name">file_exists</h3>
       <pre class="usage"><code>file_exists(path)</code></pre>
     </div>
-    <div class="function" id="file_delete" data-name="file_delete">
-      <h3 class="function-name">file_delete</h3>
-      <pre class="usage"><code>file_delete(path)</code></pre>
+    <div class="function" id="file_delete_raw" data-name="file_delete_raw">
+      <h3 class="function-name">file_delete_raw</h3>
+      <pre class="usage"><code>file_delete_raw(path)</code></pre>
     </div>
-    <div class="function" id="file_size" data-name="file_size">
-      <h3 class="function-name">file_size</h3>
-      <pre class="usage"><code>file_size(path)</code></pre>
+    <div class="function" id="file_size_raw" data-name="file_size_raw">
+      <h3 class="function-name">file_size_raw</h3>
+      <pre class="usage"><code>file_size_raw(path)</code></pre>
+    </div>
+    <div class="function" id="file_mtime" data-name="file_mtime">
+      <h3 class="function-name">file_mtime</h3>
+      <pre class="usage"><code>file_mtime(path)</code></pre>
     </div>
     <div class="function" id="dir_exists" data-name="dir_exists">
       <h3 class="function-name">dir_exists</h3>
       <pre class="usage"><code>dir_exists(path)</code></pre>
       <p class="doc">Directory operations</p>
     </div>
-    <div class="function" id="dir_create" data-name="dir_create">
-      <h3 class="function-name">dir_create</h3>
-      <pre class="usage"><code>dir_create(path)</code></pre>
+    <div class="function" id="dir_create_raw" data-name="dir_create_raw">
+      <h3 class="function-name">dir_create_raw</h3>
+      <pre class="usage"><code>dir_create_raw(path)</code></pre>
     </div>
-    <div class="function" id="dir_delete" data-name="dir_delete">
-      <h3 class="function-name">dir_delete</h3>
-      <pre class="usage"><code>dir_delete(path)</code></pre>
+    <div class="function" id="dir_delete_raw" data-name="dir_delete_raw">
+      <h3 class="function-name">dir_delete_raw</h3>
+      <pre class="usage"><code>dir_delete_raw(path)</code></pre>
     </div>
     <div class="function" id="path_join" data-name="path_join">
       <h3 class="function-name">path_join</h3>
@@ -107,6 +115,14 @@
     <div class="function" id="path_is_absolute" data-name="path_is_absolute">
       <h3 class="function-name">path_is_absolute</h3>
       <pre class="usage"><code>path_is_absolute(path)</code></pre>
+    </div>
+    <div class="function" id="dir_list_count" data-name="dir_list_count">
+      <h3 class="function-name">dir_list_count</h3>
+      <pre class="usage"><code>dir_list_count(list)</code></pre>
+    </div>
+    <div class="function" id="dir_list_get" data-name="dir_list_get">
+      <h3 class="function-name">dir_list_get</h3>
+      <pre class="usage"><code>dir_list_get(list, index)</code></pre>
     </div>
     <div class="function" id="dir_list_free" data-name="dir_list_free">
       <h3 class="function-name">dir_list_free</h3>

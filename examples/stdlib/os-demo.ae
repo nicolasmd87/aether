@@ -10,11 +10,14 @@ main() {
     code = os.system("echo hello from shell")
     println("Exit code: ${code}\n")
 
-    // Capture command output
+    // Capture command output — Go-style tuple return
     println("Capturing 'date' output:")
-    output = os.exec("date")
-    defer free(output)
-    print("Date: ${output}")
+    output, eerr = os.exec("date")
+    if eerr == "" {
+        print("Date: ${output}")
+    } else {
+        println("exec failed: ${eerr}")
+    }
 
     // Get environment variable
     home = os.getenv("HOME")

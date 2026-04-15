@@ -6,6 +6,16 @@
 typedef struct MessageFieldDef {
     char* name;
     int type_kind;
+    // Full C type string for this field, owned by this struct.
+    // Required for composite types (arrays, structs) where type_kind alone
+    // is insufficient. For example, a field declared as `string[]` has
+    // type_kind == TYPE_ARRAY and c_type == "const char**".
+    // NULL is tolerated for backward-compat with sites that populate only
+    // type_kind; consumers should fall back to a type_kind lookup in that case.
+    char* c_type;
+    // Element C type for array fields, owned by this struct. NULL for
+    // non-array fields. For `string[]` this is "const char*".
+    char* element_c_type;
     struct MessageFieldDef* next;
 } MessageFieldDef;
 

@@ -84,16 +84,15 @@ main() {
     defer free(arr_text)
     println("  Array: ${arr_text}")
 
-    // Parse a JSON string
+    // Parse a JSON string — Go-style tuple return
     print("\nParsing JSON:\n")
-    parsed = json.parse("{\"greeting\":\"hi\",\"count\":7}")
-    if (parsed != 0) {
+    parsed, perr = json.parse("{\"greeting\":\"hi\",\"count\":7}")
+    if perr == "" {
         ptype = json.type(parsed)
         println("  Parsed type: ${ptype} (expected: 5 = JSON_OBJECT)")
 
         greeting = json.object_get(parsed, "greeting")
         g_str = json.get_string(greeting)
-        defer free(g_str)
         println("  greeting = ${g_str}")
 
         count = json.object_get(parsed, "count")
@@ -102,7 +101,7 @@ main() {
 
         json.free(parsed)
     } else {
-        println("  Parse failed")
+        println("  Parse failed: ${perr}")
     }
 
     // Clean up

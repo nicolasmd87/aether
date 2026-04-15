@@ -4,8 +4,8 @@
 #if !AETHER_HAS_NETWORKING
 // Stubs when networking is unavailable
 HttpServer* http_server_create(int p) { (void)p; return NULL; }
-int http_server_bind(HttpServer* s, const char* h, int p) { (void)s; (void)h; (void)p; return -1; }
-int http_server_start(HttpServer* s) { (void)s; return -1; }
+int http_server_bind_raw(HttpServer* s, const char* h, int p) { (void)s; (void)h; (void)p; return -1; }
+int http_server_start_raw(HttpServer* s) { (void)s; return -1; }
 void http_server_stop(HttpServer* s) { (void)s; }
 void http_server_free(HttpServer* s) { (void)s; }
 void http_server_add_route(HttpServer* s, const char* m, const char* p, HttpHandler h, void* u) { (void)s; (void)m; (void)p; (void)h; (void)u; }
@@ -127,7 +127,7 @@ HttpServer* http_server_create(int port) {
     return server;
 }
 
-int http_server_bind(HttpServer* server, const char* host, int port) {
+int http_server_bind_raw(HttpServer* server, const char* host, int port) {
     server->socket_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (server->socket_fd < 0) {
         fprintf(stderr, "Failed to create socket\n");
@@ -901,7 +901,7 @@ static void* accept_thread_fn(void* arg) {
 }
 #endif
 
-int http_server_start(HttpServer* server) {
+int http_server_start_raw(HttpServer* server) {
     server->is_running = 1;
 
 #if !defined(_WIN32)
@@ -980,7 +980,7 @@ int http_server_start(HttpServer* server) {
     } else if (use_actor_mode) {
         // Single-accept with I/O poller (default): one accept thread waits for data
         // before dispatching to worker actors. Best for most workloads.
-        if (http_server_bind(server, server->host, server->port) < 0) {
+        if (http_server_bind_raw(server, server->host, server->port) < 0) {
             return -1;
         }
 
@@ -1005,7 +1005,7 @@ int http_server_start(HttpServer* server) {
     } else
 #endif
     {
-        if (http_server_bind(server, server->host, server->port) < 0) {
+        if (http_server_bind_raw(server, server->host, server->port) < 0) {
             return -1;
         }
 

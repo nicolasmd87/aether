@@ -5,7 +5,7 @@
 extern string_concat(a: string, b: string) -> string
 extern string_length(s: string) -> int
 extern map_new() -> ptr
-extern map_put(m: ptr, key: string, value: ptr)
+extern map_put_raw(m: ptr, key: string, value: ptr) -> int
 extern map_get(m: ptr, key: string) -> ptr
 
 // Returns string — the caller must infer string, not int
@@ -21,7 +21,7 @@ add(a, b) {
 // Returns ptr (map) — the caller must infer ptr, not int
 make_pair(key: string, val: string) {
     m = map_new()
-    map_put(m, key, val)
+    map_put_raw(m, key, val)
     return m
 }
 

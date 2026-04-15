@@ -16,18 +16,22 @@ ArrayList* list_new() {
     return list;
 }
 
-void list_add(ArrayList* list, void* item) {
-    if (!list) return;
+// list_add_raw returns 1 on success, 0 on failure (realloc error or
+// null list). The Aether wrapper `list.add` in std.list/std.collections
+// turns the 0 into an error string.
+int list_add_raw(ArrayList* list, void* item) {
+    if (!list) return 0;
 
     if (list->size >= list->capacity) {
         int new_capacity = list->capacity == 0 ? 8 : list->capacity * 2;
         void** new_items = (void**)realloc(list->items, new_capacity * sizeof(void*));
-        if (!new_items) return;
+        if (!new_items) return 0;
         list->items = new_items;
         list->capacity = new_capacity;
     }
 
     list->items[list->size++] = item;
+    return 1;
 }
 
 void* list_get(ArrayList* list, int index) {
@@ -129,8 +133,11 @@ static void hashmap_resize(HashMap* map) {
     free(old_buckets);
 }
 
-void map_put(HashMap* map, const char* key, void* value) {
-    if (!map || !key) return;
+// map_put_raw returns 1 on success, 0 on failure (null map/key or OOM).
+// The Aether wrapper `map.put` in std.map/std.collections turns the 0
+// into an error string.
+int map_put_raw(HashMap* map, const char* key, void* value) {
+    if (!map || !key) return 0;
 
     if ((float)map->size / map->capacity > HASHMAP_LOAD_FACTOR) {
         hashmap_resize(map);
@@ -142,18 +149,19 @@ void map_put(HashMap* map, const char* key, void* value) {
     while (entry) {
         if (key_equals(entry->key, key)) {
             entry->value = value;
-            return;
+            return 1;
         }
         entry = entry->next;
     }
 
     HashMapEntry* new_entry = (HashMapEntry*)malloc(sizeof(HashMapEntry));
-    if (!new_entry) return;
+    if (!new_entry) return 0;
     new_entry->key = string_new(key);
     new_entry->value = value;
     new_entry->next = map->buckets[index];
     map->buckets[index] = new_entry;
     map->size++;
+    return 1;
 }
 
 void* map_get(HashMap* map, const char* key) {

@@ -700,6 +700,7 @@ found_root:
                 "%s/std/net/aether_http.c "
                 "%s/std/net/aether_http_server.c "
                 "%s/std/net/aether_net.c "
+                "%s/std/net/aether_actor_bridge.c "
                 "%s/std/collections/aether_collections.c "
                 "%s/std/json/aether_json.c "
                 "%s/std/io/aether_io.c "
@@ -716,7 +717,7 @@ found_root:
                 tc.root, tc.root, tc.root, tc.root, tc.root,
                 tc.root, tc.root, tc.root, tc.root, tc.root,
                 tc.root, tc.root, tc.root, tc.root, tc.root,
-                tc.root, tc.root, tc.root, tc.root, tc.root);
+                tc.root, tc.root, tc.root, tc.root, tc.root, tc.root);
         }
     } else {
         // Installed layout: headers in include/aether/, source in share/aether/
@@ -774,6 +775,7 @@ found_root:
                 "%s/std/net/aether_http.c "
                 "%s/std/net/aether_http_server.c "
                 "%s/std/net/aether_net.c "
+                "%s/std/net/aether_actor_bridge.c "
                 "%s/std/collections/aether_collections.c "
                 "%s/std/json/aether_json.c "
                 "%s/std/io/aether_io.c "
@@ -790,7 +792,7 @@ found_root:
                 src, src, src, src, src,
                 src, src, src, src, src,
                 src, src, src, src, src,
-                src, src, src, src, src);
+                src, src, src, src, src, src);
         }
     }
 }
@@ -1157,6 +1159,7 @@ static int build_wasm_cmd(char* cmd, size_t size,
         "std/net/aether_http.c",
         "std/net/aether_http_server.c",
         "std/net/aether_net.c",
+        "std/net/aether_actor_bridge.c",
         "std/collections/aether_collections.c",
         "std/json/aether_json.c",
         "std/fs/aether_fs.c",
@@ -2425,6 +2428,60 @@ static int ae_extract(const char* archive, const char* dest_dir) {
 #endif
 }
 
+// Clear macOS Gatekeeper state on a freshly installed/copied binary.
+//
+// Released Aether binaries are adhoc-signed and get a quarantine xattr
+// the moment they're downloaded. Clearing the quarantine alone is not
+// enough: Gatekeeper also caches an "assessment" per file, and an
+// ad-hoc-signed binary from an untrusted source is rejected by default.
+// The rejection manifests as the shell seeing "Killed: 9" (SIGKILL) or
+// `ae` hanging for seconds while `syspolicyd` evaluates the binary.
+//
+// The reliable fix is to re-sign in place with `codesign --force --sign -`.
+// This refreshes the CDHash and creates a local ad-hoc signature that
+// Gatekeeper allows to execute without notarization checks. Combined with
+// clearing the quarantine attribute, the binary runs cleanly right away.
+//
+// No-op on Linux and Windows, which have no Gatekeeper equivalent.
+static void macos_prepare_binary(const char* path) {
+#ifdef __APPLE__
+    if (!path || !*path) return;
+    char cmd[2048];
+    // Re-sign in place. Suppress both success and failure output so a
+    // missing codesign (unusual but not impossible on stripped systems)
+    // degrades to quarantine-clear only.
+    snprintf(cmd, sizeof(cmd),
+             "codesign --force --sign - \"%s\" >/dev/null 2>&1", path);
+    (void)system(cmd);
+    // Clear quarantine + any other resource forks/xattrs that would
+    // otherwise trigger an extra syspolicyd round-trip on first run.
+    snprintf(cmd, sizeof(cmd), "xattr -cr \"%s\" >/dev/null 2>&1", path);
+    (void)system(cmd);
+#else
+    (void)path;
+#endif
+}
+
+// Prepare every executable in a bin directory. Used after install/extract
+// and after copying binaries into ~/.aether/bin/ from a versioned install.
+static void macos_prepare_bin_dir(const char* bin_dir) {
+#ifdef __APPLE__
+    if (!bin_dir || !*bin_dir) return;
+    char cmd[2048];
+    // find + xargs handles spaces via -print0/-0. We only touch regular
+    // files; symlinks are skipped so we don't re-sign a link's target.
+    snprintf(cmd, sizeof(cmd),
+             "find \"%s\" -maxdepth 1 -type f -perm +111 -print0 2>/dev/null "
+             "| xargs -0 -I {} codesign --force --sign - \"{}\" >/dev/null 2>&1",
+             bin_dir);
+    (void)system(cmd);
+    snprintf(cmd, sizeof(cmd), "xattr -cr \"%s\" >/dev/null 2>&1", bin_dir);
+    (void)system(cmd);
+#else
+    (void)bin_dir;
+#endif
+}
+
 // List available releases from GitHub. Marks installed + current versions.
 static int cmd_version_list(void) {
     const char* home = get_home_dir();
@@ -2758,6 +2815,18 @@ static int cmd_version_install(const char* version) {
         }
     }
 
+    // Prepare binaries for macOS Gatekeeper. Download + extract leaves the
+    // binaries quarantined; without this step the first run of any binary
+    // from the fresh install (including the self-invocation from
+    // `ae version use`) hangs or gets SIGKILL'd by syspolicyd.
+    {
+        char bin_sub[1024];
+        snprintf(bin_sub, sizeof(bin_sub), "%s/bin", ver_dir);
+        if (dir_exists(bin_sub)) {
+            macos_prepare_bin_dir(bin_sub);
+        }
+    }
+
     printf("Installed Aether %s → %s\n", vtag, ver_dir);
     printf("Switch to it with: ae version use %s\n", vtag);
     return 0;
@@ -2891,6 +2960,19 @@ static int cmd_version_use(const char* version) {
         }
     }
 
+    // Verify the source bin dir actually contains an `ae` binary before
+    // we start mutating anything. This catches extraction-layout bugs
+    // early rather than leaving the user with a half-switched install.
+    {
+        char src_ae[1024];
+        snprintf(src_ae, sizeof(src_ae), "%s/ae" EXE_EXT, src_bin);
+        if (!path_exists(src_ae)) {
+            fprintf(stderr, "Error: no ae binary at %s. The install for %s looks incomplete.\n", src_ae, vtag);
+            fprintf(stderr, "Try reinstalling: ae version install %s\n", vtag);
+            return 1;
+        }
+    }
+
     // POSIX: update ~/.aether/current symlink
     char current[512];
     snprintf(current, sizeof(current), "%s/.aether/current", home);
@@ -2902,42 +2984,54 @@ static int cmd_version_use(const char* version) {
         fprintf(stderr, "  ln -sf %s %s\n", ver_dir, current);
         return 1;
     }
+
+    // Copy binaries into ~/.aether/bin/. Previously this was a single
+    // `cp -f "%s"/* "%s/" 2>/dev/null; true` which suppressed every
+    // possible failure mode including a missing source or permissions
+    // error. We now fail loudly and verify afterwards.
     char dest_bin[512];
     snprintf(dest_bin, sizeof(dest_bin), "%s/.aether/bin", home);
+    snprintf(cmd, sizeof(cmd), "mkdir -p \"%s\"", dest_bin);
+    if (system(cmd) != 0) {
+        fprintf(stderr, "Error: failed to create %s\n", dest_bin);
+        return 1;
+    }
+    // Use a subshell with nullglob so an empty source (which shouldn't
+    // happen after the verification above, but just in case) fails the
+    // `cp` explicitly rather than trying to copy a literal "*".
     snprintf(cmd, sizeof(cmd),
-        "mkdir -p \"%s\" && cp -f \"%s\"/* \"%s/\" 2>/dev/null; true",
-        dest_bin, src_bin, dest_bin);
+        "/bin/sh -c 'set -e; for f in \"%s\"/*; do cp -f \"$f\" \"%s/\"; done'",
+        src_bin, dest_bin);
     if (system(cmd) != 0) {
         fprintf(stderr, "Error: failed to copy binaries from %s to %s\n", src_bin, dest_bin);
         return 1;
     }
-#ifdef __APPLE__
-    // Remove macOS quarantine so Gatekeeper doesn't kill unsigned binaries
-    snprintf(cmd, sizeof(cmd), "xattr -cr \"%s\"/* 2>/dev/null; true", dest_bin);
-    (void)system(cmd);
-#endif
+
+    // Verify the copy landed.
+    {
+        char dest_ae[1024];
+        snprintf(dest_ae, sizeof(dest_ae), "%s/ae" EXE_EXT, dest_bin);
+        if (!path_exists(dest_ae)) {
+            fprintf(stderr, "Error: expected %s after copy, but it's not there.\n", dest_ae);
+            return 1;
+        }
+    }
+
+    // Prepare the binaries for macOS Gatekeeper (codesign + xattr clear).
+    // Without this the next invocation of `ae` hangs or gets SIGKILL'd by
+    // syspolicyd on first run. No-op on Linux.
+    macos_prepare_bin_dir(dest_bin);
 
     // Sync lib/, include/, and share/ from the version directory to ~/.aether/
     // so that stale files left by a previous install.sh don't shadow the
-    // version-managed files.  The 'current' symlink alone is not enough
-    // because toolchain discovery may resolve the parent directory first.
+    // version-managed files. The 'current' symlink alone is not enough because
+    // toolchain discovery may resolve the parent directory first.
     //
-    // Bootstrap problem: if the user upgrades from an old ae that lacks this
-    // sync code, the old binary won't sync. To handle this, we first try
-    // invoking the NEW ae binary (just copied to dest_bin) to do the sync.
-    // If the new binary supports --sync-version, it handles everything.
-    // If it doesn't (old binary format), the call fails harmlessly and
-    // we fall through to the in-process sync below.
-    {
-        char new_ae[1024];
-        snprintf(new_ae, sizeof(new_ae), "%s/ae" EXE_EXT, dest_bin);
-        if (path_exists(new_ae)) {
-            snprintf(cmd, sizeof(cmd),
-                "\"%s\" version --sync-from \"%s\" 2>/dev/null", new_ae, ver_dir);
-            int _sync_rc = system(cmd);  // best-effort; in-process sync below handles failure
-            (void)_sync_rc;
-        }
-    }
+    // We used to self-invoke the freshly copied ae with --sync-from as a
+    // bootstrap for old-binary upgrades. On macOS that invocation hangs or
+    // gets SIGKILL'd by Gatekeeper before syspolicyd finishes evaluating the
+    // just-copied binary, leaving the user waiting minutes. The in-process
+    // sync below does the same work, so we drop the self-invocation entirely.
     {
         char dest[512];
         const char* subdirs[] = {"lib", "include", "share"};

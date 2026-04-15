@@ -15,8 +15,19 @@
   <input type="text" id="search" placeholder="Search net..." onkeyup="searchModule()">
   <h2>Functions</h2>
   <ul class="function-nav">
-    <li><a href="#http_server_bind">http_server_bind</a></li>
-    <li><a href="#http_server_start">http_server_start</a></li>
+    <li><a href="#"></a></li>
+    <li><a href="#void">void</a></li>
+    <li><a href="#"></a></li>
+    <li><a href="#void">void</a></li>
+    <li><a href="#void">void</a></li>
+    <li><a href="#"></a></li>
+    <li><a href="#"></a></li>
+    <li><a href="#"></a></li>
+    <li><a href="#"></a></li>
+    <li><a href="#"></a></li>
+    <li><a href="#"></a></li>
+    <li><a href="#http_server_bind_raw">http_server_bind_raw</a></li>
+    <li><a href="#http_server_start_raw">http_server_start_raw</a></li>
     <li><a href="#http_server_stop">http_server_stop</a></li>
     <li><a href="#http_server_free">http_server_free</a></li>
     <li><a href="#http_server_add_route">http_server_add_route</a></li>
@@ -40,14 +51,19 @@
     <li><a href="#http_mime_type">http_mime_type</a></li>
     <li><a href="#http_serve_file">http_serve_file</a></li>
     <li><a href="#http_serve_static">http_serve_static</a></li>
-    <li><a href="#http_get">http_get</a></li>
-    <li><a href="#http_post">http_post</a></li>
-    <li><a href="#http_put">http_put</a></li>
-    <li><a href="#http_delete">http_delete</a></li>
+    <li><a href="#void">void</a></li>
+    <li><a href="#http_request_method">http_request_method</a></li>
+    <li><a href="#http_request_path">http_request_path</a></li>
+    <li><a href="#http_request_body">http_request_body</a></li>
+    <li><a href="#http_request_query">http_request_query</a></li>
     <li><a href="#http_response_free">http_response_free</a></li>
-    <li><a href="#tcp_connect">tcp_connect</a></li>
-    <li><a href="#tcp_send">tcp_send</a></li>
-    <li><a href="#tcp_receive">tcp_receive</a></li>
+    <li><a href="#http_response_status">http_response_status</a></li>
+    <li><a href="#http_response_body">http_response_body</a></li>
+    <li><a href="#http_response_headers">http_response_headers</a></li>
+    <li><a href="#http_response_error">http_response_error</a></li>
+    <li><a href="#http_response_ok">http_response_ok</a></li>
+    <li><a href="#tcp_send_raw">tcp_send_raw</a></li>
+    <li><a href="#tcp_receive_raw">tcp_receive_raw</a></li>
     <li><a href="#tcp_close">tcp_close</a></li>
     <li><a href="#tcp_server_close">tcp_server_close</a></li>
   </ul>
@@ -59,6 +75,7 @@
     <li><a href="math.html">math</a></li>
     <li><a href="json.html">json</a></li>
     <li><a href="log.html">log</a></li>
+    <li><a href="os.html">os</a></li>
     <li><a href="string.html">string</a></li>
     <li><a href="collections.html">collections</a></li>
     <li><a href="fs.html">fs</a></li>
@@ -70,13 +87,60 @@
     <p class="module-desc">HTTP client, server, and networking</p>
   </div>
   <div class="functions" id="functions">
-    <div class="function" id="http_server_bind" data-name="http_server_bind">
-      <h3 class="function-name">http_server_bind</h3>
-      <pre class="usage"><code>http_server_bind(server, host, port)</code></pre>
+    <div class="function" id="" data-name="">
+      <h3 class="function-name"></h3>
+      <pre class="usage"><code>()</code></pre>
+      <p class="doc">Actor dispatch mode (opt-in: set via http_server_set_actor_handler)</p>
     </div>
-    <div class="function" id="http_server_start" data-name="http_server_start">
-      <h3 class="function-name">http_server_start</h3>
-      <pre class="usage"><code>http_server_start(server)</code></pre>
+    <div class="function" id="void" data-name="void">
+      <h3 class="function-name">void</h3>
+      <pre class="usage"><code>void(send_fn)</code></pre>
+      <p class="doc">Fire-and-forget: spawn one actor per request</p>
+    </div>
+    <div class="function" id="" data-name="">
+      <h3 class="function-name"></h3>
+      <pre class="usage"><code>(spawn_fn)</code></pre>
+    </div>
+    <div class="function" id="void" data-name="void">
+      <h3 class="function-name">void</h3>
+      <pre class="usage"><code>void(release_fn)</code></pre>
+    </div>
+    <div class="function" id="void" data-name="void">
+      <h3 class="function-name">void</h3>
+      <pre class="usage"><code>void(step_fn)</code></pre>
+    </div>
+    <div class="function" id="" data-name="">
+      <h3 class="function-name"></h3>
+      <pre class="usage"><code>()</code></pre>
+      <p class="doc">Multi-accept: one accept thread per core with SO_REUSEPORT (opt-in)</p>
+    </div>
+    <div class="function" id="" data-name="">
+      <h3 class="function-name"></h3>
+      <pre class="usage"><code>()</code></pre>
+    </div>
+    <div class="function" id="" data-name="">
+      <h3 class="function-name"></h3>
+      <pre class="usage"><code>()</code></pre>
+    </div>
+    <div class="function" id="" data-name="">
+      <h3 class="function-name"></h3>
+      <pre class="usage"><code>()</code></pre>
+    </div>
+    <div class="function" id="" data-name="">
+      <h3 class="function-name"></h3>
+      <pre class="usage"><code>()</code></pre>
+    </div>
+    <div class="function" id="" data-name="">
+      <h3 class="function-name"></h3>
+      <pre class="usage"><code>()</code></pre>
+    </div>
+    <div class="function" id="http_server_bind_raw" data-name="http_server_bind_raw">
+      <h3 class="function-name">http_server_bind_raw</h3>
+      <pre class="usage"><code>http_server_bind_raw(server, host, port)</code></pre>
+    </div>
+    <div class="function" id="http_server_start_raw" data-name="http_server_start_raw">
+      <h3 class="function-name">http_server_start_raw</h3>
+      <pre class="usage"><code>http_server_start_raw(server)</code></pre>
     </div>
     <div class="function" id="http_server_stop" data-name="http_server_stop">
       <h3 class="function-name">http_server_stop</h3>
@@ -175,38 +239,60 @@
       <h3 class="function-name">http_serve_static</h3>
       <pre class="usage"><code>http_serve_static(req, res, base_dir)</code></pre>
     </div>
-    <div class="function" id="http_get" data-name="http_get">
-      <h3 class="function-name">http_get</h3>
-      <pre class="usage"><code>http_get(url)</code></pre>
+    <div class="function" id="void" data-name="void">
+      <h3 class="function-name">void</h3>
+      <pre class="usage"><code>void(release_fn)</code></pre>
     </div>
-    <div class="function" id="http_post" data-name="http_post">
-      <h3 class="function-name">http_post</h3>
-      <pre class="usage"><code>http_post(url, body, content_type)</code></pre>
+    <div class="function" id="http_request_method" data-name="http_request_method">
+      <h3 class="function-name">http_request_method</h3>
+      <pre class="usage"><code>http_request_method(req)</code></pre>
+      <p class="doc">Request accessors (for use from Aether .ae code via opaque ptr)</p>
     </div>
-    <div class="function" id="http_put" data-name="http_put">
-      <h3 class="function-name">http_put</h3>
-      <pre class="usage"><code>http_put(url, body, content_type)</code></pre>
+    <div class="function" id="http_request_path" data-name="http_request_path">
+      <h3 class="function-name">http_request_path</h3>
+      <pre class="usage"><code>http_request_path(req)</code></pre>
     </div>
-    <div class="function" id="http_delete" data-name="http_delete">
-      <h3 class="function-name">http_delete</h3>
-      <pre class="usage"><code>http_delete(url)</code></pre>
+    <div class="function" id="http_request_body" data-name="http_request_body">
+      <h3 class="function-name">http_request_body</h3>
+      <pre class="usage"><code>http_request_body(req)</code></pre>
+    </div>
+    <div class="function" id="http_request_query" data-name="http_request_query">
+      <h3 class="function-name">http_request_query</h3>
+      <pre class="usage"><code>http_request_query(req)</code></pre>
     </div>
     <div class="function" id="http_response_free" data-name="http_response_free">
       <h3 class="function-name">http_response_free</h3>
       <pre class="usage"><code>http_response_free(response)</code></pre>
     </div>
-    <div class="function" id="tcp_connect" data-name="tcp_connect">
-      <h3 class="function-name">tcp_connect</h3>
-      <pre class="usage"><code>tcp_connect(host, port)</code></pre>
-      <p class="doc">TCP Client</p>
+    <div class="function" id="http_response_status" data-name="http_response_status">
+      <h3 class="function-name">http_response_status</h3>
+      <pre class="usage"><code>http_response_status(response)</code></pre>
+      <p class="doc">Response field accessors. All are NULL-safe: passing NULL or a freed response returns a sensible default (0 or &quot;&quot;) rather than crashing. Returned const char* pointers are owned by the response struct and valid until http_response_free() is called.</p>
     </div>
-    <div class="function" id="tcp_send" data-name="tcp_send">
-      <h3 class="function-name">tcp_send</h3>
-      <pre class="usage"><code>tcp_send(sock, data)</code></pre>
+    <div class="function" id="http_response_body" data-name="http_response_body">
+      <h3 class="function-name">http_response_body</h3>
+      <pre class="usage"><code>http_response_body(response)</code></pre>
     </div>
-    <div class="function" id="tcp_receive" data-name="tcp_receive">
-      <h3 class="function-name">tcp_receive</h3>
-      <pre class="usage"><code>tcp_receive(sock, max_bytes)</code></pre>
+    <div class="function" id="http_response_headers" data-name="http_response_headers">
+      <h3 class="function-name">http_response_headers</h3>
+      <pre class="usage"><code>http_response_headers(response)</code></pre>
+    </div>
+    <div class="function" id="http_response_error" data-name="http_response_error">
+      <h3 class="function-name">http_response_error</h3>
+      <pre class="usage"><code>http_response_error(response)</code></pre>
+    </div>
+    <div class="function" id="http_response_ok" data-name="http_response_ok">
+      <h3 class="function-name">http_response_ok</h3>
+      <pre class="usage"><code>http_response_ok(response)</code></pre>
+      <p class="doc">Convenience: returns 1 if the request succeeded (no transport error AND HTTP status is in the 2xx range), 0 otherwise. Use this for the common &quot;did it work?&quot; check instead of chaining error/status calls.</p>
+    </div>
+    <div class="function" id="tcp_send_raw" data-name="tcp_send_raw">
+      <h3 class="function-name">tcp_send_raw</h3>
+      <pre class="usage"><code>tcp_send_raw(sock, data)</code></pre>
+    </div>
+    <div class="function" id="tcp_receive_raw" data-name="tcp_receive_raw">
+      <h3 class="function-name">tcp_receive_raw</h3>
+      <pre class="usage"><code>tcp_receive_raw(sock, max_bytes)</code></pre>
     </div>
     <div class="function" id="tcp_close" data-name="tcp_close">
       <h3 class="function-name">tcp_close</h3>

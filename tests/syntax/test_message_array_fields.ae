@@ -1,0 +1,103 @@
+// Test: composite types (string[], int[]) in message fields.
+//
+// Before the fix these silently corrupted data: the parser accepted
+// `sites: string[]`, but the runtime registry only stored a single type_kind
+// per field and dropped the element type. Receive-pattern destructuring
+// generated `int* sites = _pattern->sites;` (wrong C type) and the send
+// side emitted `.sites = {"a", "b"}` (broken C initializer). Reading any
+// element produced garbage.
+//
+// Fix:
+//   1. MessageFieldDef now carries the resolved c_type and element_c_type.
+//   2. Receive-pattern destructuring uses the stored c_type.
+//   3. Send-side wraps array literals in a compound literal so the field
+//      initializer is valid C.
+//   4. Typechecker propagates element type onto AST_ARRAY_ACCESS so print
+//      and string interpolation pick the right format specifier.
+
+message Urls { sites: string[], count: int }
+message Nums { values: int[], sum: int }
+message Mixed { tag: string, labels: string[], n: int }
+
+actor StringArrayActor {
+    state ok = 0
+
+    receive {
+        Urls(sites, count) -> {
+            // Array access inside receive arm must yield string, not int.
+            if sites[0] == "alpha" {
+                if sites[1] == "beta" {
+                    if sites[2] == "gamma" {
+                        if count == 3 {
+                            ok = 1
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+actor IntArrayActor {
+    state ok = 0
+
+    receive {
+        Nums(values, sum) -> {
+            if values[0] == 10 {
+                if values[1] == 20 {
+                    if values[2] == 30 {
+                        if sum == 60 {
+                            ok = 1
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+actor MixedActor {
+    state ok = 0
+
+    receive {
+        Mixed(tag, labels, n) -> {
+            // Scalar field before and after the array must both work.
+            if tag == "batch" {
+                if labels[0] == "x" {
+                    if labels[1] == "y" {
+                        if n == 42 {
+                            ok = 1
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+main() {
+    s = spawn(StringArrayActor())
+    i = spawn(IntArrayActor())
+    m = spawn(MixedActor())
+
+    s ! Urls { sites: ["alpha", "beta", "gamma"], count: 3 }
+    i ! Nums { values: [10, 20, 30], sum: 60 }
+    m ! Mixed { tag: "batch", labels: ["x", "y"], n: 42 }
+
+    wait_for_idle()
+
+    if s.ok == 0 {
+        println("FAIL: string[] message field did not round-trip correctly")
+        exit(1)
+    }
+    if i.ok == 0 {
+        println("FAIL: int[] message field did not round-trip correctly")
+        exit(1)
+    }
+    if m.ok == 0 {
+        println("FAIL: mixed scalar + array message fields did not round-trip")
+        exit(1)
+    }
+
+    println("message array fields ok")
+}

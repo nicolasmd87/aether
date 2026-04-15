@@ -352,21 +352,23 @@ specific entries. The check function matches exact or wildcard.
 ## What's enforced
 
 The sandbox intercepts at the **stdlib level**. These calls are checked
-transparently — the contained code uses normal functions and cannot tell
-it's sandboxed:
+transparently — the contained code uses normal stdlib wrappers and
+cannot tell it's sandboxed. The check happens inside the underlying
+`_raw` C function, so both the Go-style wrapper (`tcp.connect`) and
+direct calls to the raw extern (`tcp_connect_raw`) are enforced.
 
-| Stdlib function | Category checked | Enforced |
-|----------------|-----------------|----------|
-| `tcp_connect(host, port)` | `"tcp"` | Yes — returns NULL if denied |
-| `tcp_listen(port)` | `"tcp_listen"` | Yes — returns NULL if denied |
-| `file_open(path, "r")` | `"fs_read"` | Yes — returns NULL if denied |
-| `file_open(path, "w")` | `"fs_write"` | Yes — returns NULL if denied |
-| `file_exists(path)` | `"fs_read"` | Yes — returns 0 if denied |
-| `file_delete(path)` | `"fs_write"` | Yes — returns 0 if denied |
-| `file_size(path)` | `"fs_read"` | Yes — returns 0 if denied |
-| `os_system(cmd)` | `"exec"` | Yes — returns -1 if denied |
-| `os_exec(cmd)` | `"exec"` | Yes — returns NULL if denied |
-| `os_getenv(name)` | `"env"` | Yes — returns NULL if denied |
+| Wrapper | Raw C symbol | Category | Enforced |
+|---------|--------------|----------|----------|
+| `tcp.connect(host, port)` | `tcp_connect_raw` | `"tcp"` | Yes — wrapper returns `(null, "connect failed")` if denied |
+| `tcp.listen(port)` | `tcp_listen_raw` | `"tcp_listen"` | Yes — wrapper returns `(null, "listen failed")` if denied |
+| `file.open(path, "r")` | `file_open_raw` | `"fs_read"` | Yes — wrapper returns `(null, "cannot open file")` if denied |
+| `file.open(path, "w")` | `file_open_raw` | `"fs_write"` | Yes — wrapper returns `(null, "cannot open file")` if denied |
+| `file.exists(path)` | `file_exists` | `"fs_read"` | Yes — returns 0 if denied |
+| `file.delete(path)` | `file_delete_raw` | `"fs_write"` | Yes — wrapper returns `"cannot delete file"` if denied |
+| `file.size(path)` | `file_size_raw` | `"fs_read"` | Yes — wrapper returns `(0, "cannot stat file")` if denied |
+| `os.system(cmd)` | `os_system` | `"exec"` | Yes — returns -1 if denied |
+| `os.exec(cmd)` | `os_exec_raw` | `"exec"` | Yes — wrapper returns `("", "command failed")` if denied |
+| `os.getenv(name)` | `os_getenv` | `"env"` | Yes — returns null if denied |
 
 Nested sandboxes are intersected — an inner sandbox cannot escalate
 beyond what the outer sandbox grants.
