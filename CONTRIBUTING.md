@@ -198,7 +198,102 @@ make ci-portability
 | Linux | Linux GCC | `docker-ci-windows`, `docker-ci-wasm`, `docker-ci-embedded` |
 | Windows (MSYS2) | Windows MinGW | `docker-ci-wasm`, `docker-ci-embedded` (Docker on WSL2) |
 
-**No OS can locally test another OS natively.** macOS cannot be virtualized on Linux/Windows. Windows build+run requires MSYS2. Docker targets provide cross-compilation syntax checking only. GitHub Actions CI automatically tests all 5 targets (Linux GCC, Linux Clang, macOS ARM64, macOS x86_64, Windows MinGW) on every PR — this is the definitive cross-platform test. If your changes touch platform-specific code (`_WIN32`, `__APPLE__`, `system()`, file paths), wait for CI results before merging.
+**No OS can locally test another OS natively.** macOS cannot be virtualized on Linux/Windows. Windows build+run requires MSYS2. Docker targets provide cross-compilation syntax checking only. If your changes touch platform-specific code (`_WIN32`, `__APPLE__`, `system()`, file paths, symlinks, PATH lookup, process spawning, sockets), wait for CI results before merging.
+
+### CI permutations run on every PR
+
+GitHub Actions runs a matrix of builds on every pull request. Every target
+must be green before a PR can be merged. Plan your code changes with this
+matrix in mind:
+
+| Target | Runner | Compiler | What trips up PRs |
+|---|---|---|---|
+| **Linux GCC** | `ubuntu-latest` | `gcc` | `-Werror` strictness; pedantic `-Wall -Wextra` |
+| **Linux Clang** | `ubuntu-latest` | `clang` | Different warning surface than GCC |
+| **macOS ARM64** | `macos-latest` | Apple Clang | BSD-style tools; no `/proc`; different `stat(2)` fields; Gatekeeper on fresh binaries |
+| **macOS x86_64** | `macos-13` | Apple Clang | Same as ARM64 plus intel-specific codegen corners |
+| **Windows MSYS2** | `windows-latest` (MSYS2 shell) | MinGW GCC | `#ifdef _WIN32` branches actually execute; POSIX syscalls (`symlink`, `readlink`, `fork`, `execvp`, `pipe`) are absent or stubbed; `/bin/sh` / `rm` / `ln` not guaranteed; path separators; `_mkdir`/`_unlink` instead of `mkdir`/`unlink`; `$PATH` uses `;` not `:` |
+| **Windows mingw-w64** | `windows-latest` (cross-compiled) | `x86_64-w64-mingw32-gcc` | Same C-level issues as MSYS2 but a different toolchain version, so MSVCRT corner-cases sometimes diverge |
+| **`make ci-coop`** | any Linux | `gcc` with `AETHER_NO_THREADING` | Cooperative scheduler only — tests that assume pthreads / `spawn` semantics may behave differently |
+| **`make test-asan`** | Linux | AddressSanitizer | Any use-after-free / leak in your new C code |
+| **`make test-valgrind`** | Docker Linux | Valgrind | Same, slower, catches a slightly different set |
+
+The Windows targets are where most new-feature PRs fail first, because
+the existing stdlib has `_WIN32` stubs for anything POSIX-specific
+(symlinks, `fork`/`exec`, `readlink`, `/proc`, signals, dotfiles-by-default,
+`:` as PATH separator). If your feature adds a new stdlib function, you
+should assume Windows gets a stub that returns failure until a proper
+Win32 backend lands, and your tests should **detect the stub and skip
+gracefully** rather than assert success and crash the matrix.
+
+### Coding for portability
+
+Anticipate the CI permutations while writing the feature, not after the
+first red build. A few patterns the stdlib and existing tests use:
+
+**1. Detect the platform at the top of a test and skip the parts that
+don't apply.** Aether programs can read `$OS` — it's set to `Windows_NT`
+on both MSYS2 and mingw-w64 (cmd.exe inherits it, bash picks it up). This
+is cleaner than probing a stub function because the SKIP message
+self-documents *why*:
+
+```aether
+import std.os
+main() {
+    if os_getenv("OS") == "Windows_NT" {
+        println("SKIP os_which: Windows backend not yet implemented")
+        return
+    }
+    // …POSIX-only assertions below…
+}
+```
+
+**2. Alternatively, probe a call that's known to fail on the platforms
+you haven't implemented.** Existing example:
+`tests/syntax/test_await_io.ae` calls `net.pipe_open()` and prints
+`SKIP: pipe() unavailable (non-POSIX platform)` if the return is
+negative. This is useful when the platform boundary is narrower than
+"all of Windows" — e.g. a stub that happens to fail, or a feature that
+depends on a capability you can't name directly.
+
+**3. Split a test that has both portable and non-portable sub-cases.**
+In `tests/syntax/test_fs_stdlib_bundle.ae`, `fs_mkdir_p` and `fs_unlink`
+work on Windows (they wrap `_mkdir` / `_unlink`), but `fs_symlink`,
+`fs_readlink`, and `fs_is_symlink` are stubbed. The test runs mkdir_p
+and unlink on every platform, and wraps the symlink sub-cases in
+`if is_windows == 0 { … }`. Each platform gets the coverage it can
+actually provide.
+
+**4. On the C side, stub don't fake.** When you add a POSIX function
+to a stdlib `.c` file, wrap the real implementation in `#ifndef _WIN32`
+and provide a Windows branch that returns 0 / NULL / -1 following
+whatever convention the rest of the file uses. Do NOT try to emulate
+the POSIX behavior using the closest Win32 API unless you've actually
+tested it — the CI will catch it, but so will your users, and a stub
+that fails loudly is better than a half-broken fake. File a follow-up
+issue for the real Windows backend at the same time so it doesn't
+rot.
+
+**5. On the C side, use `<errno.h>` after every POSIX syscall, not
+`system()` of an equivalent shell command.** `system("ln -s …")` doesn't
+exist on Windows (no `/bin/sh`, no `ln`). Direct `symlink(2)` at least
+has a clean `#ifndef _WIN32` boundary.
+
+**6. Prefer existing portable helpers over re-rolling your own path
+handling.** `std/fs/aether_fs.c` provides `path_join`, `path_dirname`,
+`path_basename`, `path_normalize`, `path_is_absolute`. These already
+handle the cases where `/` and `\` both count as separators (Windows
+C stdlib accepts either). Concatenating with `"/"` is portable by
+accident; using the helpers is portable by design.
+
+**7. When in doubt, run the tests under a forced `OS=Windows_NT` env
+var locally.** It won't exercise actual `_WIN32` C branches (you need
+mingw-w64 or Docker for that), but it will exercise the Aether-level
+skip guards you wrote, which is where most per-test PR breakage lives:
+
+```bash
+OS=Windows_NT build/test_syntax_test_my_new_test
+```
 
 ### Additional Checks
 
