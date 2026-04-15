@@ -80,7 +80,7 @@ end_point(_ctx: ptr, method: int, pattern: string, handler: fn) {
     list.add(map_get(_ctx, "routes"), route_entry(method, pattern, handler))
 }
 
-tw_filter(_ctx: ptr, method: int, pattern: string, handler: fn) {
+web_filter(_ctx: ptr, method: int, pattern: string, handler: fn) {
     list.add(map_get(_ctx, "filters"), filter_entry(method, pattern, handler))
 }
 
@@ -214,7 +214,7 @@ main() {
     // Filters
     print("Filters: ")
     srv = web_server(8080) {
-        tw_filter(GET, "/.*") |req: ptr, res: ptr, rctx: ptr| { return 1 }
+        web_filter(GET, "/.*") |req: ptr, res: ptr, rctx: ptr| { return 1 }
     }
     _chk(list.size(map_get(srv, "filters")) == 1, "count")
     fe = list.get(map_get(srv, "filters"), 0)
@@ -263,7 +263,7 @@ main() {
     // Full composition
     print("Full ExampleApp: ")
     srv = web_server(8080) {
-        tw_filter(GET, "/.*") |req: ptr, res: ptr, rctx: ptr| { return 1 }
+        web_filter(GET, "/.*") |req: ptr, res: ptr, rctx: ptr| { return 1 }
         end_point(GET, "/bar") |req: ptr, res: ptr, rctx: ptr| { }
         web_socket("/eee") |msg: string, s: ptr, rctx: ptr| { }
         serve_static("/static", ".")

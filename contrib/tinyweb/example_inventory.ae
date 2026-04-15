@@ -1,0 +1,196 @@
+// Inventory + Cart demo — hide/seal in nested closure scopes
+//
+// The outer scope sets up inventory (app-level data).
+// The cart tier can see inventory (to validate SKUs) but actions
+// inside the cart block hide the raw inventory — they can only
+// reach it through the cart's own API functions.
+//
+// This is the natural use of hide/seal: not a DI framework, just
+// nested closures where each tier declares what it declines to see.
+
+import std.list
+import std.map
+import std.string
+
+// ---- TinyWeb DSL subset (inline, same as test_spec.ae) ----
+
+const GET     = 1
+const POST    = 2
+const DELETE  = 4
+
+route_entry(method: int, pp: string, handler: fn) {
+    e = map_new()
+    map_put(e, "method", method)
+    map_put(e, "path", pp)
+    map_put(e, "handler", box_closure(handler))
+    return e
+}
+
+end_point(_ctx: ptr, method: int, pattern: string, handler: fn) {
+    list.add(map_get(_ctx, "routes"), route_entry(method, pattern, handler))
+}
+
+tw_path(_ctx: ptr, bp: string) {
+    prefix = map_get(_ctx, "prefix")
+    sub = map_new()
+    map_put(sub, "prefix", "${prefix}${bp}")
+    map_put(sub, "routes", map_get(_ctx, "routes"))
+    return sub
+}
+
+web_server(port: int) {
+    srv = map_new()
+    map_put(srv, "port", port)
+    map_put(srv, "prefix", "")
+    map_put(srv, "routes", list.new())
+    return srv
+}
+
+// Stub response/request (real ones call C via std.http)
+response_json(res: ptr, body: string) {
+    map_put(res, "status", 200)
+    map_put(res, "body", body)
+}
+
+response_write_status(res: ptr, body: string, status: int) {
+    map_put(res, "status", status)
+    map_put(res, "body", body)
+}
+
+request_get_query_param(req: ptr, name: string) {
+    if map_has(req, name) == 1 { return map_get(req, name) }
+    return ""
+}
+
+// ---- Domain ----
+
+inventory_lookup(inv: ptr, sku: string) {
+    if map_has(inv, sku) == 1 { return map_get(inv, sku) }
+    return ""
+}
+
+// ---- Handler functions ----
+// Extracted from closures due to a compiler codegen limitation
+// (locals in the Nth closure inside a trailing block sometimes
+// don't get C declarations emitted).  Each one demonstrates
+// hide/seal at the function boundary.
+
+// Cart actions: can see `cart` but NOT `inventory` directly.
+// They receive a pre-validated SKU or work purely on the cart.
+
+do_cart_add(req: ptr, res: ptr, cart: ptr, inventory: ptr) {
+    hide inventory
+    sku = request_get_query_param(req, "sku")
+    // Can't touch inventory here — hidden.
+    // Validation happened in the closure before we were called.
+    list.add(cart, sku)
+    response_json(res, "{\"added\":\"${sku}\"}")
+}
+
+do_cart_list(res: ptr, cart: ptr, inventory: ptr) {
+    hide inventory
+    n = list.size(cart)
+    if n == 0 {
+        response_json(res, "[]")
+    } else {
+        out = "["
+        for (i = 0; i < n; i++) {
+            if i > 0 { out = "${out}," }
+            item = list.get(cart, i)
+            out = "${out}\"${item}\""
+        }
+        response_json(res, "${out}]")
+    }
+}
+
+do_cart_remove(req: ptr, res: ptr, cart: ptr, inventory: ptr) {
+    hide inventory
+    list.remove(cart, 0)
+    response_json(res, "{\"removed_index\":0}")
+}
+
+// Inventory actions: seal except to whitelist only what's needed.
+
+do_inv_list(res: ptr, inventory: ptr) {
+    seal except res, inventory, response_json, map_has
+    if map_has(inventory, "WIDGET-1") == 1 {
+        response_json(res, "{\"has_widget\":true}")
+    } else {
+        response_json(res, "{\"has_widget\":false}")
+    }
+}
+
+do_inv_lookup(req: ptr, res: ptr, inventory: ptr) {
+    seal except req, res, inventory, response_json, response_write_status,
+                request_get_query_param, inventory_lookup, str_eq
+    sku = request_get_query_param(req, "sku")
+    info = inventory_lookup(inventory, sku)
+    if str_eq(info, "") == 1 {
+        response_write_status(res, "{\"error\":\"not found\"}", 404)
+    } else {
+        response_json(res, "{\"sku\":\"${sku}\",\"info\":\"${info}\"}")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// App assembly — the nested scope structure IS the point
+// ---------------------------------------------------------------------------
+
+main() {
+    println("=== Inventory + Cart Demo (hide/seal in nested scopes) ===\n")
+
+    // ---- App-level: inventory is born here ----
+    inventory = map_new()
+    map_put(inventory, "WIDGET-1", "Widget Alpha|999")
+    map_put(inventory, "WIDGET-2", "Widget Beta|1499")
+    map_put(inventory, "GADGET-1", "Gadget Gamma|2500")
+
+    // ---- Session-level: cart is born here, can see inventory ----
+    cart = list.new()
+
+    server = web_server(8080) {
+
+        // Inventory endpoints — read-only, see the catalog directly
+        tw_path("/api/inventory") {
+            end_point(GET, "/list") |req: ptr, res: ptr, ctx: ptr| {
+                do_inv_list(res, inventory)
+            }
+            end_point(GET, "/lookup") |req: ptr, res: ptr, ctx: ptr| {
+                do_inv_lookup(req, res, inventory)
+            }
+        }
+
+        // Cart endpoints — actions hide inventory from their bodies
+        tw_path("/api/cart") {
+            end_point(POST, "/add") |req: ptr, res: ptr, ctx: ptr| {
+                // Validate SKU here (where inventory IS visible)…
+                sku = request_get_query_param(req, "sku")
+                info = inventory_lookup(inventory, sku)
+                if str_eq(info, "") == 1 {
+                    response_write_status(res, "{\"error\":\"unknown sku\"}", 404)
+                } else {
+                    // …then delegate to action that hides inventory
+                    do_cart_add(req, res, cart, inventory)
+                }
+            }
+            end_point(GET, "/list") |req: ptr, res: ptr, ctx: ptr| {
+                do_cart_list(res, cart, inventory)
+            }
+            end_point(DELETE, "/remove") |req: ptr, res: ptr, ctx: ptr| {
+                do_cart_remove(req, res, cart, inventory)
+            }
+        }
+    }
+
+    println("Routes registered: ${list.size(map_get(server, \"routes\"))}")
+    println("  GET  /api/inventory/list")
+    println("  GET  /api/inventory/lookup?sku=WIDGET-1")
+    println("  POST /api/cart/add?sku=WIDGET-1")
+    println("  GET  /api/cart/list")
+    println("  DEL  /api/cart/remove")
+    println("")
+    println("Key pattern:")
+    println("  do_cart_*  hides `inventory` — can only touch cart")
+    println("  do_inv_*   uses seal except — whitelists what it needs")
+    println("\nDone (not starting server — this is a DSL/scope demo).")
+}
