@@ -1,0 +1,88 @@
+// Regression test: fs_glob's recursive walk_recursive must match dot-prefixed
+// files (e.g. ".env", ".build.ae") while still skipping dot-prefixed
+// directories (".git", ".aeb") from recursion.
+//
+// Before the fs_glob fix, walk_recursive skipped every directory entry whose
+// name began with '.', so patterns like "**/.build.ae" or "**/.*.ae"
+// always returned zero results.
+//
+// We build a tiny fixture tree under build/test_glob_dotfiles/ at runtime,
+// run several glob patterns against it, and clean up.
+
+import std.fs
+
+extern println(s: string)
+extern exit(code: int)
+
+// Create an empty file (cross-platform touch equivalent).
+touch(path: string) {
+    f = file_open_raw(path, "w")
+    if f != null {
+        file_close(f)
+    }
+}
+
+main() {
+    root = "build/test_glob_dotfiles"
+
+    // Build fixture tree using stdlib functions (no shell commands).
+    dir_create_raw("build/test_glob_dotfiles")
+    dir_create_raw("build/test_glob_dotfiles/sub")
+    dir_create_raw("build/test_glob_dotfiles/sub/sub2")
+    dir_create_raw("build/test_glob_dotfiles/.hidden_dir")
+    touch("build/test_glob_dotfiles/.dotfile.cfg")
+    touch("build/test_glob_dotfiles/sub/.build.ae")
+    touch("build/test_glob_dotfiles/sub/sub2/.tests.ae")
+    touch("build/test_glob_dotfiles/sub/plain_sentinel")
+    touch("build/test_glob_dotfiles/.hidden_dir/should_not_appear")
+
+    // Recursive match against any dot-prefixed .ae file (this used to return 0).
+    r1 = fs_glob_raw("build/test_glob_dotfiles/**/.*.ae")
+    n1 = dir_list_count(r1)
+    if n1 < 2 {
+        println("FAIL: recursive .*.ae matched only ${n1} files (expected >= 2)")
+        dir_list_free(r1)
+        exit(1)
+    }
+    dir_list_free(r1)
+
+    // Specific dot-prefixed file under a specific subtree.
+    r2 = fs_glob_raw("build/test_glob_dotfiles/**/.build.ae")
+    if dir_list_count(r2) != 1 {
+        println("FAIL: .build.ae match count != 1")
+        dir_list_free(r2)
+        exit(1)
+    }
+    dir_list_free(r2)
+
+    // Dot-prefixed directories must NOT be recursed into. The file at
+    // .hidden_dir/should_not_appear should never show up.
+    r3 = fs_glob_raw("build/test_glob_dotfiles/**/should_not_appear")
+    if dir_list_count(r3) != 0 {
+        println("FAIL: should_not_appear was visited under a hidden dir")
+        dir_list_free(r3)
+        exit(1)
+    }
+    dir_list_free(r3)
+
+    // Non-dot pattern still works (sanity).
+    r4 = fs_glob_raw("build/test_glob_dotfiles/**/plain_sentinel")
+    if dir_list_count(r4) != 1 {
+        println("FAIL: plain_sentinel match count != 1")
+        dir_list_free(r4)
+        exit(1)
+    }
+    dir_list_free(r4)
+
+    // Clean up fixture tree (files first, then dirs bottom-up).
+    file_delete_raw("build/test_glob_dotfiles/.dotfile.cfg")
+    file_delete_raw("build/test_glob_dotfiles/sub/.build.ae")
+    file_delete_raw("build/test_glob_dotfiles/sub/sub2/.tests.ae")
+    file_delete_raw("build/test_glob_dotfiles/sub/plain_sentinel")
+    file_delete_raw("build/test_glob_dotfiles/.hidden_dir/should_not_appear")
+    dir_delete_raw("build/test_glob_dotfiles/sub/sub2")
+    dir_delete_raw("build/test_glob_dotfiles/sub")
+    dir_delete_raw("build/test_glob_dotfiles/.hidden_dir")
+    dir_delete_raw("build/test_glob_dotfiles")
+    println("PASS glob dotfiles")
+}

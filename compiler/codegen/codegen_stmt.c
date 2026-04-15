@@ -574,6 +574,15 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                 if (is_var_declared(gen, stmt->value)) {
                     // Already declared - generate assignment only
                     if (stmt->child_count > 0 && is_heap_string_expr(stmt->children[0])) {
+                        // If the variable was originally declared as a non-heap
+                        // string, its _heap_<name> tracker was never emitted —
+                        // declare it lazily before the reassignment wrapper that
+                        // references it.
+                        if (!is_heap_string_var(gen, stmt->value)) {
+                            fprintf(gen->output, "int _heap_%s = 0; (void)_heap_%s; ",
+                                    stmt->value, stmt->value);
+                            mark_heap_string_var(gen, stmt->value);
+                        }
                         // Free old heap string before reassignment.
                         fprintf(gen->output, "{ const char* _tmp_old = %s; ", stmt->value);
                         fprintf(gen->output, "%s = ", stmt->value);
@@ -820,6 +829,7 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                             print_indent(gen);
                             fprintf(gen->output, "int _heap_%s = %d; (void)_heap_%s;\n",
                                     stmt->value, init_heap ? 1 : 0, stmt->value);
+                            mark_heap_string_var(gen, stmt->value);
                         }
                     }
                     // Record variable→closure mapping for closure invocation
