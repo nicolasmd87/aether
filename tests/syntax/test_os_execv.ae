@@ -1,17 +1,24 @@
 // Test: os_execv — replace the current process image.
 //
-// Edge cases exercised (all before the final successful exec call):
-//   1. nonexistent program  → returns -1, caller still running
-//   2. null argv_list        → synthesised argv[0] from prog, works
-//   3. absolute path         → looked up without touching PATH
+// Edge cases (all platforms):
+//   1. nonexistent program → returns -1, caller still running
+//   2. null argv_list       → synthesised argv[0] from prog, still -1 on missing
 //
-// Finally, the test terminates with a successful exec of /bin/echo.
-// When the exec succeeds the current process image is replaced and
-// the echoed string becomes the test's stdout. If exec ever returns,
-// the test fails loudly.
+// Happy path is platform-gated:
+//   • POSIX (macOS / Linux) where `/bin/echo` exists: exec it and let
+//     its stdout become the test's tail output. On success the call
+//     never returns; if it does, the test fails loudly.
+//   • Windows (no `/bin/echo`, `os_execv` stub returns -1): skip the
+//     happy-path exec and verify the Windows stub returns -1 for a
+//     non-null argv_list. The Windows contract is documented in
+//     `std/os/aether_os.c` — use `os_run` + `exit(rc)` there.
+//
+// Either way the test prints `os_execv ok` (via echo on POSIX, directly
+// on Windows) and exits zero.
 
 import std.os
 import std.list
+import std.file
 
 extern println(s: string)
 extern exit(code: int)
@@ -34,22 +41,34 @@ main() {
         exit(1)
     }
 
-    // --- 3. Sanity: progress marker so a hanging test is obvious.
-    println("os_execv edge cases ok, about to exec echo")
+    println("os_execv edge cases ok")
 
-    // --- 4. Happy path: exec /bin/echo. On macOS and Linux /bin/echo is
-    //     always present. On success this call never returns; the echoed
-    //     string becomes the test's tail stdout line. If it returns we
-    //     print FAIL and exit non-zero.
+    // --- 3. Platform gate: happy path only on systems that have /bin/echo.
+    //     Windows doesn't, and `os_execv` is a -1 stub there anyway.
+    if file.exists("/bin/echo") == 0 {
+        // Windows (or any POSIX without /bin/echo): verify the stub
+        // returns -1 rather than pretending to exec, then exit cleanly.
+        win_argv = list.new()
+        _wa = list.add(win_argv, "echo")
+        rc_win = os_execv("/bin/echo", win_argv)
+        if rc_win != -1 {
+            println("FAIL: os_execv on unavailable /bin/echo returned ${rc_win}")
+            exit(1)
+        }
+        println("os_execv ok")
+        exit(0)
+    }
+
+    // --- 4. POSIX happy path: exec /bin/echo. On success this call never
+    //     returns — the echoed string becomes the test's tail stdout.
     argv = list.new()
     _ea2 = list.add(argv, "echo")
     _ea3 = list.add(argv, "os_execv")
-    _ea4 = list.add(argv, "happy")
-    _ea5 = list.add(argv, "path")
+    _ea4 = list.add(argv, "ok")
 
     _rc = os_execv("/bin/echo", argv)
 
-    // Only reached on failure.
+    // Only reached on failure of the exec system call itself.
     println("FAIL: os_execv(/bin/echo, ...) returned ${_rc}")
     exit(1)
 }
