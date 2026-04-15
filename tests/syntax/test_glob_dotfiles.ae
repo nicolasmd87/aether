@@ -11,20 +11,30 @@
 
 import std.fs
 
-extern os_system(cmd: string) -> int
 extern println(s: string)
 extern exit(code: int)
 
+// Create an empty file (cross-platform touch equivalent).
+touch(path: string) {
+    f = file_open_raw(path, "w")
+    if f != null {
+        file_close(f)
+    }
+}
+
 main() {
     root = "build/test_glob_dotfiles"
-    os_system("rm -rf build/test_glob_dotfiles")
-    os_system("mkdir -p build/test_glob_dotfiles/sub/sub2")
-    os_system("mkdir -p build/test_glob_dotfiles/.hidden_dir")
-    os_system("touch build/test_glob_dotfiles/.dotfile.cfg")
-    os_system("touch build/test_glob_dotfiles/sub/.build.ae")
-    os_system("touch build/test_glob_dotfiles/sub/sub2/.tests.ae")
-    os_system("touch build/test_glob_dotfiles/sub/plain_sentinel")
-    os_system("touch build/test_glob_dotfiles/.hidden_dir/should_not_appear")
+
+    // Build fixture tree using stdlib functions (no shell commands).
+    dir_create_raw("build/test_glob_dotfiles")
+    dir_create_raw("build/test_glob_dotfiles/sub")
+    dir_create_raw("build/test_glob_dotfiles/sub/sub2")
+    dir_create_raw("build/test_glob_dotfiles/.hidden_dir")
+    touch("build/test_glob_dotfiles/.dotfile.cfg")
+    touch("build/test_glob_dotfiles/sub/.build.ae")
+    touch("build/test_glob_dotfiles/sub/sub2/.tests.ae")
+    touch("build/test_glob_dotfiles/sub/plain_sentinel")
+    touch("build/test_glob_dotfiles/.hidden_dir/should_not_appear")
 
     // Recursive match against any dot-prefixed .ae file (this used to return 0).
     r1 = fs_glob_raw("build/test_glob_dotfiles/**/.*.ae")
@@ -64,6 +74,15 @@ main() {
     }
     dir_list_free(r4)
 
-    os_system("rm -rf build/test_glob_dotfiles")
+    // Clean up fixture tree (files first, then dirs bottom-up).
+    file_delete_raw("build/test_glob_dotfiles/.dotfile.cfg")
+    file_delete_raw("build/test_glob_dotfiles/sub/.build.ae")
+    file_delete_raw("build/test_glob_dotfiles/sub/sub2/.tests.ae")
+    file_delete_raw("build/test_glob_dotfiles/sub/plain_sentinel")
+    file_delete_raw("build/test_glob_dotfiles/.hidden_dir/should_not_appear")
+    dir_delete_raw("build/test_glob_dotfiles/sub/sub2")
+    dir_delete_raw("build/test_glob_dotfiles/sub")
+    dir_delete_raw("build/test_glob_dotfiles/.hidden_dir")
+    dir_delete_raw("build/test_glob_dotfiles")
     println("PASS glob dotfiles")
 }
