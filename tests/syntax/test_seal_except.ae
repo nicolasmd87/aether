@@ -1,0 +1,53 @@
+// Test: `seal except a, b, c` blocks every outer binding from a nested
+// block EXCEPT the names listed in the whitelist. Inverted form of `hide`
+// — useful for handlers where you want to enumerate what you do use.
+
+extern println(s: string)
+extern string_concat(a: string, b: string) -> string
+extern exit(code: int)
+
+// Top-level helper that handler will whitelist.
+greet(name: string) {
+    return string_concat("hello, ", name)
+}
+
+main() {
+    // Several outer values; handler() will only allow `name` and `greet`
+    // through the seal.
+    name = "world"
+    secret_token = "do not touch"
+    db_handle = "do not touch either"
+
+    {
+        seal except name, greet, println, exit
+
+        // OK: name is in the whitelist.
+        msg = greet(name)
+        // OK: greet is in the whitelist.
+        // OK: println is in the whitelist (so we can report).
+        if msg != "hello, world" {
+            println("FAIL: greet returned wrong value")
+            exit(1)
+        }
+
+        // Local bindings created inside the sealed block are always
+        // visible — seal only blocks lookups that walk out of the block.
+        local_extra = "fresh"
+        if local_extra != "fresh" {
+            println("FAIL: local binding inside sealed block not visible")
+            exit(1)
+        }
+    }
+
+    // Outside the sealed block, everything is reachable again.
+    if secret_token != "do not touch" {
+        println("FAIL: secret_token unreachable in parent scope")
+        exit(1)
+    }
+    if db_handle != "do not touch either" {
+        println("FAIL: db_handle unreachable in parent scope")
+        exit(1)
+    }
+
+    println("PASS seal except")
+}

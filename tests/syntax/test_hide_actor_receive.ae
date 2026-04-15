@@ -1,0 +1,55 @@
+// Test: `hide` and `seal except` work inside actor receive arms.
+// The receive arm body is a block scope, so directives apply there
+// just like any other nested block.
+
+extern println(s: string)
+extern string_concat(a: string, b: string) -> string
+extern exit(code: int)
+
+message Ping {}
+
+actor Server {
+    state secret = "do not touch"
+    state public_val = "ok"
+
+    receive {
+        Ping() -> {
+            hide secret
+            // public_val is NOT hidden, so it should still resolve.
+            if public_val != "ok" {
+                println("FAIL: public_val not visible after hide secret")
+                exit(1)
+            }
+        }
+    }
+}
+
+message Greet { name: string }
+
+actor Greeter {
+    state secret = "do not touch"
+    state greeting = "hello"
+
+    receive {
+        Greet(name) -> {
+            seal except name, greeting, println, string_concat, exit
+            msg = string_concat(greeting, name)
+            if msg != "helloworld" {
+                println("FAIL: seal except whitelist broken in receive arm")
+                exit(1)
+            }
+        }
+    }
+}
+
+main() {
+    s = spawn(Server())
+    s ! Ping {}
+    wait_for_idle()
+
+    g = spawn(Greeter())
+    g ! Greet { name: "world" }
+    wait_for_idle()
+
+    println("PASS hide/seal in actor receive arms")
+}

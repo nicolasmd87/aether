@@ -1014,6 +1014,42 @@ ASTNode* parse_statement(Parser* parser) {
             }
             return node;
         }
+
+        case TOKEN_HIDE: {
+            // Scope-level directive: hide name1, name2, ...
+            // Position within block doesn't matter — typechecker collects all
+            // hide directives in a scope before resolving any other names.
+            int hline = token->line, hcol = token->column;
+            advance_token(parser); // consume 'hide'
+            ASTNode* node = create_ast_node(AST_HIDE_DIRECTIVE, NULL, hline, hcol);
+            for (;;) {
+                Token* hname = expect_token(parser, TOKEN_IDENTIFIER);
+                if (!hname) return NULL;
+                ASTNode* id = create_ast_node(AST_IDENTIFIER, hname->value, hname->line, hname->column);
+                add_child(node, id);
+                if (!match_token(parser, TOKEN_COMMA)) break;
+            }
+            match_token(parser, TOKEN_SEMICOLON);
+            return node;
+        }
+
+        case TOKEN_SEAL: {
+            // Scope-level directive: seal except name1, name2, ...
+            // Hides every outer binding except those listed in the whitelist.
+            int sline = token->line, scol = token->column;
+            advance_token(parser); // consume 'seal'
+            if (!expect_token(parser, TOKEN_EXCEPT)) return NULL;
+            ASTNode* node = create_ast_node(AST_SEAL_DIRECTIVE, NULL, sline, scol);
+            for (;;) {
+                Token* sname = expect_token(parser, TOKEN_IDENTIFIER);
+                if (!sname) return NULL;
+                ASTNode* id = create_ast_node(AST_IDENTIFIER, sname->value, sname->line, sname->column);
+                add_child(node, id);
+                if (!match_token(parser, TOKEN_COMMA)) break;
+            }
+            match_token(parser, TOKEN_SEMICOLON);
+            return node;
+        }
             
         case TOKEN_INT:
         case TOKEN_INT64:

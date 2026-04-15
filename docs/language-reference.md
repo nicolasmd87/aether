@@ -476,6 +476,45 @@ example() {
 
 ---
 
+## Scope Directives: `hide` and `seal except`
+
+Two scope-level directives let a block decline to see selected names from its enclosing lexical scopes. Both are compile-time only — no runtime overhead, no codegen change. Error code: `E0304`.
+
+### `hide` — blacklist specific names
+
+```aether
+{
+    hide secret_token, db_handle
+    // secret_token and db_handle from outer scopes are invisible here.
+    // Reading, writing, or redeclaring them is a compile error.
+}
+```
+
+### `seal except` — whitelist
+
+```aether
+handler(req, res) {
+    seal except req, res, inventory, response_write
+    // Every outer name is invisible EXCEPT the four listed.
+    // Local bindings created inside this block are still visible.
+}
+```
+
+### Key semantics
+
+- **Scope-level:** position of the directive within its block doesn't matter.
+- **Blocks reads AND writes.**
+- **Propagates to nested blocks** — no way to un-hide deeper in.
+- **Does NOT reach through call boundaries** — a visible function can still use hidden names via its own lexical chain. This is name resolution denial, not an effect system.
+- **Local bindings always visible** — directives only affect lookups that walk out to parent scopes.
+- **Applies to qualified names** — `hide http` also blocks `http.get(url)`.
+- **Works inside actor receive arms** — receive handler bodies are block scopes.
+- **Cannot redeclare** a hidden name in the same scope (but a nested child scope may).
+
+For the full design rationale, edge cases, and worked examples, see [hide-and-seal.md](hide-and-seal.md).
+
+---
+
 ## Memory Management
 
 Aether uses **deterministic scope-exit cleanup** -- no garbage collector, no GC pauses. The primary mechanism is `defer`.
@@ -1081,6 +1120,7 @@ The following identifiers are reserved:
 | `import`, `extern` | Modules and C interop |
 | `const` | Top-level constants |
 | `defer` | Scope-exit cleanup |
+| `hide`, `seal`, `except` | Scope-level name denial (see [hide-and-seal.md](hide-and-seal.md)) |
 | `null`, `true`, `false` | Literals |
 | `when` | Guard clauses |
 | `int`, `float`, `string`, `bool`, `void`, `ptr`, `long` | Type names |

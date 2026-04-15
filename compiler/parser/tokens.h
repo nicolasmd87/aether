@@ -44,6 +44,9 @@ typedef enum {
     TOKEN_IN,               // 'in' keyword for range-based for loops
     TOKEN_AFTER,            // 'after' keyword for receive timeouts
     TOKEN_CALLBACK,         // 'callback' keyword for callback trailing blocks
+    TOKEN_HIDE,             // 'hide' scope-level directive: blocks named outer bindings
+    TOKEN_SEAL,             // 'seal' scope-level directive: blocks all but a whitelist
+    TOKEN_EXCEPT,           // 'except' modifier following 'seal'
 
     // Types
     TOKEN_INT,
