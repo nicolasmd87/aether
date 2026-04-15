@@ -1,0 +1,60 @@
+// process-exec — demonstrate argv0 discovery + argv-based process replacement.
+// Run with: ae run examples/stdlib/process-exec.ae -- hello world
+//
+// Shows two related features from std.os:
+//
+//   • `os.argv0()` / `aether_argv0()` — read argv[0]. Useful when a tool
+//     needs to find its own binary (to re-exec with different flags,
+//     locate sibling helpers next to itself, or print a self-path in a
+//     diagnostic).
+//
+//   • `os_execv(prog, argv)` — replace the current process image with
+//     `prog`, passing an explicit argv. No shell in the middle, so
+//     paths with spaces, quotes, or $-signs are safe. On success this
+//     call never returns; on failure it returns -1 and the current
+//     process keeps running.
+//
+// The program prints its own path, then execs /bin/echo with a fixed
+// argv whose payload is "hi from ${argv0}". When exec succeeds, the
+// echoed line becomes this program's stdout and the process dies
+// holding echo's PID.
+
+import std.os
+import std.list
+import std.string
+
+main() {
+    // Discover where we were launched from.
+    me = os.argv0()
+    if string.length(me) == 0 {
+        println("unexpected: os.argv0() was empty")
+        exit(1)
+    }
+    println("process-exec: I am ${me}")
+
+    // Forward any extra args the user passed so the demo is visible.
+    n = aether_args_count()
+    if n > 1 {
+        println("process-exec: forwarding ${n - 1} extra arg(s)")
+    }
+
+    // Build the argv for /bin/echo. argv[0] is conventionally the
+    // program name — it doesn't have to match `prog`, but setting it
+    // sensibly helps tools like ps(1) show a readable command line.
+    argv = list.new()
+    _e1 = list.add(argv, "echo")
+    _e2 = list.add(argv, "hi")
+    _e3 = list.add(argv, "from")
+    _e4 = list.add(argv, me)
+    i = 1
+    while i < n {
+        _e5 = list.add(argv, aether_args_get(i))
+        i = i + 1
+    }
+
+    // Replace this process with /bin/echo. On success this call never
+    // returns; on failure we fall through to the error branch.
+    rc = os_execv("/bin/echo", argv)
+    println("process-exec: os_execv failed with rc=${rc}")
+    exit(rc)
+}

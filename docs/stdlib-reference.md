@@ -707,8 +707,31 @@ main() {
 - `os.system(cmd)` - Run shell command, returns exit code (0 = success, POSIX convention)
 - `os.exec(cmd)` → `(string, string)` - Run command and capture stdout, return `(output, err)`
 - `os.getenv(name)` - Get environment variable (returns string, or null if not set — infallible)
+- `aether_args_count()` → `int` - Number of command-line arguments
+- `aether_args_get(index)` → `string` - Get the i-th argument; null if out of range
+- `aether_argv0()` → `string` - Path the OS launched the current process with (argv[0]); null before `aether_args_init` runs
+- `os.argv0()` → `string` - Convenience wrapper around `aether_argv0()` that returns `""` instead of null and hands back a fresh copy
+- `os_execv(prog, argv_list)` → `int` - Replace the current process image with `prog`, passing an explicit `list<ptr>` argv. Uses POSIX `execvp(3)` so `prog` is looked up on `PATH` when it does not contain a slash. Flushes stdio before the exec so pre-exec output is not lost. On success this call **never returns**; on failure returns `-1` and the current process continues. Not available on Windows — use `os_run` + `exit(rc)` instead.
 
 Raw extern: `os_exec_raw`.
+
+**Process replacement example:**
+
+```aether
+import std.os
+import std.list
+
+main() {
+    argv = list.new()
+    _e1 = list.add(argv, "echo")
+    _e2 = list.add(argv, "hello from")
+    _e3 = list.add(argv, os.argv0())
+    rc = os_execv("/bin/echo", argv)
+    // Only reached if exec failed.
+    println("exec failed: ${rc}")
+    exit(rc)
+}
+```
 
 ---
 

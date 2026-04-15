@@ -1198,6 +1198,15 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         }
         if (already_declared) continue;
 
+        // Imported functions are emitted as `static` in their definitions
+        // (see generate_function_definition / generate_combined_function),
+        // so the matching forward declaration must also be `static` —
+        // otherwise C rejects the file with "static declaration follows
+        // non-static declaration".
+        if (child->is_imported) {
+            fprintf(gen->output, "static ");
+        }
+
         // Determine return type
         Type* ret_type = child->node_type;
         int func_has_return = has_return_value(child);

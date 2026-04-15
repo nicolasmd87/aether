@@ -954,6 +954,13 @@ void module_merge_into_program(ASTNode* program) {
                 ASTNode* clone = clone_ast_node(decl);
                 free(clone->value);
                 clone->value = strdup(prefixed);
+                // Mark as imported so codegen emits this function with the
+                // C `static` storage class. Each translation unit that
+                // imports the same module gets its own private copy, and
+                // the linker no longer sees them as duplicate symbols
+                // when several .o files are linked together (e.g. macOS
+                // ld64, which does not support --allow-multiple-definition).
+                clone->is_imported = 1;
 
                 // Rename intra-module function calls and constant refs within the cloned body
                 rename_intra_module_refs(clone, ns, func_names, func_count,

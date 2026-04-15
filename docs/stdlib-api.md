@@ -35,7 +35,7 @@ Functions are called using **namespace-style syntax**: `namespace.function()`
 | `import std.math` | `math` | `math.sqrt(x)`, `math.sin(x)` |
 | `import std.log` | `log` | `log.init(file, level)`, `log.write(level, msg)` |
 | `import std.io` | `io` | `io.print(str)`, `io.read_file(path)`, `io.getenv(name)` |
-| `import std.os` | `os` | `os.system(cmd)`, `os.exec(cmd)`, `os.getenv(name)` |
+| `import std.os` | `os` | `os.system(cmd)`, `os.exec(cmd)`, `os.getenv(name)`, `os.argv0()`, `os_execv(prog, argv)` |
 
 ---
 
@@ -280,6 +280,49 @@ werr = io.write_file("output.txt", "hello")
 - `io.unsetenv(name)` → `string` - Unset env var, return error string
 
 Raw externs: `io_read_file_raw`, `io_write_file_raw`, `io_append_file_raw`, `io_delete_file_raw`, `io_file_info_raw`, `io_setenv_raw`, `io_unsetenv_raw`.
+
+---
+
+## OS / Process Library
+
+### Shell execution
+
+- `os.system(cmd)` → `int` — Run a shell command, return exit code
+- `os.exec(cmd)` → `(string, string)` — Run a command and capture stdout; returns `(output, err)` tuple
+- `os.getenv(name)` → `string` — Read environment variable; returns null if unset
+
+### Argv discovery
+
+- `aether_args_count()` → `int` — Number of command-line arguments
+- `aether_args_get(index)` → `string` — Get the i-th argument; returns null if out of range
+- `aether_argv0()` → `string` — Path the OS launched the current process with (argv[0]); returns null before `aether_args_init` has run
+- `os.argv0()` → `string` — Convenience wrapper around `aether_argv0()` that returns `""` instead of null
+
+Typical use: a tool that needs to find its own binary (to locate sibling helpers next to itself, re-exec with different flags, or print a self-path in a diagnostic) can call `os.argv0()` and skip the argv-index bookkeeping.
+
+### Process replacement
+
+- `os_execv(prog, argv_list)` → `int` — Replace the current process image with `prog`, passing an explicit argv list. `argv_list` is a `list<ptr>` of C strings (element 0 is argv[0] for the new program). On success this call **never returns**; on failure it returns `-1` and the current process keeps running. `prog` is looked up on `PATH` if it does not contain a slash. Not available on Windows — returns `-1`.
+
+Paired with `os_run` / `os_run_capture` (see PR #148), this gives Aether programs a full argv-based process-launch surface with no shell in the middle, so paths with spaces, quotes, or `$`-signs are safe. Stdio is flushed before the exec, so pre-exec diagnostics are not lost.
+
+Example:
+
+```aether
+import std.os
+import std.list
+
+main() {
+    argv = list.new()
+    _e1 = list.add(argv, "echo")
+    _e2 = list.add(argv, "from")
+    _e3 = list.add(argv, os.argv0())
+    rc = os_execv("/bin/echo", argv)
+    // Only reached if exec failed.
+    println("exec failed: ${rc}")
+    exit(rc)
+}
+```
 
 ---
 

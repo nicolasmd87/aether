@@ -137,6 +137,11 @@ typedef struct ASTNode {
     int line;
     int column;
     char* annotation;          // Optional metadata (e.g., defer factory name)
+    int is_imported;           // 1 if cloned in from another module by
+                               // module_merge_into_program; codegen emits
+                               // such functions as `static` so each TU gets
+                               // a private copy and the linker doesn't see
+                               // them as duplicate symbols.
 } ASTNode;
 
 // Type functions
