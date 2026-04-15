@@ -151,3 +151,15 @@ const char* aether_args_get(int index) {
     }
     return aether_argv[index];
 }
+
+// argv[0] convenience. Exposed via std.os as `extern aether_argv0` so
+// Aether programs can discover the path the OS launched them with
+// without having to call `aether_args_get(0)`. Lives here (next to
+// aether_argc / aether_argv) rather than in std/os/aether_os.c so that
+// the compiler binary — which does NOT link aether_runtime.c — doesn't
+// pull in an unresolved reference to the runtime's argv storage. The
+// returned pointer is borrowed from OS argv and must not be freed.
+const char* aether_argv0(void) {
+    if (aether_argc <= 0 || !aether_argv) return NULL;
+    return aether_argv[0];
+}

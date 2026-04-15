@@ -1,0 +1,55 @@
+// Test: os_execv — replace the current process image.
+//
+// Edge cases exercised (all before the final successful exec call):
+//   1. nonexistent program  → returns -1, caller still running
+//   2. null argv_list        → synthesised argv[0] from prog, works
+//   3. absolute path         → looked up without touching PATH
+//
+// Finally, the test terminates with a successful exec of /bin/echo.
+// When the exec succeeds the current process image is replaced and
+// the echoed string becomes the test's stdout. If exec ever returns,
+// the test fails loudly.
+
+import std.os
+import std.list
+
+extern println(s: string)
+extern exit(code: int)
+
+main() {
+    // --- 1. nonexistent program returns -1 without replacing the process.
+    empty_argv = list.new()
+    _ea = list.add(empty_argv, "aether_nonexistent_xyz_12345")
+    rc_missing = os_execv("aether_nonexistent_xyz_12345", empty_argv)
+    if rc_missing != -1 {
+        println("FAIL: os_execv on missing binary returned ${rc_missing}")
+        exit(1)
+    }
+
+    // --- 2. null argv_list is tolerated — we synthesise argv[0] from prog.
+    //     We still expect -1 because the program doesn't exist.
+    rc_null = os_execv("aether_also_nonexistent_zzz", null)
+    if rc_null != -1 {
+        println("FAIL: os_execv with null argv_list returned ${rc_null}")
+        exit(1)
+    }
+
+    // --- 3. Sanity: progress marker so a hanging test is obvious.
+    println("os_execv edge cases ok, about to exec echo")
+
+    // --- 4. Happy path: exec /bin/echo. On macOS and Linux /bin/echo is
+    //     always present. On success this call never returns; the echoed
+    //     string becomes the test's tail stdout line. If it returns we
+    //     print FAIL and exit non-zero.
+    argv = list.new()
+    _ea2 = list.add(argv, "echo")
+    _ea3 = list.add(argv, "os_execv")
+    _ea4 = list.add(argv, "happy")
+    _ea5 = list.add(argv, "path")
+
+    _rc = os_execv("/bin/echo", argv)
+
+    // Only reached on failure.
+    println("FAIL: os_execv(/bin/echo, ...) returned ${_rc}")
+    exit(1)
+}

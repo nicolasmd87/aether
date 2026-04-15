@@ -39,6 +39,11 @@ void aether_args_init(int argc, char** argv);
 int aether_args_count(void);
 const char* aether_args_get(int index);
 
+// Return argv[0] — the path the OS launched the current process with.
+// Borrowed pointer into the OS argv storage; do not free. Returns NULL
+// when aether_args_init has not been called.
+const char* aether_argv0(void);
+
 // Configuration queries
 const AetherRuntimeInitConfig* aether_runtime_get_config();
 int aether_runtime_has_feature(int feature_flag);

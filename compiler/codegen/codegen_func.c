@@ -240,6 +240,15 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
     // Track current function's return type for multi-return codegen
     gen->current_func_return_type = func->node_type;
 
+    // Functions cloned from imported modules are emitted with the C
+    // `static` storage class so each translation unit gets a private copy.
+    // Without this, linking multiple .o files that all import the same
+    // SDK module produces duplicate symbol errors on linkers that don't
+    // support GNU's --allow-multiple-definition (notably macOS ld64).
+    if (func->is_imported) {
+        fprintf(gen->output, "static ");
+    }
+
     // Determine return type: if type is void but function has return-with-value, use int
     Type* ret_type = func->node_type;
     if ((!ret_type || ret_type->kind == TYPE_VOID || ret_type->kind == TYPE_UNKNOWN) && has_return_value(func)) {
@@ -723,6 +732,12 @@ void generate_combined_function(CodeGenerator* gen, ASTNode** clauses, int claus
         if (has_return_value(clauses[i])) {
             has_return = 1;
         }
+    }
+
+    // Imported clauses get the same `static` storage class — see
+    // generate_function_definition for the full rationale.
+    if (first->is_imported) {
+        fprintf(gen->output, "static ");
     }
 
     if ((!ret_type || ret_type->kind == TYPE_VOID || ret_type->kind == TYPE_UNKNOWN) && has_return) {
