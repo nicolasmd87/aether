@@ -44,7 +44,7 @@ const CONTINUE = 1
 const STOP     = 0
 
 // Convert a method constant to the HTTP method string for the C layer
-method_to_string(method: int) -> string {
+method_to_string(method: int) {
     if method == GET     { return "GET" }
     if method == POST    { return "POST" }
     if method == PUT     { return "PUT" }
@@ -78,29 +78,29 @@ method_to_string(method: int) -> string {
 
 // Wrap the raw C ptrs so the DSL callbacks get a clean triple
 
-request_get_body(req: ptr) -> string {
+request_get_body(req: ptr) {
     return http.request_body(req)
 }
 
-request_get_path(req: ptr) -> string {
+request_get_path(req: ptr) {
     return http.request_path(req)
 }
 
-request_get_header(req: ptr, name: string) -> string {
+request_get_header(req: ptr, name: string) {
     return http.get_header(req, name)
 }
 
-request_get_query_param(req: ptr, name: string) -> string {
+request_get_query_param(req: ptr, name: string) {
     return http.get_query_param(req, name)
 }
 
-request_get_path_param(ctx: ptr, name: string) -> string {
+request_get_path_param(ctx: ptr, name: string) {
     return http.get_path_param(ctx, name)
 }
 
 // Cookie parsing — parses the Cookie header and returns
 // the value for the given name, or "" if not found.
-request_get_cookie(req: ptr, name: string) -> string {
+request_get_cookie(req: ptr, name: string) {
     cookie_header = http.get_header(req, "Cookie")
     if str_eq(cookie_header, "") == 1 { return "" }
 
@@ -141,7 +141,7 @@ ctx_set_attribute(ctx: ptr, key: string, value: string) {
 }
 
 // Get an attribute from the request context
-ctx_get_attribute(ctx: ptr, key: string) -> string {
+ctx_get_attribute(ctx: ptr, key: string) {
     if map_has(ctx, key) == 1 {
         return map_get(ctx, key)
     }
@@ -443,17 +443,17 @@ stats_add_filter(stats: ptr, filter_path: string, result: string, duration_ms: i
 }
 
 // Accessors for stats records
-stats_get_path(stats: ptr) -> string { return map_get(stats, "path") }
-stats_get_endpoint(stats: ptr) -> string { return map_get(stats, "endpoint") }
-stats_get_status(stats: ptr) -> int { return map_get(stats, "status") }
-stats_get_duration(stats: ptr) -> int { return map_get(stats, "duration") }
-stats_get_endpoint_duration(stats: ptr) -> int { return map_get(stats, "endpoint_duration") }
-stats_get_filters(stats: ptr) -> ptr { return map_get(stats, "filters") }
+stats_get_path(stats: ptr) { return map_get(stats, "path") }
+stats_get_endpoint(stats: ptr) { return map_get(stats, "endpoint") }
+stats_get_status(stats: ptr) { return map_get(stats, "status") }
+stats_get_duration(stats: ptr) { return map_get(stats, "duration") }
+stats_get_endpoint_duration(stats: ptr) { return map_get(stats, "endpoint_duration") }
+stats_get_filters(stats: ptr) { return map_get(stats, "filters") }
 
 // Accessors for filter stat entries
-filter_stat_path(fs: ptr) -> string { return map_get(fs, "path") }
-filter_stat_result(fs: ptr) -> string { return map_get(fs, "result") }
-filter_stat_duration(fs: ptr) -> int { return map_get(fs, "duration") }
+filter_stat_path(fs: ptr) { return map_get(fs, "path") }
+filter_stat_result(fs: ptr) { return map_get(fs, "result") }
+filter_stat_duration(fs: ptr) { return map_get(fs, "duration") }
 
 // Internal: record stats if callback registered
 _record_stats(srv: ptr, stats: ptr) {
@@ -504,7 +504,7 @@ ws_send_close(sock: ptr) {
 // Reads one WebSocket frame, unmasking if needed. Returns "" on close/error.
 // ---------------------------------------------------------------------------
 
-ws_read_frame(sock: ptr) -> string {
+ws_read_frame(sock: ptr) {
     // Read 2-byte header
     hdr = tcp.receive(sock, 2)
     if hdr == 0 { return "" }
