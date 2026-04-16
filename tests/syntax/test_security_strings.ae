@@ -1,0 +1,48 @@
+// Security: string escaping through the full pipeline.
+// Embedded quotes, backslashes, newlines, tabs, and percent
+// signs must survive parse → codegen → gcc → run.
+
+extern println(s: string)
+extern exit(code: int)
+
+_chk(cond: int, msg: string) {
+    if cond == 0 { println("FAIL: ${msg}"); exit(1) }
+}
+
+main() {
+    // Embedded quotes
+    q = "hello \"world\""
+    _chk(string_length(q) == 13, "quoted length")
+
+    // Backslashes
+    bs = "path\\to\\file"
+    _chk(string_length(bs) == 12, "backslash length")
+
+    // Newline and tab
+    nl = "line1\nline2"
+    _chk(string_length(nl) == 11, "newline length")
+    tb = "col1\tcol2"
+    _chk(string_length(tb) == 9, "tab length")
+
+    // Percent signs (not format specifiers)
+    pct = "100% done %s %d %n"
+    _chk(string_length(pct) == 18, "percent length")
+
+    // Empty string
+    empty = ""
+    _chk(string_length(empty) == 0, "empty length")
+
+    // String interpolation with special chars
+    name = "O'Reilly"
+    greeting = "Hello, ${name}!"
+    _chk(string_length(greeting) > 0, "interp length")
+
+    // Repeated interpolation
+    a = "x"
+    b = "${a}${a}${a}"
+    _chk(string_length(b) == 3, "triple interp")
+
+    println("PASS security strings")
+}
+
+extern string_length(s: string) -> int

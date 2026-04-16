@@ -1,0 +1,76 @@
+// Security: stress tests for the Aether compiler pipeline.
+// Deep nesting, many variables, long chains — exercises parser,
+// typechecker, and codegen with large/complex inputs.
+
+extern println(s: string)
+extern exit(code: int)
+
+_chk(cond: int, msg: string) {
+    if cond == 0 { println("FAIL: ${msg}"); exit(1) }
+}
+
+// 20-deep nested blocks
+test_deep_nesting() {
+    x = 0
+    { { { { { { { { { { { { { { { { { { { {
+        x = 1
+    } } } } } } } } } } } } } } } } } } } }
+    _chk(x == 1, "deep nesting")
+}
+
+// 50 variables in one scope
+test_many_variables() {
+    v0 = 0; v1 = 1; v2 = 2; v3 = 3; v4 = 4
+    v5 = 5; v6 = 6; v7 = 7; v8 = 8; v9 = 9
+    v10 = 10; v11 = 11; v12 = 12; v13 = 13; v14 = 14
+    v15 = 15; v16 = 16; v17 = 17; v18 = 18; v19 = 19
+    v20 = 20; v21 = 21; v22 = 22; v23 = 23; v24 = 24
+    v25 = 25; v26 = 26; v27 = 27; v28 = 28; v29 = 29
+    v30 = 30; v31 = 31; v32 = 32; v33 = 33; v34 = 34
+    v35 = 35; v36 = 36; v37 = 37; v38 = 38; v39 = 39
+    v40 = 40; v41 = 41; v42 = 42; v43 = 43; v44 = 44
+    v45 = 45; v46 = 46; v47 = 47; v48 = 48; v49 = 49
+    _chk(v0 + v49 == 49, "many vars sum")
+}
+
+// Long addition chain (200 terms)
+test_long_chain() {
+    x = 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1
+      + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1
+      + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1
+      + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1
+      + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1
+      + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1
+      + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1
+      + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1
+      + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1
+      + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1 + 1
+    _chk(x == 100, "long chain")
+}
+
+// Multiple scope levels with variables at each
+test_scope_depth() {
+    a = 1
+    {
+        b = 2
+        {
+            c = 3
+            {
+                d = 4
+                {
+                    e = 5
+                    _chk(a + b + c + d + e == 15,
+                         "scope depth sum")
+                }
+            }
+        }
+    }
+}
+
+main() {
+    test_deep_nesting()
+    test_many_variables()
+    test_long_chain()
+    test_scope_depth()
+    println("PASS security stress")
+}

@@ -329,6 +329,7 @@ int is_imported_namespace(const char* name) {
 }
 
 Symbol* lookup_qualified_symbol(SymbolTable* table, const char* qualified_name) {
+    if (!table || !qualified_name) return NULL;
     // Split qualified name on '.'
     char* name_copy = strdup(qualified_name);
     char* dot = strchr(name_copy, '.');
