@@ -6,10 +6,10 @@
 // are in .ae files under tests/syntax/ and tests/integration/.
 
 #include "../runtime/test_harness.h"
-#include "parser/lexer.h"
-#include "parser/parser.h"
-#include "analysis/typechecker.h"
-#include "ast.h"
+#include "../../compiler/parser/lexer.h"
+#include "../../compiler/parser/parser.h"
+#include "../../compiler/analysis/typechecker.h"
+#include "../../compiler/ast.h"
 #include <string.h>
 #include <stdlib.h>
 
