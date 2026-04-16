@@ -1,0 +1,9 @@
+// Probe: can a closure mutate a captured local variable?
+main() {
+    n = 0
+    inc = || { n = n + 1 }
+    call(inc)
+    call(inc)
+    call(inc)
+    println(n)
+}

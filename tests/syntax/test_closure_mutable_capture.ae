@@ -1,0 +1,51 @@
+// Test: closures mutate captured variables from the enclosing scope,
+// Ruby/Groovy-style — writes inside `|| { n = n + 1 }` are visible to
+// the outer scope rather than shadowing with a fresh local.
+//
+// Also exercises closure-in-variable: a local that holds a closure can be
+// reassigned to a different closure and `call(var, args)` dispatches to
+// whichever one is currently stored, not whichever one was first assigned.
+
+extern println(s: string)
+extern exit(code: int)
+
+main() {
+    // 1. Mutable capture: closure writes through to outer binding.
+    n = 0
+    inc = || { n = n + 1 }
+    call(inc)
+    call(inc)
+    call(inc)
+    if n != 3 {
+        println("FAIL: mutable capture did not update outer binding")
+        exit(1)
+    }
+
+    // 2. Multiple captures, read + write mixed with outer reads.
+    total = 0
+    step = 5
+    add_step = || { total = total + step }
+    call(add_step)
+    call(add_step)
+    if total != 10 {
+        println("FAIL: captured-step accumulator wrong")
+        exit(1)
+    }
+
+    // 3. Closure-as-operator: a single variable holds different closures
+    // over time; call() must dispatch to the currently-held one.
+    op = |a: int, b: int| { return a + b }
+    first = call(op, 2, 3)
+    op = |a: int, b: int| { return a * b }
+    second = call(op, 4, 5)
+    if first != 5 {
+        println("FAIL: first closure dispatch wrong")
+        exit(1)
+    }
+    if second != 20 {
+        println("FAIL: reassigned closure dispatch wrong")
+        exit(1)
+    }
+
+    println("OK closure mutable capture + reassignment")
+}

@@ -1,0 +1,8 @@
+// Test per-symbol import: bare call should resolve to module function.
+import std.os.argv0
+
+main() {
+    path = argv0()
+    print("argv0 = ")
+    println(path)
+}

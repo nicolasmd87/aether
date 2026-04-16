@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **Per-symbol imports (`import mod.sym` / `import mod (a, b)`)**: callers can now write bare `button("7")` after `import contrib.aether_ui.button` instead of the namespace-qualified `aether_ui.button("7")`. The orchestrator tries the full dotted path as a module first; if resolution fails, the trailing component is split off and treated as a selective-import symbol (Java-style tail). The existing parenthesised selective form also now exposes its symbols unqualified. Merge adds a second pass that rewrites bare-name references in user code to the module-prefixed form. Externs are always imported regardless of the selection list so merged function bodies can still call their own C bindings.
+
+- **Mutable captured variables in closures**: closures now capture outer locals by POINTER, so writes inside a closure body are visible to the enclosing scope (the Ruby/Groovy model). `n = 0; inc = || { n = n + 1 }; call(inc); call(inc)` leaves `n == 2`. Closure environment structs now store `T*` fields, the body uses `#define name (*_env->name)` so reads and writes transparently go through the outer binding, and the constructor takes `&var` at the call site. Closure body preprocessing converts `name = expr` to an AST_ASSIGNMENT when `name` is declared textually above the closure (Ruby-style "defined before the block" rule) — `v = ref_get(num)` inside a closure whose outer `v` sits later in source stays a fresh local, while `n = n + 1` and `op = fn` rewrite to capture-writes. Forward declarations are now emitted for every hoisted closure function so siblings can reference each other as arguments. Lifetime caveat: capturing a stack local still requires the closure not to outlive the enclosing frame — promoting captured variables to the heap is a follow-up. Test: `tests/syntax/test_closure_mutable_capture.ae`.
+
+- **Closure-in-variable reassignment dispatches correctly**: a local that holds a closure can be reassigned to a different closure, and `call(var, args)` dispatches through the function pointer currently stored in the variable — not whichever closure was first assigned when the variable was declared. Codegen tracks the variable→closure mapping across reassignments (both from literals and from variables carrying closures) and falls back to signature-compatible generic invocation when the variable holds more than one closure identity — or an unknown closure identity — over its lifetime. Regular closure arguments (e.g. `call(apply_op, |a,b| a+b)`) are now forwarded to the callee instead of being silently dropped; only trailing DSL-block closures (value `"trailing"`) are skipped. Replaces the opcode-dispatch idiom (`if op == 43 { ... }` for `+`, `45` for `-`, etc.) with direct closure-as-operator: `op = |a,b| { return a + b }; op = |a,b| { return a * b }; v = call(op, pv, v)`. Demonstrated by `contrib/aether_ui/example_calculator.ae` (69 lines, 11/11 AetherUIDriver tests pass) — which also drops the ref cell dance in favour of mutable captures, down from 95 lines. Test: `tests/syntax/test_closure_mutable_capture.ae`.
+
 ## [0.59.0]
 
 ### Added

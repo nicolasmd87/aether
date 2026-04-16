@@ -1,0 +1,13 @@
+// Probe: can a closure be stored in a local variable, then reassigned to
+// another closure and invoked (Ruby-style `@previous.send(@op, @number)`
+// equivalent)?
+main() {
+    op = |a: int, b: int| { return a + b }
+    r1 = call(op, 2, 3)
+
+    op = |a: int, b: int| { return a * b }
+    r2 = call(op, 4, 5)
+
+    println(r1)
+    println(r2)
+}

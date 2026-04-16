@@ -1200,13 +1200,15 @@ int typecheck_program(ASTNode* program) {
                 // Process import and register alias if present
                 const char* module_path = child->value;
 
-                // Check if this import has an alias (last child is identifier)
+                // Check if this import has an alias (last child is identifier
+                // annotated by the parser as "module_alias" to distinguish from
+                // selective-import symbols, which are also AST_IDENTIFIER children).
                 if (child->child_count > 0) {
                     ASTNode* last_child = child->children[child->child_count - 1];
-                    // Check if last child is the alias (an identifier node)
-                    if (last_child && last_child->type == AST_IDENTIFIER) {
+                    if (last_child && last_child->type == AST_IDENTIFIER &&
+                        last_child->annotation &&
+                        strcmp(last_child->annotation, "module_alias") == 0) {
                         const char* alias = last_child->value;
-                        // Register the alias in symbol table
                         add_module_alias(global_table, alias, module_path);
                     }
                 }
@@ -1276,28 +1278,15 @@ int typecheck_program(ASTNode* program) {
                         for (int j = 0; j < mod_ast->child_count; j++) {
                             ASTNode* decl = mod_ast->children[j];
                             if (decl->type == AST_EXTERN_FUNCTION && decl->value) {
-                                // Check if selective import - only import specified functions
-                                int should_import = 1;
-                                if (child->child_count > 0) {
-                                    ASTNode* first = child->children[0];
-                                    if (first && first->type == AST_IDENTIFIER) {
-                                        should_import = 0;
-                                        for (int k = 0; k < child->child_count; k++) {
-                                            ASTNode* sel = child->children[k];
-                                            if (sel && sel->type == AST_IDENTIFIER &&
-                                                strcmp(sel->value, decl->value) == 0) {
-                                                should_import = 1;
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
-
-                                if (should_import) {
-                                    if (!lookup_symbol_local(global_table, decl->value)) {
-                                        add_symbol(global_table, decl->value,
-                                                   clone_type(decl->node_type), 0, 1, 0);
-                                    }
+                                // Always import externs regardless of selection.
+                                // Externs are C bindings that merged Aether
+                                // functions may call internally — filtering
+                                // them out breaks transitive references.
+                                // The selective filter applies at qualified-call
+                                // sites via is_selective_import_blocked().
+                                if (!lookup_symbol_local(global_table, decl->value)) {
+                                    add_symbol(global_table, decl->value,
+                                               clone_type(decl->node_type), 0, 1, 0);
                                 }
                             }
                             // AST_FUNCTION_DEFINITION handled by module_merge_into_program()
@@ -1362,12 +1351,15 @@ int typecheck_program(ASTNode* program) {
                         }
                     }
                 }
-            }
 
-            // Store alias for AST rewriting: "release" -> "build.release"
-            char dotted[256];
-            snprintf(dotted, sizeof(dotted), "%s.%s", ns, short_name);
-            add_import_alias(short_name, dotted);
+                // Store alias for AST rewriting: "release" -> "build.release".
+                // Only register when a prefixed symbol actually exists — otherwise
+                // we'd rewrite calls to externs (which keep their bare names) into
+                // nonexistent `ns_extern` forms.
+                char dotted[256];
+                snprintf(dotted, sizeof(dotted), "%s.%s", ns, short_name);
+                add_import_alias(short_name, dotted);
+            }
         }
     }
 

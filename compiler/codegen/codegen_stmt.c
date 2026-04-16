@@ -598,6 +598,23 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                         }
                         fprintf(gen->output, ";\n");
                     }
+                    // Track closure reassignment so `call(var, args...)` downstream
+                    // can detect the variable may hold different closures and
+                    // fall back to signature-compatible generic invocation.
+                    if (stmt->child_count > 0 && stmt->children[0] &&
+                        stmt->children[0]->type == AST_CLOSURE &&
+                        stmt->children[0]->value && stmt->value) {
+                        int cid = atoi(stmt->children[0]->value);
+                        if (gen->closure_var_count >= gen->closure_var_capacity) {
+                            gen->closure_var_capacity = gen->closure_var_capacity ?
+                                gen->closure_var_capacity * 2 : 16;
+                            gen->closure_var_map = realloc(gen->closure_var_map,
+                                gen->closure_var_capacity * sizeof(gen->closure_var_map[0]));
+                        }
+                        gen->closure_var_map[gen->closure_var_count].var_name = strdup(stmt->value);
+                        gen->closure_var_map[gen->closure_var_count].closure_id = cid;
+                        gen->closure_var_count++;
+                    }
                     // Handle trailing blocks on reassignment (same as first declaration)
                     if (stmt->child_count > 0 && stmt->children[0] &&
                         stmt->children[0]->type == AST_FUNCTION_CALL) {
@@ -1010,6 +1027,41 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                 fprintf(gen->output, " = ");
                 generate_expression(gen, rhs);
                 fprintf(gen->output, ";\n");
+
+                // If this assignment writes to a variable that's already known
+                // to hold a closure (e.g. `op = fn` where `fn` is a param), record
+                // it. If the RHS is a new closure literal we record THAT closure's
+                // id; otherwise we record a sentinel (-1) so downstream `call(op,
+                // args...)` sees an ambiguous map and falls back to signature-
+                // compatible generic invocation instead of dispatching through the
+                // originally-assigned closure's specific function pointer.
+                if (lhs && lhs->type == AST_IDENTIFIER && lhs->value) {
+                    int already_tracked = 0;
+                    for (int ci = 0; ci < gen->closure_var_count; ci++) {
+                        if (gen->closure_var_map[ci].var_name &&
+                            strcmp(gen->closure_var_map[ci].var_name, lhs->value) == 0) {
+                            already_tracked = 1;
+                            break;
+                        }
+                    }
+                    if (already_tracked) {
+                        int new_cid;
+                        if (rhs && rhs->type == AST_CLOSURE && rhs->value) {
+                            new_cid = atoi(rhs->value);
+                        } else {
+                            new_cid = -1;  // sentinel: holds an unknown closure at runtime
+                        }
+                        if (gen->closure_var_count >= gen->closure_var_capacity) {
+                            gen->closure_var_capacity = gen->closure_var_capacity ?
+                                gen->closure_var_capacity * 2 : 16;
+                            gen->closure_var_map = realloc(gen->closure_var_map,
+                                gen->closure_var_capacity * sizeof(gen->closure_var_map[0]));
+                        }
+                        gen->closure_var_map[gen->closure_var_count].var_name = strdup(lhs->value);
+                        gen->closure_var_map[gen->closure_var_count].closure_id = new_cid;
+                        gen->closure_var_count++;
+                    }
+                }
 
                 // Handle trailing blocks on the RHS function call
                 // Same logic as VAR_DECLARATION trailing block handler

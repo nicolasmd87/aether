@@ -2,7 +2,11 @@
 
 // ---- Closure support ----
 
-// Collect identifiers referenced in an AST subtree
+// Collect identifiers referenced in an AST subtree, stopping at nested
+// closures. A nested closure's params and body introduce names in a new
+// scope; they must not be counted as identifier references of the enclosing
+// closure, otherwise the enclosing closure would try to capture names like
+// the inner closure's `a`, `b` params that don't exist in the outer scope.
 static void collect_identifiers(ASTNode* node, char*** names, int* count, int* cap) {
     if (!node) return;
     if (node->type == AST_IDENTIFIER && node->value) {
@@ -16,6 +20,7 @@ static void collect_identifiers(ASTNode* node, char*** names, int* count, int* c
         }
         (*names)[(*count)++] = strdup(node->value);
     }
+    if (node->type == AST_CLOSURE) return;  // inner closures have their own scope
     for (int i = 0; i < node->child_count; i++) {
         collect_identifiers(node->children[i], names, count, cap);
     }
@@ -33,7 +38,7 @@ static int is_closure_param(ASTNode* closure, const char* name) {
     return 0;
 }
 
-// Check if a name is declared locally inside a block
+// Check if a name is declared locally inside a block (top level only)
 static int is_local_var(ASTNode* block, const char* name) {
     if (!block) return 0;
     for (int i = 0; i < block->child_count; i++) {
@@ -45,6 +50,98 @@ static int is_local_var(ASTNode* block, const char* name) {
         }
     }
     return 0;
+}
+
+// Check if a name appears in a flat array
+static int name_in_array(const char** names, int count, const char* target) {
+    if (!target) return 0;
+    for (int i = 0; i < count; i++) {
+        if (names[i] && strcmp(names[i], target) == 0) return 1;
+    }
+    return 0;
+}
+
+// Recursively collect local-variable and const-declaration names at any depth
+// within a function body, along with the source line where each was declared.
+// Used to seed closure-capture detection with the set of names the enclosing
+// function binds BEFORE a given closure — so a closure that writes `n = n + 1`
+// can recognise `n` as a capture, while a later closure whose body does
+// `v = ref_get(num)` still treats that `v` as a fresh local if the outer
+// `v` declaration sits textually AFTER the closure.
+static void collect_all_declared_names(ASTNode* node, const char** names,
+                                        int* lines, int* count, int max) {
+    if (!node || *count >= max) return;
+    if ((node->type == AST_VARIABLE_DECLARATION || node->type == AST_CONST_DECLARATION ||
+         node->type == AST_PATTERN_VARIABLE) &&
+        node->value) {
+        if (!name_in_array(names, *count, node->value)) {
+            names[*count] = node->value;
+            lines[*count] = node->line;
+            (*count)++;
+        }
+    }
+    // Don't descend into nested closures — they have their own scope
+    if (node->type == AST_CLOSURE) return;
+    for (int i = 0; i < node->child_count; i++) {
+        collect_all_declared_names(node->children[i], names, lines, count, max);
+    }
+}
+
+// Filter an (names, lines) list down to names whose decl_line < limit_line.
+// This gives a closure at source line L the set of outer bindings that were
+// textually declared BEFORE L — matching Ruby/Groovy block semantics where
+// writing to a name captures iff the name was already in scope when the
+// block was defined.
+static int filter_names_before_line(const char** names, const int* lines, int count,
+                                     int limit_line,
+                                     const char** out_names, int out_max) {
+    int n = 0;
+    for (int i = 0; i < count && n < out_max; i++) {
+        if (lines[i] < limit_line && names[i]) {
+            out_names[n++] = names[i];
+        }
+    }
+    return n;
+}
+
+// Rewrite AST_VARIABLE_DECLARATION nodes inside a closure body to assignment
+// (AST_ASSIGNMENT) when the LHS name is bound in the enclosing scope. The
+// caller filters `outer_names` to only names whose outer declaration was
+// textually above the closure — so a `v = ref_get(num)` inside a closure
+// whose outer `v` is declared later in source stays a fresh local, while
+// `op = fn` and `n = n + 1` both rewrite to assignments that write through
+// to the captured outer binding.
+static void rewrite_decls_to_assigns(ASTNode* node, const char** outer_names,
+                                      int outer_count) {
+    if (!node) return;
+    if (node->type == AST_CLOSURE) return;  // nested closures handle themselves
+
+    if (node->type == AST_VARIABLE_DECLARATION && node->value &&
+        name_in_array(outer_names, outer_count, node->value) &&
+        node->child_count > 0) {
+        // children[0] is the RHS expression; preserve it as child[1]. Prepend
+        // a fresh AST_IDENTIFIER carrying the original name as child[0] (LHS)
+        // and retype the node to AST_ASSIGNMENT so codegen_stmt picks it up
+        // as a standalone `lhs = rhs;` statement.
+        ASTNode* lhs = create_ast_node(AST_IDENTIFIER, node->value,
+                                        node->line, node->column);
+        ASTNode** new_children = malloc(sizeof(ASTNode*) * (node->child_count + 1));
+        new_children[0] = lhs;
+        for (int i = 0; i < node->child_count; i++) {
+            new_children[i + 1] = node->children[i];
+        }
+        free(node->children);
+        node->children = new_children;
+        node->child_count++;
+
+        node->type = AST_ASSIGNMENT;
+        free(node->value);
+        node->value = NULL;
+    }
+
+    for (int i = 0; i < node->child_count; i++) {
+        rewrite_decls_to_assigns(node->children[i], outer_names, outer_count);
+    }
 }
 
 // Built-in function names that should not be treated as captures
@@ -61,15 +158,39 @@ static int is_builtin_name(const char* name) {
     return 0;
 }
 
-// Discover closures in an AST subtree and register them with the codegen
-void discover_closures(CodeGenerator* gen, ASTNode* node) {
+// Internal variant that threads the enclosing function's binding set plus
+// each binding's declaration line through the recursion. Line numbers let
+// closure-capture detection honour source order: a closure only captures
+// outer bindings that were textually declared above it, matching Ruby/Groovy
+// "defined before the block" semantics.
+static void discover_closures_impl(CodeGenerator* gen, ASTNode* node,
+                                    const char** outer_names,
+                                    const int* outer_lines,
+                                    int outer_count) {
     if (!node) return;
+
+    // When entering a function-level scope, compute its binding set and use
+    // THAT as the outer scope for any closures nested inside. Nested
+    // functions shadow the outer function's bindings.
+    if (node->type == AST_FUNCTION_DEFINITION ||
+        node->type == AST_MAIN_FUNCTION ||
+        node->type == AST_BUILDER_FUNCTION) {
+        const char* fn_names[256];
+        int fn_lines[256];
+        int fn_count = 0;
+        collect_all_declared_names(node, fn_names, fn_lines, &fn_count, 256);
+        for (int i = 0; i < node->child_count; i++) {
+            discover_closures_impl(gen, node->children[i], fn_names, fn_lines, fn_count);
+        }
+        return;
+    }
+
     if (node->type == AST_CLOSURE) {
         // Skip trailing blocks — they are inlined at the call site, not hoisted
         if (node->value && strcmp(node->value, "trailing") == 0) {
             // Still recurse into children to find nested non-trailing closures
             for (int i = 0; i < node->child_count; i++) {
-                discover_closures(gen, node->children[i]);
+                discover_closures_impl(gen, node->children[i], outer_names, outer_lines, outer_count);
             }
             return;
         }
@@ -88,6 +209,19 @@ void discover_closures(CodeGenerator* gen, ASTNode* node) {
                 break;
             }
         }
+
+        // Filter outer bindings to the ones declared textually above this
+        // closure. Writes inside the body to names in the filtered set
+        // become captures; later-declared names remain fresh locals.
+        const char* pre_names[256];
+        int pre_count = filter_names_before_line(outer_names, outer_lines,
+                                                  outer_count, node->line,
+                                                  pre_names, 256);
+
+        // Rewrite outer-name "decl" writes to real assignments BEFORE
+        // scanning for captures, so the write sites no longer look like
+        // fresh local declarations that would shadow the outer binding.
+        rewrite_decls_to_assigns(body, pre_names, pre_count);
 
         // Collect all identifiers in the body
         char** all_ids = NULL;
@@ -127,8 +261,12 @@ void discover_closures(CodeGenerator* gen, ASTNode* node) {
 
     // Recurse into children (including nested closures)
     for (int i = 0; i < node->child_count; i++) {
-        discover_closures(gen, node->children[i]);
+        discover_closures_impl(gen, node->children[i], outer_names, outer_lines, outer_count);
     }
+}
+
+void discover_closures(CodeGenerator* gen, ASTNode* node) {
+    discover_closures_impl(gen, node, NULL, NULL, 0);
 }
 
 // Look up a variable's C type by searching the program AST
@@ -167,23 +305,58 @@ static const char* lookup_var_c_type(CodeGenerator* gen, const char* var_name) {
 
 // Emit all hoisted closure environment structs and static functions
 void emit_closure_definitions(CodeGenerator* gen) {
+    // Forward-declare every closure function so sibling closures can
+    // reference each other (e.g. a closure passed as an argument to a call
+    // inside another closure that was defined later in source order).
+    // Without this, C emits an implicit-declaration error at the call site.
+    for (int ci = 0; ci < gen->closure_count; ci++) {
+        int id = gen->closures[ci].id;
+        ASTNode* closure = gen->closures[ci].closure_node;
+        ASTNode* body_check = NULL;
+        for (int i = closure->child_count - 1; i >= 0; i--) {
+            if (closure->children[i] && closure->children[i]->type == AST_BLOCK) {
+                body_check = closure->children[i];
+                break;
+            }
+        }
+        const char* ret_type = (body_check && has_return_value(body_check)) ? "int" : "void";
+        fprintf(gen->output, "typedef struct _closure_env_%d _closure_env_%d;\n", id, id);
+        fprintf(gen->output, "static %s _closure_fn_%d(_closure_env_%d* _env", ret_type, id, id);
+        for (int i = 0; i < closure->child_count; i++) {
+            ASTNode* p = closure->children[i];
+            if (p && p->type == AST_CLOSURE_PARAM) {
+                const char* ptype = "int";
+                if (p->node_type) {
+                    ptype = get_c_type(p->node_type);
+                }
+                fprintf(gen->output, ", %s %s", ptype, safe_c_name(p->value));
+            }
+        }
+        fprintf(gen->output, ");\n");
+    }
+    fprintf(gen->output, "\n");
+
     for (int ci = 0; ci < gen->closure_count; ci++) {
         int id = gen->closures[ci].id;
         ASTNode* closure = gen->closures[ci].closure_node;
         char** captures = gen->closures[ci].captures;
         int cap_count = gen->closures[ci].capture_count;
 
-        // Emit environment struct (even if empty, for uniform calling convention)
-        fprintf(gen->output, "typedef struct {\n");
+        // Emit environment struct (even if empty, for uniform calling convention).
+        // Captured fields are stored as POINTERS to the outer variable so writes
+        // from the closure body are visible in the enclosing scope. This trades
+        // a dangling-pointer footgun (closure outliving its creator's frame) for
+        // the Ruby/Groovy semantics users expect of `|x| { n = n + 1 }`.
+        fprintf(gen->output, "struct _closure_env_%d {\n", id);
         if (cap_count == 0) {
             fprintf(gen->output, "    int _dummy;\n");
         } else {
             for (int i = 0; i < cap_count; i++) {
                 const char* ctype = lookup_var_c_type(gen, captures[i]);
-                fprintf(gen->output, "    %s %s;\n", ctype, safe_c_name(captures[i]));
+                fprintf(gen->output, "    %s* %s;\n", ctype, safe_c_name(captures[i]));
             }
         }
-        fprintf(gen->output, "} _closure_env_%d;\n\n", id);
+        fprintf(gen->output, "};\n\n");
 
         // Determine return type: check if body has return statements
         int has_return = 0;
@@ -213,11 +386,24 @@ void emit_closure_definitions(CodeGenerator* gen) {
         }
         fprintf(gen->output, ") {\n");
 
-        // Emit capture aliases (local vars that reference env fields)
+        // Emit capture aliases as macros that deref the env pointer. This lets
+        // every bare identifier reference in the body — read or write — go
+        // through the outer variable without the statement codegen needing to
+        // know anything about closures. Seed the "declared vars" tracker so
+        // `n = expr` inside the body emits as assignment, not a fresh int decl.
+        clear_declared_vars(gen);
         for (int i = 0; i < cap_count; i++) {
-            const char* ctype = lookup_var_c_type(gen, captures[i]);
-            fprintf(gen->output, "    %s %s = _env->%s;\n",
-                    ctype, safe_c_name(captures[i]), safe_c_name(captures[i]));
+            fprintf(gen->output, "#define %s (*_env->%s)\n",
+                    safe_c_name(captures[i]), safe_c_name(captures[i]));
+            mark_var_declared(gen, captures[i]);
+        }
+        // Mark closure parameters as declared too — they're in scope via the
+        // C function signature, so any `param = expr` is an assignment.
+        for (int i = 0; i < closure->child_count; i++) {
+            ASTNode* p = closure->children[i];
+            if (p && p->type == AST_CLOSURE_PARAM && p->value) {
+                mark_var_declared(gen, p->value);
+            }
         }
 
         // Find and emit body
@@ -241,16 +427,24 @@ void emit_closure_definitions(CodeGenerator* gen) {
             gen->indent_level = 0;
         }
 
+        // Undefine the capture macros so the next hoisted closure sees a
+        // clean namespace and any outer code emitted after this block
+        // doesn't accidentally pick up the macro definitions.
+        for (int i = 0; i < cap_count; i++) {
+            fprintf(gen->output, "#undef %s\n", safe_c_name(captures[i]));
+        }
+        clear_declared_vars(gen);
         fprintf(gen->output, "}\n\n");
 
-        // Emit MSVC-compatible closure constructor function (avoids statement expressions)
+        // Emit MSVC-compatible closure constructor function (avoids statement expressions).
+        // Params are POINTERS to the outer variables (see env-struct comment).
         if (cap_count > 0) {
             fprintf(gen->output, "#if !AETHER_GCC_COMPAT\n");
             fprintf(gen->output, "static _AeClosure _aether_make_closure_%d(", id);
             for (int i = 0; i < cap_count; i++) {
                 if (i > 0) fprintf(gen->output, ", ");
                 const char* ctype = lookup_var_c_type(gen, captures[i]);
-                fprintf(gen->output, "%s %s", ctype, safe_c_name(captures[i]));
+                fprintf(gen->output, "%s* %s", ctype, safe_c_name(captures[i]));
             }
             fprintf(gen->output, ") {\n");
             fprintf(gen->output, "    _closure_env_%d* _e = malloc(sizeof(_closure_env_%d));\n", id, id);
@@ -1089,18 +1283,34 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 // Looks up the closure's hoisted function signature and calls through it
                 else if (strcmp(func_name, "call") == 0 && expr->child_count >= 1) {
                     ASTNode* closure_arg = expr->children[0];
-                    // Look up the closure ID from the variable name
+                    // Look up the closure ID from the variable name. If the
+                    // variable was reassigned to a DIFFERENT closure (Ruby's
+                    // `@op = :+, @op = :*` idiom), the typed direct call is
+                    // unsafe — fall through to the generic function-pointer
+                    // invocation which is signature-compatible regardless of
+                    // which closure instance `closure_arg` currently holds.
                     int found_id = -1;
+                    int ambiguous = 0;
                     if (closure_arg && closure_arg->type == AST_IDENTIFIER && closure_arg->value) {
                         for (int ci = 0; ci < gen->closure_var_count; ci++) {
                             if (strcmp(gen->closure_var_map[ci].var_name, closure_arg->value) == 0) {
-                                found_id = gen->closure_var_map[ci].closure_id;
-                                break;
+                                int cid = gen->closure_var_map[ci].closure_id;
+                                // -1 is a sentinel recorded when the variable was
+                                // reassigned from a non-literal closure source
+                                // (e.g. `op = fn` where fn is a param). We can't
+                                // know the runtime closure identity from the map
+                                // any more — force the fallback.
+                                if (cid < 0) {
+                                    ambiguous = 1;
+                                } else if (found_id >= 0 && found_id != cid) {
+                                    ambiguous = 1;
+                                }
+                                if (cid >= 0) found_id = cid;
                             }
                         }
                     }
 
-                    if (found_id >= 0) {
+                    if (found_id >= 0 && !ambiguous) {
                         // Generate typed call: _closure_fn_N((_closure_env_N*)closure.env, args...)
                         fprintf(gen->output, "_closure_fn_%d((_closure_env_%d*)",
                                 found_id, found_id);
@@ -1108,7 +1318,12 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         fprintf(gen->output, ".env");
                         for (int i = 1; i < expr->child_count; i++) {
                             ASTNode* arg = expr->children[i];
-                            if (arg && arg->type == AST_CLOSURE) continue;
+                            // Skip only TRAILING closures (DSL block form).
+                            // Regular closure values passed as arguments
+                            // (e.g. `call(apply_op, |a,b| a+b)`) must be
+                            // forwarded to the target.
+                            if (arg && arg->type == AST_CLOSURE &&
+                                arg->value && strcmp(arg->value, "trailing") == 0) continue;
                             fprintf(gen->output, ", ");
                             generate_expression(gen, arg);
                         }
@@ -1123,10 +1338,15 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         fprintf(gen->output, "((%s(*)(void*", ret);
                         for (int i = 1; i < expr->child_count; i++) {
                             ASTNode* arg = expr->children[i];
-                            if (arg && arg->type == AST_CLOSURE) continue;
-                            // Infer arg type
+                            // Skip only TRAILING closures (DSL block form).
+                            if (arg && arg->type == AST_CLOSURE &&
+                                arg->value && strcmp(arg->value, "trailing") == 0) continue;
+                            // Closure-valued arguments lower to _AeClosure.
+                            // All other types go through the regular inference.
                             const char* atype = "int";
-                            if (arg && arg->node_type) {
+                            if (arg && arg->type == AST_CLOSURE) {
+                                atype = "_AeClosure";
+                            } else if (arg && arg->node_type) {
                                 atype = get_c_type(arg->node_type);
                             }
                             fprintf(gen->output, ", %s", atype);
@@ -1138,7 +1358,12 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         fprintf(gen->output, ".env");
                         for (int i = 1; i < expr->child_count; i++) {
                             ASTNode* arg = expr->children[i];
-                            if (arg && arg->type == AST_CLOSURE) continue;
+                            // Skip only TRAILING closures (DSL block form).
+                            // Regular closure values passed as arguments
+                            // (e.g. `call(apply_op, |a,b| a+b)`) must be
+                            // forwarded to the target.
+                            if (arg && arg->type == AST_CLOSURE &&
+                                arg->value && strcmp(arg->value, "trailing") == 0) continue;
                             fprintf(gen->output, ", ");
                             generate_expression(gen, arg);
                         }
@@ -1657,11 +1882,13 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 fprintf(gen->output, "(_AeClosure){ .fn = (void(*)(void))_closure_fn_%d, .env = NULL }",
                         id);
             } else {
-                // Heap-allocate the environment (portable, no use-after-free)
+                // Heap-allocate the environment (portable, no use-after-free).
+                // Each capture is stored as &outer_var so the closure body
+                // sees and writes through the outer binding.
                 fprintf(gen->output, "\n#if AETHER_GCC_COMPAT\n");
                 fprintf(gen->output, "({ _closure_env_%d* _e = malloc(sizeof(_closure_env_%d)); ", id, id);
                 for (int i = 0; i < cap_count; i++) {
-                    fprintf(gen->output, "_e->%s = %s; ", safe_c_name(captures[i]), safe_c_name(captures[i]));
+                    fprintf(gen->output, "_e->%s = &%s; ", safe_c_name(captures[i]), safe_c_name(captures[i]));
                 }
                 fprintf(gen->output, "(_AeClosure){ .fn = (void(*)(void))_closure_fn_%d, .env = _e }; })", id);
                 fprintf(gen->output, "\n#else\n");
@@ -1669,7 +1896,7 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 fprintf(gen->output, "_aether_make_closure_%d(", id);
                 for (int i = 0; i < cap_count; i++) {
                     if (i > 0) fprintf(gen->output, ", ");
-                    fprintf(gen->output, "%s", safe_c_name(captures[i]));
+                    fprintf(gen->output, "&%s", safe_c_name(captures[i]));
                 }
                 fprintf(gen->output, ")");
                 fprintf(gen->output, "\n#endif\n");

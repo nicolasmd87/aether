@@ -1722,6 +1722,9 @@ ASTNode* parse_import_statement(Parser* parser) {
         if (alias) {
             ASTNode* alias_node = create_ast_node(AST_IDENTIFIER, alias->value,
                                                  alias->line, alias->column);
+            // Mark so the typechecker can tell aliases from selective imports,
+            // which share AST_IDENTIFIER children of the import statement.
+            alias_node->annotation = strdup("module_alias");
             // Store alias as last child
             add_child(import_stmt, alias_node);
         }
