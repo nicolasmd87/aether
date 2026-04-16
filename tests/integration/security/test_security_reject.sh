@@ -151,7 +151,7 @@ run_accept "10000-char string literal" /tmp/ae_sec_longstr.ae
 # ---------------------------------------------------------------
 cat > /tmp/ae_sec_quotes.ae << 'EOF'
 extern println(s: string)
-extern string_length(s: string) -> int
+import std.string
 extern exit(code: int)
 main() {
     q = "hello \"world\""
@@ -170,7 +170,7 @@ run_accept_and_exec "string embedded quotes" \
 # ---------------------------------------------------------------
 cat > /tmp/ae_sec_backslash.ae << 'EOF'
 extern println(s: string)
-extern string_length(s: string) -> int
+import std.string
 extern exit(code: int)
 main() {
     bs = "path\\to\\file"
@@ -189,7 +189,7 @@ run_accept_and_exec "string backslashes" \
 # ---------------------------------------------------------------
 cat > /tmp/ae_sec_percent.ae << 'EOF'
 extern println(s: string)
-extern string_length(s: string) -> int
+import std.string
 extern exit(code: int)
 main() {
     pct = "100% done %s %d"
@@ -252,7 +252,7 @@ run_accept_and_exec "50 variables" \
 # ---------------------------------------------------------------
 cat > /tmp/ae_sec_interp.ae << 'EOF'
 extern println(s: string)
-extern string_length(s: string) -> int
+import std.string
 extern exit(code: int)
 main() {
     name = "O'Reilly"

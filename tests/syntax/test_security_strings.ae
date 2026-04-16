@@ -2,6 +2,8 @@
 // Embedded quotes, backslashes, newlines, tabs, and percent
 // signs must survive parse → codegen → gcc → run.
 
+import std.string
+
 extern println(s: string)
 extern exit(code: int)
 
@@ -45,4 +47,3 @@ main() {
     println("PASS security strings")
 }
 
-extern string_length(s: string) -> int
