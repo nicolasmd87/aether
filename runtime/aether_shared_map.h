@@ -45,4 +45,8 @@ void aether_shared_map_read_outputs_from_shm(AetherSharedMap* map, const char* s
 // Clean up shm
 void aether_shared_map_unlink_shm(const char* shm_name);
 
+// Token-based cross-process serialization (convenience wrappers)
+char* aether_shared_map_to_shm_by_token(uint64_t token);
+void aether_shared_map_read_outputs_from_shm_by_token(uint64_t token, const char* shm_name);
+
 #endif

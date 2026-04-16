@@ -268,9 +268,23 @@ void aether_shared_map_read_outputs_from_shm(AetherSharedMap* map, const char* s
 void aether_shared_map_unlink_shm(const char* shm_name) {
     if (shm_name) shm_unlink(shm_name);
 }
+
+char* aether_shared_map_to_shm_by_token(uint64_t token) {
+    AetherSharedMap* map = find_by_token(token);
+    if (!map) return NULL;
+    return aether_shared_map_to_shm(map);
+}
+
+void aether_shared_map_read_outputs_from_shm_by_token(uint64_t token, const char* shm_name) {
+    AetherSharedMap* map = find_by_token(token);
+    if (!map) return;
+    aether_shared_map_read_outputs_from_shm(map, shm_name);
+}
 #else
 // Non-POSIX stubs
 char* aether_shared_map_to_shm(AetherSharedMap* map) { (void)map; return NULL; }
 void aether_shared_map_read_outputs_from_shm(AetherSharedMap* map, const char* shm_name) { (void)map; (void)shm_name; }
 void aether_shared_map_unlink_shm(const char* shm_name) { (void)shm_name; }
+char* aether_shared_map_to_shm_by_token(uint64_t token) { (void)token; return NULL; }
+void aether_shared_map_read_outputs_from_shm_by_token(uint64_t token, const char* shm_name) { (void)token; (void)shm_name; }
 #endif

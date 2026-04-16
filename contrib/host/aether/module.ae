@@ -1,0 +1,56 @@
+// std.host.aether — Aether-hosts-Aether Sandbox Module
+//
+// Compiles and runs an Aether script as a sandboxed subprocess.
+// The child process runs with LD_PRELOAD=libaether_sandbox.so so its
+// libc calls (connect, open, execve, getenv) are intercepted and
+// checked against the grant list.  Communication with the child
+// happens via shared memory (aether_shared_map).
+//
+// Unlike the Lua/Python/Ruby host modules which embed an interpreter
+// in-process, this module launches a separate process — because
+// Aether is compiled, not interpreted.  The sandbox enforcement is
+// at the OS level (LD_PRELOAD), not the language level.
+//
+// Usage:
+//   import std.host.aether
+//
+//   worker = sandbox("worker") {
+//       grant_fs_read("/etc/app/config.yaml")
+//       grant_env("PRICING_VERSION")
+//   }
+//   aether.run_sandboxed(worker, "rules/pricing.ae")
+//   aether.run_sandboxed_with_map(worker, "rules/pricing.ae", shared_map_token)
+
+// Compile an Aether script to an executable.
+// Returns: 0 on success, -1 on compile error.
+// Output binary is placed at out_path.
+extern aether_host_compile(script_path: string, out_path: string) -> int
+
+// Run a compiled Aether binary in a sandboxed subprocess.
+// Uses aether_spawn_sandboxed() — grants are serialized to POSIX
+// shared memory, LD_PRELOAD is set automatically.
+// Returns: child exit code (0 = success).
+extern aether_host_run_sandboxed(perms: ptr, binary_path: string) -> int
+
+// Run an Aether script (compile + run) in a sandboxed subprocess.
+// Convenience wrapper: compiles to a temp binary, runs it sandboxed.
+// Returns: child exit code (0 = success).
+extern aether_host_run_script_sandboxed(perms: ptr, script_path: string) -> int
+
+// Run with shared map: the child can read inputs and write outputs
+// via aether_map_get/aether_map_put.  The map is serialized to
+// shared memory before launch and read back after the child exits.
+// Returns: child exit code (0 = success).
+extern aether_host_run_sandboxed_with_map(perms: ptr, binary_path: string, map_token: int) -> int
+extern aether_host_run_script_sandboxed_with_map(
+    perms: ptr, script_path: string, map_token: int) -> int
+
+// Run without sandbox (full access).  Still a subprocess — useful for
+// testing or trusted scripts that need unrestricted access.
+extern aether_host_run(binary_path: string) -> int
+extern aether_host_run_script(script_path: string) -> int
+
+// Capture stdout from a sandboxed run as a string.
+// Returns: child's stdout output, or "" on error.
+extern aether_host_capture_sandboxed(perms: ptr, binary_path: string) -> string
+extern aether_host_capture_script_sandboxed(perms: ptr, script_path: string) -> string
