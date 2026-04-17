@@ -13,15 +13,15 @@ main() {
             }
 
             // Echo the message back 3 times
-            web_socket("/eee") |message: string, sender: ptr, ctx: ptr| {
-                ws_send_frame(sender, "Server sent: ${message}-1")
-                ws_send_frame(sender, "Server sent: ${message}-2")
-                ws_send_frame(sender, "Server sent: ${message}-3")
+            web_socket("/eee") |msg: string, sender: ptr, ctx: ptr| {
+                ws_send_frame(sender, "Server sent: ${msg}-1")
+                ws_send_frame(sender, "Server sent: ${msg}-2")
+                ws_send_frame(sender, "Server sent: ${msg}-3")
             }
         }
 
-        web_socket("/echo") |message: string, sender: ptr, ctx: ptr| {
-            ws_send_frame(sender, "Echo: ${message}")
+        web_socket("/echo") |msg: string, sender: ptr, ctx: ptr| {
+            ws_send_frame(sender, "Echo: ${msg}")
         }
 
         end_point(GET, "/") |req: ptr, res: ptr, ctx: ptr| {

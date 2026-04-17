@@ -722,7 +722,7 @@ sse_handle_client(client: ptr, sse_handlers: ptr) {
     for (i = 0; i < n_sse; i++) {
         entry = list.get(sse_handlers, i)
         entry_path = map_get(entry, "path")
-        if str_eq(req_path, entry_path) == 1 {
+        if (req_path == entry_path) {
             handler = unbox_closure(map_get(entry, "handler"))
         }
     }

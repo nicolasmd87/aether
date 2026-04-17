@@ -10,7 +10,7 @@ main() {
         path("/foo") {
             filter(GET, "/.*") |req: ptr, res: ptr, ctx: ptr| {
                 hdr = request_get_header(req, "sucks")
-                if str_eq(hdr, "") == 0 {
+                if (hdr != "") {
                     response_write_status(res, "Access Denied", 403)
                     return STOP
                 }
