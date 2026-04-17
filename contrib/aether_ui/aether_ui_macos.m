@@ -298,9 +298,15 @@ static void retain_target(id obj) {
 
 // Default low content-hugging priority so buttons fill horizontal space in
 // hstacks (matching GTK4's grid-like look on single-char button rows).
+// NSBezelStyleRegularSquare also makes the button render edge-to-edge inside
+// its frame — AppKit's default rounded bezel has a fixed intrinsic height and
+// refuses to stretch, leaving wasted space in tall cells (calculator grid).
 static void configure_button(NSButton* btn) {
     [btn setContentHuggingPriority:200
                     forOrientation:NSLayoutConstraintOrientationHorizontal];
+    [btn setContentHuggingPriority:200
+                    forOrientation:NSLayoutConstraintOrientationVertical];
+    [btn setBezelStyle:NSBezelStyleRegularSquare];
 }
 
 int aether_ui_button_create(const char* label, void* boxed_closure) {
@@ -347,6 +353,10 @@ int aether_ui_vstack_create(int spacing) {
     [stack setOrientation:NSUserInterfaceLayoutOrientationVertical];
     [stack setSpacing:spacing];
     [stack setAlignment:NSLayoutAttributeLeading];
+    // Fill distribution: vertical slack goes to children by hugging priority
+    // so spacer() absorbs most of it and hstack rows grow to fill leftover
+    // — matches GTK4's box behaviour.
+    [stack setDistribution:NSStackViewDistributionFill];
     [stack setTranslatesAutoresizingMaskIntoConstraints:NO];
     return register_widget_typed((__bridge void*)stack, AUI_VSTACK);
 }
@@ -360,6 +370,10 @@ int aether_ui_hstack_create(int spacing) {
     // according to their content-hugging priority. Buttons (set to 200 at
     // creation) absorb leftover space; spacers (priority 1) soak up the rest.
     [stack setDistribution:NSStackViewDistributionFill];
+    // Low vertical hugging so hstack rows can absorb vertical slack inside
+    // a vstack with Fill distribution (grid-like rows in the calculator).
+    [stack setContentHuggingPriority:200
+                      forOrientation:NSLayoutConstraintOrientationVertical];
     [stack setTranslatesAutoresizingMaskIntoConstraints:NO];
     return register_widget_typed((__bridge void*)stack, AUI_HSTACK);
 }
@@ -750,9 +764,7 @@ void aether_ui_set_bg_color(int handle, double r, double g, double b, double a) 
     [v setWantsLayer:YES];
     v.layer.backgroundColor = [[NSColor colorWithRed:r green:g blue:b alpha:a] CGColor];
     if ([v isKindOfClass:[NSButton class]]) {
-        NSButton* btn = (NSButton*)v;
-        [btn setBezelStyle:NSBezelStyleRegularSquare];
-        [btn setBordered:NO];
+        [(NSButton*)v setBordered:NO];
     }
 }
 
@@ -1448,6 +1460,20 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
                 ct == AUI_TEXTAREA || ct == AUI_NAVSTACK) {
                 [child.leadingAnchor constraintEqualToAnchor:sv.leadingAnchor].active = YES;
                 [child.trailingAnchor constraintEqualToAnchor:sv.trailingAnchor].active = YES;
+            }
+            // Vertical peers: chain equal-height among hstack siblings in the
+            // same vstack — with Fill distribution this gives grid-like row
+            // heights (calculator) without affecting mixed vstacks whose
+            // slack is absorbed by spacer().
+            if (ct == AUI_HSTACK) {
+                for (NSView* sib in [sv arrangedSubviews]) {
+                    if (sib == child) break;
+                    int sh = handle_for_view(sib);
+                    if (get_widget_type(sh) == AUI_HSTACK) {
+                        [child.heightAnchor constraintEqualToAnchor:sib.heightAnchor].active = YES;
+                        break;
+                    }
+                }
             }
         } else {
             // Horizontal stack: constrain all button children to equal width.
