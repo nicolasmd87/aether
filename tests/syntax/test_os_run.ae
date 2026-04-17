@@ -4,8 +4,11 @@
 // argv items are passed verbatim, so paths-with-spaces, $variables, |, ;,
 // *, and other shell metacharacters are not interpreted.
 //
-// Windows note: os_run and os_run_capture_raw are stubbed on Windows
-// pending CreateProcessW. The test detects Windows via $OS and SKIPs.
+// Platform note: this test hardcodes Linux paths (/bin/true, /bin/false,
+// /bin/echo, /usr/bin/env, /usr/bin/seq) and Linux-specific behavior
+// (GNU echo, /usr/bin/seq exists). It SKIPs on:
+//   - Windows: os_run/os_run_capture_raw stubbed pending CreateProcessW
+//   - macOS: /usr/bin/seq doesn't exist; /bin/echo differs (BSD vs GNU)
 
 import std.os
 import std.list
@@ -13,6 +16,8 @@ import std.string
 
 extern println(s: string)
 extern exit(code: int)
+extern os_exec_raw(cmd: string) -> string
+extern string_starts_with(s: string, prefix: string) -> int
 
 fail(msg: string) {
     println("FAIL: ${msg}")
@@ -22,6 +27,14 @@ fail(msg: string) {
 main() {
     if os_getenv("OS") == "Windows_NT" {
         println("SKIP os_run: Windows backend not yet implemented")
+        return
+    }
+    // Detect macOS (Darwin) vs Linux via `uname -s`. os_exec_raw returns
+    // "Darwin\n" on macOS, "Linux\n" on Linux. We can't use the paths the
+    // test itself exercises as the probe (that would be circular).
+    uname = os_exec_raw("uname -s")
+    if string_starts_with(uname, "Darwin") == 1 {
+        println("SKIP os_run: Linux-only paths (no /usr/bin/seq on macOS, BSD echo differs)")
         return
     }
 
