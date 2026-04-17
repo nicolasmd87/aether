@@ -1,23 +1,16 @@
 // Calculator — terse/elegant edition. Demonstrates:
-//   - per-symbol imports (bare `button("+")`, no `aether_ui.` prefix)
+//   - selective imports (bare `button("+")`, no `aether_ui.` prefix)
 //   - mutable captures (closures write straight to `num`, `prev`, `op`)
 //   - closure-as-operator (`op` holds a |a,b| closure; equals dispatches
 //     via `call(op, prev, num)` — no opcode ints or if/else chain)
 
-import contrib.aether_ui.root_vstack
-import contrib.aether_ui.hstack
-import contrib.aether_ui.btn
-import contrib.aether_ui.button
-import contrib.aether_ui.bg_color
-import contrib.aether_ui.onclick
-import contrib.aether_ui.divider
-import contrib.aether_ui.text_bound
-import contrib.aether_ui.ui_state
-import contrib.aether_ui.ui_set
-import contrib.aether_ui.margin
-import contrib.aether_ui.app_run
-import contrib.aether_ui.enable_test_server
-import std.os.os_getenv
+import contrib.aether_ui (
+    root_vstack, hstack, btn, button,
+    bg_color, onclick, divider, text_bound,
+    ui_state, ui_set, margin,
+    app_run, enable_test_server
+)
+import std.os (os_getenv)
 
 main() {
     num     = 0
