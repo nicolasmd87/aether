@@ -102,7 +102,7 @@ request_get_path_param(ctx: ptr, name: string) {
 // the value for the given name, or "" if not found.
 request_get_cookie(req: ptr, name: string) {
     cookie_header = http.get_header(req, "Cookie")
-    if str_eq(cookie_header, "") == 1 { return "" }
+    if (cookie_header == "") { return "" }
 
     // Split on ";" to get individual cookies
     pairs = string.split(cookie_header, ";")
@@ -114,7 +114,7 @@ request_get_cookie(req: ptr, name: string) {
         eq_pos = string.index_of(pair, "=")
         if eq_pos > 0 {
             key = string.substring(pair, 0, eq_pos)
-            if str_eq(key, name) == 1 {
+            if (key == name) {
                 result = string.substring(pair, eq_pos + 1, string.length(pair))
             }
         }
@@ -481,19 +481,19 @@ ws_send_frame(sock: ptr, payload: string) {
     if len < 126 {
         hdr = string.concat(string.from_int(129), string.from_int(len))
         // Send as raw bytes via TCP
-        tcp.send(sock, hdr)
+        tcp.write(sock, hdr)
     } else {
         hdr = string.concat(string.from_int(129), string.from_int(126))
         hdr = string.concat(hdr, string.from_int(len / 256))
         hdr = string.concat(hdr, string.from_int(len - (len / 256) * 256))
-        tcp.send(sock, hdr)
+        tcp.write(sock, hdr)
     }
-    tcp.send(sock, payload)
+    tcp.write(sock, payload)
 }
 
 // Send a close frame (opcode 8, empty payload)
 ws_send_close(sock: ptr) {
-    tcp.send(sock, string.concat(string.from_int(136), string.from_int(0)))
+    tcp.write(sock, string.concat(string.from_int(136), string.from_int(0)))
 }
 
 // ---------------------------------------------------------------------------
@@ -506,10 +506,10 @@ ws_send_close(sock: ptr) {
 
 ws_read_frame(sock: ptr) {
     // Read 2-byte header
-    hdr = tcp.receive(sock, 2)
+    hdr = tcp.read(sock, 2)
     if hdr == 0 { return "" }
 
-    byte0 = char_at(hdr)
+    byte0 = string.char_at(hdr, 0)
     byte1 = string.char_at(hdr, 1)
 
     opcode = byte0 - ((byte0 / 16) * 16)  // byte0 & 0x0F
@@ -518,9 +518,9 @@ ws_read_frame(sock: ptr) {
 
     // Extended payload length
     if payload_len == 126 {
-        ext = tcp.receive(sock, 2)
+        ext = tcp.read(sock, 2)
         if ext == 0 { return "" }
-        payload_len = char_at(ext) * 256 + string.char_at(ext, 1)
+        payload_len = string.char_at(ext, 0) * 256 + string.char_at(ext, 1)
     }
 
     // Close frame
@@ -532,13 +532,13 @@ ws_read_frame(sock: ptr) {
     // Read masking key (4 bytes) if masked
     mask_key = ""
     if masked == 1 {
-        mask_key = tcp.receive(sock, 4)
+        mask_key = tcp.read(sock, 4)
         if mask_key == 0 { return "" }
     }
 
     // Read payload
     if payload_len == 0 { return "" }
-    payload = tcp.receive(sock, payload_len)
+    payload = tcp.read(sock, payload_len)
     if payload == 0 { return "" }
 
     // Unmask: payload[i] ^= mask_key[i % 4]
@@ -562,7 +562,7 @@ ws_read_frame(sock: ptr) {
 
 ws_handle_client(client: ptr, ws_handlers: ptr) {
     // Read the HTTP upgrade request
-    request_data = tcp.receive(client, 4096)
+    request_data = tcp.read(client, 4096)
     if request_data == 0 {
         tcp.close(client)
         return
@@ -590,7 +590,7 @@ ws_handle_client(client: ptr, ws_handlers: ptr) {
     }
     string.array_free(lines)
 
-    if str_eq(client_key, "") == 1 {
+    if (client_key == "") {
         tcp.close(client)
         return
     }
@@ -600,7 +600,7 @@ ws_handle_client(client: ptr, ws_handlers: ptr) {
     response = "HTTP/1.1 101 Switching Protocols\r\nConnection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Accept: "
     response = string.concat(response, accept_key)
     response = string.concat(response, "\r\n\r\n")
-    tcp.send(client, response)
+    tcp.write(client, response)
 
     // Find handler for this path
     handler = 0
@@ -608,7 +608,7 @@ ws_handle_client(client: ptr, ws_handlers: ptr) {
     for (i = 0; i < n_ws; i++) {
         entry = list.get(ws_handlers, i)
         entry_path = map_get(entry, "path")
-        if str_eq(ws_path, entry_path) == 1 {
+        if (ws_path == entry_path) {
             handler = unbox_closure(map_get(entry, "handler"))
         }
     }
@@ -624,13 +624,13 @@ ws_handle_client(client: ptr, ws_handlers: ptr) {
     // Message loop — read frames and dispatch to handler
     running = 1
     for (running == 1; running == 1; running = running) {
-        message = ws_read_frame(client)
-        if str_eq(message, "") == 1 {
+        msg = ws_read_frame(client)
+        if (msg == "") {
             running = 0
         } else {
             // Call handler: (message, sender_socket, ctx)
             // sender_socket is the raw TCP socket — use ws_send_frame() to reply
-            call(handler, message, client, 0)
+            call(handler, msg, client, 0)
         }
     }
 
@@ -679,17 +679,17 @@ sse_endpoint(_ctx: ptr, sse_path: string, handler: fn) {
 // An SSE stream wraps a TCP socket with the event-stream protocol.
 // Send an SSE data event
 sse_send(stream: ptr, data: string) {
-    tcp.send(stream, "data: ${data}\n\n")
+    tcp.write(stream, "data: ${data}\n\n")
 }
 
 // Send a named SSE event with an event type
 sse_send_event(stream: ptr, event_type: string, data: string) {
-    tcp.send(stream, "event: ${event_type}\ndata: ${data}\n\n")
+    tcp.write(stream, "event: ${event_type}\ndata: ${data}\n\n")
 }
 
 // Send an SSE comment (keep-alive)
 sse_comment(stream: ptr, comment: string) {
-    tcp.send(stream, ": ${comment}\n\n")
+    tcp.write(stream, ": ${comment}\n\n")
 }
 
 // Close an SSE stream
@@ -701,7 +701,7 @@ sse_close(stream: ptr) {
 // then call the registered handler with the raw socket as "stream"
 sse_handle_client(client: ptr, sse_handlers: ptr) {
     // Read the HTTP request
-    request_data = tcp.receive(client, 4096)
+    request_data = tcp.read(client, 4096)
     if request_data == 0 {
         tcp.close(client)
         return
@@ -728,13 +728,13 @@ sse_handle_client(client: ptr, sse_handlers: ptr) {
     }
 
     if handler == 0 {
-        tcp.send(client, "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found")
+        tcp.write(client, "HTTP/1.1 404 Not Found\r\nContent-Length: 9\r\n\r\nNot Found")
         tcp.close(client)
         return
     }
 
     // Send SSE headers
-    tcp.send(client, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n")
+    tcp.write(client, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: keep-alive\r\n\r\n")
 
     // Call handler with the raw socket as "stream"
     // Handler uses sse_send(stream, data) to push events
@@ -761,7 +761,7 @@ sse_accept_loop(tcp_server: ptr, sse_handlers: ptr) {
 
 // Send chunked response headers
 chunked_start(sock: ptr, status: int) {
-    tcp.send(sock, "HTTP/1.1 ${status} OK\r\nTransfer-Encoding: chunked\r\n\r\n")
+    tcp.write(sock, "HTTP/1.1 ${status} OK\r\nTransfer-Encoding: chunked\r\n\r\n")
 }
 
 // Write a single chunk (hex-length + CRLF + data + CRLF)
@@ -779,12 +779,12 @@ write_chunk(sock: ptr, data: string) {
             else { hex = string.concat(string.from_int(digit + 87), hex) }
         }
     }
-    tcp.send(sock, "${hex}\r\n${data}\r\n")
+    tcp.write(sock, "${hex}\r\n${data}\r\n")
 }
 
 // End chunked transfer (send zero-length chunk)
 chunked_end(sock: ptr) {
-    tcp.send(sock, "0\r\n\r\n")
+    tcp.write(sock, "0\r\n\r\n")
 }
 
 // ---------------------------------------------------------------------------
