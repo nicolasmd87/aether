@@ -296,10 +296,18 @@ static void retain_target(id obj) {
     [retained_targets addObject:obj];
 }
 
+// Default low content-hugging priority so buttons fill horizontal space in
+// hstacks (matching GTK4's grid-like look on single-char button rows).
+static void configure_button(NSButton* btn) {
+    [btn setContentHuggingPriority:200
+                    forOrientation:NSLayoutConstraintOrientationHorizontal];
+}
+
 int aether_ui_button_create(const char* label, void* boxed_closure) {
     NSButton* btn = [NSButton buttonWithTitle:
         [NSString stringWithUTF8String:label ? label : ""]
                                        target:nil action:nil];
+    configure_button(btn);
     if (boxed_closure) {
         AetherButtonTarget* target = [[AetherButtonTarget alloc] init];
         target.closure = (AeClosure*)boxed_closure;
@@ -314,6 +322,7 @@ int aether_ui_button_create_plain(const char* label) {
     NSButton* btn = [NSButton buttonWithTitle:
         [NSString stringWithUTF8String:label ? label : ""]
                                        target:nil action:nil];
+    configure_button(btn);
     return register_widget_typed((__bridge void*)btn, AUI_BUTTON);
 }
 
@@ -347,6 +356,10 @@ int aether_ui_hstack_create(int spacing) {
     [stack setOrientation:NSUserInterfaceLayoutOrientationHorizontal];
     [stack setSpacing:spacing];
     [stack setAlignment:NSLayoutAttributeCenterY];
+    // Fill distribution matches GTK4's box behavior: children grow/shrink
+    // according to their content-hugging priority. Buttons (set to 200 at
+    // creation) absorb leftover space; spacers (priority 1) soak up the rest.
+    [stack setDistribution:NSStackViewDistributionFill];
     [stack setTranslatesAutoresizingMaskIntoConstraints:NO];
     return register_widget_typed((__bridge void*)stack, AUI_HSTACK);
 }
@@ -1420,7 +1433,38 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
     if (!parent || !child) return;
 
     if ([parent isKindOfClass:[NSStackView class]]) {
-        [(NSStackView*)parent addArrangedSubview:child];
+        NSStackView* sv = (NSStackView*)parent;
+        [sv addArrangedSubview:child];
+
+        if ([sv orientation] == NSUserInterfaceLayoutOrientationVertical) {
+            // In a vertical stack, arranged subviews only take their intrinsic
+            // width by default. Pin container-like children to the parent's
+            // leading/trailing anchors so nested hstacks (e.g. calculator rows)
+            // fill the full width — matches GTK4 box behaviour.
+            int ct = get_widget_type(child_handle);
+            if (ct == AUI_HSTACK || ct == AUI_VSTACK || ct == AUI_ZSTACK ||
+                ct == AUI_SCROLLVIEW || ct == AUI_FORM_SECTION ||
+                ct == AUI_DIVIDER || ct == AUI_PROGRESSBAR ||
+                ct == AUI_TEXTAREA || ct == AUI_NAVSTACK) {
+                [child.leadingAnchor constraintEqualToAnchor:sv.leadingAnchor].active = YES;
+                [child.trailingAnchor constraintEqualToAnchor:sv.trailingAnchor].active = YES;
+            }
+        } else {
+            // Horizontal stack: constrain all button children to equal width.
+            // NSStackViewDistributionFill with multiple low-hugging siblings
+            // lets autolayout give the slack to one child; an explicit
+            // width-equality chain forces grid-like button rows (calculator)
+            // without affecting label+textfield or button+spacer rows.
+            if ([child isKindOfClass:[NSButton class]]) {
+                for (NSView* sib in [sv arrangedSubviews]) {
+                    if (sib == child) break;
+                    if ([sib isKindOfClass:[NSButton class]]) {
+                        [child.widthAnchor constraintEqualToAnchor:sib.widthAnchor].active = YES;
+                        break;
+                    }
+                }
+            }
+        }
     } else if ([parent isKindOfClass:[NSScrollView class]]) {
         [(NSScrollView*)parent setDocumentView:child];
     } else if ([parent isKindOfClass:[NSBox class]]) {
@@ -1760,6 +1804,39 @@ static void handle_test_request(int client_fd) {
             close(client_fd);
             return;
         }
+    }
+
+    // GET /screenshot — capture the primary window as PNG
+    if (method == 0 && strcmp(path, "/screenshot") == 0) {
+        __block NSData* png = nil;
+        dispatch_sync(dispatch_get_main_queue(), ^{
+            NSWindow* win = primary_window;
+            if (!win) return;
+            NSView* v = [win contentView];
+            if (!v) return;
+            NSRect bounds = [v bounds];
+            NSBitmapImageRep* rep = [v bitmapImageRepForCachingDisplayInRect:bounds];
+            if (!rep) return;
+            [v cacheDisplayInRect:bounds toBitmapImageRep:rep];
+            png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+        });
+
+        if (png && [png length] > 0) {
+            char header[256];
+            int hlen = snprintf(header, sizeof(header),
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: image/png\r\n"
+                "Content-Length: %lu\r\n"
+                "Connection: close\r\n\r\n",
+                (unsigned long)[png length]);
+            write(client_fd, header, hlen);
+            write(client_fd, [png bytes], [png length]);
+        } else {
+            send_response(client_fd, 500, "Error", "application/json",
+                          "{\"error\":\"screenshot failed\"}");
+        }
+        close(client_fd);
+        return;
     }
 
     // GET /widget/{id}
