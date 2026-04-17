@@ -4,8 +4,8 @@
 import contrib.tinyweb
 
 validate_token(token: string) {
-    if str_eq(token, "valid-session-abc") == 1 { return "alice@example.com" }
-    if str_eq(token, "valid-session-xyz") == 1 { return "bob@example.com" }
+    if (token == "valid-session-abc") { return "alice@example.com" }
+    if (token == "valid-session-xyz") { return "bob@example.com" }
     return ""
 }
 
@@ -19,7 +19,7 @@ main() {
                 token = request_get_cookie(req, "session")
                 user = validate_token(token)
 
-                if str_eq(user, "") == 1 {
+                if (user == "") {
                     response_write_status(res, "Try logging in again", 403)
                     return STOP
                 }

@@ -31,7 +31,7 @@ main() {
         path("/admin") {
             filter(GET, "/.*") |req: ptr, res: ptr, ctx: ptr| {
                 token = request_get_header(req, "X-Admin-Token")
-                if str_eq(token, "secret42") == 1 {
+                if (token == "secret42") {
                     return CONTINUE
                 }
                 response_write_status(res, "Forbidden", 403)

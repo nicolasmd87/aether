@@ -169,7 +169,8 @@ TEST_SRC = tests/runtime/test_harness.c \
            tests/runtime/test_http_server.c \
            tests/memory/test_memory_arena.c \
            tests/memory/test_memory_pool.c \
-           tests/compiler/test_lexer.c
+           tests/compiler/test_lexer.c \
+           tests/compiler/test_security.c
 
 # Standalone test programs with their own main() - build separately
 # These are not part of the main test suite but can be built manually
