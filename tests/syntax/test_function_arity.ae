@@ -1,0 +1,20 @@
+// Test: function arity tracking in calls
+// Regression test for bug where function definitions with 4+ parameters
+// are misreported as having fewer parameters by the typechecker.
+
+extern println(s: string)
+
+// Define a function with 4 parameters
+my_func(a: int, b: int, c: int, d: int) {
+    println("my_func called")
+}
+
+// Define a wrapper that calls it with all 4 args
+call_my_func() {
+    my_func(1, 2, 3, 4)
+}
+
+main() {
+    call_my_func()
+    println("PASS function arity")
+}
