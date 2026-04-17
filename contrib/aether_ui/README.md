@@ -166,7 +166,7 @@ capabilities the test harness is denied, not the other way around.
 | Platform | Backend | Status |
 |----------|---------|--------|
 | Linux | GTK4 (`aether_ui_gtk4.c`) | Full — all widgets, canvas, events, styling, test server |
-| macOS | AppKit (`aether_ui_macos.m`) | Core widgets working, canvas/events/test server stubbed |
+| macOS | AppKit (`aether_ui_macos.m`) | Full — all widgets, canvas, events, styling, test server |
 
 ## Status
 

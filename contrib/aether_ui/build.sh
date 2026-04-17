@@ -44,7 +44,7 @@ case "$OS" in
             "$C_FILE" "$SCRIPT_DIR/aether_ui_macos.m" \
             -L"$AETHER_ROOT/build" -laether \
             -o "$OUTPUT" \
-            -framework AppKit -framework Foundation -pthread -lm
+            -framework AppKit -framework Foundation -framework QuartzCore -pthread -lm
         ;;
     Linux)
         if ! pkg-config --exists gtk4 2>/dev/null; then
