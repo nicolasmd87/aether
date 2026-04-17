@@ -1,0 +1,23 @@
+// Primitive-type round-trip: long (64-bit int), bool, float.
+// NB: Aether's 64-bit integer type is spelled `long` at the source level
+// (the `int64` token maps to the same type internally but isn't the
+// surface keyword). The ABI layer still emits `int64_t` in the
+// generated aether_<name> signature.
+
+echo_long(x: long) {
+    return x
+}
+
+// Bool via int — Aether bool compiles to int under the hood, ABI
+// normalizes to int32_t on the boundary.
+negate_bool(b: int) {
+    if b == 0 { return 1 }
+    return 0
+}
+
+// Float — single-precision (Aether float == C float).
+scale(x: float, factor: float) {
+    return x * factor
+}
+
+main() { println("unused in lib mode") }

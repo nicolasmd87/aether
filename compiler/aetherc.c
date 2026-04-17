@@ -48,6 +48,14 @@ static bool check_only_mode = false;
 static bool preempt_mode = false;
 static const char* emit_header_path = NULL;
 
+// --emit=<exe|lib|both> — which artifact(s) to produce.
+// exe (default): emit `int main(int, char**)`, no aether_* alias stubs.
+// lib          : omit main(), emit aether_<name> alias stubs for every top-level
+//                Aether function, and refuse to link capability-heavy stdlib modules.
+// both         : emit both — executable and library symbols live in one .c file.
+static bool emit_exe = true;
+static bool emit_lib = false;
+
 #ifdef _WIN32
     #include <windows.h>
     #include <io.h>
@@ -215,6 +223,38 @@ int compile_source(const char* input_path, const char* output_path) {
     // Step 2.6: Merge pure Aether module functions into program AST
     module_merge_into_program(program);
 
+    // Step 2.7: --emit=lib capability-empty check.
+    // In lib mode the output is consumed by another process (Java host,
+    // Python script, etc.) that owns network/filesystem/process access.
+    // An embedded Aether script that opens sockets or writes files is
+    // a capability escalation — fail the build and point the user to the
+    // documented pattern (host does I/O, script returns data).
+    if (emit_lib) {
+        static const char* banned[] = {
+            "std.net", "std.http", "std.tcp", "std.fs", "std.os", NULL
+        };
+        for (int i = 0; i < program->child_count; i++) {
+            ASTNode* child = program->children[i];
+            if (!child || child->type != AST_IMPORT_STATEMENT || !child->value) continue;
+            for (int b = 0; banned[b]; b++) {
+                if (strcmp(child->value, banned[b]) == 0) {
+                    fprintf(stderr,
+                        "Error: --emit=lib rejects 'import %s' — the library ABI is\n"
+                        "       capability-empty by default. The host process owns\n"
+                        "       network/filesystem/process access; the script should\n"
+                        "       only compute and return data.\n",
+                        banned[b]);
+                    module_registry_shutdown();
+                    free_ast_node(program);
+                    for (int k = 0; k < token_count; k++) free_token(tokens[k]);
+                    free_parser(parser);
+                    free(source);
+                    return 0;
+                }
+            }
+        }
+    }
+
     // Step 3: Type Checking
     if (verbose_mode) printf("Step 3: Type checking...\n");
     if (!typecheck_program(program)) {
@@ -293,6 +333,8 @@ int compile_source(const char* input_path, const char* output_path) {
         codegen = create_code_generator(output);
     }
     if (preempt_mode) codegen->preempt_loops = 1;
+    codegen->emit_exe = emit_exe ? 1 : 0;
+    codegen->emit_lib = emit_lib ? 1 : 0;
     generate_program(codegen, program);
     fclose(output);
     if (header_output) {
@@ -364,6 +406,7 @@ void print_help(const char* program_name) {
     printf("  --verbose                        Show detailed compilation phases and timing\n");
     printf("  --emit-c                         Print generated C code to stdout\n");
     printf("  --emit-header [path]             Generate C header for embedding (default: auto)\n");
+    printf("  --emit=<exe|lib|both>            Output artifact (exe default, lib produces .so/.dylib)\n");
     printf("  --check                          Type-check only (no code generation)\n");
     printf("  --dump-ast                       Print AST and exit (no code generation)\n");
     printf("  --help, -h                       Show this help message\n");
@@ -425,6 +468,22 @@ int main(int argc, char *argv[]) {
             }
             module_set_lib_dir(argv[arg_offset + 1]);
             arg_offset += 2;
+        } else if (strncmp(argv[arg_offset], "--emit=", 7) == 0) {
+            const char* val = argv[arg_offset] + 7;
+            if (strcmp(val, "exe") == 0) {
+                emit_exe = true;
+                emit_lib = false;
+            } else if (strcmp(val, "lib") == 0) {
+                emit_exe = false;
+                emit_lib = true;
+            } else if (strcmp(val, "both") == 0) {
+                emit_exe = true;
+                emit_lib = true;
+            } else {
+                fprintf(stderr, "Error: --emit must be one of: exe, lib, both (got '%s')\n", val);
+                return 1;
+            }
+            arg_offset++;
         } else {
             fprintf(stderr, "Unknown option: %s\n", argv[arg_offset]);
             fprintf(stderr, "Use --help for usage information\n");

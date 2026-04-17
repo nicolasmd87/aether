@@ -1,0 +1,17 @@
+// Negative test: functions with parameter types that don't have an ABI
+// mapping should compile, but the aether_<name> alias stub must be skipped
+// (with a warning). This lets users write internal helpers in Aether
+// without worrying that every function becomes a public export.
+
+// Supported — produces aether_good_fn.
+good_fn(a: int, b: int) {
+    return a + b
+}
+
+// Unsupported parameter type — fn (closure). Should not get an
+// aether_takes_closure stub.
+takes_closure(cb: fn) {
+    return call(cb)
+}
+
+main() { println("unused in lib mode") }

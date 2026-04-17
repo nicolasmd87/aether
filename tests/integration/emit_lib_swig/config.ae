@@ -1,0 +1,14 @@
+// Test fixture for SWIG-based Python consumption of an Aether lib.
+// Same shape as tests/integration/emit_lib/config.ae.
+
+add(a: int, b: int) {
+    return a + b
+}
+
+shout(s: string) {
+    return s
+}
+
+main() {
+    println("unused when compiled with --emit=lib")
+}

@@ -1,0 +1,20 @@
+// Test fixture for --emit=lib round-trip.
+// Defines top-level functions that the C host calls as aether_<name>.
+
+sum(a: int, b: int) {
+    return a + b
+}
+
+greet(name: string) {
+    return name
+}
+
+multiply_by_two(x: int) {
+    return x * 2
+}
+
+// main() is present but irrelevant in --emit=lib — the library has no
+// process entry point.
+main() {
+    println("unused when compiled with --emit=lib")
+}

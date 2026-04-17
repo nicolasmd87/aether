@@ -33,6 +33,12 @@ typedef struct {
     FILE* header_file;       // Output stream for header
     const char* header_path; // Path to header file
 
+    // --emit=<exe|lib|both> mode. Default is exe only.
+    // lib: omit `int main(int,char**)` entry; emit aether_<name> alias stubs.
+    // both: emit main() AND the aether_<name> stubs in the same .c file.
+    int emit_exe;            // Emit the int main(int,char**) entry point
+    int emit_lib;            // Emit aether_<name> alias stubs for top-level functions
+
     // Track generated pattern matching functions to avoid duplicates
     char** generated_functions;
     int generated_function_count;

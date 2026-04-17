@@ -95,12 +95,25 @@ typedef struct {
 
 static Toolchain tc = {0};
 
+// --emit=<exe|lib|both> for the current build. Set by cmd_build before
+// build_aetherc_cmd / build_gcc_cmd run; both helpers read these globals
+// to decide what flags to emit.
+static bool g_emit_exe = true;
+static bool g_emit_lib = false;
+
 // Build an aetherc command string with optional --lib flag
 static void build_aetherc_cmd(char* cmd, size_t cmd_size, const char* input, const char* output) {
+    const char* emit_flag = "";
+    if (g_emit_lib && g_emit_exe)      emit_flag = " --emit=both";
+    else if (g_emit_lib)               emit_flag = " --emit=lib";
+    // exe-only is the default; no flag needed.
+
     if (tc.lib_dir[0]) {
-        snprintf(cmd, cmd_size, "\"%s\" --lib \"%s\" \"%s\" \"%s\"", tc.compiler, tc.lib_dir, input, output);
+        snprintf(cmd, cmd_size, "\"%s\"%s --lib \"%s\" \"%s\" \"%s\"",
+                 tc.compiler, emit_flag, tc.lib_dir, input, output);
     } else {
-        snprintf(cmd, cmd_size, "\"%s\" \"%s\" \"%s\"", tc.compiler, input, output);
+        snprintf(cmd, cmd_size, "\"%s\"%s \"%s\" \"%s\"",
+                 tc.compiler, emit_flag, input, output);
     }
 }
 
@@ -1088,10 +1101,29 @@ static void build_gcc_cmd(char* cmd, size_t size,
         return;
     }
     char opt[600];
+    // --emit=lib adds -fPIC -shared so the output is loadable via dlopen.
+    // --emit=both (exe + lib from one source) is not supported by this
+    // helper — the caller should invoke it twice with different modes,
+    // or a future refactor can produce both artifacts in one gcc call.
+    const char* emit_lib_flags = (g_emit_lib && !g_emit_exe) ? "-fPIC -shared " : "";
     if (user_cflags[0])
-        snprintf(opt, sizeof(opt), "%s %s", optimize ? "-O2 -pipe" : "-O0 -g -pipe", user_cflags);
+        snprintf(opt, sizeof(opt), "%s%s %s", emit_lib_flags, optimize ? "-O2 -pipe" : "-O0 -g -pipe", user_cflags);
     else
-        snprintf(opt, sizeof(opt), "%s", optimize ? "-O2 -pipe" : "-O0 -g -pipe");
+        snprintf(opt, sizeof(opt), "%s%s", emit_lib_flags, optimize ? "-O2 -pipe" : "-O0 -g -pipe");
+
+    // Append aether_config.c to the compile when building a lib so the
+    // aether_config_* accessors are bundled into the .so. The .c file
+    // lives in runtime/ under dev mode and in include/aether/runtime/
+    // (or similar) on installed toolchains.
+    char config_c[2048] = "";
+    if (g_emit_lib) {
+        char candidate[2048];
+        snprintf(candidate, sizeof(candidate), "%s/runtime/aether_config.c", tc.root);
+        if (path_exists(candidate)) {
+            snprintf(config_c, sizeof(config_c), " \"%s\"", candidate);
+        }
+    }
+
     if (tc.has_lib) {
         char lib_dir[1024];
         strncpy(lib_dir, tc.lib, sizeof(lib_dir) - 1);
@@ -1100,12 +1132,12 @@ static void build_gcc_cmd(char* cmd, size_t size,
         if (slash) *slash = '\0';
 
         snprintf(cmd, size,
-            "gcc %s %s \"%s\" %s -L%s -laether -o \"%s\" -pthread -lm %s",
-            opt, tc.include_flags, c_file, extra, lib_dir, out_file, link_flags);
+            "gcc %s %s \"%s\"%s %s -L%s -laether -o \"%s\" -pthread -lm %s",
+            opt, tc.include_flags, c_file, config_c, extra, lib_dir, out_file, link_flags);
     } else {
         snprintf(cmd, size,
-            "gcc %s %s \"%s\" %s %s -o \"%s\" -pthread -lm %s",
-            opt, tc.include_flags, c_file, extra, tc.runtime_srcs, out_file, link_flags);
+            "gcc %s %s \"%s\"%s %s %s -o \"%s\" -pthread -lm %s",
+            opt, tc.include_flags, c_file, config_c, extra, tc.runtime_srcs, out_file, link_flags);
     }
 #endif
 }
@@ -1396,6 +1428,10 @@ static int cmd_build(int argc, char** argv) {
 
     const char* target = NULL;
 
+    // Reset emit mode to the default (exe-only) for this build.
+    g_emit_exe = true;
+    g_emit_lib = false;
+
     for (int i = 0; i < argc; i++) {
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             output_name = argv[++i];
@@ -1407,6 +1443,27 @@ static int cmd_build(int argc, char** argv) {
         } else if (strcmp(argv[i], "--lib") == 0 && i + 1 < argc) {
             strncpy(tc.lib_dir, argv[++i], sizeof(tc.lib_dir) - 1);
             tc.lib_dir[sizeof(tc.lib_dir) - 1] = '\0';
+        } else if (strncmp(argv[i], "--emit=", 7) == 0) {
+            const char* val = argv[i] + 7;
+            if (strcmp(val, "exe") == 0) {
+                g_emit_exe = true;
+                g_emit_lib = false;
+            } else if (strcmp(val, "lib") == 0) {
+                g_emit_exe = false;
+                g_emit_lib = true;
+            } else if (strcmp(val, "both") == 0) {
+                // v1 scope: `ae build --emit=both` is not supported because
+                // producing both a .so and an executable from one gcc call
+                // needs either two invocations or a two-pass build. Users
+                // who need both artifacts today should run `ae build --emit=exe`
+                // and `ae build --emit=lib -o ...` separately.
+                fprintf(stderr, "Error: --emit=both is not yet implemented for `ae build`.\n");
+                fprintf(stderr, "       Run `ae build --emit=exe` and `ae build --emit=lib` separately.\n");
+                return 1;
+            } else {
+                fprintf(stderr, "Error: --emit must be one of: exe, lib (got '%s')\n", val);
+                return 1;
+            }
         } else if (argv[i][0] != '-') {
             file = argv[i];
         }
@@ -1502,6 +1559,43 @@ static int cmd_build(int argc, char** argv) {
         } else {
             strncat(exe_file, ".js", sizeof(exe_file) - strlen(exe_file) - 1);
         }
+    }
+
+    // Override output name for --emit=lib: swap <name> for lib<name>.so
+    // (or .dylib on macOS). Only applies when the user didn't supply -o
+    // with an explicit name; if they did, we honor their choice.
+    if (g_emit_lib && !g_emit_exe && !is_wasm && !output_name) {
+#ifdef __APPLE__
+        const char* lib_ext = ".dylib";
+#elif defined(_WIN32)
+        const char* lib_ext = ".dll";
+#else
+        const char* lib_ext = ".so";
+#endif
+        // Find the basename portion in exe_file and insert "lib" prefix.
+        // Strategy: walk back from the end to the last separator, copy the
+        // prefix, append "lib", then the basename with its extension swapped.
+        char buf[2048];
+        const char* last_sep = exe_file;
+        for (const char* p = exe_file; *p; p++) {
+            if (*p == '/' || *p == '\\') last_sep = p + 1;
+        }
+        size_t prefix_len = (size_t)(last_sep - exe_file);
+        if (prefix_len >= sizeof(buf)) prefix_len = sizeof(buf) - 1;
+        memcpy(buf, exe_file, prefix_len);
+        buf[prefix_len] = '\0';
+        // Strip EXE_EXT (empty on POSIX) from the basename before adding lib_ext.
+        char basename_noext[512];
+        strncpy(basename_noext, last_sep, sizeof(basename_noext) - 1);
+        basename_noext[sizeof(basename_noext) - 1] = '\0';
+        if (EXE_EXT[0]) {
+            size_t elen = strlen(EXE_EXT);
+            size_t blen = strlen(basename_noext);
+            if (blen >= elen && strcmp(basename_noext + blen - elen, EXE_EXT) == 0) {
+                basename_noext[blen - elen] = '\0';
+            }
+        }
+        snprintf(exe_file, sizeof(exe_file), "%slib%s%s", buf, basename_noext, lib_ext);
     }
 
     // Pre-flight: verify emcc for wasm target before starting compilation

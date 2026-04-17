@@ -1,0 +1,11 @@
+// Used by both an exe build (runs main, produces stdout) and a lib build
+// (exports aether_<name>). Demonstrates the "one source, two artifacts"
+// pattern today (by running `ae build` twice).
+
+greet(name: string) {
+    return name
+}
+
+main() {
+    println("ran as exe")
+}
