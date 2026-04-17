@@ -446,8 +446,9 @@ static int count_function_params(ASTNode* func) {
         if (child->type == AST_VARIABLE_DECLARATION ||
             child->type == AST_PATTERN_VARIABLE ||
             child->type == AST_PATTERN_LITERAL) {
-            // Skip _ctx parameters — they're auto-injected by the builder system
-            if (child->value && strcmp(child->value, "_ctx") == 0 &&
+            // Skip _ctx parameters only for builder functions — they're auto-injected
+            if (func->type == AST_BUILDER_FUNCTION &&
+                child->value && strcmp(child->value, "_ctx") == 0 &&
                 child->node_type && child->node_type->kind == TYPE_PTR) {
                 continue;
             }
