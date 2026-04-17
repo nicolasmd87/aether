@@ -1,0 +1,22 @@
+// Test: function arity in ordered definitions
+// Regression test for a typechecker bug where a function with a _ctx: ptr
+// first parameter was reported as having N-1 args when the caller passed
+// _ctx explicitly. The call filter(_ctx, ...) with 4 args would error as
+// "filter expects 3 argument(s), got 4".
+
+extern println(s: string)
+
+// Caller defined first, calls filter with 4 args (passing _ctx explicitly)
+filter_all(_ctx: ptr, pattern: string, handler: fn) {
+    filter(_ctx, 1, pattern, handler)
+}
+
+// Function defined after the call — forward-reference
+filter(_ctx: ptr, method: int, pattern: string, handler: fn) {
+    println("filter called")
+}
+
+main() {
+    filter_all(null, "test") callback { println("handler ran") }
+    println("PASS function arity ordered")
+}

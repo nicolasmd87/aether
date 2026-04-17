@@ -27,4 +27,23 @@ int os_execv(const char* prog, void* argv_list);
 // Caller owns the returned string.
 char* os_which(const char* name);
 
+// Run a child process directly via fork+execvp+waitpid (POSIX) or
+// CreateProcessW (Windows — TODO). NO SHELL is interpreted: argv items
+// are passed verbatim, so paths-with-spaces, $vars, |, ;, *, etc. in
+// arguments are not metachars. Returns the child's exit code, or -1
+// on failure to spawn (program not found, etc.).
+//
+//   prog    — program to execute. Resolved via PATH if it has no '/'.
+//   argv    — Aether list (ArrayList*) of strings; argv[0] should be the
+//             program name itself. May be NULL (treated as empty list).
+//   env     — Aether list (ArrayList*) of "KEY=VALUE" strings, or NULL
+//             to inherit the parent's environment.
+int os_run(const char* prog, void* argv, void* env);
+
+// Same as os_run but captures the child's stdout into a heap-allocated
+// string the caller must free. Returns NULL on spawn failure. The
+// child's exit code is discarded — if you need it, use os_run instead
+// (or a future os_run_capture_with_status() if demand arises).
+char* os_run_capture_raw(const char* prog, void* argv, void* env);
+
 #endif

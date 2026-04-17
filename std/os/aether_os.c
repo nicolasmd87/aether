@@ -16,6 +16,8 @@ char* os_exec_raw(const char* c) { (void)c; return NULL; }
 char* os_getenv(const char* n) { (void)n; return NULL; }
 int os_execv(const char* p, void* a) { (void)p; (void)a; return -1; }
 char* os_which(const char* n) { (void)n; return NULL; }
+int os_run(const char* p, void* a, void* e) { (void)p; (void)a; (void)e; return -1; }
+char* os_run_capture_raw(const char* p, void* a, void* e) { (void)p; (void)a; (void)e; return NULL; }
 #else
 
 #include <stdio.h>
@@ -31,6 +33,18 @@ char* os_which(const char* n) { (void)n; return NULL; }
 // here without a dependency cycle; the prototypes match
 // std/collections/aether_collections.h.
 extern int list_size(void* list);
+extern void* list_get(void* list, int index);
+
+#ifndef _WIN32
+#include <unistd.h>
+#include <sys/types.h>
+#include <sys/wait.h>
+#include <errno.h>
+#endif
+
+// libaether.a list operations — declared extern so this file doesn't have
+// to include the collections header (which would create a build cycle).
+extern int   list_size(void* list);
 extern void* list_get(void* list, int index);
 
 int os_system(const char* cmd) {
@@ -222,5 +236,190 @@ char* os_which(const char* name) {
     return NULL;
 #endif
 }
+
+
+// --- os_run / os_run_capture: argv-based child process launch ---
+//
+// Both functions take an Aether list as the argv (and optional env)
+// rather than a shell-string command line. There is no /bin/sh in the
+// loop, so paths-with-spaces, $variables, |, ;, *, and other shell
+// metacharacters in argv items are passed verbatim. This eliminates a
+// large class of quoting bugs and makes the same Aether code portable
+// to platforms without a POSIX shell.
+//
+// Implementation: POSIX uses fork + execvp + waitpid, with execve when
+// an explicit env is provided. The Windows backend is a TODO — for now
+// it just returns -1 / NULL on _WIN32 builds.
+
+#ifndef _WIN32
+
+// Build a NULL-terminated argv array from an Aether list. The first
+// entry in argv[] is `prog`. Caller must free the returned array (the
+// strings inside are pointers into the Aether list and must NOT be
+// freed individually). Returns NULL on allocation failure.
+static char** build_argv_array(const char* prog, void* argv_list) {
+    int n = argv_list ? list_size(argv_list) : 0;
+    char** av = (char**)malloc(sizeof(char*) * (size_t)(n + 2));
+    if (!av) return NULL;
+    av[0] = (char*)prog;
+    for (int i = 0; i < n; i++) {
+        av[i + 1] = (char*)list_get(argv_list, i);
+    }
+    av[n + 1] = NULL;
+    return av;
+}
+
+// Build a NULL-terminated environ array from an Aether list of
+// "KEY=VALUE" strings. Returns NULL if env_list is NULL (caller should
+// inherit parent env in that case). Caller must free the returned
+// array.
+static char** build_envp_array(void* env_list) {
+    if (!env_list) return NULL;
+    int n = list_size(env_list);
+    char** envp = (char**)malloc(sizeof(char*) * (size_t)(n + 1));
+    if (!envp) return NULL;
+    for (int i = 0; i < n; i++) {
+        envp[i] = (char*)list_get(env_list, i);
+    }
+    envp[n] = NULL;
+    return envp;
+}
+
+int os_run(const char* prog, void* argv_list, void* env_list) {
+    if (!prog) return -1;
+    if (!aether_sandbox_check("exec", prog)) return -1;
+
+    char** av = build_argv_array(prog, argv_list);
+    if (!av) return -1;
+    char** envp = build_envp_array(env_list);
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        free(av);
+        free(envp);
+        return -1;
+    }
+    if (pid == 0) {
+        // Child
+        if (envp) {
+            execve(prog, av, envp);
+        } else {
+            execvp(prog, av);
+        }
+        // exec only returns on failure
+        _exit(127);
+    }
+    // Parent
+    free(av);
+    free(envp);
+    int status = 0;
+    while (waitpid(pid, &status, 0) < 0) {
+        if (errno != EINTR) return -1;
+    }
+    if (WIFEXITED(status)) return WEXITSTATUS(status);
+    if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+    return -1;
+}
+
+char* os_run_capture_raw(const char* prog, void* argv_list, void* env_list) {
+    if (!prog) return NULL;
+    if (!aether_sandbox_check("exec", prog)) return NULL;
+
+    int pipefd[2];
+    if (pipe(pipefd) != 0) return NULL;
+
+    char** av = build_argv_array(prog, argv_list);
+    if (!av) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        return NULL;
+    }
+    char** envp = build_envp_array(env_list);
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        free(av);
+        free(envp);
+        return NULL;
+    }
+    if (pid == 0) {
+        // Child: redirect stdout to pipe write end, close read end
+        close(pipefd[0]);
+        if (dup2(pipefd[1], 1) < 0) _exit(127);
+        close(pipefd[1]);
+        if (envp) {
+            execve(prog, av, envp);
+        } else {
+            execvp(prog, av);
+        }
+        _exit(127);
+    }
+    // Parent: close write end, read until EOF
+    close(pipefd[1]);
+    free(av);
+    free(envp);
+
+    size_t cap = 1024;
+    size_t len = 0;
+    char* result = (char*)malloc(cap);
+    if (!result) {
+        close(pipefd[0]);
+        // Reap the child so we don't leave a zombie
+        int st = 0;
+        waitpid(pid, &st, 0);
+        return NULL;
+    }
+    char buf[1024];
+    for (;;) {
+        ssize_t n = read(pipefd[0], buf, sizeof(buf));
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            free(result);
+            close(pipefd[0]);
+            int st = 0;
+            waitpid(pid, &st, 0);
+            return NULL;
+        }
+        if (n == 0) break;
+        if (len + (size_t)n + 1 > cap) {
+            while (len + (size_t)n + 1 > cap) cap *= 2;
+            char* bigger = (char*)realloc(result, cap);
+            if (!bigger) {
+                free(result);
+                close(pipefd[0]);
+                int st = 0;
+                waitpid(pid, &st, 0);
+                return NULL;
+            }
+            result = bigger;
+        }
+        memcpy(result + len, buf, (size_t)n);
+        len += (size_t)n;
+    }
+    result[len] = '\0';
+    close(pipefd[0]);
+    int st = 0;
+    waitpid(pid, &st, 0);
+    return result;
+}
+
+#else // _WIN32
+
+int os_run(const char* prog, void* argv_list, void* env_list) {
+    // TODO: CreateProcessW with explicit command-line and environment
+    // block. Until then, Windows builds get -1 and a clear failure mode.
+    (void)prog; (void)argv_list; (void)env_list;
+    return -1;
+}
+
+char* os_run_capture_raw(const char* prog, void* argv_list, void* env_list) {
+    (void)prog; (void)argv_list; (void)env_list;
+    return NULL;
+}
+
+#endif // !_WIN32
+
 
 #endif // AETHER_HAS_FILESYSTEM

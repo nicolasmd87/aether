@@ -8,6 +8,24 @@ extern os_system(cmd: string) -> int
 // NULL on failure. Use the Go-style wrapper `os.exec` below in most code.
 extern os_exec_raw(cmd: string) -> string
 
+// Run a child process directly via fork+execvp+waitpid (POSIX). NO SHELL
+// is interpreted: argv items are passed verbatim, so paths-with-spaces,
+// $variables, |, ;, *, and other shell metacharacters in arguments are
+// not metachars. Returns the child's exit code, or -1 on spawn failure.
+//
+//   prog  — program to execute (resolved via PATH if it has no '/')
+//   argv  — list of strings to pass as arguments AFTER argv[0]=prog,
+//           or null/empty list for no arguments
+//   env   — list of "KEY=VALUE" strings to pass as the child's
+//           environment, or null to inherit the parent's environment
+extern os_run(prog: string, argv: ptr, env: ptr) -> int
+
+// Same as os_run but captures the child's stdout. Raw extern returns
+// null on spawn failure. Use the Go-style wrapper `os.run_capture` in
+// most code. The child's exit code is discarded — use os_run if you
+// need both.
+extern os_run_capture_raw(prog: string, argv: ptr, env: ptr) -> string
+
 // Get environment variable, returns string or NULL if not set
 extern os_getenv(name: string) -> string
 
@@ -45,6 +63,18 @@ exec(cmd: string) -> {
     output = os_exec_raw(cmd)
     if output == null {
         return "", "command failed"
+    }
+    output_copy = string_concat(output, "")
+    return output_copy, ""
+}
+
+// Run a child process and capture its stdout. Returns (output, "") on
+// success, ("", error) on spawn failure. Argv-based — no shell, no
+// quoting issues. Use os_run if you need the exit code instead.
+run_capture(prog: string, argv: ptr, env: ptr) -> {
+    output = os_run_capture_raw(prog, argv, env)
+    if output == null {
+        return "", "spawn failed"
     }
     output_copy = string_concat(output, "")
     return output_copy, ""

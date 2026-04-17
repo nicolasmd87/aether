@@ -447,16 +447,28 @@ static int count_function_params(ASTNode* func) {
         if (child->type == AST_VARIABLE_DECLARATION ||
             child->type == AST_PATTERN_VARIABLE ||
             child->type == AST_PATTERN_LITERAL) {
-            // Skip _ctx parameters — they're auto-injected by the builder system
-            if (child->value && strcmp(child->value, "_ctx") == 0 &&
-                child->node_type && child->node_type->kind == TYPE_PTR) {
-                continue;
-            }
             count++;
         }
         // AST_GUARD_CLAUSE is skipped (not a parameter)
     }
     return count;
+}
+
+// Returns 1 if the function's first parameter is _ctx: ptr. Such functions
+// can be called either with _ctx passed explicitly (got == expected) or with
+// _ctx auto-injected by the builder-DSL runtime (got == expected - 1).
+static int has_ctx_first_param(ASTNode* func) {
+    if (!func || func->child_count == 0) return 0;
+    for (int i = 0; i < func->child_count - 1; i++) {
+        ASTNode* child = func->children[i];
+        if (child->type == AST_VARIABLE_DECLARATION ||
+            child->type == AST_PATTERN_VARIABLE ||
+            child->type == AST_PATTERN_LITERAL) {
+            return child->value && strcmp(child->value, "_ctx") == 0 &&
+                   child->node_type && child->node_type->kind == TYPE_PTR;
+        }
+    }
+    return 0;
 }
 
 // Type compatibility functions
@@ -2530,21 +2542,28 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
     // Arity check: user-defined functions have their AST node stored
     if (symbol->node && (symbol->node->type == AST_FUNCTION_DEFINITION || symbol->node->type == AST_BUILDER_FUNCTION)) {
         int expected = count_function_params(symbol->node);
+        int ctx_first = has_ctx_first_param(symbol->node);
         int got = call->child_count;
         // If mismatch, try excluding trailing closures (for functions that
         // don't accept fn params but have trailing blocks for DSL syntax)
-        if (got != expected) {
+        if (got != expected && !(ctx_first && got == expected - 1)) {
             int non_closure = 0;
             for (int i = 0; i < call->child_count; i++) {
                 if (call->children[i] && call->children[i]->type != AST_CLOSURE) {
                     non_closure++;
                 }
             }
-            if (non_closure == expected) {
+            if (non_closure == expected ||
+                (ctx_first && non_closure == expected - 1)) {
                 got = non_closure; // trailing closures are DSL blocks, not args
             }
         }
-        if (got != expected) {
+        // Functions with _ctx as the first param accept either:
+        //   - expected args (caller passed _ctx explicitly), or
+        //   - expected-1 args (builder DSL auto-injects _ctx at the call site)
+        int arity_ok = (got == expected) ||
+                       (ctx_first && got == expected - 1);
+        if (!arity_ok) {
             char error_msg[256];
             snprintf(error_msg, sizeof(error_msg),
                      "Function '%s' expects %d argument(s), got %d",
