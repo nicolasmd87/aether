@@ -1,0 +1,20 @@
+// Test: function arity in ordered definitions
+// Mirrors tinyweb's filter/filter_all pattern where one function
+// calls another with 4 params, but the caller is defined after.
+
+extern println(s: string)
+
+// Caller defined first, calls filter with 4 args
+filter_all(_ctx: ptr, pattern: string, handler: fn) {
+    filter(_ctx, 1, pattern, handler)
+}
+
+// Function defined after the call
+filter(_ctx: ptr, method: int, pattern: string, handler: fn) {
+    println("filter called")
+}
+
+main() {
+    filter_all(0, "test", 0)
+    println("PASS function arity ordered")
+}
