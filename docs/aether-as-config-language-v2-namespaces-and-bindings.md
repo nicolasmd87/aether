@@ -377,8 +377,8 @@ downcall to fetch detail by id from its own service.
 sequenceDiagram
     autonumber
     participant Host as Java host JVM<br/>(TradingDemo + its TradeService field)
-    participant SDK as Trading.class<br/>(generated SDK; in the same JVM)
-    participant Lib as libtrading.so<br/>(Aether script; loaded via dlopen)
+    participant SDK as Trading.class<br/>(generated SDK — in the same JVM)
+    participant Lib as libtrading.so<br/>(Aether script — loaded via dlopen)
     participant Reg as event registry<br/>(in libtrading.so)
 
     Note over Host,Reg: setup (once)
@@ -439,7 +439,7 @@ script can branch on.
 sequenceDiagram
     autonumber
     participant Host as Java host JVM<br/>(TradingDemo + its FraudService field)
-    participant SDK as Trading.class<br/>(generated SDK; in the same JVM)
+    participant SDK as Trading.class<br/>(generated SDK — in the same JVM)
     participant Lib as libtrading.so<br/>(Aether script)
     participant HReg as host_call registry<br/>(📋 Shape B — not built)
 
@@ -459,7 +459,7 @@ sequenceDiagram
     Host-->>SDK: returns 42
     SDK-->>HReg: trampoline returns 42
     HReg-->>Lib: host_call returns 42
-    Lib->>Lib: if score > 80 { notify("OrderRejected", id); return 0 }
+    Lib->>Lib: if score > 80 then notify("OrderRejected", id) and return 0
     Lib-->>SDK: returns rc
     SDK-->>Host: rc
     end
