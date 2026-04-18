@@ -348,6 +348,139 @@ so anything the script printed leading up to the event surfaces in
 the right order. Cosmetic-only — the values returned by the script
 are unaffected; only the on-screen ordering of pre-event log output.
 
+## What works today vs. what's Shape B
+
+Two sequence diagrams. Same trading example; the first shows the
+round-trip that works in v1, the second shows the case the script
+*can't* express today and which `host_call` (Shape B) would unlock.
+
+### Works today: claim-check round-trip
+
+The host calls a script function. Mid-execution the script emits an
+event with a thin id payload. The registered host handler runs
+synchronously, persists state under that id, and returns. The script
+finishes and returns its own value. Later (or in the same Java
+statement after `placeTrade` returns), the host makes a second typed
+downcall to fetch detail by id from its own service.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Host as Java host
+    participant SDK as Trading SDK<br/>(Panama / ctypes / Fiddle)
+    participant Lib as libtrading.so<br/>(Aether script)
+    participant Reg as event registry<br/>(in libtrading.so)
+    participant Svc as Java TradeService
+
+    Note over Host,Reg: setup (once)
+    Host->>SDK: new Trading("aether/libtrading.so")
+    SDK->>Lib: dlopen
+    Host->>SDK: onOrderPlaced(id -> ...)
+    SDK->>Reg: aether_event_register("OrderPlaced", trampoline)
+
+    Note over Host,Svc: per-call: place_trade(100, 50_000, 1)
+    Host->>SDK: t.placeTrade(100, 50_000, 1)
+    SDK->>Lib: aether_place_trade(100, 50_000, 1)
+    Lib->>Lib: println("[ae] place_trade ...")
+    Lib->>Reg: notify("OrderPlaced", 100)
+    Reg->>Reg: fflush(NULL)
+    Reg-->>SDK: trampoline(100)
+    SDK-->>Host: handler.accept(100)
+    Host->>Svc: trades.put(100, "PLACED")
+    Svc-->>Host: ok
+    Host-->>SDK: handler returns
+    SDK-->>Reg: trampoline returns
+    Reg-->>Lib: notify returns 1
+    Lib-->>SDK: returns 1 (rc)
+    SDK-->>Host: rc == 1
+
+    Note over Host,Svc: later: typed downcall fetches detail by id
+    Host->>SDK: t.getTicker("ACME")
+    SDK->>Lib: aether_get_ticker("ACME")
+    Lib-->>SDK: "ACME"
+    SDK-->>Host: "ACME"
+```
+
+The whole thing crosses the C ABI as primitives: an `int64_t` id, a
+`const char*` event name, return codes. No structs marshalled, no
+closures held by the host beyond the event handler the host itself
+owns.
+
+### Shape B (not yet shipped): script calling into host
+
+What if `place_trade` needs the *current* fraud score from a running
+Java service mid-evaluation? The score isn't an `input` we can
+pre-pass — it depends on the order amount and is recomputed live.
+And it's not something the script can `notify` for, because `notify`
+is fire-and-forget with no return value.
+
+The only escape today is: pre-compute *every value the script might
+need* and pass it as an `input(...)`. That works when the inputs are
+small and bounded; it falls down when the script wants to do an
+ad-hoc lookup against host state.
+
+`host_call(name, ...)` would be a new extern that crosses the
+boundary in the script → host direction, returning a value the
+script can branch on.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Host as Java host
+    participant SDK as Trading SDK
+    participant Lib as libtrading.so<br/>(Aether script)
+    participant HReg as host_call registry<br/>(📋 Shape B — not built)
+    participant Svc as Java FraudService
+
+    rect rgba(255, 220, 220, 0.4)
+    Note over Host,Svc: 📋 Entire flow below is Shape B — none of these arrows work today
+    Note over Host,HReg: setup
+    Host->>SDK: t.exposeHostCall("fraud_score", order -> svc.score(order))
+    SDK->>HReg: aether_host_call_register("fraud_score", trampoline)
+
+    Note over Host,Svc: per-call
+    Host->>SDK: t.placeTrade(100, 50_000, 1)
+    SDK->>Lib: aether_place_trade(100, 50_000, 1)
+    Lib->>HReg: host_call("fraud_score", order_map)
+    HReg->>SDK: trampoline(order_map)
+    SDK->>Host: handler.apply(order_map)
+    Host->>Svc: svc.score(order_map)
+    Svc-->>Host: 42
+    Host-->>SDK: returns 42
+    SDK-->>HReg: trampoline returns 42
+    HReg-->>Lib: host_call returns 42
+    Lib->>Lib: if score > 80 { notify("OrderRejected", id); return 0 }
+    Lib-->>SDK: returns rc
+    SDK-->>Host: rc
+    end
+```
+
+The pink-shaded rect marks every arrow inside as not implemented today —
+the `host_call` registry, the script-side `host_call("name", ...)`
+extern, and the host-side `exposeHostCall(...)` registration API are
+all illustrative. The actual API will be settled when the work is
+scheduled.
+
+Why this is harder than `notify`:
+
+- **Return values cross the boundary.** `notify` is `void` from the
+  script's perspective (well, `int` for delivered/not-delivered, but
+  no payload). `host_call` returns a value the script will branch on,
+  which means the C-ABI return type has to be `void*` / `AetherValue*`
+  and the script-side codegen has to know how to unbox it.
+- **Argument marshalling is variadic.** `notify` takes `(name, id)`.
+  `host_call` takes `(name, ...)` with arbitrary argument types per
+  registered host call. Either we restrict arg types to the same
+  primitives `input(...)` accepts (probably right for v1 of Shape B),
+  or we marshal everything through `AetherValue*` (heavier but more
+  general).
+- **Lifecycle of host-supplied closures.** The Java/Python/Ruby
+  trampoline has to outlive the script's call into it. Same keepalive
+  problem as event handlers, just on the other side of the boundary.
+
+These are tractable — none of them are research problems — but they're
+the reason Shape B is a deliberate v2 deferral and not a one-day add.
+
 ## The discovery method
 
 The manifest description is serialized into a static struct embedded in
