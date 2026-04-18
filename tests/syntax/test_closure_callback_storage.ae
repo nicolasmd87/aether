@@ -1,0 +1,22 @@
+// Regression: a closure returned from a builder function captures another
+// closure, both must survive the return. Prior to the fixes this segfaulted.
+
+extern exit(code: int)
+
+build_handler() {
+    count = 0
+    digit = |d: int| { count = count + d; return count }
+    bump = || { return call(digit, 1) }
+    return bump
+}
+
+main() {
+    handler = build_handler()
+    a = call(handler)
+    if a != 1 { println("FAIL: first"); exit(1) }
+    b = call(handler)
+    if b != 2 { println("FAIL: second"); exit(1) }
+    c = call(handler)
+    if c != 3 { println("FAIL: third"); exit(1) }
+    println("ok")
+}

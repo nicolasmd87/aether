@@ -1,0 +1,17 @@
+// Regression: in-scope mutating closure. Prior to the fixes the env was
+// not wired up for assignment targets, so `count = count + 1` wrote to
+// an uninitialised stack local — printed garbage from the second call on.
+
+extern exit(code: int)
+
+main() {
+    count = 0
+    inc = || { count = count + 1; return count }
+    a = call(inc)
+    if a != 1 { println("FAIL: first"); exit(1) }
+    b = call(inc)
+    if b != 2 { println("FAIL: second"); exit(1) }
+    c = call(inc)
+    if c != 3 { println("FAIL: third"); exit(1) }
+    println("ok")
+}

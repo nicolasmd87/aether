@@ -1,0 +1,17 @@
+// Regression/baseline: ref cell pattern for shared mutable state.
+// This is the documented workaround for by-value capture semantics.
+
+extern exit(code: int)
+
+main() {
+    count = ref(0)
+    inc = || { ref_set(count, ref_get(count) + 1); return ref_get(count) }
+    a = call(inc)
+    if a != 1 { println("FAIL: first"); exit(1) }
+    b = call(inc)
+    if b != 2 { println("FAIL: second"); exit(1) }
+    c = call(inc)
+    if c != 3 { println("FAIL: third"); exit(1) }
+    ref_free(count)
+    println("ok")
+}

@@ -1,6 +1,64 @@
 #include "codegen_internal.h"
 #include "optimizer.h"
 
+// Is `name` the variable name of a known closure? If yes, also returns the
+// closure id via *out_id. Used by return-site Bug B protection.
+static int lookup_closure_var(CodeGenerator* gen, const char* name, int* out_id) {
+    if (!gen || !name) return 0;
+    for (int i = 0; i < gen->closure_var_count; i++) {
+        if (gen->closure_var_map[i].var_name &&
+            strcmp(gen->closure_var_map[i].var_name, name) == 0) {
+            if (out_id) *out_id = gen->closure_var_map[i].closure_id;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Append `name` to the protected-closures list if it isn't already there.
+static void add_protected_name(char*** names, int* count, int* cap, const char* name) {
+    if (!name) return;
+    for (int i = 0; i < *count; i++) {
+        if ((*names)[i] && strcmp((*names)[i], name) == 0) return;
+    }
+    if (*count >= *cap) {
+        *cap = *cap ? *cap * 2 : 4;
+        *names = realloc(*names, *cap * sizeof(char*));
+    }
+    (*names)[(*count)++] = strdup(name);
+}
+
+// Walk `expr` and collect the names of any closure variables that appear.
+// Accepts bare identifiers (`return bump`), box_closure wrappers
+// (`return box_closure(bump)`), and nested calls. Then transitively expands:
+// if `bump` captures `digit` and `digit` is also a closure variable, `digit`'s
+// env must be protected too.
+static void collect_returned_closures(CodeGenerator* gen, ASTNode* expr,
+                                      char*** names, int* count, int* cap) {
+    if (!expr) return;
+    if (expr->type == AST_IDENTIFIER && expr->value) {
+        int cid;
+        if (lookup_closure_var(gen, expr->value, &cid)) {
+            add_protected_name(names, count, cap, expr->value);
+            // Transitive: any capture of this closure that is itself a
+            // closure variable must also be protected.
+            for (int ci = 0; ci < gen->closure_count; ci++) {
+                if (gen->closures[ci].id != cid) continue;
+                for (int k = 0; k < gen->closures[ci].capture_count; k++) {
+                    const char* cap_name = gen->closures[ci].captures[k];
+                    if (cap_name && lookup_closure_var(gen, cap_name, NULL)) {
+                        add_protected_name(names, count, cap, cap_name);
+                    }
+                }
+                break;
+            }
+        }
+    }
+    for (int i = 0; i < expr->child_count; i++) {
+        collect_returned_closures(gen, expr->children[i], names, count, cap);
+    }
+}
+
 // ============================================================================
 // ARITHMETIC SERIES LOOP COLLAPSE
 //
@@ -567,6 +625,27 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     gen->match_result_var = stmt->value;
                     generate_statement(gen, stmt->children[0]);
                     gen->match_result_var = NULL;
+                    break;
+                }
+
+                // If we're in a closure body and this name is a mutated capture,
+                // route the write through _env-> so mutations persist on the env
+                // struct rather than dying with a stack-local alias.
+                int is_env_cap = 0;
+                for (int ec = 0; ec < gen->current_env_capture_count; ec++) {
+                    if (gen->current_env_captures[ec] &&
+                        strcmp(gen->current_env_captures[ec], stmt->value) == 0) {
+                        is_env_cap = 1;
+                        break;
+                    }
+                }
+                if (is_env_cap) {
+                    fprintf(gen->output, "_env->%s", stmt->value);
+                    if (stmt->child_count > 0) {
+                        fprintf(gen->output, " = ");
+                        generate_expression(gen, stmt->children[0]);
+                    }
+                    fprintf(gen->output, ";\n");
                     break;
                 }
 
@@ -1486,7 +1565,17 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     fprintf(gen->output, "%s _builder_ret = ", ret_c_type);
                     generate_expression(gen, stmt->children[0]);
                     fprintf(gen->output, ";\n");
-                    emit_all_defers(gen);
+                    // Bug B suppression: any closure whose env is still live
+                    // through the returned value (directly or transitively via
+                    // another closure capturing it) must not have its env-free
+                    // defer run — the caller now owns the env.
+                    char** protected_names = NULL;
+                    int protected_count = 0, protected_cap = 0;
+                    collect_returned_closures(gen, stmt->children[0],
+                                              &protected_names, &protected_count, &protected_cap);
+                    emit_all_defers_protected(gen, protected_names, protected_count);
+                    for (int p = 0; p < protected_count; p++) free(protected_names[p]);
+                    free(protected_names);
                     print_line(gen, "return _builder_ret;");
                 } else if (stmt->child_count > 0 && stmt->children[0] &&
                            stmt->children[0]->type == AST_PRINT_STATEMENT) {

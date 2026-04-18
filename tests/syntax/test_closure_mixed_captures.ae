@@ -1,0 +1,26 @@
+// Regression: one read-only capture and one mutated capture in the same
+// closure. Read-only captures keep the cheap alias in the body prologue;
+// mutated captures route through _env->. Both must coexist.
+
+extern exit(code: int)
+
+main() {
+    base = 100           // read-only in closure
+    count = 0            // mutated in closure
+    step = || {
+        count = count + 1
+        return base + count
+    }
+    r1 = call(step)
+    if r1 != 101 { println("FAIL: r1"); exit(1) }
+    r2 = call(step)
+    if r2 != 102 { println("FAIL: r2"); exit(1) }
+    r3 = call(step)
+    if r3 != 103 { println("FAIL: r3"); exit(1) }
+    // Outer `base` unchanged — read-only captures are by value, unaffected
+    // by anything the closure could have done.
+    if base != 100 { println("FAIL: base mutated"); exit(1) }
+    // Outer `count` unchanged — by-value semantics, mutations live in env.
+    if count != 0 { println("FAIL: outer count mutated"); exit(1) }
+    println("ok")
+}

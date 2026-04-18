@@ -102,6 +102,8 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->builder_func_count = 0;
     gen->builder_func_capacity = 0;
     gen->in_trailing_block = 0;
+    gen->current_env_captures = NULL;
+    gen->current_env_capture_count = 0;
     // Builder function registry
     gen->builder_funcs_reg = NULL;
     gen->builder_func_reg_count = 0;
@@ -360,17 +362,53 @@ void exit_scope(CodeGenerator* gen) {
     }
 }
 
-// Emit ALL deferred statements (for return - unwinds entire function)
-void emit_all_defers(CodeGenerator* gen) {
+// Is `deferred` the synthetic "free(<name>.env)" defer for the closure var
+// called `name`? The defers inserted by codegen_stmt.c at closure-variable
+// declaration sites have a fixed shape: EXPRESSION_STATEMENT > FUNCTION_CALL
+// "free" > IDENTIFIER "<name>.env".
+static int is_env_free_for(ASTNode* deferred, const char* name) {
+    if (!deferred || !name) return 0;
+    if (deferred->type != AST_EXPRESSION_STATEMENT || deferred->child_count < 1) return 0;
+    ASTNode* call = deferred->children[0];
+    if (!call || call->type != AST_FUNCTION_CALL || !call->value ||
+        strcmp(call->value, "free") != 0 || call->child_count < 1) return 0;
+    ASTNode* arg = call->children[0];
+    if (!arg || arg->type != AST_IDENTIFIER || !arg->value) return 0;
+    size_t nlen = strlen(name);
+    if (strncmp(arg->value, name, nlen) != 0) return 0;
+    if (strcmp(arg->value + nlen, ".env") != 0) return 0;
+    return 1;
+}
+
+// Emit ALL deferred statements (for return - unwinds entire function).
+// `protected_names` and `protected_count` list closure variable names whose
+// env-free defer should be suppressed — used at return sites where the
+// closure's env is still live through the returned value.
+void emit_all_defers_protected(CodeGenerator* gen, char** protected_names, int protected_count) {
     // Emit all defers in LIFO order across all scopes
     for (int i = gen->defer_count - 1; i >= 0; i--) {
         ASTNode* deferred = gen->defer_stack[i];
-        if (deferred) {
-            print_indent(gen);
-            fprintf(gen->output, "/* deferred */ ");
-            generate_statement(gen, deferred);
+        if (!deferred) continue;
+        int skip = 0;
+        for (int p = 0; p < protected_count; p++) {
+            if (protected_names[p] && is_env_free_for(deferred, protected_names[p])) {
+                skip = 1;
+                break;
+            }
         }
+        if (skip) {
+            print_indent(gen);
+            fprintf(gen->output, "/* deferred (suppressed: escapes via return) */\n");
+            continue;
+        }
+        print_indent(gen);
+        fprintf(gen->output, "/* deferred */ ");
+        generate_statement(gen, deferred);
     }
+}
+
+void emit_all_defers(CodeGenerator* gen) {
+    emit_all_defers_protected(gen, NULL, 0);
 }
 
 // ============================================================================

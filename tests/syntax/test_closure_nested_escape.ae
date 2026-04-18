@@ -1,0 +1,22 @@
+// Regression: outer closure captures inner closure; both escape.
+// Prior to the fixes this segfaulted because the captured ptr type was
+// truncated to int and the returned env was freed prematurely.
+
+extern exit(code: int)
+extern str_eq(a: string, b: string) -> int
+
+build_pair() {
+    label = "hello"
+    inner = || { return label }
+    wrapped = || { return call(inner) }
+    return wrapped
+}
+
+main() {
+    w = build_pair()
+    s1 = call(w)
+    if str_eq(s1, "hello") == 0 { println("FAIL: first"); exit(1) }
+    s2 = call(w)
+    if str_eq(s2, "hello") == 0 { println("FAIL: second"); exit(1) }
+    println("ok")
+}
