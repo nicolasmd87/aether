@@ -491,6 +491,57 @@ Why this is harder than `notify`:
 These are tractable — none of them are research problems — but they're
 the reason Shape B is a deliberate v2 deferral and not a one-day add.
 
+## Marshalling: cost and safety
+
+The lifelines in the diagrams are marshalling boundaries; this
+section says what each kind of crossing actually costs and what can
+go wrong.
+
+### Marshalling cost per type
+
+Per-call overhead, not amortized startup. Numbers are order-of-
+magnitude; measure in your own host before optimizing.
+
+| Crossing | What happens | Cost |
+|---|---|---|
+| `int`, `int64`, `bool` | Register-passed primitive — Panama / ctypes / Fiddle widen or pun bits, no allocation | ~tens of ns per call. JIT can't inline across the FFI but otherwise free |
+| `string` (host → script) | Java `String` (UTF-16 internally) → encode UTF-8 → `arena.allocateFrom` → null-terminate → pass `MemorySegment.address()` as `const char*` | One allocation + one encoding pass + linear copy, all O(length). Cheap for `"ACME"`, real for >1 KB |
+| `string` (script → host) | Aether returns `const char*` (already UTF-8) → host does `MemorySegment.getString(0)` → scan for `\0` → decode UTF-8 → allocate a Java `String` | One allocation + one decoding pass + linear scan + linear copy. Same shape as the inbound direction |
+| Event handler registration | `Linker.upcallStub(MethodHandle, FunctionDescriptor, Arena)` generates a tiny native trampoline at runtime that, when called from C, marshals back into the JVM and invokes the handler | One-time cost per `on<Event>(...)` call (microseconds). Subsequent invocations pay the trampoline overhead (~tens of ns per call) |
+| `notify(name, id)` (script → host event) | `(const char*, int64_t)` — primitives only. No allocation, no encoding | Two register-passes + a strcmp-based dispatch lookup + the trampoline overhead. Sub-microsecond |
+| Maps / lists / structs | **Not in v1** — Aether composite values would marshal via `aether_config_*` accessors, one FFI call per field walk | Quadratic in the worst case (FFI per accessor × depth). The reason `input(...)` is restricted to primitives + strings |
+
+The asymmetry worth flagging: **strings cost more than primitives in
+both directions** (encoding/decoding + allocation), and **callbacks
+pay a one-time setup cost but a per-invocation trampoline cost
+forever.** A trading scenario calling `place_trade(id, amount, ticker_known)`
+once per HTTP request is unaffected — three primitive args are
+microseconds at most. A scenario passing 10 KB JSON strings through
+`label("...", ...)` at 100 K calls/sec would feel it.
+
+### Memory safety at the boundary
+
+The FFI boundary is exactly where C's "trust the caller" memory
+model meets Java/Python/Ruby's "the runtime owns it" model. The
+generators try to shield host authors from the worst sharp edges,
+but some are unavoidable in v1. Honest accounting:
+
+| Hazard | Risk in v1 | What protects you |
+|---|---|---|
+| **Buffer overflow (write)** | Low | Aether `string` is `const char*` and the host's marshallers (`MemorySegment.getString`, `ctypes.c_char_p`, `Fiddle::Pointer.to_str`) all allocate fresh host-language strings — they never write through the C pointer |
+| **Read past end of unterminated string** | Low — but real if a future Aether stdlib function returns a non-null-terminated buffer | Convention: every `const char*` returned by an Aether function is null-terminated. The compiler's string codegen guarantees this today; a hand-written extern could break it |
+| **Use-after-free: returned strings** | Medium | Strings returned by `aether_<name>(...)` are borrowed pointers into Aether's heap. Lifetime is "until the next Aether call into the same `.so`." Hosts that hold the pointer past that point will see freed memory. Each per-language SDK eagerly copies the string out (via `getString` / decode) before the call returns, which is the right pattern — but a host author bypassing the SDK and calling the raw `aether_<name>` symbol directly could trip on this |
+| **Use-after-free: callback trampolines** | Medium | The Python/Ruby/Java SDKs hold each registered callback in `self._callbacks` / `@callbacks` / a final field on the SDK instance so the host-language GC doesn't reclaim it while C still has the function pointer. If a host author rebinds those collections (`self._callbacks = []`) or replaces the SDK instance while a `notify` is in flight on another thread (see concurrency, below), UAF |
+| **Double-free** | Low | The script doesn't hand the host any owned memory the host is supposed to free. Everything returned is borrowed from Aether's heap. If a future ABI version adds owned-string returns, this risk reappears |
+| **Integer truncation / sign confusion** | Low | `notify(name, id)` is `int64_t`. Java `long`, Python arbitrary-precision `int` (ctypes silently masks to 64-bit), Ruby `Integer` (Fiddle truncates). Garbage-in/garbage-out, no crash — but a Python host passing `2**70` will see a different `id` on the script side than it expected |
+| **String encoding mismatch** | Low | All three SDKs default to UTF-8 for the FFI marshal. A host that explicitly forces UTF-16 or Latin-1 would see garbage |
+| **Concurrency: races on the dispatch table** | **Real and undocumented** | The Aether runtime is single-threaded. The `g_events[]` registry and `g_manifest` are NOT mutex-guarded. A Java host calling into the `.so` from two threads concurrently can race `aether_event_register` against `notify`, with possible UAF on the handler pointer. **Today's contract is "host serializes all calls into the SDK."** Not enforced anywhere; not even mentioned in the SDK comments. Worth fixing before v1 ships to anyone who didn't write the runtime |
+| **Capability escape via raw `extern`** | **Real gap** | The capability-empty link profile excludes `std.fs`, `std.net`, etc. — so `import std.fs` in a script is rejected. But a malicious script author can declare their own `extern open(path: ptr, flags: int) -> int` directly, and the linker (which doesn't know about Aether's capability model) will happily resolve it against libc. The compile-time capability check inspects imports, not raw externs. This is a real escape — though "malicious script author" is a meaningful threat model only when the host is loading scripts from untrusted sources |
+
+The two **real and undocumented** rows above (concurrency and raw
+`extern` escape) are the items most worth fixing before this layer
+gets serious adoption. They're listed in "Open questions" below.
+
 ## The discovery method
 
 The manifest description is serialized into a static struct embedded in
@@ -607,6 +658,28 @@ A handful of decisions deferred from the v1 ship:
    `exclude ["internal_helpers.ae"]`, or a leading underscore
    convention. The manifest-level approach is probably cleanest because
    it keeps the policy in the namespace owner's hands.
+
+5. **Concurrency contract on the SDK.** The C-side dispatch table
+   (`g_events[]`) and the manifest registry (`g_manifest`) are not
+   mutex-guarded. The implicit contract today is "the host serializes
+   all calls into the SDK from one thread at a time," but this is not
+   documented anywhere and is easy to violate from a Java host that
+   dispatches HTTP requests on a thread pool. Two fixes worth
+   considering: (a) document the contract loudly in each generated
+   SDK's class header so a host author has to opt into the
+   single-threaded model knowingly, or (b) add a coarse
+   `pthread_mutex_t` in `aether_host.c` so concurrent calls serialize
+   transparently. (b) is the friendlier default for v2 hosts; (a)
+   keeps the runtime free of pthread dependencies.
+
+6. **Capability escape via raw `extern` declarations.** The
+   capability-empty link profile inspects `import` statements but
+   doesn't catch a script that declares its own
+   `extern open(path: ptr, flags: int) -> int` to reach libc directly.
+   Real escape, but only matters when the host loads scripts from
+   untrusted sources. Fix: extend the compile-time capability check
+   to enumerate raw extern declarations against an allowlist
+   (currently `notify` and the manifest builders).
 
 ## Summary
 
