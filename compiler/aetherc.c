@@ -56,6 +56,21 @@ static const char* emit_header_path = NULL;
 static bool emit_exe = true;
 static bool emit_lib = false;
 
+// --emit-namespace-manifest: walk a manifest.ae's AST, extract the
+// namespace/input/event/bindings calls, and write a JSON description
+// to stdout. Used by `ae build --namespace <dir>` to learn about the
+// namespace before codegen so it can synthesize the discovery struct.
+// Implies --check (no codegen output).
+static bool emit_namespace_manifest = false;
+
+// --emit-namespace-describe: like --emit-namespace-manifest but writes
+// a C source file containing a static const AetherNamespaceManifest
+// and the aether_describe() definition. The C file is then linked
+// into the namespace .so so the host can call aether_describe() at
+// runtime. Output path is the second positional arg (the input is
+// the manifest.ae).
+static bool emit_namespace_describe = false;
+
 #ifdef _WIN32
     #include <windows.h>
     #include <io.h>
@@ -94,6 +109,220 @@ static void report_compilation_failure(void) {
     if (n > 0) {
         fprintf(stderr, "aborting: %d error(s) found\n", n);
     }
+}
+
+// JSON helpers for --emit-namespace-manifest. Quote a string literal,
+// handling backslash and double-quote. Newlines/tabs are unlikely in
+// manifest fields but escape them for safety.
+static void json_emit_str(FILE* out, const char* s) {
+    if (!s) { fputs("null", out); return; }
+    fputc('"', out);
+    for (const char* p = s; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c == '"' || c == '\\') { fputc('\\', out); fputc(c, out); }
+        else if (c == '\n') { fputs("\\n", out); }
+        else if (c == '\t') { fputs("\\t", out); }
+        else if (c < 0x20) { fprintf(out, "\\u%04x", c); }
+        else { fputc(c, out); }
+    }
+    fputc('"', out);
+}
+
+// Captured manifest used by both the JSON emitter and the C-describe
+// emitter. Borrowed pointers into the parsed AST's literal storage —
+// valid for the lifetime of the parse.
+typedef struct {
+    const char* ns_name;
+    const char* java_pkg;
+    const char* java_class;
+    const char* py_module;
+    const char* go_package;
+    struct { const char* name; const char* type_sig; } inputs[64];
+    int input_count;
+    struct { const char* name; const char* carries; } events[64];
+    int event_count;
+} ExtractedManifest;
+
+// Walk a parsed program AST and capture every top-level manifest
+// builder call (namespace/input/event/bindings/java/python/go) found
+// in the body of any top-level function. The function ordering inside
+// the AST preserves the user's declaration order — inputs and events
+// appear in the generated SDK in the order the manifest declared them.
+//
+// We deliberately do NOT execute the manifest at compile time; we
+// inspect the AST. That sidesteps the need to dlopen the just-built
+// library inside `aetherc` and matches how documented contract
+// generators (gRPC's protoc-gen-*, openapi-generator, etc.) work:
+// description is structural, not behavioural.
+static void extract_manifest(ExtractedManifest* m, ASTNode* program) {
+    memset(m, 0, sizeof(*m));
+    if (!program) return;
+
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* fn = program->children[i];
+        if (!fn || (fn->type != AST_FUNCTION_DEFINITION
+                 && fn->type != AST_BUILDER_FUNCTION)) continue;
+
+        ASTNode* body = NULL;
+        for (int b = 0; b < fn->child_count; b++) {
+            if (fn->children[b] && fn->children[b]->type == AST_BLOCK) {
+                body = fn->children[b];
+            }
+        }
+        if (!body) continue;
+
+        for (int s = 0; s < body->child_count; s++) {
+            ASTNode* stmt = body->children[s];
+            if (!stmt || stmt->type != AST_EXPRESSION_STATEMENT
+                     || stmt->child_count == 0) continue;
+            ASTNode* call = stmt->children[0];
+            if (!call || call->type != AST_FUNCTION_CALL || !call->value) continue;
+
+            const char* name = call->value;
+            #define ARG_STR(n) (call->child_count > (n) && call->children[(n)] \
+                                && call->children[(n)]->type == AST_LITERAL \
+                                ? call->children[(n)]->value : NULL)
+            if (strcmp(name, "namespace") == 0) {
+                if (ARG_STR(0)) m->ns_name = ARG_STR(0);
+            } else if (strcmp(name, "input") == 0) {
+                if (m->input_count < 64 && ARG_STR(0) && ARG_STR(1)) {
+                    m->inputs[m->input_count].name = ARG_STR(0);
+                    m->inputs[m->input_count].type_sig = ARG_STR(1);
+                    m->input_count++;
+                }
+            } else if (strcmp(name, "event") == 0) {
+                if (m->event_count < 64 && ARG_STR(0) && ARG_STR(1)) {
+                    m->events[m->event_count].name = ARG_STR(0);
+                    m->events[m->event_count].carries = ARG_STR(1);
+                    m->event_count++;
+                }
+            } else if (strcmp(name, "java") == 0) {
+                if (ARG_STR(0)) m->java_pkg = ARG_STR(0);
+                if (ARG_STR(1)) m->java_class = ARG_STR(1);
+            } else if (strcmp(name, "python") == 0) {
+                if (ARG_STR(0)) m->py_module = ARG_STR(0);
+            } else if (strcmp(name, "go") == 0) {
+                if (ARG_STR(0)) m->go_package = ARG_STR(0);
+            }
+            #undef ARG_STR
+        }
+    }
+}
+
+static void emit_manifest_json(FILE* out, ASTNode* program) {
+    if (!out) return;
+    ExtractedManifest m;
+    extract_manifest(&m, program);
+
+    fputs("{\n  \"namespace\": ", out); json_emit_str(out, m.ns_name); fputs(",\n", out);
+
+    fputs("  \"inputs\": [", out);
+    for (int i = 0; i < m.input_count; i++) {
+        if (i > 0) fputs(", ", out);
+        fputs("{\"name\": ", out); json_emit_str(out, m.inputs[i].name);
+        fputs(", \"type\": ",     out); json_emit_str(out, m.inputs[i].type_sig);
+        fputs("}", out);
+    }
+    fputs("],\n", out);
+
+    fputs("  \"events\": [", out);
+    for (int i = 0; i < m.event_count; i++) {
+        if (i > 0) fputs(", ", out);
+        fputs("{\"name\": ",    out); json_emit_str(out, m.events[i].name);
+        fputs(", \"carries\": ", out); json_emit_str(out, m.events[i].carries);
+        fputs("}", out);
+    }
+    fputs("],\n", out);
+
+    fputs("  \"bindings\": {\n", out);
+    fputs("    \"java\": {\"package\": ", out); json_emit_str(out, m.java_pkg);
+    fputs(", \"class\": ", out); json_emit_str(out, m.java_class); fputs("},\n", out);
+    fputs("    \"python\": {\"module\": ", out); json_emit_str(out, m.py_module); fputs("},\n", out);
+    fputs("    \"go\": {\"package\": ", out); json_emit_str(out, m.go_package); fputs("}\n", out);
+    fputs("  }\n", out);
+    fputs("}\n", out);
+}
+
+// C-quote a string for embedding in a static initializer. Same escape
+// rules as JSON above but for C string literals.
+static void c_emit_str(FILE* out, const char* s) {
+    if (!s) { fputs("NULL", out); return; }
+    fputc('"', out);
+    for (const char* p = s; *p; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (c == '"' || c == '\\') { fputc('\\', out); fputc(c, out); }
+        else if (c == '\n') { fputs("\\n", out); }
+        else if (c == '\t') { fputs("\\t", out); }
+        else if (c < 0x20) { fprintf(out, "\\x%02x\"\"", c); }
+        else { fputc(c, out); }
+    }
+    fputc('"', out);
+}
+
+// Emit a self-contained C source file declaring a static const
+// AetherNamespaceManifest populated from the parsed manifest AST,
+// plus an aether_describe() exported function. This file is linked
+// into the namespace .so so the host can introspect at runtime.
+static void emit_describe_c(FILE* out, ASTNode* program) {
+    if (!out) return;
+    ExtractedManifest m;
+    extract_manifest(&m, program);
+
+    /* The describe stub is intentionally self-contained — it doesn't
+     * #include aether_host.h so that it can be linked into a .so even
+     * when the host's include path isn't known to aetherc. We define
+     * a *layout-compatible* struct under a different name and cast at
+     * the boundary. The host #includes aether_host.h and sees the
+     * canonical names. */
+    fputs("/* Auto-generated by aetherc --emit-namespace-describe. DO NOT EDIT. */\n", out);
+    fputs("#include <stdint.h>\n", out);
+    fputs("#include <stddef.h>\n\n", out);
+    fputs("struct AetherInputDecl { const char* name; const char* type_signature; };\n", out);
+    fputs("struct AetherEventDecl { const char* name; const char* carries_type; };\n", out);
+    fputs("struct AetherJavaBinding   { const char* package_name; const char* class_name; };\n", out);
+    fputs("struct AetherPythonBinding { const char* module_name; };\n", out);
+    fputs("struct AetherGoBinding     { const char* package_name; };\n", out);
+    fputs("struct AetherNamespaceManifest {\n", out);
+    fputs("    const char* namespace_name;\n", out);
+    fputs("    int input_count;\n", out);
+    fputs("    struct AetherInputDecl inputs[64];\n", out);
+    fputs("    int event_count;\n", out);
+    fputs("    struct AetherEventDecl events[64];\n", out);
+    fputs("    struct AetherJavaBinding   java;\n", out);
+    fputs("    struct AetherPythonBinding python;\n", out);
+    fputs("    struct AetherGoBinding     go;\n", out);
+    fputs("};\n\n", out);
+
+    fputs("static const struct AetherNamespaceManifest g_aether_describe = {\n", out);
+    fputs("    .namespace_name = ", out); c_emit_str(out, m.ns_name); fputs(",\n", out);
+    fprintf(out, "    .input_count = %d,\n", m.input_count);
+    fputs("    .inputs = {\n", out);
+    for (int i = 0; i < m.input_count; i++) {
+        fputs("        { ", out); c_emit_str(out, m.inputs[i].name);
+        fputs(", ", out); c_emit_str(out, m.inputs[i].type_sig);
+        fputs(" },\n", out);
+    }
+    fputs("    },\n", out);
+    fprintf(out, "    .event_count = %d,\n", m.event_count);
+    fputs("    .events = {\n", out);
+    for (int i = 0; i < m.event_count; i++) {
+        fputs("        { ", out); c_emit_str(out, m.events[i].name);
+        fputs(", ", out); c_emit_str(out, m.events[i].carries);
+        fputs(" },\n", out);
+    }
+    fputs("    },\n", out);
+    fputs("    .java = { ", out); c_emit_str(out, m.java_pkg);
+    fputs(", ", out); c_emit_str(out, m.java_class); fputs(" },\n", out);
+    fputs("    .python = { ", out); c_emit_str(out, m.py_module); fputs(" },\n", out);
+    fputs("    .go = { ", out); c_emit_str(out, m.go_package); fputs(" },\n", out);
+    fputs("};\n\n", out);
+
+    /* aether_describe() is the runtime discovery entry point. Hosts
+     * cast the returned pointer to AetherNamespaceManifest* (declared
+     * canonically in runtime/aether_host.h). */
+    fputs("const struct AetherNamespaceManifest* aether_describe(void) {\n", out);
+    fputs("    return &g_aether_describe;\n", out);
+    fputs("}\n", out);
 }
 
 // Compile aether source to C
@@ -203,6 +432,41 @@ int compile_source(const char* input_path, const char* output_path) {
         free_parser(parser);
         free(source);
         return 1;  // success
+    }
+
+    // --emit-namespace-manifest: walk the AST for std.host builder calls
+    // and emit JSON to stdout. Used by `ae build --namespace`. No codegen.
+    if (emit_namespace_manifest) {
+        emit_manifest_json(stdout, program);
+        free_ast_node(program);
+        for (int i = 0; i < token_count; i++) {
+            free_token(tokens[i]);
+        }
+        free_parser(parser);
+        free(source);
+        return 1;  // success
+    }
+
+    // --emit-namespace-describe: walk the AST and emit a self-contained
+    // C file with the embedded AetherNamespaceManifest + aether_describe()
+    // stub. Output path is `output_path` (the second positional argument).
+    if (emit_namespace_describe) {
+        FILE* out = fopen(output_path, "w");
+        if (!out) {
+            perror("Error opening output file");
+            free_ast_node(program);
+            for (int i = 0; i < token_count; i++) free_token(tokens[i]);
+            free_parser(parser);
+            free(source);
+            return 0;
+        }
+        emit_describe_c(out, program);
+        fclose(out);
+        free_ast_node(program);
+        for (int i = 0; i < token_count; i++) free_token(tokens[i]);
+        free_parser(parser);
+        free(source);
+        return 1;
     }
 
     // Step 2.5: Module Orchestration
@@ -407,6 +671,7 @@ void print_help(const char* program_name) {
     printf("  --emit-c                         Print generated C code to stdout\n");
     printf("  --emit-header [path]             Generate C header for embedding (default: auto)\n");
     printf("  --emit=<exe|lib|both>            Output artifact (exe default, lib produces .so/.dylib)\n");
+    printf("  --emit-namespace-manifest        Print the manifest JSON for a manifest.ae and exit\n");
     printf("  --check                          Type-check only (no code generation)\n");
     printf("  --dump-ast                       Print AST and exit (no code generation)\n");
     printf("  --help, -h                       Show this help message\n");
@@ -483,6 +748,12 @@ int main(int argc, char *argv[]) {
                 fprintf(stderr, "Error: --emit must be one of: exe, lib, both (got '%s')\n", val);
                 return 1;
             }
+            arg_offset++;
+        } else if (strcmp(argv[arg_offset], "--emit-namespace-manifest") == 0) {
+            emit_namespace_manifest = true;
+            arg_offset++;
+        } else if (strcmp(argv[arg_offset], "--emit-namespace-describe") == 0) {
+            emit_namespace_describe = true;
             arg_offset++;
         } else {
             fprintf(stderr, "Unknown option: %s\n", argv[arg_offset]);

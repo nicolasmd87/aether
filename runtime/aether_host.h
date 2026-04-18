@@ -136,6 +136,46 @@ AetherManifest* manifest_get(void);
  * own bookkeeping — we don't free what we don't own. */
 void manifest_clear(void);
 
+/* ---------------------------------------------------------------------
+ * Discovery
+ *
+ * AetherNamespaceManifest is the layout `aether_describe()` returns
+ * from a namespace .so built by `ae build --namespace`. It's the same
+ * shape as AetherManifest above — both describe the same data — but
+ * AetherNamespaceManifest is statically embedded in each namespace .so
+ * at compile time, while AetherManifest is the runtime mutable
+ * registry the std.host builders write into.
+ *
+ * Hosts call aether_describe() to introspect the loaded library:
+ *   - Verify the namespace name matches what they expect at startup
+ *   - Walk inputs to know what set<X>() methods to expose
+ *   - Walk events to know what on<Y>() listeners to wire up
+ *   - Read the bindings struct to confirm the SDK they're using
+ *     was generated for the same namespace
+ *
+ * The struct layout MUST stay binary-compatible with the static-init
+ * the aetherc --emit-namespace-describe stub generates (see
+ * compiler/aetherc.c::emit_describe_c). If you reorder fields, update
+ * both sides at once.
+ * --------------------------------------------------------------------- */
+
+typedef struct AetherNamespaceManifest {
+    const char* namespace_name;
+    int input_count;
+    AetherInputDecl inputs[AETHER_MANIFEST_MAX_INPUTS];
+    int event_count;
+    AetherEventDecl events[AETHER_MANIFEST_MAX_EVENTS];
+    AetherJavaBinding   java;
+    AetherPythonBinding python;
+    AetherGoBinding     go;
+} AetherNamespaceManifest;
+
+/* The discovery entry point. Defined by the auto-generated stub
+ * inside each namespace .so; declared here so hosts can include this
+ * header and call it via dlsym. Returns a borrowed pointer to a
+ * static — DO NOT free. */
+const AetherNamespaceManifest* aether_describe(void);
+
 #ifdef __cplusplus
 }  /* extern "C" */
 #endif

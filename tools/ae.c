@@ -1425,6 +1425,287 @@ static int cmd_check(int argc, char** argv) {
     return run_cmd(cmd);
 }
 
+// Forward declaration — cmd_build_namespace delegates to cmd_build for the
+// actual link step, but cmd_build is defined further down.
+static int cmd_build(int argc, char** argv);
+
+// =============================================================================
+// `ae build --namespace <dir>` — build a namespace into a single .so
+//
+// A namespace is a directory containing:
+//   - manifest.ae               (declares namespace name, inputs, events,
+//                                 bindings — see std.host module DSL)
+//   - one or more sibling *.ae  (contribute their top-level functions
+//                                 to the namespace; auto-discovered by
+//                                 directory convention)
+//
+// The pipeline:
+//   1. Find <dir>/manifest.ae. Error if missing.
+//   2. Run aetherc --emit-namespace-describe to produce a .c stub
+//      containing the static AetherNamespaceManifest + aether_describe().
+//   3. Discover sibling .ae files (everything under <dir> except
+//      manifest.ae and files marked @private — annotation deferred to
+//      a later chunk; for v1 every sibling is included).
+//   4. Concatenate all sibling .ae files into one synthetic .ae and
+//      compile via the existing --emit=lib pipeline. (Single-file
+//      compile fits the one-file-per-build constraint of aetherc.)
+//   5. Link the describe.c stub alongside the resulting .c into a
+//      single libnamespace.so.
+//
+// The default output is lib<namespace>.so (or .dylib on macOS), placed
+// in the current directory unless -o is supplied.
+// =============================================================================
+
+#include <dirent.h>
+
+int cmd_build_namespace(int argc, char** argv) {
+    const char* dir = NULL;
+    const char* output_name = NULL;
+
+    for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "--namespace") == 0 && i + 1 < argc) {
+            dir = argv[++i];
+        } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+            output_name = argv[++i];
+        }
+    }
+
+    if (!dir) {
+        fprintf(stderr, "Error: --namespace requires a directory argument\n");
+        return 1;
+    }
+    if (!dir_exists(dir)) {
+        fprintf(stderr, "Error: namespace directory '%s' not found\n", dir);
+        return 1;
+    }
+
+    char manifest_path[1024];
+    snprintf(manifest_path, sizeof(manifest_path), "%s/manifest.ae", dir);
+    if (!path_exists(manifest_path)) {
+        fprintf(stderr, "Error: %s not found — every namespace needs a manifest.ae\n", manifest_path);
+        return 1;
+    }
+
+#ifdef __APPLE__
+    const char* lib_ext = ".dylib";
+#elif defined(_WIN32)
+    const char* lib_ext = ".dll";
+#else
+    const char* lib_ext = ".so";
+#endif
+
+    /* Set up a temp workspace for the synthesized .ae, the .c outputs,
+     * and the describe stub. Nothing here outlives the build. */
+    char tmpdir[1024];
+    snprintf(tmpdir, sizeof(tmpdir), "%s/aether_ns_%d", get_temp_dir(), (int)getpid());
+    mkdirs(tmpdir);
+
+    /* Step 1: produce the describe.c stub from manifest.ae. */
+    char describe_c[1024];
+    snprintf(describe_c, sizeof(describe_c), "%s/aether_describe.c", tmpdir);
+    char cmd[16384];
+    snprintf(cmd, sizeof(cmd),
+        "\"%s\" --emit-namespace-describe \"%s\" \"%s\"",
+        tc.compiler, manifest_path, describe_c);
+    if (run_cmd_quiet(cmd) != 0) {
+        fprintf(stderr, "Error: aetherc --emit-namespace-describe failed\n");
+        fprintf(stderr, "       cmd: %s\n", cmd);
+        return 1;
+    }
+    if (!path_exists(describe_c)) {
+        fprintf(stderr, "Error: describe stub was not produced at %s\n", describe_c);
+        return 1;
+    }
+
+    /* Step 2: discover sibling .ae files (skip manifest.ae). Sort by
+     * name for reproducible build output. */
+    DIR* d = opendir(dir);
+    if (!d) {
+        fprintf(stderr, "Error: opendir(%s) failed\n", dir);
+        return 1;
+    }
+    char  siblings[64][512];
+    int   sibling_count = 0;
+    struct dirent* ent;
+    while ((ent = readdir(d)) != NULL) {
+        const char* name = ent->d_name;
+        size_t n = strlen(name);
+        if (n < 4) continue;
+        if (strcmp(name + n - 3, ".ae") != 0) continue;
+        if (strcmp(name, "manifest.ae") == 0) continue;
+        if (sibling_count >= 64) break;
+        snprintf(siblings[sibling_count++], 512, "%s/%s", dir, name);
+    }
+    closedir(d);
+
+    if (sibling_count == 0) {
+        fprintf(stderr, "Error: namespace '%s' contains a manifest but no scripts (*.ae)\n", dir);
+        return 1;
+    }
+
+    /* sort with qsort+strcmp for determinism */
+    for (int i = 1; i < sibling_count; i++) {
+        for (int j = i; j > 0 && strcmp(siblings[j], siblings[j-1]) < 0; j--) {
+            char tmp[512];
+            strncpy(tmp, siblings[j], sizeof(tmp));
+            strncpy(siblings[j], siblings[j-1], sizeof(siblings[j]));
+            strncpy(siblings[j-1], tmp, sizeof(siblings[j-1]));
+        }
+    }
+
+    /* Step 3: concatenate the siblings into one synthetic .ae. We
+     * deduplicate `import` lines (a script uses `import std.host` for
+     * notify/manifest builders; concatenating two such siblings would
+     * import twice). Everything else passes through unchanged. */
+    char concat_path[1024];
+    snprintf(concat_path, sizeof(concat_path), "%s/_namespace.ae", tmpdir);
+    FILE* concat = fopen(concat_path, "w");
+    if (!concat) { perror("fopen concat"); return 1; }
+
+    /* Track imports we've already emitted to avoid duplicates. */
+    char seen_imports[64][128];
+    int  seen_count = 0;
+    int  has_main = 0;
+
+    for (int i = 0; i < sibling_count; i++) {
+        FILE* in = fopen(siblings[i], "r");
+        if (!in) {
+            fprintf(stderr, "Error: cannot read sibling %s\n", siblings[i]);
+            fclose(concat);
+            return 1;
+        }
+        fprintf(concat, "// === from %s ===\n", siblings[i]);
+        char line[2048];
+        while (fgets(line, sizeof(line), in)) {
+            /* Detect duplicate import lines. */
+            const char* p = line;
+            while (*p == ' ' || *p == '\t') p++;
+            if (strncmp(p, "import ", 7) == 0) {
+                int dup = 0;
+                for (int s = 0; s < seen_count; s++) {
+                    if (strcmp(seen_imports[s], p) == 0) { dup = 1; break; }
+                }
+                if (dup) continue;
+                if (seen_count < 64) {
+                    strncpy(seen_imports[seen_count], p, sizeof(seen_imports[0]) - 1);
+                    seen_imports[seen_count][sizeof(seen_imports[0]) - 1] = '\0';
+                    seen_count++;
+                }
+            }
+            /* Skip duplicate main()s — keep only the first. */
+            if (strncmp(p, "main(", 5) == 0 || strncmp(p, "main (", 6) == 0) {
+                if (has_main) {
+                    /* Skip until matching close brace. Naive but
+                     * sufficient for a synthesized namespace where
+                     * scripts shouldn't normally have main(). */
+                    int depth = 0;
+                    int seen_open = 0;
+                    while (fgets(line, sizeof(line), in)) {
+                        for (char* q = line; *q; q++) {
+                            if (*q == '{') { depth++; seen_open = 1; }
+                            else if (*q == '}') { depth--; if (seen_open && depth <= 0) goto done_main; }
+                        }
+                    }
+                done_main:
+                    continue;
+                }
+                has_main = 1;
+            }
+            fputs(line, concat);
+        }
+        fputs("\n", concat);
+        fclose(in);
+    }
+
+    /* If no script declared main(), emit a synthetic one so --emit=lib
+     * is happy (it tolerates main() but the lib drops it). */
+    if (!has_main) {
+        fputs("\nmain() {}\n", concat);
+    }
+    fclose(concat);
+
+    /* Step 4: derive the output library path. When the user passes
+     *   -o foo  →  "libfoo.so" in the cwd
+     * Without -o, derive from the directory's basename:
+     *   --namespace trading/  →  libtrading.so
+     *   --namespace .         →  use the cwd's basename
+     */
+    char base_name[512];
+    if (output_name) {
+        strncpy(base_name, output_name, sizeof(base_name) - 1);
+        base_name[sizeof(base_name) - 1] = '\0';
+    } else {
+        const char* base = dir;
+        if (strcmp(dir, ".") == 0) {
+            /* Use cwd's basename when --namespace . was used. */
+            char cwd[1024];
+            if (getcwd(cwd, sizeof(cwd))) {
+                const char* slash = strrchr(cwd, '/');
+                base = slash ? slash + 1 : cwd;
+            }
+        } else {
+            const char* slash = strrchr(dir, '/');
+            if (slash) base = slash + 1;
+        }
+        strncpy(base_name, base, sizeof(base_name) - 1);
+        base_name[sizeof(base_name) - 1] = '\0';
+    }
+
+    /* Construct the full output path with lib<base><ext>. */
+    char out_path[1024];
+    snprintf(out_path, sizeof(out_path), "lib%s%s", base_name, lib_ext);
+
+    /* Step 5: build the synthetic .ae as --emit=lib, then re-link with
+     * the describe.c stub appended. We piggy-back on the existing
+     * pipeline: invoke cmd_build with --emit=lib --extra <describe.c>.
+     * cmd_build's output-name override (lib<X>.so) only fires when -o
+     * is omitted; we pass an explicit -o that already has the lib<>
+     * prefix and the .ext, but cmd_build appends EXE_EXT to the -o
+     * value as-is. To make sure no extra extension creeps in, we strip
+     * the trailing lib_ext and let cmd_build's lib-mode logic re-add
+     * it (or actually, since we pass -o, cmd_build uses the value
+     * literally — see cmd_build l.1532). So pass the path WITHOUT
+     * the .so/.dylib/.dll suffix and let cmd_build's existing override
+     * take effect. */
+    char out_no_ext[1024];
+    strncpy(out_no_ext, out_path, sizeof(out_no_ext) - 1);
+    out_no_ext[sizeof(out_no_ext) - 1] = '\0';
+    char* dot = strrchr(out_no_ext, '.');
+    if (dot && (strcmp(dot, ".so") == 0 || strcmp(dot, ".dylib") == 0 || strcmp(dot, ".dll") == 0)) {
+        *dot = '\0';
+    }
+
+    g_emit_lib = true;
+    g_emit_exe = false;
+
+    char* sub_argv[10];
+    int sub_argc = 0;
+    sub_argv[sub_argc++] = (char*)concat_path;
+    sub_argv[sub_argc++] = (char*)"--emit=lib";
+    sub_argv[sub_argc++] = (char*)"--extra";
+    sub_argv[sub_argc++] = (char*)describe_c;
+    sub_argv[sub_argc++] = (char*)"-o";
+    sub_argv[sub_argc++] = out_no_ext;
+
+    int rc = cmd_build(sub_argc, sub_argv);
+    if (rc == 0) {
+        /* cmd_build with -o uses the value literally with EXE_EXT (empty
+         * on POSIX), so the actual file at this point is `out_no_ext`
+         * with no extension. Rename to add the proper lib extension. */
+        if (path_exists(out_no_ext) && !path_exists(out_path)) {
+            if (rename(out_no_ext, out_path) != 0) {
+                /* Rename failed; report what's actually there. */
+                fprintf(stderr, "Warning: built %s but couldn't rename to %s\n",
+                        out_no_ext, out_path);
+                printf("Built namespace: %s\n", out_no_ext);
+                return rc;
+            }
+        }
+        printf("Built namespace: %s\n", out_path);
+    }
+    return rc;
+}
+
 static int cmd_build(int argc, char** argv) {
     const char* file = NULL;
     const char* output_name = NULL;
@@ -1468,6 +1749,9 @@ static int cmd_build(int argc, char** argv) {
                 fprintf(stderr, "Error: --emit must be one of: exe, lib (got '%s')\n", val);
                 return 1;
             }
+        } else if (strcmp(argv[i], "--namespace") == 0 && i + 1 < argc) {
+            // Handled in a dedicated function defined above.
+            return cmd_build_namespace(argc, argv);
         } else if (argv[i][0] != '-') {
             file = argv[i];
         }
