@@ -366,19 +366,18 @@ downcall to fetch detail by id from its own service.
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Host as Java host
-    participant SDK as Trading SDK<br/>(Panama / ctypes / Fiddle)
-    participant Lib as libtrading.so<br/>(Aether script)
+    participant Host as Java host JVM<br/>(TradingDemo + its TradeService field)
+    participant SDK as Trading.class<br/>(generated SDK; in the same JVM)
+    participant Lib as libtrading.so<br/>(Aether script; loaded via dlopen)
     participant Reg as event registry<br/>(in libtrading.so)
-    participant Svc as Java TradeService
 
     Note over Host,Reg: setup (once)
     Host->>SDK: new Trading("aether/libtrading.so")
     SDK->>Lib: dlopen
-    Host->>SDK: onOrderPlaced(id -> ...)
+    Host->>SDK: onOrderPlaced(id -> trades.put(id, "PLACED"))
     SDK->>Reg: aether_event_register("OrderPlaced", trampoline)
 
-    Note over Host,Svc: per-call: place_trade(100, 50_000, 1)
+    Note over Host,Reg: per-call: place_trade(100, 50_000, 1)
     Host->>SDK: t.placeTrade(100, 50_000, 1)
     SDK->>Lib: aether_place_trade(100, 50_000, 1)
     Lib->>Lib: println("[ae] place_trade ...")
@@ -386,20 +385,28 @@ sequenceDiagram
     Reg->>Reg: fflush(NULL)
     Reg-->>SDK: trampoline(100)
     SDK-->>Host: handler.accept(100)
-    Host->>Svc: trades.put(100, "PLACED")
-    Svc-->>Host: ok
+    Note right of Host: handler runs Java<br/>trades.put(100, "PLACED")
     Host-->>SDK: handler returns
     SDK-->>Reg: trampoline returns
     Reg-->>Lib: notify returns 1
     Lib-->>SDK: returns 1 (rc)
     SDK-->>Host: rc == 1
 
-    Note over Host,Svc: later: typed downcall fetches detail by id
+    Note over Host,Reg: later: typed downcall fetches detail by id
     Host->>SDK: t.getTicker("ACME")
     SDK->>Lib: aether_get_ticker("ACME")
     Lib-->>SDK: "ACME"
     SDK-->>Host: "ACME"
 ```
+
+The four "lifelines" are not four processes — `Host` and `SDK` are
+both Java code running inside the same JVM (`TradingDemo` calls
+methods on `Trading.class`, the generated SDK), and `Lib` and `Reg`
+are both C code in the dlopened `libtrading.so`. They're split out
+on the diagram only because the boundaries between them are where
+the marshalling decisions happen: `Host`↔`SDK` is a normal Java
+method call, `SDK`↔`Lib` is the Panama (or ctypes / Fiddle) FFI
+crossing, `Lib`↔`Reg` is a plain C call inside the `.so`.
 
 The whole thing crosses the C ABI as primitives: an `int64_t` id, a
 `const char*` event name, return codes. No structs marshalled, no
@@ -426,26 +433,24 @@ script can branch on.
 ```mermaid
 sequenceDiagram
     autonumber
-    participant Host as Java host
-    participant SDK as Trading SDK
+    participant Host as Java host JVM<br/>(TradingDemo + its FraudService field)
+    participant SDK as Trading.class<br/>(generated SDK; in the same JVM)
     participant Lib as libtrading.so<br/>(Aether script)
     participant HReg as host_call registry<br/>(📋 Shape B — not built)
-    participant Svc as Java FraudService
 
     rect rgba(255, 220, 220, 0.4)
-    Note over Host,Svc: 📋 Entire flow below is Shape B — none of these arrows work today
+    Note over Host,HReg: 📋 Entire flow below is Shape B — none of these arrows work today
     Note over Host,HReg: setup
-    Host->>SDK: t.exposeHostCall("fraud_score", order -> svc.score(order))
+    Host->>SDK: t.exposeHostCall("fraud_score", order -> fraudService.score(order))
     SDK->>HReg: aether_host_call_register("fraud_score", trampoline)
 
-    Note over Host,Svc: per-call
+    Note over Host,HReg: per-call
     Host->>SDK: t.placeTrade(100, 50_000, 1)
     SDK->>Lib: aether_place_trade(100, 50_000, 1)
     Lib->>HReg: host_call("fraud_score", order_map)
     HReg->>SDK: trampoline(order_map)
     SDK->>Host: handler.apply(order_map)
-    Host->>Svc: svc.score(order_map)
-    Svc-->>Host: 42
+    Note right of Host: handler runs Java<br/>fraudService.score(order_map) → 42
     Host-->>SDK: returns 42
     SDK-->>HReg: trampoline returns 42
     HReg-->>Lib: host_call returns 42
