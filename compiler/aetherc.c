@@ -71,6 +71,12 @@ static bool emit_namespace_manifest = false;
 // the manifest.ae).
 static bool emit_namespace_describe = false;
 
+// --list-functions: walk the AST, print one line per top-level Aether
+// function definition: `<name>|<return_type>|<param_name>:<param_type>,...`
+// Used by the namespace pipeline's per-language SDK generators to learn
+// what aether_<name>() exports the .so will contain.
+static bool list_functions_mode = false;
+
 #ifdef _WIN32
     #include <windows.h>
     #include <io.h>
@@ -257,6 +263,63 @@ static void c_emit_str(FILE* out, const char* s) {
         else { fputc(c, out); }
     }
     fputc('"', out);
+}
+
+// Walk a parsed program AST and emit one line per top-level function:
+//   <name>|<return_aether_type>|<param_name>:<param_aether_type>,...
+//
+// Each parameter is `name:type`; multiple parameters comma-separated;
+// no parameters → empty string after the second |. Return type is the
+// Aether type spelling we infer from the function definition's
+// node_type (or "void" if unset). Used by the namespace pipeline to
+// generate per-language SDKs that map Aether function signatures to
+// host-language method signatures.
+//
+// We skip functions whose name starts with `_` (treated as private)
+// and the synthesized main() that the namespace pipeline injects.
+static const char* aether_type_spelling(Type* t) {
+    if (!t) return "void";
+    switch (t->kind) {
+        case TYPE_INT:    return "int";
+        case TYPE_INT64:  return "long";
+        case TYPE_UINT64: return "ulong";
+        case TYPE_FLOAT:  return "float";
+        case TYPE_BOOL:   return "bool";
+        case TYPE_STRING: return "string";
+        case TYPE_PTR:    return "ptr";
+        case TYPE_VOID:   return "void";
+        default:          return "any";
+    }
+}
+
+static void emit_function_list(FILE* out, ASTNode* program) {
+    if (!out || !program) return;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* fn = program->children[i];
+        if (!fn || (fn->type != AST_FUNCTION_DEFINITION
+                 && fn->type != AST_BUILDER_FUNCTION)) continue;
+        if (!fn->value) continue;
+        if (fn->value[0] == '_') continue;
+        if (fn->is_imported) continue;
+
+        fprintf(out, "%s|%s|", fn->value, aether_type_spelling(fn->node_type));
+
+        int param_count = 0;
+        for (int j = 0; j < fn->child_count; j++) {
+            ASTNode* c = fn->children[j];
+            if (!c) continue;
+            if (c->type == AST_GUARD_CLAUSE) continue;
+            if (c->type == AST_BLOCK) continue;
+            if (c->type != AST_VARIABLE_DECLARATION
+             && c->type != AST_PATTERN_VARIABLE) continue;
+            if (param_count > 0) fputc(',', out);
+            fprintf(out, "%s:%s",
+                c->value ? c->value : "_unnamed",
+                aether_type_spelling(c->node_type));
+            param_count++;
+        }
+        fputc('\n', out);
+    }
 }
 
 // Emit a self-contained C source file declaring a static const
@@ -536,6 +599,17 @@ int compile_source(const char* input_path, const char* output_path) {
     
     if (verbose_mode) printf("Type checking successful\n");
 
+    // --list-functions: post-typecheck so node_type is populated.
+    if (list_functions_mode) {
+        emit_function_list(stdout, program);
+        module_registry_shutdown();
+        free_ast_node(program);
+        for (int i = 0; i < token_count; i++) free_token(tokens[i]);
+        free_parser(parser);
+        free(source);
+        return 1;
+    }
+
     // --check: stop after typecheck + type inference, no codegen
     if (check_only_mode) {
         int warnings = aether_warning_count();
@@ -754,6 +828,9 @@ int main(int argc, char *argv[]) {
             arg_offset++;
         } else if (strcmp(argv[arg_offset], "--emit-namespace-describe") == 0) {
             emit_namespace_describe = true;
+            arg_offset++;
+        } else if (strcmp(argv[arg_offset], "--list-functions") == 0) {
+            list_functions_mode = true;
             arg_offset++;
         } else {
             fprintf(stderr, "Unknown option: %s\n", argv[arg_offset]);

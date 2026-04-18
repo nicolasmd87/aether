@@ -1,0 +1,15 @@
+// Namespace exercising the Python SDK generator end-to-end.
+// Has multiple inputs (covering the v1 type vocabulary), two events,
+// and a `python` binding so the generator emits a .py module.
+
+import std.host
+
+setup() {
+    namespace("calc")
+    input("limit", "int")
+    input("name", "string")
+    event("Computed", "int64")
+    event("Overflow", "int64")
+    bindings()
+    python("calc_sdk")
+}
