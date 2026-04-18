@@ -363,6 +363,16 @@ finishes and returns its own value. Later (or in the same Java
 statement after `placeTrade` returns), the host makes a second typed
 downcall to fetch detail by id from its own service.
 
+> **A note on the lifelines.** All four lifelines below are one OS
+> process — the JVM `dlopen`s `libtrading.so` and the `.so` runs in
+> the JVM's address space, on the JVM's threads. There's no IPC, no
+> fork, no separate scheduler. The lifelines mark where calls cross
+> a *marshalling* boundary, not an execution one: `Host`↔`SDK` is a
+> normal Java method call, `SDK`↔`Lib` is the Panama (or ctypes /
+> Fiddle) FFI crossing where Java values get reboxed as C values,
+> `Lib`↔`Reg` is a plain C call inside the `.so`. Treat the
+> lifelines as "where does the next call cost something?"
+
 ```mermaid
 sequenceDiagram
     autonumber
@@ -399,15 +409,6 @@ sequenceDiagram
     SDK-->>Host: "ACME"
 ```
 
-The four "lifelines" are not four processes — `Host` and `SDK` are
-both Java code running inside the same JVM (`TradingDemo` calls
-methods on `Trading.class`, the generated SDK), and `Lib` and `Reg`
-are both C code in the dlopened `libtrading.so`. They're split out
-on the diagram only because the boundaries between them are where
-the marshalling decisions happen: `Host`↔`SDK` is a normal Java
-method call, `SDK`↔`Lib` is the Panama (or ctypes / Fiddle) FFI
-crossing, `Lib`↔`Reg` is a plain C call inside the `.so`.
-
 The whole thing crosses the C ABI as primitives: an `int64_t` id, a
 `const char*` event name, return codes. No structs marshalled, no
 closures held by the host beyond the event handler the host itself
@@ -429,6 +430,10 @@ ad-hoc lookup against host state.
 `host_call(name, ...)` would be a new extern that crosses the
 boundary in the script → host direction, returning a value the
 script can branch on.
+
+> Same lifeline convention as the first diagram — all four are one
+> OS process, the lifelines mark marshalling boundaries, not
+> execution contexts.
 
 ```mermaid
 sequenceDiagram
