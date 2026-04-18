@@ -1,0 +1,22 @@
+// Pinning test: a closure body that writes a name without ever reading
+// it treats that name as a fresh local, shadowing any same-named outer
+// binding. This is Python-style implicit shadowing (`x = expr` with no
+// RHS read of x introduces x).
+//
+// Observationally the outer scope is untouched either way (by-value
+// capture + no read-back would produce the same result), but this
+// test pins the behaviour so changes to scope analysis are noticed.
+
+extern exit(code: int)
+
+main() {
+    count = 99
+    reset = || {
+        count = 0        // fresh local inside the closure; outer count safe
+    }
+    call(reset)
+    call(reset)
+    // Outer count untouched regardless of interpretation.
+    if count != 99 { println("FAIL: outer mutated"); exit(1) }
+    println("ok")
+}

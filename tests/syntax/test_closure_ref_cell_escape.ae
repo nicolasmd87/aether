@@ -1,0 +1,23 @@
+// Regression: ref cell survives across a function return. The cell is
+// heap-allocated so the pointer remains valid; this was the documented
+// escape hatch back when escaping closures didn't work at all, and
+// must still work now that they do.
+
+extern exit(code: int)
+
+make_counter() {
+    count = ref(0)
+    return || { ref_set(count, ref_get(count) + 1); return ref_get(count) }
+    // No ref_free — caller inherits the cell. Intentional mini-leak.
+}
+
+main() {
+    c = make_counter()
+    a = call(c)
+    if a != 1 { println("FAIL: first"); exit(1) }
+    b = call(c)
+    if b != 2 { println("FAIL: second"); exit(1) }
+    d = call(c)
+    if d != 3 { println("FAIL: third"); exit(1) }
+    println("ok")
+}

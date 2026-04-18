@@ -1,0 +1,26 @@
+// Regression: returning a closure that captures another closure.
+// When `wrapped` is returned from build_pair, its env holds `inner`,
+// and inner's env must survive too — both defer-frees have to be
+// suppressed. Without the transitive-capture protection, inner.env
+// would be freed and the wrapped().call(inner) invocation would UAF.
+
+extern exit(code: int)
+extern str_eq(a: string, b: string) -> int
+
+build_pair() {
+    label = "world"
+    inner   = || { return label }         // inner.env holds label
+    wrapped = || { return call(inner) }   // wrapped.env holds inner
+    return wrapped                         // both envs must survive
+}
+
+main() {
+    w = build_pair()
+    // Call many times — if inner.env was freed, the allocator would
+    // likely reuse the memory by now.
+    s1 = call(w); if str_eq(s1, "world") == 0 { println("FAIL: 1"); exit(1) }
+    s2 = call(w); if str_eq(s2, "world") == 0 { println("FAIL: 2"); exit(1) }
+    s3 = call(w); if str_eq(s3, "world") == 0 { println("FAIL: 3"); exit(1) }
+    s4 = call(w); if str_eq(s4, "world") == 0 { println("FAIL: 4"); exit(1) }
+    println("ok")
+}

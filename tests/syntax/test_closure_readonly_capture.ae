@@ -1,0 +1,17 @@
+// Regression/baseline: read-only capture. Worked before the fixes and
+// must keep working — this is the "happy path" env-population case.
+
+extern exit(code: int)
+
+main() {
+    base = 10
+    add5  = || { return base + 5 }
+    add10 = || { return base + 10 }
+    a = call(add5)
+    if a != 15 { println("FAIL: add5 first"); exit(1) }
+    b = call(add10)
+    if b != 20 { println("FAIL: add10"); exit(1) }
+    c = call(add5)
+    if c != 15 { println("FAIL: add5 second"); exit(1) }
+    println("ok")
+}

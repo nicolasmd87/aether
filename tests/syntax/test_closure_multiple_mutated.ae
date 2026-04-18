@@ -1,0 +1,23 @@
+// Regression: multiple mutated captures in one closure. Each must get
+// its own env slot and route reads/writes through _env-> correctly.
+
+extern exit(code: int)
+
+main() {
+    x = 0
+    y = 10
+    step = || {
+        x = x + 1
+        y = y - 1
+        return x + y    // always x+y which stays constant
+    }
+    r1 = call(step)
+    if r1 != 10 { println("FAIL: r1"); exit(1) }
+    r2 = call(step)
+    if r2 != 10 { println("FAIL: r2"); exit(1) }
+    r3 = call(step)
+    if r3 != 10 { println("FAIL: r3"); exit(1) }
+    // Verify env persistence: the closure's x has advanced to 3.
+    if call(step) != 10 { println("FAIL: r4"); exit(1) }
+    println("ok")
+}

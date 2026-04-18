@@ -84,6 +84,13 @@ typedef struct {
     int builder_func_capacity;
     int in_trailing_block;  // >0 when generating code inside a trailing block
 
+    // When emitting a closure body, captures in this list are mutated and
+    // therefore routed through _env->name on reassignment. Set per-closure
+    // by emit_closure_definitions, cleared after the body. NULL when not
+    // currently emitting a closure body.
+    char** current_env_captures;
+    int current_env_capture_count;
+
     // Builder function registry: functions marked with 'builder' keyword
     // Block runs first (filling config), then function executes with config
     struct BuilderFuncEntry {

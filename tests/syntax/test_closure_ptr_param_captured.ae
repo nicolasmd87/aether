@@ -1,0 +1,30 @@
+// Regression: capturing a function's `ptr` parameter from an inner
+// closure. The old lookup_var_c_type walked only top-level variable
+// declarations and never saw function parameters, so a captured `ptr`
+// parameter got typed `int` in the env struct — pointer truncated on
+// store, segfault on deref. This is the exact shape that crashed the
+// `make_b(n: ptr)` probe during the investigation.
+
+extern exit(code: int)
+
+bump(n: ptr) {
+    // The closure captures `n`, which is a parameter of the enclosing
+    // function. The fix threads the enclosing function name into the
+    // closure's parent_func slot and looks up `n` in that function's
+    // AST_PATTERN_VARIABLE children — returning void* instead of
+    // falling back to int.
+    return box_closure(|| { ref_set(n, ref_get(n) + 1) })
+}
+
+main() {
+    r = ref(0)
+    boxed = bump(r)
+    h = unbox_closure(boxed)
+    call(h)
+    call(h)
+    call(h)
+    v = ref_get(r)
+    if v != 3 { println("FAIL: expected 3"); exit(1) }
+    ref_free(r)
+    println("ok")
+}
