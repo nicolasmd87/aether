@@ -705,6 +705,7 @@ found_root:
                 "%s/runtime/utils/aether_simd_vectorized.c "
                 "%s/runtime/aether_runtime.c "
                 "%s/runtime/aether_numa.c "
+                "%s/runtime/aether_host.c "
                 "%s/runtime/actors/aether_send_buffer.c "
                 "%s/runtime/actors/aether_send_message.c "
                 "%s/runtime/actors/aether_actor_thread.c "
@@ -730,7 +731,8 @@ found_root:
                 tc.root, tc.root, tc.root, tc.root, tc.root,
                 tc.root, tc.root, tc.root, tc.root, tc.root,
                 tc.root, tc.root, tc.root, tc.root, tc.root,
-                tc.root, tc.root, tc.root, tc.root, tc.root, tc.root);
+                tc.root, tc.root, tc.root, tc.root, tc.root,
+                tc.root, tc.root);
         }
     } else {
         // Installed layout: headers in include/aether/, source in share/aether/
@@ -780,6 +782,7 @@ found_root:
                 "%s/runtime/utils/aether_simd_vectorized.c "
                 "%s/runtime/aether_runtime.c "
                 "%s/runtime/aether_numa.c "
+                "%s/runtime/aether_host.c "
                 "%s/runtime/actors/aether_send_buffer.c "
                 "%s/runtime/actors/aether_send_message.c "
                 "%s/runtime/actors/aether_actor_thread.c "
@@ -805,7 +808,8 @@ found_root:
                 src, src, src, src, src,
                 src, src, src, src, src,
                 src, src, src, src, src,
-                src, src, src, src, src, src);
+                src, src, src, src, src,
+                src, src);
         }
     }
 }

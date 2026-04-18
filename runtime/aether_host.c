@@ -1,0 +1,86 @@
+/*
+ * aether_host.c — Implementation of the host-callback dispatch table.
+ *
+ * Single linear-search registry capped at AETHER_HOST_MAX_EVENTS. Linear
+ * search keeps the data layout obvious and is fine for small N — most
+ * namespaces declare 5-20 events, not hundreds. If a namespace ever
+ * needs more, the cap can be raised; a hash table would be premature.
+ */
+
+#include "aether_host.h"
+#include <string.h>
+
+#ifndef AETHER_HOST_MAX_EVENTS
+#define AETHER_HOST_MAX_EVENTS 64
+#endif
+
+typedef struct {
+    /* event_name is a borrowed pointer — the caller (typically the host
+     * Java/Python/Go SDK) owns the storage for the lifetime of the
+     * registration. The generated host SDKs use string literals, so
+     * lifetime is the program's lifetime in practice. */
+    const char* event_name;
+    aether_event_handler_t handler;
+} EventEntry;
+
+static EventEntry g_events[AETHER_HOST_MAX_EVENTS];
+static int        g_event_count = 0;
+
+static int find_event_index(const char* name) {
+    if (!name) return -1;
+    for (int i = 0; i < g_event_count; i++) {
+        if (g_events[i].event_name &&
+            strcmp(g_events[i].event_name, name) == 0) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+int aether_event_register(const char* event_name, aether_event_handler_t handler) {
+    if (!event_name || !handler) return -1;
+
+    /* Replace existing entry if the name is already registered. */
+    int existing = find_event_index(event_name);
+    if (existing >= 0) {
+        g_events[existing].handler = handler;
+        return 0;
+    }
+
+    if (g_event_count >= AETHER_HOST_MAX_EVENTS) return -1;
+
+    g_events[g_event_count].event_name = event_name;
+    g_events[g_event_count].handler    = handler;
+    g_event_count++;
+    return 0;
+}
+
+int aether_event_unregister(const char* event_name) {
+    int idx = find_event_index(event_name);
+    if (idx < 0) return -1;
+
+    /* Compact the array — preserves order, which we don't promise but
+     * also don't deny. Cheap at small N. */
+    for (int i = idx; i < g_event_count - 1; i++) {
+        g_events[i] = g_events[i + 1];
+    }
+    g_event_count--;
+    g_events[g_event_count].event_name = NULL;
+    g_events[g_event_count].handler    = NULL;
+    return 0;
+}
+
+void aether_event_clear(void) {
+    for (int i = 0; i < g_event_count; i++) {
+        g_events[i].event_name = NULL;
+        g_events[i].handler    = NULL;
+    }
+    g_event_count = 0;
+}
+
+int notify(const char* event_name, int64_t id) {
+    int idx = find_event_index(event_name);
+    if (idx < 0) return 0;
+    g_events[idx].handler(id);
+    return 1;
+}

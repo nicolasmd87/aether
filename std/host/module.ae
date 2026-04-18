@@ -1,0 +1,18 @@
+// std.host — primitives for Aether scripts embedded in a host application.
+//
+// Used in conjunction with `aetherc --emit=lib`. The script imports
+// std.host and calls notify() to emit events back to the host process;
+// the host registers handlers for those events via the C-side
+// aether_event_register() function (declared in runtime/aether_host.h).
+//
+// The pattern is the EAI / Hohpe "claim check": notify() carries only
+// an event name and an int64 ID. If the host needs more detail, it
+// calls back into the script through normal typed downcalls (the
+// aether_<name>() exports the script declares as top-level functions).
+
+// Emit an event to the host process. Returns 1 if a handler was found
+// and invoked, 0 if no listener is registered for this event name.
+//
+// `long` is Aether's 64-bit integer (TOKEN_INT64); the C-side ABI is
+// int64_t per the public host header (runtime/aether_host.h).
+extern notify(event: string, id: long) -> int
