@@ -1,0 +1,21 @@
+// Regression: closure escapes its creating scope via return value.
+// Prior to the closure-bug fixes (commits 18bf092..4fabb14), the env was
+// freed before the caller could use it — printed garbage like 32765.
+
+extern exit(code: int)
+
+make_counter() {
+    count = 0
+    return || { count = count + 1; return count }
+}
+
+main() {
+    c = make_counter()
+    a = call(c)
+    if a != 1 { println("FAIL: first call"); exit(1) }
+    b = call(c)
+    if b != 2 { println("FAIL: second call"); exit(1) }
+    d = call(c)
+    if d != 3 { println("FAIL: third call"); exit(1) }
+    println("ok")
+}
