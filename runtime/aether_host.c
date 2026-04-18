@@ -137,6 +137,11 @@ void python(void* _ctx, const char* module_name) {
     g_manifest.python.module_name = module_name;
 }
 
+void ruby(void* _ctx, const char* module_name) {
+    (void)_ctx;
+    g_manifest.ruby.module_name = module_name;
+}
+
 void go(void* _ctx, const char* package_name) {
     (void)_ctx;
     g_manifest.go.package_name = package_name;

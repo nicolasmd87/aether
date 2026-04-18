@@ -83,6 +83,10 @@ typedef struct AetherPythonBinding {
     const char* module_name;    /* may be NULL */
 } AetherPythonBinding;
 
+typedef struct AetherRubyBinding {
+    const char* module_name;    /* may be NULL */
+} AetherRubyBinding;
+
 typedef struct AetherGoBinding {
     const char* package_name;   /* may be NULL */
 } AetherGoBinding;
@@ -102,6 +106,7 @@ typedef struct AetherManifest {
     AetherEventDecl events[AETHER_MANIFEST_MAX_EVENTS];
     AetherJavaBinding   java;
     AetherPythonBinding python;
+    AetherRubyBinding   ruby;
     AetherGoBinding     go;
 } AetherManifest;
 
@@ -135,6 +140,7 @@ void event(void* _ctx, const char* name, const char* carries_type);
 void bindings(void* _ctx);
 void java(void* _ctx, const char* package_name, const char* class_name);
 void python(void* _ctx, const char* module_name);
+void ruby(void* _ctx, const char* module_name);
 void go(void* _ctx, const char* package_name);
 
 /* Read the captured manifest. Returns a borrowed pointer to the
@@ -179,6 +185,7 @@ typedef struct AetherNamespaceManifest {
     AetherEventDecl events[AETHER_MANIFEST_MAX_EVENTS];
     AetherJavaBinding   java;
     AetherPythonBinding python;
+    AetherRubyBinding   ruby;
     AetherGoBinding     go;
 } AetherNamespaceManifest;
 

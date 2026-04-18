@@ -142,6 +142,7 @@ typedef struct {
     const char* java_pkg;
     const char* java_class;
     const char* py_module;
+    const char* rb_module;
     const char* go_package;
     struct { const char* name; const char* type_sig; } inputs[64];
     int input_count;
@@ -197,6 +198,8 @@ static void extract_manifest_walk(ExtractedManifest* m, ASTNode* node) {
             if (ARG_STR(1)) m->java_class = ARG_STR(1);
         } else if (strcmp(name, "python") == 0) {
             if (ARG_STR(0)) m->py_module = ARG_STR(0);
+        } else if (strcmp(name, "ruby") == 0) {
+            if (ARG_STR(0)) m->rb_module = ARG_STR(0);
         } else if (strcmp(name, "go") == 0) {
             if (ARG_STR(0)) m->go_package = ARG_STR(0);
         }
@@ -256,6 +259,7 @@ static void emit_manifest_json(FILE* out, ASTNode* program) {
     fputs("    \"java\": {\"package\": ", out); json_emit_str(out, m.java_pkg);
     fputs(", \"class\": ", out); json_emit_str(out, m.java_class); fputs("},\n", out);
     fputs("    \"python\": {\"module\": ", out); json_emit_str(out, m.py_module); fputs("},\n", out);
+    fputs("    \"ruby\": {\"module\": ", out); json_emit_str(out, m.rb_module); fputs("},\n", out);
     fputs("    \"go\": {\"package\": ", out); json_emit_str(out, m.go_package); fputs("}\n", out);
     fputs("  }\n", out);
     fputs("}\n", out);
@@ -356,6 +360,7 @@ static void emit_describe_c(FILE* out, ASTNode* program) {
     fputs("struct AetherEventDecl { const char* name; const char* carries_type; };\n", out);
     fputs("struct AetherJavaBinding   { const char* package_name; const char* class_name; };\n", out);
     fputs("struct AetherPythonBinding { const char* module_name; };\n", out);
+    fputs("struct AetherRubyBinding   { const char* module_name; };\n", out);
     fputs("struct AetherGoBinding     { const char* package_name; };\n", out);
     fputs("struct AetherNamespaceManifest {\n", out);
     fputs("    const char* namespace_name;\n", out);
@@ -365,6 +370,7 @@ static void emit_describe_c(FILE* out, ASTNode* program) {
     fputs("    struct AetherEventDecl events[64];\n", out);
     fputs("    struct AetherJavaBinding   java;\n", out);
     fputs("    struct AetherPythonBinding python;\n", out);
+    fputs("    struct AetherRubyBinding   ruby;\n", out);
     fputs("    struct AetherGoBinding     go;\n", out);
     fputs("};\n\n", out);
 
@@ -389,6 +395,7 @@ static void emit_describe_c(FILE* out, ASTNode* program) {
     fputs("    .java = { ", out); c_emit_str(out, m.java_pkg);
     fputs(", ", out); c_emit_str(out, m.java_class); fputs(" },\n", out);
     fputs("    .python = { ", out); c_emit_str(out, m.py_module); fputs(" },\n", out);
+    fputs("    .ruby = { ", out);   c_emit_str(out, m.rb_module); fputs(" },\n", out);
     fputs("    .go = { ", out); c_emit_str(out, m.go_package); fputs(" },\n", out);
     fputs("};\n\n", out);
 

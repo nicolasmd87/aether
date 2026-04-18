@@ -1452,6 +1452,7 @@ static int cmd_build(int argc, char** argv);
 typedef struct {
     char ns_name[128];
     char py_module[128];
+    char rb_module[128];
     char java_pkg[256];
     char java_class[128];
     int  input_count;
@@ -1539,6 +1540,7 @@ static int parse_manifest_json(const char* json, CapturedManifest* m) {
      * (java's vs go's). */
     const char* java_obj   = strstr(json, "\"java\":");
     const char* python_obj = strstr(json, "\"python\":");
+    const char* ruby_obj   = strstr(json, "\"ruby\":");
     const char* go_obj     = strstr(json, "\"go\":");
     if (java_obj)   {
         json_extract_string_field(java_obj, "package", m->java_pkg,   sizeof(m->java_pkg));
@@ -1547,7 +1549,10 @@ static int parse_manifest_json(const char* json, CapturedManifest* m) {
     if (python_obj) {
         json_extract_string_field(python_obj, "module", m->py_module, sizeof(m->py_module));
     }
-    /* Go binding stored but unused for now — chunk 5+. */
+    if (ruby_obj) {
+        json_extract_string_field(ruby_obj, "module", m->rb_module, sizeof(m->rb_module));
+    }
+    /* Go binding stored but unused for now — emitter is a stub. */
     (void)go_obj;
 
     /* Inputs and events: each occurrence of `"name":` inside an array
@@ -1666,6 +1671,21 @@ static const char* py_ctype_for(const char* aether_type) {
     return NULL;
 }
 
+/* Map an Aether type to a Ruby Fiddle type constant. Returns NULL for
+ * types not representable in v1 (caller should skip the function with
+ * a warning, same convention as Python and Java). */
+static const char* rb_fiddle_type_for(const char* aether_type) {
+    if (strcmp(aether_type, "int")    == 0) return "Fiddle::TYPE_INT";
+    if (strcmp(aether_type, "long")   == 0) return "Fiddle::TYPE_LONG_LONG";
+    if (strcmp(aether_type, "ulong")  == 0) return "Fiddle::TYPE_LONG_LONG";  /* unsigned view */
+    if (strcmp(aether_type, "float")  == 0) return "Fiddle::TYPE_FLOAT";
+    if (strcmp(aether_type, "bool")   == 0) return "Fiddle::TYPE_INT";
+    if (strcmp(aether_type, "string") == 0) return "Fiddle::TYPE_VOIDP";  /* C string ptr */
+    if (strcmp(aether_type, "ptr")    == 0) return "Fiddle::TYPE_VOIDP";
+    if (strcmp(aether_type, "void")   == 0) return "Fiddle::TYPE_VOID";
+    return NULL;
+}
+
 /* Convert snake_case to CamelCase for class / event method names. */
 static void to_camel(const char* in, char* out, size_t out_size) {
     size_t i = 0;
@@ -1674,6 +1694,30 @@ static void to_camel(const char* in, char* out, size_t out_size) {
         if (*p == '_') { next_upper = 1; continue; }
         out[i++] = next_upper ? (char)toupper((unsigned char)*p) : *p;
         next_upper = 0;
+    }
+    out[i] = '\0';
+}
+
+/* Convert PascalCase or camelCase to snake_case for Ruby method names.
+ * Inserts '_' before each uppercase that follows a lowercase or digit.
+ *   "OrderPlaced"   -> "order_placed"
+ *   "TradeKilled"   -> "trade_killed"
+ *   "HTTPResponse"  -> "http_response" (best-effort; consecutive caps
+ *                                       collapse into a single run). */
+static void to_snake(const char* in, char* out, size_t out_size) {
+    size_t i = 0;
+    for (const char* p = in; *p && i + 1 < out_size; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (p > in && isupper(c)) {
+            unsigned char prev = (unsigned char)*(p - 1);
+            unsigned char next = (unsigned char)*(p + 1);
+            int prev_lower = islower(prev) || isdigit(prev);
+            int next_lower = next && islower(next);
+            if ((prev_lower || next_lower) && i + 1 < out_size) {
+                out[i++] = '_';
+            }
+        }
+        if (i + 1 < out_size) out[i++] = (char)tolower(c);
     }
     out[i] = '\0';
 }
@@ -1738,6 +1782,9 @@ static int emit_python_sdk(const CapturedManifest* m,
 "class _PythonBinding(ctypes.Structure):\n"
 "    _fields_ = [(\"module_name\", ctypes.c_char_p)]\n"
 "\n"
+"class _RubyBinding(ctypes.Structure):\n"
+"    _fields_ = [(\"module_name\", ctypes.c_char_p)]\n"
+"\n"
 "class _GoBinding(ctypes.Structure):\n"
 "    _fields_ = [(\"package_name\", ctypes.c_char_p)]\n"
 "\n"
@@ -1749,6 +1796,7 @@ static int emit_python_sdk(const CapturedManifest* m,
 "                (\"events\", _EventDecl * 64),\n"
 "                (\"java\", _JavaBinding),\n"
 "                (\"python\", _PythonBinding),\n"
+"                (\"ruby\", _RubyBinding),\n"
 "                (\"go\", _GoBinding)]\n"
 "\n"
 "\n"
@@ -1765,6 +1813,7 @@ static int emit_python_sdk(const CapturedManifest* m,
 "        self.java_package = c_manifest.java.package_name.decode() if c_manifest.java.package_name else None\n"
 "        self.java_class   = c_manifest.java.class_name.decode()   if c_manifest.java.class_name   else None\n"
 "        self.python_module = c_manifest.python.module_name.decode() if c_manifest.python.module_name else None\n"
+"        self.ruby_module   = c_manifest.ruby.module_name.decode()   if c_manifest.ruby.module_name   else None\n"
 "        self.go_package    = c_manifest.go.package_name.decode()    if c_manifest.go.package_name    else None\n"
 "\n"
 "    def __repr__(self):\n"
@@ -1928,6 +1977,301 @@ static int emit_python_sdk(const CapturedManifest* m,
 
     fclose(f);
     printf("Generated Python SDK: %s\n", out_path);
+    return 0;
+}
+
+/* Generate the Ruby SDK file. Single self-contained .rb that uses
+ * Fiddle (Ruby's stdlib FFI). Same shape as the Python SDK — the
+ * pattern translates almost line-for-line. The user-facing API:
+ *
+ *     require_relative 'calc_sdk'
+ *     ns = CalcSdk::Calc.new('./libcalc.so')
+ *     ns.set_limit(100)
+ *     ns.on_computed { |id| puts "computed #{id}" }
+ *     ns.double_it(7)               # => 14
+ *     ns.describe.namespace_name    # => "calc"
+ */
+static int emit_ruby_sdk(const CapturedManifest* m,
+                         const CapturedFunction* fns, int fn_count,
+                         const char* lib_path,
+                         const char* out_dir) {
+    if (!m->rb_module[0]) return 0;  /* no ruby binding declared */
+
+    char out_path[1024];
+    snprintf(out_path, sizeof(out_path), "%s/%s.rb", out_dir, m->rb_module);
+    FILE* f = fopen(out_path, "w");
+    if (!f) {
+        fprintf(stderr, "Error: cannot write %s\n", out_path);
+        return -1;
+    }
+
+    /* Module name from the manifest's `ruby("module")` declaration —
+     * conventionally snake_case. Class name is the namespace's name
+     * mapped to CamelCase. */
+    char outer_module[160];
+    to_camel(m->rb_module, outer_module, sizeof(outer_module));
+    char cls[128];
+    to_camel(m->ns_name, cls, sizeof(cls));
+
+    const char* lib_basename = strrchr(lib_path, '/');
+    lib_basename = lib_basename ? lib_basename + 1 : lib_path;
+
+    fprintf(f,
+"# Auto-generated Aether namespace binding for `%s`.\n"
+"#\n"
+"# Do not edit by hand — regenerated by `ae build --namespace`.\n"
+"#\n"
+"# Usage:\n"
+"#     require_relative '%s'\n"
+"#     ns = %s::%s.new\n"
+"#     ns.on_<event> { |id| ... }\n"
+"#     ns.set_<input>(value)\n"
+"#     result = ns.<function>(args)\n"
+"#\n"
+"# Requires Ruby's stdlib Fiddle module (ships with MRI Ruby 1.9.2+).\n"
+"require 'fiddle'\n"
+"require 'fiddle/import'\n"
+"\n"
+"module %s\n"
+"\n"
+"# Default location of the namespace .so/.dylib. Constructor accepts an\n"
+"# override for projects that ship the lib elsewhere.\n"
+"DEFAULT_LIB = File.expand_path('%s', __dir__)\n"
+"\n",
+        m->ns_name, m->rb_module, outer_module, cls, outer_module, lib_basename);
+
+    /* Manifest mirror — tied to runtime/aether_host.h. Layout MUST stay
+     * binary-compatible. */
+    fprintf(f,
+"# Mirror of AetherNamespaceManifest in runtime/aether_host.h.\n"
+"# Layout MUST stay in sync with the C struct — change both at once.\n"
+"# These mirror types are unused at runtime today (the Manifest class\n"
+"# walks the struct manually with raw pointer reads to avoid CStruct\n"
+"# version differences across Fiddle releases) but document the layout\n"
+"# for future readers.\n"
+"\n");
+
+    /* Manifest typed view — populated from the ptr returned by
+     * aether_describe. Walks the same fields as Python's Manifest class. */
+    fprintf(f,
+"class Manifest\n"
+"  attr_reader :namespace_name, :inputs, :events,\n"
+"              :java_package, :java_class, :python_module,\n"
+"              :ruby_module, :go_package\n"
+"\n"
+"  def initialize(raw_ptr)\n"
+"    base = raw_ptr.to_i\n"
+"    # namespace_name: const char* at offset 0\n"
+"    @namespace_name = _read_cstr_at(base, 0)\n"
+"    # input_count: int at offset 8 (after const char* on 64-bit)\n"
+"    input_count = _read_int_at(base, 8)\n"
+"    # inputs: AetherInputDecl[64] at offset 16 (4 bytes int + 4 padding)\n"
+"    @inputs = []\n"
+"    input_count.times do |i|\n"
+"      off = 16 + i * 16  # each entry: 2 pointers = 16 bytes on 64-bit\n"
+"      @inputs << [_read_cstr_at(base, off), _read_cstr_at(base, off + 8)]\n"
+"    end\n"
+"    # event_count: int at offset 16 + 16*64 = 1040\n"
+"    events_base = 16 + 16 * 64\n"
+"    event_count = _read_int_at(base, events_base)\n"
+"    @events = []\n"
+"    events_arr = events_base + 8  # skip int + 4 padding\n"
+"    event_count.times do |i|\n"
+"      off = events_arr + i * 16\n"
+"      @events << [_read_cstr_at(base, off), _read_cstr_at(base, off + 8)]\n"
+"    end\n"
+"    # bindings: AetherJavaBinding (16 bytes), AetherPythonBinding (8),\n"
+"    #          AetherRubyBinding (8), AetherGoBinding (8)\n"
+"    bindings = events_arr + 16 * 64\n"
+"    @java_package   = _read_cstr_at(base, bindings)\n"
+"    @java_class     = _read_cstr_at(base, bindings + 8)\n"
+"    @python_module  = _read_cstr_at(base, bindings + 16)\n"
+"    @ruby_module    = _read_cstr_at(base, bindings + 24)\n"
+"    @go_package     = _read_cstr_at(base, bindings + 32)\n"
+"  end\n"
+"\n"
+"  def to_s\n"
+"    \"Manifest(namespace=#{@namespace_name.inspect}, inputs=#{@inputs.size}, events=#{@events.size})\"\n"
+"  end\n"
+"\n"
+"  private\n"
+"\n"
+"  def _read_cstr_at(base, offset)\n"
+"    # Each pointer field is 8 bytes on 64-bit. Fiddle::Pointer.new(addr)\n"
+"    # gives us a typed view; reading the pointer slot then dereferencing\n"
+"    # the pointer yields the C string.\n"
+"    slot = Fiddle::Pointer.new(base + offset)\n"
+"    addr = slot[0, Fiddle::SIZEOF_VOIDP].unpack1('Q')\n"
+"    return nil if addr.zero?\n"
+"    Fiddle::Pointer.new(addr).to_s\n"
+"  end\n"
+"\n"
+"  def _read_int_at(base, offset)\n"
+"    slot = Fiddle::Pointer.new(base + offset)\n"
+"    slot[0, 4].unpack1('l')\n"
+"  end\n"
+"end\n"
+"\n");
+
+    /* The main SDK class. Wrap the Fiddle dlopen handle and bind every
+     * exported function once at constructor time. */
+    fprintf(f,
+"class %s\n"
+"  attr_accessor",
+        cls);
+    /* List the input ivars as accessors. */
+    for (int i = 0; i < m->input_count; i++) {
+        fprintf(f, "%s :%s", i == 0 ? "" : ",", m->inputs[i].name);
+    }
+    if (m->input_count == 0) fprintf(f, " :_unused");
+    fprintf(f, "\n\n");
+
+    fprintf(f,
+"  def initialize(lib_path = nil)\n"
+"    @lib = Fiddle.dlopen(lib_path || DEFAULT_LIB)\n"
+"    @callbacks = []  # keepalive — the C side holds raw fn pointers\n"
+"\n"
+"    # Discovery + event registration helpers from runtime/aether_host.h.\n"
+"    @h_aether_describe = Fiddle::Function.new(\n"
+"      @lib['aether_describe'], [], Fiddle::TYPE_VOIDP)\n"
+"    @h_aether_event_register = Fiddle::Function.new(\n"
+"      @lib['aether_event_register'],\n"
+"      [Fiddle::TYPE_VOIDP, Fiddle::TYPE_VOIDP],\n"
+"      Fiddle::TYPE_INT)\n"
+"\n");
+
+    /* Bind each script function. */
+    for (int i = 0; i < fn_count; i++) {
+        const CapturedFunction* fn = &fns[i];
+        if (is_skipped_function(fn->name)) continue;
+        const char* ret_ft = rb_fiddle_type_for(fn->ret);
+        if (!ret_ft) {
+            fprintf(stderr, "Warning: skipping Ruby binding for %s — return type %s not supported\n",
+                    fn->name, fn->ret);
+            continue;
+        }
+        int ok = 1;
+        for (int p = 0; p < fn->param_count; p++) {
+            if (!rb_fiddle_type_for(fn->params[p].type)) {
+                fprintf(stderr, "Warning: skipping Ruby binding for %s — param %s has unsupported type %s\n",
+                        fn->name, fn->params[p].name, fn->params[p].type);
+                ok = 0; break;
+            }
+        }
+        if (!ok) continue;
+
+        fprintf(f, "    @h_%s = Fiddle::Function.new(\n", fn->name);
+        fprintf(f, "      @lib['aether_%s'],\n", fn->name);
+        fprintf(f, "      [");
+        for (int p = 0; p < fn->param_count; p++) {
+            if (p > 0) fputs(", ", f);
+            fputs(rb_fiddle_type_for(fn->params[p].type), f);
+        }
+        fprintf(f, "],\n");
+        fprintf(f, "      %s)\n", ret_ft);
+    }
+    fprintf(f, "  end\n\n");
+
+    /* Per-input setter. Ruby has accessors above; setX wraps for symmetry
+     * with the Python/Java APIs. */
+    for (int i = 0; i < m->input_count; i++) {
+        fprintf(f,
+"  def set_%s(value)\n"
+"    # v1: stored on the instance only; future host_call() bridge will\n"
+"    # surface it to the running script.\n"
+"    @%s = value\n"
+"  end\n\n",
+            m->inputs[i].name, m->inputs[i].name);
+    }
+
+    /* Per-event handler with proper trampoline keepalive. Ruby methods
+     * are snake_case, so PascalCase event names (OrderPlaced) become
+     * on_order_placed. */
+    for (int i = 0; i < m->event_count; i++) {
+        const char* ev = m->events[i].name;
+        char ev_snake[160];
+        to_snake(ev, ev_snake, sizeof(ev_snake));
+        fprintf(f,
+"  # Register a handler for the `%s` event. The block receives the int64 id.\n"
+"  # Holds the trampoline ref so Ruby's GC doesn't reclaim it while C still\n"
+"  # has the function pointer.\n"
+"  def on_%s(&handler)\n"
+"    cb = Fiddle::Closure::BlockCaller.new(\n"
+"      Fiddle::TYPE_VOID, [Fiddle::TYPE_LONG_LONG], &handler)\n"
+"    @callbacks << cb  # keepalive\n"
+"    name_ptr = Fiddle::Pointer[\"%s\"]\n"
+"    rc = @h_aether_event_register.call(name_ptr, cb)\n"
+"    raise \"aether_event_register(%s) failed: rc=#{rc}\" if rc != 0\n"
+"  end\n\n",
+            ev, ev_snake, ev, ev);
+    }
+
+    /* Per-function method. Marshal strings to/from C string pointers. */
+    for (int i = 0; i < fn_count; i++) {
+        const CapturedFunction* fn = &fns[i];
+        if (is_skipped_function(fn->name)) continue;
+        if (!rb_fiddle_type_for(fn->ret)) continue;
+        int ok = 1;
+        for (int p = 0; p < fn->param_count; p++) {
+            if (!rb_fiddle_type_for(fn->params[p].type)) { ok = 0; break; }
+        }
+        if (!ok) continue;
+
+        fprintf(f, "  def %s(", fn->name);
+        for (int p = 0; p < fn->param_count; p++) {
+            if (p > 0) fputs(", ", f);
+            fprintf(f, "%s", fn->params[p].name);
+        }
+        fprintf(f, ")\n");
+
+        /* Marshal string args to Fiddle::Pointer wrapped C strings. */
+        for (int p = 0; p < fn->param_count; p++) {
+            if (strcmp(fn->params[p].type, "string") == 0) {
+                fprintf(f, "    _%s = %s.is_a?(String) ? Fiddle::Pointer[%s] : %s\n",
+                        fn->params[p].name, fn->params[p].name,
+                        fn->params[p].name, fn->params[p].name);
+            }
+        }
+
+        fprintf(f, "    result = @h_%s.call(", fn->name);
+        for (int p = 0; p < fn->param_count; p++) {
+            if (p > 0) fputs(", ", f);
+            if (strcmp(fn->params[p].type, "string") == 0) {
+                fprintf(f, "_%s", fn->params[p].name);
+            } else {
+                fprintf(f, "%s", fn->params[p].name);
+            }
+        }
+        fprintf(f, ")\n");
+
+        if (strcmp(fn->ret, "string") == 0) {
+            /* result is an integer address; wrap in Fiddle::Pointer to
+             * read the C string. */
+            fprintf(f,
+"    return nil if result.nil? || result == 0\n"
+"    Fiddle::Pointer.new(result.to_i).to_s\n");
+        } else if (strcmp(fn->ret, "void") == 0) {
+            fprintf(f, "    nil\n");
+        } else {
+            fprintf(f, "    result\n");
+        }
+        fprintf(f, "  end\n\n");
+    }
+
+    /* describe() */
+    fprintf(f,
+"  # Return the namespace's compile-time manifest as a typed view.\n"
+"  def describe\n"
+"    ptr = @h_aether_describe.call\n"
+"    raise 'aether_describe returned NULL' if ptr.nil? || ptr.to_i == 0\n"
+"    Manifest.new(Fiddle::Pointer.new(ptr.to_i))\n"
+"  end\n"
+"end  # class\n"
+"\n"
+"end  # module\n");
+
+    fclose(f);
+    printf("Generated Ruby SDK: %s\n", out_path);
     return 0;
 }
 
@@ -2251,15 +2595,17 @@ static int emit_java_sdk(const CapturedManifest* m,
 "        public final String namespaceName;\n"
 "        public final List<String[]> inputs;  // each: { name, type }\n"
 "        public final List<String[]> events;  // each: { name, carries }\n"
-"        public final String javaPackage, javaClass, pythonModule, goPackage;\n"
+"        public final String javaPackage, javaClass, pythonModule,\n"
+"                            rubyModule, goPackage;\n"
 "\n"
 "        Manifest(String ns, List<String[]> in, List<String[]> ev,\n"
-"                 String jp, String jc, String pm, String gp) {\n"
+"                 String jp, String jc, String pm, String rm, String gp) {\n"
 "            this.namespaceName = ns;\n"
 "            this.inputs = in;\n"
 "            this.events = ev;\n"
 "            this.javaPackage = jp; this.javaClass = jc;\n"
-"            this.pythonModule = pm; this.goPackage = gp;\n"
+"            this.pythonModule = pm; this.rubyModule = rm;\n"
+"            this.goPackage = gp;\n"
 "        }\n"
 "        @Override public String toString() {\n"
 "            return \"Manifest(namespace=\\\"\" + namespaceName + \"\\\", inputs=\" + inputs.size()\n"
@@ -2274,7 +2620,7 @@ static int emit_java_sdk(const CapturedManifest* m,
 "            MemorySegment p = (MemorySegment) h_aether_describe.invokeExact();\n"
 "            if (p.equals(MemorySegment.NULL))\n"
 "                throw new RuntimeException(\"aether_describe returned NULL\");\n"
-"            MemorySegment view = p.reinterpret(8 + 4 + 16 * 64 + 4 + 16 * 64 + 16 + 8 + 8 + 8);\n"
+"            MemorySegment view = p.reinterpret(8 + 4 + 16 * 64 + 4 + 16 * 64 + 16 + 8 + 8 + 8 + 8);\n"
 "            String ns = view.get(ADDRESS, 0).reinterpret(Long.MAX_VALUE).getString(0);\n"
 "            int inputCount = view.get(JAVA_INT, 8);\n"
 "            List<String[]> inputs = new ArrayList<>();\n"
@@ -2303,11 +2649,13 @@ static int emit_java_sdk(const CapturedManifest* m,
 "            MemorySegment jp = view.get(ADDRESS, bindings);\n"
 "            MemorySegment jc = view.get(ADDRESS, bindings + 8);\n"
 "            MemorySegment pm = view.get(ADDRESS, bindings + 16);\n"
-"            MemorySegment gp = view.get(ADDRESS, bindings + 24);\n"
+"            MemorySegment rm = view.get(ADDRESS, bindings + 24);\n"
+"            MemorySegment gp = view.get(ADDRESS, bindings + 32);\n"
 "            return new Manifest(ns, inputs, events,\n"
 "                jp.equals(MemorySegment.NULL) ? null : jp.reinterpret(Long.MAX_VALUE).getString(0),\n"
 "                jc.equals(MemorySegment.NULL) ? null : jc.reinterpret(Long.MAX_VALUE).getString(0),\n"
 "                pm.equals(MemorySegment.NULL) ? null : pm.reinterpret(Long.MAX_VALUE).getString(0),\n"
+"                rm.equals(MemorySegment.NULL) ? null : rm.reinterpret(Long.MAX_VALUE).getString(0),\n"
 "                gp.equals(MemorySegment.NULL) ? null : gp.reinterpret(Long.MAX_VALUE).getString(0));\n"
 "        } catch (Throwable t) { throw new RuntimeException(t); }\n"
 "    }\n"
@@ -2361,6 +2709,9 @@ static void emit_namespace_bindings(const char* manifest_path,
 
     if (m.py_module[0]) {
         emit_python_sdk(&m, fns, fn_count, lib_path, out_dir);
+    }
+    if (m.rb_module[0]) {
+        emit_ruby_sdk(&m, fns, fn_count, lib_path, out_dir);
     }
     if (m.java_class[0] && m.java_pkg[0]) {
         emit_java_sdk(&m, fns, fn_count, lib_path, out_dir);

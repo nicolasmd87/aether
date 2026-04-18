@@ -1,0 +1,17 @@
+// Ruby SDK generator end-to-end. Mirrors namespace_python and
+// namespace_java so the three generators can be compared side-by-side:
+// same inputs, same events, same script functions.
+
+import std.host
+
+abi() {
+    describe("calc") {
+        input("limit", "int")
+        input("name", "string")
+        event("Computed", "int64")
+        event("Overflow", "int64")
+        bindings() {
+            ruby("calc_sdk")
+        }
+    }
+}
