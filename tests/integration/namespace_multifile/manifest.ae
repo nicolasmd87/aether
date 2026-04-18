@@ -1,8 +1,10 @@
 import std.host
 
-setup() {
-    namespace("calc")
-    event("Computed", "int64")
-    bindings()
-    java("com.example.calc", "Calc")
+abi() {
+    describe("calc") {
+        event("Computed", "int64")
+        bindings() {
+            java("com.example.calc", "Calc")
+        }
+    }
 }

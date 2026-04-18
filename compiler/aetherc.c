@@ -160,58 +160,70 @@ typedef struct {
 // library inside `aetherc` and matches how documented contract
 // generators (gRPC's protoc-gen-*, openapi-generator, etc.) work:
 // description is structural, not behavioural.
+/* Recursively walk an AST node looking for manifest-builder calls.
+ * Handles both the flat form (`setup() { describe("x") input(...) }`)
+ * and the nested form (`abi() { describe("x") { input(...) bindings()
+ * { java(...) } } }`).
+ *
+ * In the nested form, an `AST_FUNCTION_CALL` like `describe("trading")
+ * { ... }` has the trailing block as a child node (typically the last
+ * child, of type AST_CLOSURE with value "trailing", or AST_BLOCK).
+ * We recurse into anything that looks like a child block. */
+static void extract_manifest_walk(ExtractedManifest* m, ASTNode* node) {
+    if (!node) return;
+
+    /* If this is an AST_FUNCTION_CALL, capture builder-call args. */
+    if (node->type == AST_FUNCTION_CALL && node->value) {
+        const char* name = node->value;
+        #define ARG_STR(n) (node->child_count > (n) && node->children[(n)] \
+                            && node->children[(n)]->type == AST_LITERAL \
+                            ? node->children[(n)]->value : NULL)
+        if (strcmp(name, "describe") == 0) {
+            if (ARG_STR(0)) m->ns_name = ARG_STR(0);
+        } else if (strcmp(name, "input") == 0) {
+            if (m->input_count < 64 && ARG_STR(0) && ARG_STR(1)) {
+                m->inputs[m->input_count].name = ARG_STR(0);
+                m->inputs[m->input_count].type_sig = ARG_STR(1);
+                m->input_count++;
+            }
+        } else if (strcmp(name, "event") == 0) {
+            if (m->event_count < 64 && ARG_STR(0) && ARG_STR(1)) {
+                m->events[m->event_count].name = ARG_STR(0);
+                m->events[m->event_count].carries = ARG_STR(1);
+                m->event_count++;
+            }
+        } else if (strcmp(name, "java") == 0) {
+            if (ARG_STR(0)) m->java_pkg = ARG_STR(0);
+            if (ARG_STR(1)) m->java_class = ARG_STR(1);
+        } else if (strcmp(name, "python") == 0) {
+            if (ARG_STR(0)) m->py_module = ARG_STR(0);
+        } else if (strcmp(name, "go") == 0) {
+            if (ARG_STR(0)) m->go_package = ARG_STR(0);
+        }
+        #undef ARG_STR
+    }
+
+    /* Recurse into all children — picks up nested trailing blocks
+     * (the trailing block of `describe("x") { ... }` is a child of
+     * the call node) and the ordinary statements of any function body. */
+    for (int i = 0; i < node->child_count; i++) {
+        extract_manifest_walk(m, node->children[i]);
+    }
+}
+
 static void extract_manifest(ExtractedManifest* m, ASTNode* program) {
     memset(m, 0, sizeof(*m));
     if (!program) return;
 
+    /* Walk every top-level function (`abi`, `setup`, `main`, whatever).
+     * Skip externs and the import statements themselves — we only
+     * want to find calls inside function bodies. */
     for (int i = 0; i < program->child_count; i++) {
         ASTNode* fn = program->children[i];
         if (!fn || (fn->type != AST_FUNCTION_DEFINITION
-                 && fn->type != AST_BUILDER_FUNCTION)) continue;
-
-        ASTNode* body = NULL;
-        for (int b = 0; b < fn->child_count; b++) {
-            if (fn->children[b] && fn->children[b]->type == AST_BLOCK) {
-                body = fn->children[b];
-            }
-        }
-        if (!body) continue;
-
-        for (int s = 0; s < body->child_count; s++) {
-            ASTNode* stmt = body->children[s];
-            if (!stmt || stmt->type != AST_EXPRESSION_STATEMENT
-                     || stmt->child_count == 0) continue;
-            ASTNode* call = stmt->children[0];
-            if (!call || call->type != AST_FUNCTION_CALL || !call->value) continue;
-
-            const char* name = call->value;
-            #define ARG_STR(n) (call->child_count > (n) && call->children[(n)] \
-                                && call->children[(n)]->type == AST_LITERAL \
-                                ? call->children[(n)]->value : NULL)
-            if (strcmp(name, "namespace") == 0) {
-                if (ARG_STR(0)) m->ns_name = ARG_STR(0);
-            } else if (strcmp(name, "input") == 0) {
-                if (m->input_count < 64 && ARG_STR(0) && ARG_STR(1)) {
-                    m->inputs[m->input_count].name = ARG_STR(0);
-                    m->inputs[m->input_count].type_sig = ARG_STR(1);
-                    m->input_count++;
-                }
-            } else if (strcmp(name, "event") == 0) {
-                if (m->event_count < 64 && ARG_STR(0) && ARG_STR(1)) {
-                    m->events[m->event_count].name = ARG_STR(0);
-                    m->events[m->event_count].carries = ARG_STR(1);
-                    m->event_count++;
-                }
-            } else if (strcmp(name, "java") == 0) {
-                if (ARG_STR(0)) m->java_pkg = ARG_STR(0);
-                if (ARG_STR(1)) m->java_class = ARG_STR(1);
-            } else if (strcmp(name, "python") == 0) {
-                if (ARG_STR(0)) m->py_module = ARG_STR(0);
-            } else if (strcmp(name, "go") == 0) {
-                if (ARG_STR(0)) m->go_package = ARG_STR(0);
-            }
-            #undef ARG_STR
-        }
+                 && fn->type != AST_BUILDER_FUNCTION
+                 && fn->type != AST_MAIN_FUNCTION)) continue;
+        extract_manifest_walk(m, fn);
     }
 }
 

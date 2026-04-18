@@ -1171,8 +1171,21 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     fprintf(gen->output, "%s(", c_func_name);
                     int arg_printed = 0;
                     // Auto-inject builder context for builder functions
-                    // (functions with _ctx: ptr as first param)
-                    if (gen->in_trailing_block > 0) {
+                    // (functions with _ctx: ptr as first param). Inject only
+                    // when the user's arg count is exactly one less than the
+                    // function's declared param count — that means the user
+                    // omitted _ctx and expects the codegen to fill it in.
+                    // If the user-arg count matches the param count exactly,
+                    // they passed _ctx explicitly (e.g. forwarding from a
+                    // surrounding builder body) and we trust them.
+                    //
+                    // _aether_ctx_get() returns NULL at the top of the stack,
+                    // so a top-level builder call gets NULL injected, which
+                    // builders that ignore _ctx (like std.host's manifest
+                    // builders) handle correctly. That's what makes the
+                    // outermost call in `abi() { describe("trading") { ... }
+                    // }` work.
+                    {
                         // Normalize func_name (dots to underscores) for comparison
                         // since builder_funcs are registered with underscores
                         char bf_normalized[256];
@@ -1181,11 +1194,55 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         for (char* p = bf_normalized; *p; p++) {
                             if (*p == '.') *p = '_';
                         }
+                        int is_builder = 0;
                         for (int bi = 0; bi < gen->builder_func_count; bi++) {
                             if (strcmp(gen->builder_funcs[bi], bf_normalized) == 0) {
+                                is_builder = 1;
+                                break;
+                            }
+                        }
+                        if (is_builder) {
+                            // Find the function's declared param count (counting
+                            // both regular function params and extern params).
+                            int declared_params = -1;
+                            ASTNode* program = gen->program;
+                            for (int fi = 0; program && fi < program->child_count; fi++) {
+                                ASTNode* fdef = program->children[fi];
+                                if (!fdef || !fdef->value) continue;
+                                int matches = (strcmp(fdef->value, bf_normalized) == 0);
+                                if (matches && (fdef->type == AST_FUNCTION_DEFINITION
+                                             || fdef->type == AST_EXTERN_FUNCTION
+                                             || fdef->type == AST_BUILDER_FUNCTION)) {
+                                    declared_params = 0;
+                                    for (int pi = 0; pi < fdef->child_count; pi++) {
+                                        ASTNode* p = fdef->children[pi];
+                                        if (!p) continue;
+                                        if (p->type == AST_GUARD_CLAUSE) continue;
+                                        if (p->type == AST_BLOCK) continue;
+                                        declared_params++;
+                                    }
+                                    break;
+                                }
+                            }
+                            // If we couldn't find the definition (e.g. extern
+                            // imported via std.host that's not in program->children),
+                            // fall back to "always inject" — the original behavior.
+                            // The looser rule may break in pathological cases but
+                            // works for our manifest builders.
+                            int user_args = 0;
+                            for (int ai = 0; ai < expr->child_count; ai++) {
+                                ASTNode* a = expr->children[ai];
+                                /* Trailing DSL blocks aren't user args. */
+                                if (a && a->type == AST_CLOSURE && a->value
+                                  && strcmp(a->value, "trailing") == 0) continue;
+                                user_args++;
+                            }
+                            int should_inject =
+                                (declared_params < 0)
+                             || (user_args == declared_params - 1);
+                            if (should_inject) {
                                 fprintf(gen->output, "_aether_ctx_get()");
                                 arg_printed++;
-                                break;
                             }
                         }
                     }

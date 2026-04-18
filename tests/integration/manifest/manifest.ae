@@ -1,21 +1,23 @@
 // Sample manifest exercising every std.host builder.
-// The C consumer dlopens this lib, calls aether_setup(), then queries
+// The C consumer dlopens this lib, calls aether_abi(), then queries
 // manifest_get() to verify the captured state.
 
 import std.host
 
-setup() {
-    namespace("trading")
-    input("order", "map")
-    input("catalog_has", "fn(string) -> bool")
-    input("max_order", "int")
-    event("OrderPlaced", "int64")
-    event("OrderRejected", "int64")
-    event("UnknownTicker", "int64")
-    bindings()
-    java("com.example.trading", "Trading")
-    python("trading_rules")
-    go("trading")
+abi() {
+    describe("trading") {
+        input("order", "map")
+        input("catalog_has", "fn(string) -> bool")
+        input("max_order", "int")
+        event("OrderPlaced", "int64")
+        event("OrderRejected", "int64")
+        event("UnknownTicker", "int64")
+        bindings() {
+            java("com.example.trading", "Trading")
+            python("trading_rules")
+            go("trading")
+        }
+    }
 }
 
 main() {

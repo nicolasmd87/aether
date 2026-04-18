@@ -1,7 +1,7 @@
 /*
  * consume.c — Verifies the manifest builder DSL.
  *
- * dlopens the lib, calls aether_setup() (which runs the namespace()
+ * dlopens the lib, calls aether_abi() (which runs the namespace()
  * block), then walks the captured manifest via manifest_get() and
  * asserts each input/event/binding is present.
  */
@@ -28,11 +28,11 @@ int main(int argc, char** argv) {
     void* h = dlopen(argv[1], RTLD_NOW);
     if (!h) FAIL("dlopen: %s", dlerror());
 
-    setup_fn setup = (setup_fn)dlsym(h, "aether_setup");
-    if (!setup) FAIL("aether_setup not found: %s", dlerror());
+    setup_fn abi = (setup_fn)dlsym(h, "aether_abi");
+    if (!abi) FAIL("aether_abi not found: %s", dlerror());
 
     /* Run the manifest builder. */
-    setup();
+    abi();
 
     AetherManifest* m = manifest_get();
     if (!m) FAIL("manifest_get returned NULL — namespace() didn't run");

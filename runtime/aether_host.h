@@ -107,23 +107,35 @@ typedef struct AetherManifest {
 
 /* Manifest builders — called from std/host/module.ae via externs.
  *
- * These names are aggressive-looking (notify, event, input, namespace,
- * java, ...) and could collide with user code in the embedding host's C
- * compilation unit. The collision risk is low because:
- *   - The host typically dlopens the library rather than statically
- *     linking it, so namespace pollution is per-library not per-process.
- *   - Hosts that statically link can wrap the library in a translation
- *     unit that doesn't import these names directly.
- * If collisions become a problem, a future version can prefix everything
- * with `aether_` and have std.host's externs use the prefixed names. */
-void namespace(const char* name);
-void namespace_end(void);
-void input(const char* name, const char* type_signature);
-void event(const char* name, const char* carries_type);
-void bindings(void);                                              /* visual no-op */
-void java(const char* package_name, const char* class_name);
-void python(const char* module_name);
-void go(const char* package_name);
+ * Each takes `void* _ctx` as its first parameter to satisfy the
+ * codegen's auto-_ctx-injection rule for builder functions inside a
+ * trailing block. The _ctx is unused — the manifest registry is
+ * process-global state, written in declaration order. This shape lets
+ * authors write:
+ *
+ *     abi() {
+ *         describe("trading") {
+ *             input("port", "int")
+ *             bindings() { java("com.example", "Trading") }
+ *         }
+ *     }
+ *
+ * matching Aether's existing builder DSL idiom (see contrib/tinyweb,
+ * examples/calculator-tui).
+ *
+ * These names (describe, event, input, java, ...) are short and could
+ * collide with user code in the embedding host's C compilation unit.
+ * The collision risk is low because hosts typically dlopen the library
+ * rather than statically link it. If a host needs to statically link
+ * and these names collide, wrap the library .o behind a translation
+ * unit that doesn't import these names directly. */
+void describe(void* _ctx, const char* name);
+void input(void* _ctx, const char* name, const char* type_signature);
+void event(void* _ctx, const char* name, const char* carries_type);
+void bindings(void* _ctx);
+void java(void* _ctx, const char* package_name, const char* class_name);
+void python(void* _ctx, const char* module_name);
+void go(void* _ctx, const char* package_name);
 
 /* Read the captured manifest. Returns a borrowed pointer to the
  * process-global state — DO NOT free. Returns NULL if no manifest

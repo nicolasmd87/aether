@@ -4,12 +4,14 @@
 
 import std.host
 
-setup() {
-    namespace("calc")
-    input("limit", "int")
-    input("name", "string")
-    event("Computed", "int64")
-    event("Overflow", "int64")
-    bindings()
-    python("calc_sdk")
+abi() {
+    describe("calc") {
+        input("limit", "int")
+        input("name", "string")
+        event("Computed", "int64")
+        event("Overflow", "int64")
+        bindings() {
+            python("calc_sdk")
+        }
+    }
 }

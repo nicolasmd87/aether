@@ -18,38 +18,55 @@
 extern notify(event: string, id: long) -> int
 
 // ---------------------------------------------------------------------------
-// Manifest DSL — used inside `<dir>/manifest.ae` to describe an embedded
-// namespace. Each builder appends to a process-global manifest registry
-// that the namespace compile pipeline reads after running the manifest
-// script. Type signatures are strings ("int", "long", "string", "map",
-// "list", "fn(string) -> bool", etc.) — the namespace pipeline parses
-// them when it generates host SDKs.
+// Manifest DSL — used inside an `abi() { ... }` function body in a
+// namespace's manifest.ae. The pipeline walks every top-level function
+// in the manifest, locates these calls structurally, and captures the
+// arguments. Each builder also appends to a process-global manifest
+// registry at runtime (used by tests that exercise the manifest via
+// dlopen + manifest_get()).
 //
-// All manifest builders are simple externs that mutate global state.
-// Trailing blocks (`namespace("...") { ... }`, `bindings() { ... }`)
-// are purely organizational — they nest visually but the underlying
-// manifest registry is flat, written in declaration order.
+// Idiom (matches the existing Aether builder DSL pattern, e.g.
+// calculator-tui.ae's grid() { btn(...) ... } or tinyweb's
+// web_server() { path(...) ... }):
+//
+//     abi() {
+//         describe("trading") {
+//             input("order", "map")
+//             event("OrderPlaced", "int64")
+//             bindings() {
+//                 java("com.example.trading", "Trading")
+//             }
+//         }
+//     }
+//
+// All manifest builders take `_ctx: ptr` first so the codegen's auto-
+// _ctx-injection fires when they're called inside an outer trailing
+// block. The C side ignores _ctx — the manifest registry is global
+// state, written in declaration order.
+//
+// Type signatures are strings ("int", "long", "string", "map", "list",
+// "fn(string) -> bool", etc.) — the namespace pipeline parses them
+// when it generates host SDKs.
 // ---------------------------------------------------------------------------
 
-// Begin a namespace. The trailing block contains input(), event(), and
-// bindings() calls.
-extern namespace(name: string)
-extern namespace_end()
+// Begin a namespace declaration. The trailing block contains input(),
+// event(), and bindings() calls.
+extern describe(_ctx: ptr, name: string)
 
-// Inside a namespace { } block.
-extern input(name: string, type_signature: string)
-extern event(name: string, carries_type: string)
+// Inside a `describe() { }` block.
+extern input(_ctx: ptr, name: string, type_signature: string)
+extern event(_ctx: ptr, name: string, carries_type: string)
 
 // Bindings — visual grouping for the per-language binding builders.
 // Each binding extern appends to its slot in the manifest.
-extern bindings()
-extern java(package_name: string, class_name: string)
-extern python(module_name: string)
-extern go(package_name: string)
+extern bindings(_ctx: ptr)
+extern java(_ctx: ptr, package_name: string, class_name: string)
+extern python(_ctx: ptr, module_name: string)
+extern go(_ctx: ptr, package_name: string)
 
 // Read the captured manifest. Returns a ptr to an opaque
-// AetherManifest struct (see runtime/aether_host.h). Used by the
-// namespace compile pipeline; user code rarely calls this.
+// AetherManifest struct (see runtime/aether_host.h). Used by tests
+// and the dlopen pipeline; user code rarely calls this.
 extern manifest_get() -> ptr
 
 // Reset the captured manifest. Intended for tests and for the

@@ -95,43 +95,50 @@ int notify(const char* event_name, int64_t id) {
 
 static AetherManifest g_manifest = {0};
 
-void namespace(const char* name) {
+/* Each builder ignores _ctx — the manifest registry is global state.
+ * The _ctx parameter is here purely to satisfy the codegen's auto-
+ * injection rule so the manifest DSL reads idiomatically inside a
+ * trailing block: `abi() { describe("trading") { input(...) } }`. */
+
+void describe(void* _ctx, const char* name) {
+    (void)_ctx;
     g_manifest.namespace_name = name;
 }
 
-void namespace_end(void) {
-    /* No-op for now — present for symmetry and as a future hook
-     * (e.g. validation that required bindings were declared). */
-}
-
-void input(const char* name, const char* type_signature) {
+void input(void* _ctx, const char* name, const char* type_signature) {
+    (void)_ctx;
     if (g_manifest.input_count >= AETHER_MANIFEST_MAX_INPUTS) return;
     g_manifest.inputs[g_manifest.input_count].name           = name;
     g_manifest.inputs[g_manifest.input_count].type_signature = type_signature;
     g_manifest.input_count++;
 }
 
-void event(const char* name, const char* carries_type) {
+void event(void* _ctx, const char* name, const char* carries_type) {
+    (void)_ctx;
     if (g_manifest.event_count >= AETHER_MANIFEST_MAX_EVENTS) return;
     g_manifest.events[g_manifest.event_count].name         = name;
     g_manifest.events[g_manifest.event_count].carries_type = carries_type;
     g_manifest.event_count++;
 }
 
-void bindings(void) {
+void bindings(void* _ctx) {
+    (void)_ctx;
     /* Visual grouping; no state to mutate. */
 }
 
-void java(const char* package_name, const char* class_name) {
+void java(void* _ctx, const char* package_name, const char* class_name) {
+    (void)_ctx;
     g_manifest.java.package_name = package_name;
     g_manifest.java.class_name   = class_name;
 }
 
-void python(const char* module_name) {
+void python(void* _ctx, const char* module_name) {
+    (void)_ctx;
     g_manifest.python.module_name = module_name;
 }
 
-void go(const char* package_name) {
+void go(void* _ctx, const char* package_name) {
+    (void)_ctx;
     g_manifest.go.package_name = package_name;
 }
 

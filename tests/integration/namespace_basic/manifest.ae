@@ -1,10 +1,12 @@
 // Smallest possible namespace: a manifest + one script.
 import std.host
 
-setup() {
-    namespace("greet")
-    input("greeting", "string")
-    event("Greeted", "int64")
-    bindings()
-    java("com.example.greet", "Greeter")
+abi() {
+    describe("greet") {
+        input("greeting", "string")
+        event("Greeted", "int64")
+        bindings() {
+            java("com.example.greet", "Greeter")
+        }
+    }
 }

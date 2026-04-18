@@ -1285,29 +1285,67 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     }
     print_line(gen, "");
 
-    // Pre-pass: identify builder functions (first param is _ctx: ptr)
-    // These get builder_context() auto-injected at call sites inside trailing blocks
+    // Pre-pass: identify builder functions (first param is _ctx: ptr).
+    // These get builder_context() auto-injected at call sites inside
+    // trailing blocks. We walk:
+    //   1. program->children — locally defined functions (incl. those
+    //      cloned in by module_merge_into_program) and any locally
+    //      declared externs.
+    //   2. for each AST_IMPORT_STATEMENT, the imported module's externs.
+    //      Module externs aren't merged into program->children; they're
+    //      emitted as C declarations during the import codegen pass and
+    //      otherwise live only in the module registry. To recognize
+    //      std.host's manifest builders (describe, input, event, etc.)
+    //      as builder funcs, we walk those externs here too.
+    //
+    // Function params are AST_VARIABLE_DECLARATION / AST_PATTERN_VARIABLE;
+    // extern params are AST_IDENTIFIER (different parser path) but carry
+    // the same .value and .node_type info we need.
+
+    // First, helper that registers a node if its first param is _ctx: ptr.
+    // (Inlined as a lambda-style block to keep the pre-pass self-contained.)
+    #define MAYBE_REGISTER_BUILDER(node) do { \
+        ASTNode* _n = (node); \
+        if (!_n || !_n->value) break; \
+        int _is_func   = _n->type == AST_FUNCTION_DEFINITION; \
+        int _is_extern = _n->type == AST_EXTERN_FUNCTION; \
+        if (!_is_func && !_is_extern) break; \
+        for (int _j = 0; _j < _n->child_count; _j++) { \
+            ASTNode* _p = _n->children[_j]; \
+            if (!_p) continue; \
+            if (_p->type == AST_GUARD_CLAUSE || _p->type == AST_BLOCK) continue; \
+            int _ok = _p->type == AST_PATTERN_VARIABLE \
+                   || _p->type == AST_VARIABLE_DECLARATION \
+                   || _p->type == AST_IDENTIFIER; \
+            if (_ok && _p->value && strcmp(_p->value, "_ctx") == 0 && \
+                _p->node_type && _p->node_type->kind == TYPE_PTR) { \
+                if (gen->builder_func_count >= gen->builder_func_capacity) { \
+                    gen->builder_func_capacity = gen->builder_func_capacity ? gen->builder_func_capacity * 2 : 16; \
+                    gen->builder_funcs = realloc(gen->builder_funcs, \
+                        gen->builder_func_capacity * sizeof(char*)); \
+                } \
+                gen->builder_funcs[gen->builder_func_count++] = strdup(_n->value); \
+            } \
+            break; \
+        } \
+    } while (0)
+
     for (int i = 0; i < program->child_count; i++) {
         ASTNode* child = program->children[i];
-        if (!child || child->type != AST_FUNCTION_DEFINITION || !child->value) continue;
-        // Check if first non-guard, non-block child is _ctx: ptr
-        for (int j = 0; j < child->child_count; j++) {
-            ASTNode* param = child->children[j];
-            if (param->type == AST_GUARD_CLAUSE || param->type == AST_BLOCK) continue;
-            if ((param->type == AST_PATTERN_VARIABLE || param->type == AST_VARIABLE_DECLARATION) &&
-                param->value && strcmp(param->value, "_ctx") == 0 &&
-                param->node_type && param->node_type->kind == TYPE_PTR) {
-                // Register as builder function
-                if (gen->builder_func_count >= gen->builder_func_capacity) {
-                    gen->builder_func_capacity = gen->builder_func_capacity ? gen->builder_func_capacity * 2 : 16;
-                    gen->builder_funcs = realloc(gen->builder_funcs,
-                        gen->builder_func_capacity * sizeof(char*));
+        if (!child) continue;
+        if (child->type == AST_IMPORT_STATEMENT && child->value) {
+            /* Walk the imported module's externs. */
+            AetherModule* mod = module_find(child->value);
+            if (mod && mod->ast) {
+                for (int j = 0; j < mod->ast->child_count; j++) {
+                    MAYBE_REGISTER_BUILDER(mod->ast->children[j]);
                 }
-                gen->builder_funcs[gen->builder_func_count++] = strdup(child->value);
             }
-            break; // only check first param
+        } else {
+            MAYBE_REGISTER_BUILDER(child);
         }
     }
+    #undef MAYBE_REGISTER_BUILDER
 
     // Pre-pass: identify builder functions (marked with 'builder' keyword)
     // These get block-first execution: block fills config, then function runs with it
