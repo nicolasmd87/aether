@@ -1,7 +1,7 @@
 // Trading namespace manifest. Authored once; the generator templates
 // the host-side SDK in the language(s) declared under bindings.
 //
-// See docs/aether-as-config-language-v2-namespaces-and-bindings.md
+// See docs/embedded-namespaces-and-host-bindings.md
 // for the full design.
 
 import std.host

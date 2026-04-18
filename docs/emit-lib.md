@@ -6,7 +6,7 @@ entry points that any FFI-capable language can call: C, Java (Panama),
 Python (ctypes or SWIG), Go (cgo), Ruby, Rust (`extern "C"`), and so on.
 
 This document covers the v1 contract. For the broader design rationale,
-see [aether-as-a-config-language-for-other-languages.md](aether-as-a-config-language-for-other-languages.md).
+see [aether-embedded-in-host-applications.md](aether-embedded-in-host-applications.md).
 
 ## Quick example
 
@@ -196,7 +196,7 @@ See `tests/integration/emit_lib_swig/` for a worked Python round-trip.
 1. **Callbacks held live** — a host can't pass a closure into Aether and
    have it retained. If you want this (the ARexx / rules-engine model),
    track the "Shape B" design note in
-   [aether-as-a-config-language-for-other-languages.md](aether-as-a-config-language-for-other-languages.md).
+   [aether-embedded-in-host-applications.md](aether-embedded-in-host-applications.md).
 2. **`--emit=both` for `ae build`** — use two invocations.
 3. **`--with=` opt-in stdlib** — capability-empty is strict for v1.
 4. **Wall-clock timeout / allocation budget** — if the embedded script

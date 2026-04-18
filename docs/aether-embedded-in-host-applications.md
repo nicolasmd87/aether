@@ -9,7 +9,7 @@ applications (Java, Go, etc.).
 > points (see **[`emit-lib.md`](emit-lib.md)**), and the **v2 embedded-namespace
 > layer** (PR #172) generates idiomatic per-language SDKs (Python ctypes,
 > Java Panama, Ruby Fiddle) on top — see
-> **[`aether-as-config-language-v2-namespaces-and-bindings.md`](aether-as-config-language-v2-namespaces-and-bindings.md)**
+> **[`embedded-namespaces-and-host-bindings.md`](embedded-namespaces-and-host-bindings.md)**
 > for the typed-SDK story.
 >
 > What's built (✅ Done):
@@ -206,7 +206,7 @@ SDK (Panama, JDK 22+) — a class with `set*` for inputs, `on*` for
 events, methods named after each Aether function, and `AutoCloseable`
 so try-with-resources releases the `Arena`. The host developer writes
 no JNI, no `MethodHandle` lookups, no `MemorySegment` plumbing. See
-**[`aether-as-config-language-v2-namespaces-and-bindings.md`](aether-as-config-language-v2-namespaces-and-bindings.md)**
+**[`embedded-namespaces-and-host-bindings.md`](embedded-namespaces-and-host-bindings.md)**
 for the design and `examples/embedded-java/trading/` for a worked example.
 
 For hosts that want raw FFI without the namespace SDK:

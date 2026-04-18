@@ -33,7 +33,7 @@ next version number before tagging the release.
 
     - **Worked example**: `examples/embedded-java/trading/` ships a `trading` namespace with `placeTrade.ae`, `killTrade.ae`, `getTicker.ae`, a `manifest.ae`, a `TradingDemo.java`, and a `build.sh` that runs the whole pipeline and prints a trade book built up from the events. `tests/integration/embedded_java_trading_e2e/` runs the worked example end to end and asserts every expected line of output appears.
 
-    Out of scope for v1 (each tracked in `docs/aether-as-config-language-v2-namespaces-and-bindings.md`):
+    Out of scope for v1 (each tracked in `docs/embedded-namespaces-and-host-bindings.md`):
 
     - Live host-supplied callbacks (`host_call`) — Aether scripts can't yet call back into host functions. The v1 ABI is host → script for data and script → host for events; the bidirectional case is the "Shape B" milestone.
     - Escape-hatch `import trading.manifest` to add a non-sibling script to a namespace.
@@ -41,7 +41,7 @@ next version number before tagging the release.
     - Wall-clock timeout / allocation budget for scripts running inside a host.
     - Go SDK generator (parser captures the `go(package)` binding but the emitter is a stub).
 
-    The v2 work folds in the `--emit=lib` transport layer (compiler flag, capability-empty default, `runtime/aether_config.{h,c,i}`, opaque `AetherValue*`, eight `tests/integration/emit_lib*/` directories) that was originally planned as a standalone v1 PR; that layer was never shipped on its own — it's the foundation v2 builds on. The full design lives at `docs/aether-as-config-language-v2-namespaces-and-bindings.md`; the speculative `docs/aether-as-a-config-language-for-other-languages.md` and `docs/aether-dsl-as-a-rules-engine.md` are annotated with what's now real and what's still future.
+    The v2 work folds in the `--emit=lib` transport layer (compiler flag, capability-empty default, `runtime/aether_config.{h,c,i}`, opaque `AetherValue*`, eight `tests/integration/emit_lib*/` directories) that was originally planned as a standalone v1 PR; that layer was never shipped on its own — it's the foundation v2 builds on. The full design lives at `docs/embedded-namespaces-and-host-bindings.md`; the speculative `docs/aether-embedded-in-host-applications.md` and `docs/aether-dsl-as-a-rules-engine.md` are annotated with what's now real and what's still future.
 
 - **`notify()` flushes stdout before invoking the host event handler**: when an Aether namespace is loaded as a `.so` by a Java / Python / Ruby host via `dlopen`, libc's `stdout` is fully buffered (the `.so` doesn't see a TTY). Script-side `println()` calls would accumulate in the C-side buffer and only flush at process exit, so demo console output appeared scrambled — host event-handler `println`s landed in order, but the Aether script's preceding lines all came out at the very end. Adding `fflush(NULL)` to `notify()` in `runtime/aether_host.c` (just before the registered handler runs) ensures that anything the script printed leading up to the event is on stdout in the right order. Verified by `tests/integration/embedded_java_trading_e2e/`, which now sees `[ae] place_trade order_id=100` immediately before `[event] OrderPlaced id=100`. Cosmetic-only — does not affect correctness of the values returned by the script, only the on-screen ordering of pre-event log output.
 
