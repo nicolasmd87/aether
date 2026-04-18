@@ -65,16 +65,19 @@ else
     if [ -z "$LIB_PATH" ]; then
         echo "  [FAIL] no lib produced"; fail=$((fail + 1))
     else
-        # aether_greet present?
-        if nm -D "$LIB_PATH" 2>/dev/null | grep -q " T aether_greet"; then
+        # aether_greet present? (macOS nm prefixes symbols with `_`, Linux
+        # nm does not. `nm -g` is the portable "external symbols only" flag;
+        # grep matches either prefix form.)
+        if nm -g "$LIB_PATH" 2>/dev/null | grep -qE " T _?aether_greet$"; then
             echo "  [PASS] lib artifact exports aether_greet"
             pass=$((pass + 1))
         else
             echo "  [FAIL] aether_greet symbol missing from lib"
+            nm -g "$LIB_PATH" 2>/dev/null | head -20
             fail=$((fail + 1))
         fi
         # main absent?
-        if nm -D "$LIB_PATH" 2>/dev/null | grep -qE " T main$"; then
+        if nm -g "$LIB_PATH" 2>/dev/null | grep -qE " T _?main$"; then
             echo "  [FAIL] lib artifact has 'main' symbol — should be suppressed"
             fail=$((fail + 1))
         else

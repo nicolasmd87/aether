@@ -3023,6 +3023,31 @@ int cmd_build_namespace(int argc, char** argv) {
                 return rc;
             }
         }
+#ifdef __APPLE__
+        /* macOS clang bakes the `-o` value into the dylib's install_name
+         * at link time (Linux ld does not record a SONAME unless asked).
+         * Because we pass `-o out_no_ext` to get the base name right and
+         * rename afterwards, the library now has install_name equal to
+         * the extension-less interim path. Any consumer statically linked
+         * against the dylib inherits that broken path as its load-time
+         * dependency (e.g. `./libgreet`), which dyld cannot resolve.
+         *
+         * Rewrite the id to @rpath/<basename> so consumers that pass
+         * -Wl,-rpath,<dir> at link time can find the lib regardless of
+         * where it was built. */
+        {
+            const char* base = strrchr(out_path, '/');
+            base = base ? base + 1 : out_path;
+            char id_cmd[4096];
+            snprintf(id_cmd, sizeof(id_cmd),
+                     "install_name_tool -id '@rpath/%s' '%s' 2>/dev/null",
+                     base, out_path);
+            if (system(id_cmd) != 0) {
+                fprintf(stderr, "Warning: install_name_tool failed on %s; "
+                                "consumers may fail to dlopen.\n", out_path);
+            }
+        }
+#endif
         printf("Built namespace: %s\n", out_path);
 
         /* Step 6: per-language SDK generation. Reads the manifest JSON
@@ -3276,6 +3301,30 @@ static int cmd_build(int argc, char** argv) {
 
     // Clean up intermediate C file — ae build produces a binary, not C source
     remove(c_file);
+
+#ifdef __APPLE__
+    /* macOS clang bakes the `-o` value into the dylib's install_name at
+     * link time. A dylib built via `--emit=lib -o libfoo` ends up with
+     * install_name `libfoo` (no extension, no directory), which dyld
+     * cannot resolve when a statically-linked consumer tries to load it.
+     * Rewrite the id to @rpath/<basename> so consumers that pass
+     * -Wl,-rpath,<dir> at link time can find the lib.
+     *
+     * cmd_build_namespace does its own install_name fixup after its
+     * post-rename step — this block is for direct `ae build --emit=lib`. */
+    if (g_emit_lib && !g_emit_exe) {
+        const char* base = strrchr(exe_file, '/');
+        base = base ? base + 1 : exe_file;
+        char id_cmd[4096];
+        snprintf(id_cmd, sizeof(id_cmd),
+                 "install_name_tool -id '@rpath/%s' '%s' 2>/dev/null",
+                 base, exe_file);
+        if (system(id_cmd) != 0) {
+            fprintf(stderr, "Warning: install_name_tool failed on %s; "
+                            "consumers may fail to dlopen.\n", exe_file);
+        }
+    }
+#endif
 
     printf("Built: %s\n", exe_file);
     if (is_wasm) {
