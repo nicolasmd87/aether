@@ -1532,11 +1532,23 @@ static int json_extract_string_field(const char* json, const char* key,
 static int parse_manifest_json(const char* json, CapturedManifest* m) {
     memset(m, 0, sizeof(*m));
     json_extract_string_field(json, "namespace", m->ns_name, sizeof(m->ns_name));
-    /* Bindings — these are nested under "bindings": { "java": { "package":, "class": }, ...}.
-     * Our extractor matches first occurrence so it picks up the right one. */
-    json_extract_string_field(json, "package", m->java_pkg, sizeof(m->java_pkg));
-    json_extract_string_field(json, "class",   m->java_class, sizeof(m->java_class));
-    json_extract_string_field(json, "module",  m->py_module, sizeof(m->py_module));
+
+    /* Bindings live under "bindings": { "java": { "package":, "class": },
+     * "python": { "module": }, "go": { "package": } }. Scope each
+     * sub-object before extracting so we don't grab the wrong "package"
+     * (java's vs go's). */
+    const char* java_obj   = strstr(json, "\"java\":");
+    const char* python_obj = strstr(json, "\"python\":");
+    const char* go_obj     = strstr(json, "\"go\":");
+    if (java_obj)   {
+        json_extract_string_field(java_obj, "package", m->java_pkg,   sizeof(m->java_pkg));
+        json_extract_string_field(java_obj, "class",   m->java_class, sizeof(m->java_class));
+    }
+    if (python_obj) {
+        json_extract_string_field(python_obj, "module", m->py_module, sizeof(m->py_module));
+    }
+    /* Go binding stored but unused for now — chunk 5+. */
+    (void)go_obj;
 
     /* Inputs and events: each occurrence of `"name":` inside an array
      * element marks a new entry. We scan linearly to keep declaration
@@ -1919,6 +1931,395 @@ static int emit_python_sdk(const CapturedManifest* m,
     return 0;
 }
 
+/* Map an Aether type to the Panama ValueLayout symbolic name (used in
+ * FunctionDescriptor) and to the Java method-handle invokeExact return
+ * cast / param type. Returns NULL if the type isn't representable. */
+static const char* java_layout_for(const char* aether_type) {
+    if (strcmp(aether_type, "int")    == 0) return "JAVA_INT";
+    if (strcmp(aether_type, "long")   == 0) return "JAVA_LONG";
+    if (strcmp(aether_type, "ulong")  == 0) return "JAVA_LONG";   /* signed view */
+    if (strcmp(aether_type, "float")  == 0) return "JAVA_FLOAT";
+    if (strcmp(aether_type, "bool")   == 0) return "JAVA_INT";
+    if (strcmp(aether_type, "string") == 0) return "ADDRESS";
+    if (strcmp(aether_type, "ptr")    == 0) return "ADDRESS";
+    return NULL;
+}
+static const char* java_jtype_for(const char* aether_type) {
+    if (strcmp(aether_type, "int")    == 0) return "int";
+    if (strcmp(aether_type, "long")   == 0) return "long";
+    if (strcmp(aether_type, "ulong")  == 0) return "long";
+    if (strcmp(aether_type, "float")  == 0) return "float";
+    if (strcmp(aether_type, "bool")   == 0) return "int";
+    if (strcmp(aether_type, "string") == 0) return "String";
+    if (strcmp(aether_type, "ptr")    == 0) return "MemorySegment";
+    if (strcmp(aether_type, "void")   == 0) return "void";
+    return NULL;
+}
+
+/* Convert snake_case to camelCase for Java method names. Simpler than
+ * to_camel above — Java methods start lowercase. */
+static void to_lower_camel(const char* in, char* out, size_t out_size) {
+    size_t i = 0;
+    int next_upper = 0;
+    int first = 1;
+    for (const char* p = in; *p && i + 1 < out_size; p++) {
+        if (*p == '_') { next_upper = 1; continue; }
+        if (first) { out[i++] = (char)tolower((unsigned char)*p); first = 0; }
+        else       { out[i++] = next_upper ? (char)toupper((unsigned char)*p) : *p; }
+        next_upper = 0;
+    }
+    out[i] = '\0';
+}
+
+/* Generate a Java SDK file. Targets Java 22+ (Panama stable). The
+ * generated class is self-contained — no external deps beyond the JDK
+ * — so consumers compile with `javac` and run with
+ *   java --enable-native-access=ALL-UNNAMED -cp ... MyApp
+ * (or the more restrictive --enable-native-access=<module>). */
+static int emit_java_sdk(const CapturedManifest* m,
+                         const CapturedFunction* fns, int fn_count,
+                         const char* lib_path,
+                         const char* out_dir) {
+    if (!m->java_class[0] || !m->java_pkg[0]) return 0;
+
+    /* package name → directory path: com.example.foo → com/example/foo */
+    char pkg_dir[1024];
+    snprintf(pkg_dir, sizeof(pkg_dir), "%s/%s", out_dir, m->java_pkg);
+    for (char* p = pkg_dir + strlen(out_dir); *p; p++) {
+        if (*p == '.') *p = '/';
+    }
+    mkdirs(pkg_dir);
+
+    char out_path[1280];
+    snprintf(out_path, sizeof(out_path), "%s/%s.java", pkg_dir, m->java_class);
+    FILE* f = fopen(out_path, "w");
+    if (!f) {
+        fprintf(stderr, "Error: cannot write %s\n", out_path);
+        return -1;
+    }
+
+    /* Default lib path — relative to the .java's compiled class location
+     * is brittle, so we accept a constructor argument and document the
+     * default as the basename of the .so for users who put both files
+     * side by side in their resources. */
+    const char* lib_basename = strrchr(lib_path, '/');
+    lib_basename = lib_basename ? lib_basename + 1 : lib_path;
+
+    fprintf(f,
+"/*\n"
+" * Auto-generated Aether namespace binding for `%s`.\n"
+" * Do not edit by hand — regenerated by `ae build --namespace`.\n"
+" *\n"
+" * Requires Java 22+ (Foreign Function & Memory API). Run with:\n"
+" *   java --enable-native-access=ALL-UNNAMED -cp ... YourApp\n"
+" *\n"
+" * Usage:\n"
+" *   %s.%s ns = new %s.%s(\"./%s\");\n"
+" *   ns.on<EventName>(id -> ...);\n"
+" *   ns.set<InputName>(value);\n"
+" *   var result = ns.<functionName>(args);\n"
+" */\n"
+"package %s;\n"
+"\n"
+"import java.lang.foreign.*;\n"
+"import java.lang.invoke.*;\n"
+"import java.nio.file.*;\n"
+"import java.util.*;\n"
+"import java.util.function.*;\n"
+"import static java.lang.foreign.ValueLayout.*;\n"
+"\n",
+        m->ns_name,
+        m->java_pkg, m->java_class, m->java_pkg, m->java_class, lib_basename,
+        m->java_pkg);
+
+    /* Class header + state. */
+    fprintf(f,
+"public class %s implements AutoCloseable {\n"
+"\n"
+"    private final Arena arena = Arena.ofShared();\n"
+"    private final SymbolLookup lib;\n"
+"    private final Linker linker = Linker.nativeLinker();\n"
+"\n"
+"    /** Holds upcall stubs so the JVM doesn't reclaim them while the\n"
+"     *  C side still has function pointers. */\n"
+"    private final List<MemorySegment> _callbackKeepalive = new ArrayList<>();\n"
+"\n",
+        m->java_class);
+
+    /* Cached method handles for every function + the runtime helpers. */
+    fprintf(f,
+"    private final MethodHandle h_aether_event_register;\n"
+"    private final MethodHandle h_aether_describe;\n");
+    for (int i = 0; i < fn_count; i++) {
+        const CapturedFunction* fn = &fns[i];
+        if (is_skipped_function(fn->name)) continue;
+        if (!java_jtype_for(fn->ret)) continue;
+        int ok = 1;
+        for (int p = 0; p < fn->param_count; p++) {
+            if (!java_jtype_for(fn->params[p].type)) { ok = 0; break; }
+        }
+        if (!ok) continue;
+        fprintf(f, "    private final MethodHandle h_%s;\n", fn->name);
+    }
+
+    /* Input fields (v1: stored on the instance, public so callers can
+     * also read them back). */
+    fprintf(f, "\n");
+    for (int i = 0; i < m->input_count; i++) {
+        /* Input types come from the manifest as freeform strings
+         * ("int", "string", "fn(string) -> bool", "map", etc.). For v1,
+         * Java fields are typed only when the type is in the simple
+         * vocabulary; everything else falls back to Object. */
+        const char* jt = java_jtype_for(m->inputs[i].type);
+        if (!jt) jt = "Object";
+        fprintf(f, "    public %s %s;\n", jt, m->inputs[i].name);
+    }
+    fprintf(f, "\n");
+
+    /* Constructor */
+    fprintf(f,
+"    public %s(String libPath) {\n"
+"        this.lib = SymbolLookup.libraryLookup(Path.of(libPath), arena);\n"
+"        h_aether_event_register = linker.downcallHandle(\n"
+"            lib.find(\"aether_event_register\").orElseThrow(),\n"
+"            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));\n"
+"        h_aether_describe = linker.downcallHandle(\n"
+"            lib.find(\"aether_describe\").orElseThrow(),\n"
+"            FunctionDescriptor.of(ADDRESS));\n",
+        m->java_class);
+
+    /* Bind each script function. */
+    for (int i = 0; i < fn_count; i++) {
+        const CapturedFunction* fn = &fns[i];
+        if (is_skipped_function(fn->name)) continue;
+        if (!java_jtype_for(fn->ret)) continue;
+        int ok = 1;
+        for (int p = 0; p < fn->param_count; p++) {
+            if (!java_jtype_for(fn->params[p].type)) { ok = 0; break; }
+        }
+        if (!ok) {
+            fprintf(stderr, "Warning: skipping Java binding for %s — unsupported type\n", fn->name);
+            continue;
+        }
+        fprintf(f, "        h_%s = linker.downcallHandle(\n", fn->name);
+        fprintf(f, "            lib.find(\"aether_%s\").orElseThrow(),\n", fn->name);
+        fprintf(f, "            FunctionDescriptor.");
+        if (strcmp(fn->ret, "void") == 0) {
+            fprintf(f, "ofVoid(");
+            for (int p = 0; p < fn->param_count; p++) {
+                if (p > 0) fputs(", ", f);
+                fputs(java_layout_for(fn->params[p].type), f);
+            }
+            fputs("));\n", f);
+        } else {
+            fprintf(f, "of(%s", java_layout_for(fn->ret));
+            for (int p = 0; p < fn->param_count; p++) {
+                fprintf(f, ", %s", java_layout_for(fn->params[p].type));
+            }
+            fputs("));\n", f);
+        }
+    }
+    fprintf(f, "    }\n\n");
+
+    /* Per-input setter (camelCase). */
+    for (int i = 0; i < m->input_count; i++) {
+        char setter[160];
+        char input_camel[160];
+        to_camel(m->inputs[i].name, input_camel, sizeof(input_camel));
+        snprintf(setter, sizeof(setter), "set%s", input_camel);
+        const char* jt = java_jtype_for(m->inputs[i].type);
+        if (!jt) jt = "Object";
+        fprintf(f,
+"    public void %s(%s value) {\n"
+"        /* v1: stored on the instance; future host_call() will surface to script. */\n"
+"        this.%s = value;\n"
+"    }\n\n",
+            setter, jt, m->inputs[i].name);
+    }
+
+    /* Per-event registrar: on<EventName>(LongConsumer handler). */
+    for (int i = 0; i < m->event_count; i++) {
+        const char* ev = m->events[i].name;
+        char ev_camel[160];
+        to_camel(ev, ev_camel, sizeof(ev_camel));
+        fprintf(f,
+"    public void on%s(LongConsumer handler) {\n"
+"        try {\n"
+"            /* Look up LongConsumer.accept (a public interface method) and\n"
+"             * bind to the user-supplied lambda. We don't bind directly\n"
+"             * via lookup().bind(handler, ...) because the lambda's class\n"
+"             * is nestmate-private and the lookup from this generated\n"
+"             * class can't reach it. */\n"
+"            MethodHandle target = MethodHandles.publicLookup()\n"
+"                .findVirtual(LongConsumer.class, \"accept\",\n"
+"                    MethodType.methodType(void.class, long.class))\n"
+"                .bindTo(handler);\n"
+"            MemorySegment stub = linker.upcallStub(\n"
+"                target,\n"
+"                FunctionDescriptor.ofVoid(JAVA_LONG),\n"
+"                arena);\n"
+"            _callbackKeepalive.add(stub);\n"
+"            int rc = (int) h_aether_event_register.invokeExact(\n"
+"                arena.allocateFrom(\"%s\"), stub);\n"
+"            if (rc != 0) throw new RuntimeException(\"aether_event_register %s: rc=\" + rc);\n"
+"        } catch (Throwable t) { throw new RuntimeException(t); }\n"
+"    }\n\n",
+            ev_camel, ev, ev);
+    }
+
+    /* Per-function method (lowerCamel). */
+    for (int i = 0; i < fn_count; i++) {
+        const CapturedFunction* fn = &fns[i];
+        if (is_skipped_function(fn->name)) continue;
+        if (!java_jtype_for(fn->ret)) continue;
+        int ok = 1;
+        for (int p = 0; p < fn->param_count; p++) {
+            if (!java_jtype_for(fn->params[p].type)) { ok = 0; break; }
+        }
+        if (!ok) continue;
+
+        char m_camel[160];
+        to_lower_camel(fn->name, m_camel, sizeof(m_camel));
+        const char* jret = java_jtype_for(fn->ret);
+
+        fprintf(f, "    public %s %s(", jret, m_camel);
+        for (int p = 0; p < fn->param_count; p++) {
+            if (p > 0) fputs(", ", f);
+            fprintf(f, "%s %s", java_jtype_for(fn->params[p].type), fn->params[p].name);
+        }
+        fprintf(f, ") {\n");
+        fprintf(f, "        try {\n");
+
+        /* Marshal string args via arena.allocateFrom. */
+        for (int p = 0; p < fn->param_count; p++) {
+            if (strcmp(fn->params[p].type, "string") == 0) {
+                fprintf(f, "            MemorySegment _%s = arena.allocateFrom(%s);\n",
+                        fn->params[p].name, fn->params[p].name);
+            }
+        }
+
+        /* Build the invokeExact arg list. */
+        const char* invoke_cast =
+            strcmp(jret, "void")  == 0 ? "" :
+            strcmp(jret, "int")   == 0 ? "(int) " :
+            strcmp(jret, "long")  == 0 ? "(long) " :
+            strcmp(jret, "float") == 0 ? "(float) " :
+            "(MemorySegment) ";
+
+        if (strcmp(jret, "void") == 0) {
+            fprintf(f, "            h_%s.invokeExact(", fn->name);
+        } else if (strcmp(fn->ret, "string") == 0) {
+            fprintf(f, "            MemorySegment _r = (MemorySegment) h_%s.invokeExact(", fn->name);
+        } else {
+            fprintf(f, "            return %sh_%s.invokeExact(", invoke_cast, fn->name);
+        }
+        for (int p = 0; p < fn->param_count; p++) {
+            if (p > 0) fputs(", ", f);
+            if (strcmp(fn->params[p].type, "string") == 0) {
+                fprintf(f, "_%s", fn->params[p].name);
+            } else {
+                fprintf(f, "%s", fn->params[p].name);
+            }
+        }
+        fprintf(f, ");\n");
+
+        if (strcmp(jret, "void") == 0) {
+            /* nothing to return */
+        } else if (strcmp(fn->ret, "string") == 0) {
+            fprintf(f,
+"            if (_r.equals(MemorySegment.NULL)) return null;\n"
+"            return _r.reinterpret(Long.MAX_VALUE).getString(0);\n");
+        }
+
+        fprintf(f,
+"        } catch (Throwable t) { throw new RuntimeException(t); }\n"
+"    }\n\n");
+    }
+
+    /* Manifest accessor — describe(). */
+    fprintf(f,
+"    /** Native-side manifest layout — must mirror runtime/aether_host.h. */\n"
+"    private static final MemoryLayout INPUT_DECL = MemoryLayout.structLayout(\n"
+"        ADDRESS.withName(\"name\"),\n"
+"        ADDRESS.withName(\"type_signature\"));\n"
+"    private static final MemoryLayout EVENT_DECL = MemoryLayout.structLayout(\n"
+"        ADDRESS.withName(\"name\"),\n"
+"        ADDRESS.withName(\"carries_type\"));\n"
+"\n"
+"    /** Typed view of the namespace's compile-time manifest. */\n"
+"    public static final class Manifest {\n"
+"        public final String namespaceName;\n"
+"        public final List<String[]> inputs;  // each: { name, type }\n"
+"        public final List<String[]> events;  // each: { name, carries }\n"
+"        public final String javaPackage, javaClass, pythonModule, goPackage;\n"
+"\n"
+"        Manifest(String ns, List<String[]> in, List<String[]> ev,\n"
+"                 String jp, String jc, String pm, String gp) {\n"
+"            this.namespaceName = ns;\n"
+"            this.inputs = in;\n"
+"            this.events = ev;\n"
+"            this.javaPackage = jp; this.javaClass = jc;\n"
+"            this.pythonModule = pm; this.goPackage = gp;\n"
+"        }\n"
+"        @Override public String toString() {\n"
+"            return \"Manifest(namespace=\\\"\" + namespaceName + \"\\\", inputs=\" + inputs.size()\n"
+"                + \", events=\" + events.size() + \")\";\n"
+"        }\n"
+"    }\n"
+"\n"
+"    /** Walk the AetherNamespaceManifest static struct in the .so and\n"
+"     *  return a typed copy. Layout must stay in sync with the C struct. */\n"
+"    public Manifest describe() {\n"
+"        try {\n"
+"            MemorySegment p = (MemorySegment) h_aether_describe.invokeExact();\n"
+"            if (p.equals(MemorySegment.NULL))\n"
+"                throw new RuntimeException(\"aether_describe returned NULL\");\n"
+"            MemorySegment view = p.reinterpret(8 + 4 + 16 * 64 + 4 + 16 * 64 + 16 + 8 + 8 + 8);\n"
+"            String ns = view.get(ADDRESS, 0).reinterpret(Long.MAX_VALUE).getString(0);\n"
+"            int inputCount = view.get(JAVA_INT, 8);\n"
+"            List<String[]> inputs = new ArrayList<>();\n"
+"            long base = 16; // after namespace_name(8) + input_count(4) + 4 padding\n"
+"            for (int i = 0; i < inputCount; i++) {\n"
+"                long off = base + (long)i * 16;\n"
+"                MemorySegment nm = view.get(ADDRESS, off);\n"
+"                MemorySegment ty = view.get(ADDRESS, off + 8);\n"
+"                inputs.add(new String[]{\n"
+"                    nm.equals(MemorySegment.NULL) ? null : nm.reinterpret(Long.MAX_VALUE).getString(0),\n"
+"                    ty.equals(MemorySegment.NULL) ? null : ty.reinterpret(Long.MAX_VALUE).getString(0)});\n"
+"            }\n"
+"            long eventsBase = 16 + 16L * 64;     // after inputs[64]\n"
+"            int eventCount = view.get(JAVA_INT, eventsBase);\n"
+"            long eventsArr = eventsBase + 8;     // skip int+pad\n"
+"            List<String[]> events = new ArrayList<>();\n"
+"            for (int i = 0; i < eventCount; i++) {\n"
+"                long off = eventsArr + (long)i * 16;\n"
+"                MemorySegment nm = view.get(ADDRESS, off);\n"
+"                MemorySegment ca = view.get(ADDRESS, off + 8);\n"
+"                events.add(new String[]{\n"
+"                    nm.equals(MemorySegment.NULL) ? null : nm.reinterpret(Long.MAX_VALUE).getString(0),\n"
+"                    ca.equals(MemorySegment.NULL) ? null : ca.reinterpret(Long.MAX_VALUE).getString(0)});\n"
+"            }\n"
+"            long bindings = eventsArr + 16L * 64;\n"
+"            MemorySegment jp = view.get(ADDRESS, bindings);\n"
+"            MemorySegment jc = view.get(ADDRESS, bindings + 8);\n"
+"            MemorySegment pm = view.get(ADDRESS, bindings + 16);\n"
+"            MemorySegment gp = view.get(ADDRESS, bindings + 24);\n"
+"            return new Manifest(ns, inputs, events,\n"
+"                jp.equals(MemorySegment.NULL) ? null : jp.reinterpret(Long.MAX_VALUE).getString(0),\n"
+"                jc.equals(MemorySegment.NULL) ? null : jc.reinterpret(Long.MAX_VALUE).getString(0),\n"
+"                pm.equals(MemorySegment.NULL) ? null : pm.reinterpret(Long.MAX_VALUE).getString(0),\n"
+"                gp.equals(MemorySegment.NULL) ? null : gp.reinterpret(Long.MAX_VALUE).getString(0));\n"
+"        } catch (Throwable t) { throw new RuntimeException(t); }\n"
+"    }\n"
+"\n"
+"    @Override public void close() { arena.close(); }\n"
+"}\n");
+
+    fclose(f);
+    printf("Generated Java SDK: %s\n", out_path);
+    return 0;
+}
+
 /* Driver: gather manifest + function list, dispatch to per-language emitters. */
 static void emit_namespace_bindings(const char* manifest_path,
                                     const char* concat_path,
@@ -1961,8 +2362,10 @@ static void emit_namespace_bindings(const char* manifest_path,
     if (m.py_module[0]) {
         emit_python_sdk(&m, fns, fn_count, lib_path, out_dir);
     }
+    if (m.java_class[0] && m.java_pkg[0]) {
+        emit_java_sdk(&m, fns, fn_count, lib_path, out_dir);
+    }
 
-    /* Java emission deferred to chunk 5. */
     (void)dir;  /* may be needed for relative-path resolution later */
 }
 
