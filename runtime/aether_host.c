@@ -84,3 +84,68 @@ int notify(const char* event_name, int64_t id) {
     g_events[idx].handler(id);
     return 1;
 }
+
+/* ---------------------------------------------------------------------
+ * Manifest registry
+ *
+ * String fields are borrowed pointers into Aether's interned-string
+ * storage. The manifest .ae script lives for the lifetime of the
+ * compile; the pipeline reads g_manifest before the script is freed.
+ * --------------------------------------------------------------------- */
+
+static AetherManifest g_manifest = {0};
+
+void namespace(const char* name) {
+    g_manifest.namespace_name = name;
+}
+
+void namespace_end(void) {
+    /* No-op for now — present for symmetry and as a future hook
+     * (e.g. validation that required bindings were declared). */
+}
+
+void input(const char* name, const char* type_signature) {
+    if (g_manifest.input_count >= AETHER_MANIFEST_MAX_INPUTS) return;
+    g_manifest.inputs[g_manifest.input_count].name           = name;
+    g_manifest.inputs[g_manifest.input_count].type_signature = type_signature;
+    g_manifest.input_count++;
+}
+
+void event(const char* name, const char* carries_type) {
+    if (g_manifest.event_count >= AETHER_MANIFEST_MAX_EVENTS) return;
+    g_manifest.events[g_manifest.event_count].name         = name;
+    g_manifest.events[g_manifest.event_count].carries_type = carries_type;
+    g_manifest.event_count++;
+}
+
+void bindings(void) {
+    /* Visual grouping; no state to mutate. */
+}
+
+void java(const char* package_name, const char* class_name) {
+    g_manifest.java.package_name = package_name;
+    g_manifest.java.class_name   = class_name;
+}
+
+void python(const char* module_name) {
+    g_manifest.python.module_name = module_name;
+}
+
+void go(const char* package_name) {
+    g_manifest.go.package_name = package_name;
+}
+
+AetherManifest* manifest_get(void) {
+    /* Return NULL when nothing has been declared so callers can
+     * distinguish "no manifest run" from "empty manifest". */
+    if (!g_manifest.namespace_name) return NULL;
+    return &g_manifest;
+}
+
+void manifest_clear(void) {
+    /* memset is safe here: the strings we hold are borrowed pointers
+     * we never owned. The Aether-side string storage takes care of
+     * its own lifetime. */
+    AetherManifest empty = {0};
+    g_manifest = empty;
+}

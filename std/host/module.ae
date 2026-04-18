@@ -16,3 +16,42 @@
 // `long` is Aether's 64-bit integer (TOKEN_INT64); the C-side ABI is
 // int64_t per the public host header (runtime/aether_host.h).
 extern notify(event: string, id: long) -> int
+
+// ---------------------------------------------------------------------------
+// Manifest DSL — used inside `<dir>/manifest.ae` to describe an embedded
+// namespace. Each builder appends to a process-global manifest registry
+// that the namespace compile pipeline reads after running the manifest
+// script. Type signatures are strings ("int", "long", "string", "map",
+// "list", "fn(string) -> bool", etc.) — the namespace pipeline parses
+// them when it generates host SDKs.
+//
+// All manifest builders are simple externs that mutate global state.
+// Trailing blocks (`namespace("...") { ... }`, `bindings() { ... }`)
+// are purely organizational — they nest visually but the underlying
+// manifest registry is flat, written in declaration order.
+// ---------------------------------------------------------------------------
+
+// Begin a namespace. The trailing block contains input(), event(), and
+// bindings() calls.
+extern namespace(name: string)
+extern namespace_end()
+
+// Inside a namespace { } block.
+extern input(name: string, type_signature: string)
+extern event(name: string, carries_type: string)
+
+// Bindings — visual grouping for the per-language binding builders.
+// Each binding extern appends to its slot in the manifest.
+extern bindings()
+extern java(package_name: string, class_name: string)
+extern python(module_name: string)
+extern go(package_name: string)
+
+// Read the captured manifest. Returns a ptr to an opaque
+// AetherManifest struct (see runtime/aether_host.h). Used by the
+// namespace compile pipeline; user code rarely calls this.
+extern manifest_get() -> ptr
+
+// Reset the captured manifest. Intended for tests and for the
+// pipeline to start each compilation from a clean slate.
+extern manifest_clear()
