@@ -5,11 +5,11 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.59.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
-## [0.59.0]
+## [current]
 
 ### Added
 
@@ -42,6 +42,12 @@ next version number before tagging the release.
     - Go SDK generator (parser captures the `go(package)` binding but the emitter is a stub).
 
     The v2 work folds in the `--emit=lib` transport layer (compiler flag, capability-empty default, `runtime/aether_config.{h,c,i}`, opaque `AetherValue*`, eight `tests/integration/emit_lib*/` directories) that was originally planned as a standalone v1 PR; that layer was never shipped on its own — it's the foundation v2 builds on. The full design lives at `docs/aether-as-config-language-v2-namespaces-and-bindings.md`; the speculative `docs/aether-as-a-config-language-for-other-languages.md` and `docs/aether-dsl-as-a-rules-engine.md` are annotated with what's now real and what's still future.
+
+- **`notify()` flushes stdout before invoking the host event handler**: when an Aether namespace is loaded as a `.so` by a Java / Python / Ruby host via `dlopen`, libc's `stdout` is fully buffered (the `.so` doesn't see a TTY). Script-side `println()` calls would accumulate in the C-side buffer and only flush at process exit, so demo console output appeared scrambled — host event-handler `println`s landed in order, but the Aether script's preceding lines all came out at the very end. Adding `fflush(NULL)` to `notify()` in `runtime/aether_host.c` (just before the registered handler runs) ensures that anything the script printed leading up to the event is on stdout in the right order. Verified by `tests/integration/embedded_java_trading_e2e/`, which now sees `[ae] place_trade order_id=100` immediately before `[event] OrderPlaced id=100`. Cosmetic-only — does not affect correctness of the values returned by the script, only the on-screen ordering of pre-event log output.
+
+- **Embedded namespace tests + worked example tag script-side prints with `[ae]`**: every `println()` inside `tests/integration/namespace_{python,ruby,java}/calc.ae` and `examples/embedded-java/trading/aether/{placeTrade,killTrade,getTicker}.ae` now starts with the literal `[ae] ` so a human reading the test output (or the worked example's stdout) can tell at a glance which lines came from inside the embedded Aether script versus which came from the Java / Python / Ruby host. The four test scripts grep for at least one `[ae]` line in the captured output and report `[PASS] Aether [ae] script-side output visible to host` if it landed; this is the regression test that pairs with the `notify()`-flush fix above.
+
+- **Embedded namespace test SDKs renamed to `*_generated_sdk` to make the generated nature obvious**: the Python / Ruby modules emitted by `ae build --namespace` for `tests/integration/namespace_{python,ruby}/manifest.ae` are now `calc_generated_sdk.py` / `calc_generated_sdk.rb` instead of `calc_sdk.py` / `calc_sdk.rb`; the Java class is `CalcGeneratedSdk` instead of `Calc`. No change to the SDK generators themselves — the manifest's `python("calc_generated_sdk")` / `ruby("calc_generated_sdk")` / `java("com.example.calc", "CalcGeneratedSdk")` declarations decide the output filename, and we just chose more obvious names. Reduces the chance a future contributor accidentally edits a file in a temp directory thinking it's hand-written source.
 
 - **`aether_argv0()` / `os.argv0()` — read argv[0] directly**: a small stdlib helper for tools that need to locate their own binary (to find sibling helpers next to themselves, re-exec with different flags, or print a self-path in a diagnostic). `aether_argv0()` is the raw extern, declared in `runtime/aether_runtime.h` and implemented next to `aether_argc` / `aether_argv` in `runtime/aether_runtime.c`. It lives in the runtime rather than `std/os/aether_os.c` so the compiler binary — which links `std/os` without the runtime — does not pick up an unresolved reference to argv storage. Returns `NULL` before `aether_args_init` has run (e.g. unit tests that bypass `main`). The idiomatic Aether wrapper `os.argv0()` in `std/os/module.ae` returns `""` instead of null for callers that prefer string semantics. Both route to the same OS-owned `argv[0]` slot, so `aether_argv0() == aether_args_get(0)` at the raw-pointer level. Test: `tests/syntax/test_aether_argv0.ae` covers the happy path, pointer identity with `aether_args_get(0)`, the wrapper's length-preserving copy, and the null-handling contract. Runnable example: `examples/stdlib/process-exec.ae`.
 
