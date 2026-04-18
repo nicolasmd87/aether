@@ -6,7 +6,7 @@
  * asserts the round-trip behavior. Errors are printed to stderr and
  * exit code is non-zero so the shell driver can detect failure.
  */
-import com.example.calc.Calc;
+import com.example.calc.CalcGeneratedSdk;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -17,10 +17,10 @@ public class Check {
     }
 
     public static void main(String[] args) throws Exception {
-        try (Calc ns = new Calc(args[0])) {
+        try (CalcGeneratedSdk ns = new CalcGeneratedSdk(args[0])) {
 
             // --- discovery ---
-            Calc.Manifest m = ns.describe();
+            CalcGeneratedSdk.Manifest m = ns.describe();
             if (!"calc".equals(m.namespaceName))
                 fail("namespace=" + m.namespaceName);
             if (m.inputs.size() != 2 || !"limit".equals(m.inputs.get(0)[0])
@@ -31,7 +31,7 @@ public class Check {
                 fail("events=" + m.events);
             if (!"com.example.calc".equals(m.javaPackage))
                 fail("javaPackage=" + m.javaPackage);
-            if (!"Calc".equals(m.javaClass))
+            if (!"CalcGeneratedSdk".equals(m.javaClass))
                 fail("javaClass=" + m.javaClass);
 
             // --- setters (v1: stored only) ---

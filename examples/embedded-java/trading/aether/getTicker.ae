@@ -2,5 +2,6 @@
 // composite Aether values to the host, so we return the symbol back
 // to demonstrate the round-trip.
 get_ticker(symbol: string) {
+    println("[ae] get_ticker symbol=${symbol}")
     return symbol
 }

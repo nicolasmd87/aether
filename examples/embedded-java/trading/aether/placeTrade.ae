@@ -2,9 +2,13 @@
 // the host_call() path that would fetch max_order from the host hasn't
 // landed yet. The shape below is what the design doc assumes once that
 // arrives.
+//
+// `[ae]` prefix on console output marks lines coming from this Aether
+// library (as opposed to lines from the Java TradingDemo host).
 import std.host
 
 place_trade(order_id: long, amount: int, ticker_known: int) {
+    println("[ae] place_trade order_id=${order_id} amount=${amount}")
     if amount < 0 || amount > 100000 {
         notify("OrderRejected", order_id)
         return 0

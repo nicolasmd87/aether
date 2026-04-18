@@ -32,8 +32,8 @@ cp "$SCRIPT_DIR"/manifest.ae "$SCRIPT_DIR"/calc.ae "$SCRIPT_DIR"/check.rb "$TMPD
 cd "$TMPDIR"
 if ! AETHER_HOME="" "$ROOT/build/ae" build --namespace . >"$TMPDIR/build.log" 2>&1; then
     echo "  [FAIL] ae build --namespace ."; cat "$TMPDIR/build.log"; fail=$((fail + 1))
-elif [ ! -f "$TMPDIR/calc_sdk.rb" ]; then
-    echo "  [FAIL] calc_sdk.rb was not generated"; ls -la "$TMPDIR"; fail=$((fail + 1))
+elif [ ! -f "$TMPDIR/calc_generated_sdk.rb" ]; then
+    echo "  [FAIL] calc_generated_sdk.rb was not generated"; ls -la "$TMPDIR"; fail=$((fail + 1))
 else
     LIB_PATH=""
     for c in "$TMPDIR/lib"*"${LIB_EXT}"; do
@@ -43,6 +43,14 @@ else
         echo "  [FAIL] no namespace lib"; fail=$((fail + 1))
     elif ruby "$TMPDIR/check.rb" "$LIB_PATH" >"$TMPDIR/run.out" 2>&1; then
         echo "  [PASS] generated Ruby SDK round-trips"; pass=$((pass + 1))
+        if grep -qF "[ae] double_it" "$TMPDIR/run.out"; then
+            echo "  [PASS] Aether [ae] script-side output visible to host"
+            pass=$((pass + 1))
+        else
+            echo "  [FAIL] Aether [ae] script-side output missing from stdout"
+            cat "$TMPDIR/run.out"
+            fail=$((fail + 1))
+        fi
     else
         echo "  [FAIL] check.rb failed"; cat "$TMPDIR/run.out"; fail=$((fail + 1))
     fi

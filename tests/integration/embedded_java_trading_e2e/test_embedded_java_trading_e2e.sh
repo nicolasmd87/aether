@@ -57,12 +57,22 @@ ticker = ACME
 Final trade book: {100=KILLED}
 "
     miss=0
+    # Lines from both sides — Java host (`[event]`, `Loaded`, `ticker`,
+    # `Final trade book`) AND Aether library (`[ae]`). Asserting we see
+    # both confirms the script-side console output AND the host-side
+    # event delivery both work, with the Aether prints reaching stdout
+    # before the host's matching event handler line.
     for line in \
         'Loaded Manifest(namespace="trading"' \
-        'OrderPlaced id=100' \
-        'OrderRejected id=101' \
-        'UnknownTicker id=102' \
-        'TradeKilled id=100' \
+        '[ae] place_trade order_id=100' \
+        '[event] OrderPlaced id=100' \
+        '[ae] place_trade order_id=101' \
+        '[event] OrderRejected id=101' \
+        '[ae] place_trade order_id=102' \
+        '[event] UnknownTicker id=102' \
+        '[ae] kill_trade trade_id=100' \
+        '[event] TradeKilled id=100' \
+        '[ae] get_ticker symbol=ACME' \
         'ticker = ACME' \
         '{100=KILLED}'
     do

@@ -1,6 +1,12 @@
 import std.host
 
+// Lines tagged `[ae]` come from the embedded Aether library (printed
+// directly by the script). Lines from the host (Java Check.java) are
+// untagged. Looking at the captured stdout you can tell at a glance
+// which side produced each line.
+
 double_it(n: int) {
+    println("[ae] double_it(${n})")
     if n > 1000000 {
         notify("Overflow", n)
         return -1
@@ -10,11 +16,13 @@ double_it(n: int) {
 }
 
 label(prefix: string, n: int) {
+    println("[ae] label(${prefix}, ${n})")
     notify("Computed", n)
     return prefix
 }
 
 is_positive(n: int) {
+    println("[ae] is_positive(${n})")
     if n > 0 { return 1 }
     return 0
 }

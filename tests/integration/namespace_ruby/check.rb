@@ -4,21 +4,21 @@
 # every input setter, every event handler, and every script function,
 # and asserts the round-trip behavior.
 
-require_relative 'calc_sdk'
+require_relative 'calc_generated_sdk'
 
 def fail!(msg)
   warn "FAIL: #{msg}"
   exit 1
 end
 
-ns = CalcSdk::Calc.new(ARGV[0])
+ns = CalcGeneratedSdk::Calc.new(ARGV[0])
 
 # --- discovery ---
 m = ns.describe
 fail!("namespace = #{m.namespace_name.inspect}") unless m.namespace_name == 'calc'
 fail!("inputs = #{m.inputs.inspect}") unless m.inputs.map(&:first) == ['limit', 'name']
 fail!("events = #{m.events.inspect}") unless m.events.map(&:first) == ['Computed', 'Overflow']
-fail!("ruby_module = #{m.ruby_module.inspect}") unless m.ruby_module == 'calc_sdk'
+fail!("ruby_module = #{m.ruby_module.inspect}") unless m.ruby_module == 'calc_generated_sdk'
 
 # --- setters (v1: stored, not pushed to script) ---
 ns.set_limit(100)

@@ -11,7 +11,7 @@ abi() {
         event("Computed", "int64")
         event("Overflow", "int64")
         bindings() {
-            ruby("calc_sdk")
+            ruby("calc_generated_sdk")
         }
     }
 }

@@ -5,13 +5,13 @@ every input setter, every event handler, and every script function,
 and asserts the round-trip behavior.
 """
 import sys
-import calc_sdk
+import calc_generated_sdk
 
 def fail(msg):
     print(f"FAIL: {msg}", file=sys.stderr)
     sys.exit(1)
 
-ns = calc_sdk.Calc(sys.argv[1])
+ns = calc_generated_sdk.Calc(sys.argv[1])
 
 # --- discovery ---
 m = ns.describe()
@@ -21,7 +21,7 @@ if [n for n, _ in m.inputs] != ["limit", "name"]:
     fail(f"inputs = {m.inputs}")
 if [n for n, _ in m.events] != ["Computed", "Overflow"]:
     fail(f"events = {m.events}")
-if m.python_module != "calc_sdk":
+if m.python_module != "calc_generated_sdk":
     fail(f"python_module = {m.python_module}")
 
 # --- setters (v1: stored, not pushed to script) ---

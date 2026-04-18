@@ -8,6 +8,7 @@
  */
 
 #include "aether_host.h"
+#include <stdio.h>
 #include <string.h>
 
 #ifndef AETHER_HOST_MAX_EVENTS
@@ -81,6 +82,10 @@ void aether_event_clear(void) {
 int notify(const char* event_name, int64_t id) {
     int idx = find_event_index(event_name);
     if (idx < 0) return 0;
+    /* When loaded as a .so by a host (Java/Python/Ruby), stdout is
+     * fully buffered. Flush before handing control to the host event
+     * handler so Aether's preceding prints surface in the right order. */
+    fflush(NULL);
     g_events[idx].handler(id);
     return 1;
 }
