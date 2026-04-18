@@ -4,18 +4,22 @@ A design exploration: using Aether's trailing-block DSL, `hide`/`seal except`,
 and closures as a configuration and wiring language embedded in host
 applications (Java, Go, etc.).
 
-> **Status (2026-04-18):** the **foundation is built**.
+> **Status (2026-04-18):** the **foundation is built and v2 is shipped**.
 > `aetherc --emit=lib` produces a `.so`/`.dylib` with stable C-ABI entry
-> points, and `runtime/aether_config.h` exposes typed accessors for
-> walking returned maps and lists from any FFI host. SWIG bindings ship
-> for Java/Python/Ruby/Go. See **[`emit-lib.md`](emit-lib.md)** for the
-> concrete reference.
+> points (see **[`emit-lib.md`](emit-lib.md)**), and the **v2 embedded-namespace
+> layer** (PR #172) generates idiomatic per-language SDKs (Python ctypes,
+> Java Panama, Ruby Fiddle) on top — see
+> **[`aether-as-config-language-v2-namespaces-and-bindings.md`](aether-as-config-language-v2-namespaces-and-bindings.md)**
+> for the typed-SDK story.
 >
 > What's built (✅ Done):
 > - Part 2 §1 — shared library output (compiler flag is named `--emit=lib`,
 >   not `--embed`)
 > - Part 2 §2 — `aether_config_*` C ABI for walking results
-> - Part 2 §3 — SWIG path for Java/Python/Ruby/Go bindings
+> - Part 2 §3 — host bindings: hand-written per-language SDK generators
+>   for Python, Java (Panama, JDK 22+), Ruby (Fiddle). Java SWIG is no
+>   longer the recommended path — Panama is cleaner once you have a
+>   namespace manifest to template against
 > - Part 3 — capability-empty default (rejects `std.net|http|tcp|fs|os`)
 > - Part 4 — LD_PRELOAD containment composes naturally with `--emit=lib`
 >
@@ -170,9 +174,9 @@ MemorySegment cfg = (MemorySegment) buildConfig.invoke("prod", 8080);
 
 > Built as `runtime/aether_config.h` and `runtime/aether_config.c`. The
 > only material difference from the original sketch: handles are wrapped
-> in an opaque `AetherValue*` typedef (rather than bare `void*`) so SWIG
-> generates a proxy class per target language, and so C consumers get
-> real type-checking on traversal.
+> in an opaque `AetherValue*` typedef (rather than bare `void*`) so C
+> consumers get real type-checking on traversal, and the per-language
+> SDK generators can emit a typed proxy class per target.
 
 ```c
 // runtime/aether_config.h (excerpt — see file for the full surface)
@@ -194,23 +198,28 @@ dropped — under `--emit=lib` each top-level Aether function is its own
 entry point, so there's no need for a generic eval. See
 [`emit-lib.md`](emit-lib.md) for the full surface and accessor walkthrough.
 
-#### 3. Java binding layer  ✅ Path cleared
+#### 3. Java binding layer  ✅ Built (via v2 namespace generator)
 
-The three options remain (JNI, Panama, subprocess), and the **SWIG path
-short-cuts the first two**:
+The recommended path is now the **v2 embedded-namespace layer**:
+`ae build --namespace <dir>` reads a manifest and emits a typed Java
+SDK (Panama, JDK 22+) — a class with `set*` for inputs, `on*` for
+events, methods named after each Aether function, and `AutoCloseable`
+so try-with-resources releases the `Arena`. The host developer writes
+no JNI, no `MethodHandle` lookups, no `MemorySegment` plumbing. See
+**[`aether-as-config-language-v2-namespaces-and-bindings.md`](aether-as-config-language-v2-namespaces-and-bindings.md)**
+for the design and `examples/embedded-java/trading/` for a worked example.
 
-- **SWIG** (recommended for v1): the repo ships
-  `runtime/aether_config.i`. Run `swig -java -package com.example.aether`
-  and Java gets a typed proxy class for `AetherValue` plus per-function
-  wrappers — no hand-written JNI. The same `.i` works for `-python`,
-  `-ruby`, `-go`, `-csharp`, etc. Worked example for Python in
-  `tests/integration/emit_lib_swig/`.
+For hosts that want raw FFI without the namespace SDK:
+
 - **Panama (Java 22+)**: declare each `aether_<name>` as a
   `downcallHandle` against the `.so` built by `ae build --emit=lib`.
-  No JNI boilerplate, no SWIG step. Not yet exercised by a test in this
-  repo, but the `.so` exposes everything Panama needs.
+  No JNI boilerplate. The `.so` exposes everything Panama needs.
 - **JNI**: still works — no different from any other C library — but
-  SWIG/Panama make it unnecessary.
+  Panama makes it unnecessary.
+- **SWIG**: the original v1 design considered SWIG. In practice the
+  per-target generators in `tools/ae.c` are ~200-400 lines each and
+  the templating control gained is worth not having SWIG in the
+  toolchain.
 - **Subprocess + JSON**: see §4 below; not built.
 
 #### 4. Config-mode output (the simplest path)  📋 Future — possibly obsolete
@@ -272,8 +281,8 @@ For a Java app to use Aether-defined handlers, you'd need one of:
 | Step | Status | What it gives you |
 |---|---|---|
 | Stable C ABI header (`aether_config.h`) | ✅ Shipped | Any C-FFI language walks Aether maps via opaque `AetherValue*` |
-| `aetherc --emit=lib` → `.so` | ✅ Shipped | In-process eval from Java/Python/Go via FFI |
-| SWIG bindings (`aether_config.i`) | ✅ Shipped | One-command bindings for Java/Python/Ruby/Go/C# |
+| `aetherc --emit=lib` → `.so` | ✅ Shipped | In-process eval from Java/Python/Ruby via FFI |
+| Per-language SDK generators (Python ctypes, Java Panama, Ruby Fiddle) | ✅ Shipped (v2) | `ae build --namespace <dir>` emits a typed SDK per declared binding |
 | `ae eval` → JSON on stdout | 📋 Deferred | Subprocess pattern for hosts without FFI |
 | Aether resident runtime + callbacks | 📋 Future (Shape B) | Java dispatches to live Aether closures |
 | Wall-clock timeout / allocation budget | 📋 Future | Safety primitives for embedding |
@@ -281,7 +290,7 @@ For a Java app to use Aether-defined handlers, you'd need one of:
 The original prediction ("`ae eval` is the right first step") didn't
 play out — `--emit=lib` turned out to be the same effort and gives you
 the in-process path directly.  The closure-dispatching resident runtime
-remains the next big milestone.
+(host → script callbacks) remains the next big milestone.
 
 ---
 
@@ -505,8 +514,9 @@ configuration.
 |---|---|
 | `aetherc --emit=lib` → `.so` (per-function exports, no init/run/invoke yet) | ✅ Done |
 | Capability-empty runtime (no `std.net|http|tcp|fs|os` by default) | ✅ Done |
-| SWIG bindings for Java/Python/etc. (replaces hand-written Panama boilerplate for v1) | ✅ Done |
-| `host_call` dispatch table + extern | 📋 Future, Small |
+| Per-language SDK generators (Python ctypes, Java Panama, Ruby Fiddle) via `ae build --namespace` | ✅ Done (v2) |
+| Script → host event signaling (`notify(event, id)` claim-check primitive) | ✅ Done (v2) |
+| `host_call` dispatch table + extern (script → host *function calls*) | 📋 Future, Small |
 | Callback registry (boxed closure map) | 📋 Future, Small |
 | `aether_init()` / `aether_invoke_callback()` lifecycle entry points | 📋 Future, Medium |
 | Thread safety for multi-threaded host | 📋 Future, Medium-large |

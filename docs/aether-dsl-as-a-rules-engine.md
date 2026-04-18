@@ -4,19 +4,24 @@ A design exploration: using Aether's trailing-block DSL and `hide`/`seal
 except` to build a rules engine where business rules live in `.ae` files
 alongside — but deployed independently of — the application binary.
 
-> **Status (2026-04-18):** the **embedding foundation is built**.
-> `aetherc --emit=lib` produces a `.so`/`.dylib` and
-> `runtime/aether_config.h` exposes typed accessors for walking
-> structured data — see [`emit-lib.md`](emit-lib.md). What's still
-> future work for the rules-engine vision specifically:
+> **Status (2026-04-18):** the **embedding foundation is built and v2
+> namespaces have shipped**. `aetherc --emit=lib` produces a `.so`/`.dylib`
+> with stable C-ABI exports (see [`emit-lib.md`](emit-lib.md)), and
+> `ae build --namespace <dir>` (PR #172) generates idiomatic per-language
+> SDKs (Python ctypes, Java Panama, Ruby Fiddle) plus `notify(event, id)`
+> for script → host event signaling — see
+> [`aether-as-config-language-v2-namespaces-and-bindings.md`](aether-as-config-language-v2-namespaces-and-bindings.md)
+> for the typed-SDK story. What's still future work for the rules-engine
+> vision specifically:
 >
 > | Piece | Status |
 > |---|---|
 > | Lib mode + capability-empty default | ✅ Done (`--emit=lib`) |
 > | C ABI for walking returned data | ✅ Done (`aether_config.h`) |
-> | SWIG bindings for Java/Python/etc. | ✅ Done (`aether_config.i`) |
+> | Per-language host SDK generators | ✅ Done (v2: Python/Java/Ruby; Go stubbed) |
+> | Script → host event signaling (`notify(event, id)`) | ✅ Done (v2) |
 > | `rules` stdlib module (`field`, `is_email`, `to_int`, `>>`, etc.) | 📋 Future, ~200-300 lines |
-> | Host-side callbacks (`host_call`, callback registry) | 📋 Future (Shape B) |
+> | Host-side callbacks (`host_call`, callback registry) — script *calling into* the host | 📋 Future (Shape B) |
 > | `ae eval` subprocess + JSON serializer | 📋 Future (possibly obsolete given lib mode) |
 > | File-watch + hot-swap | 📋 Future, optional |
 > | Wall-clock timeout / allocation budget | 📋 Future |
@@ -205,38 +210,50 @@ $ ae eval rules/order.ae --input '{"email":"bad","age":"35"}'
 `ae eval` doesn't exist yet, and the in-process Option B path now
 covers the same use case without a serialization round-trip.
 
-**Option B: Embedded library** (faster)  ✅ Foundation built / 📋 Callbacks future
+**Option B: Embedded library** (faster)  ✅ Substantially shipped / 📋 Callbacks future
 
-Using the embedding model from
-[Aether as a Config Language](aether-as-a-config-language-for-other-languages.md):
+Using the v2 embedded-namespace model from
+[Aether as a Config Language v2](aether-as-config-language-v2-namespaces-and-bindings.md):
 
-```java
-// Java host — speculative API, blends what's shipped with what's not yet.
-AetherHost host = new AetherHost();
-host.expose("active_catalog", () -> catalog.getSkuSet());        // 📋 host_call: future
-host.expose("charge_limit",   () -> config.getMaxCharge());      // 📋 host_call: future
-host.expose("fraud_score",    (order, cust, pay) -> ...);        // 📋 host_call: future
-
-// Load rules — compiled to native code via --emit=lib (today)
-host.loadRules("rules/order.ae");                                // ✅ ae build --emit=lib + dlopen
-host.loadRules("rules/fraud.ae");
-
-// On each request:
-RuleResult result = host.applyRules("order_validation", params); // 📋 callback dispatch: future
+```aether
+// rules/manifest.ae
+import std.host
+abi() {
+    describe("order_rules") {
+        input("max_order_qty", "int")
+        input("charge_limit", "int")
+        event("OrderRejected", "int64")
+        event("FraudFlagged",  "int64")
+        bindings() { java("com.example.rules", "OrderRules") }
+    }
+}
 ```
 
-**What works today (the data half):** the rules `.ae` file can compute
-and return structured data (a map of `{clean: {...}, invalid: {...}}`)
-which the Java host walks via `aether_config_*` accessors. Pure
-validation rules — read inputs, check predicates, return categorized
-results — work end-to-end with the v1 surface.
+```java
+// Java host — using the generated SDK
+try (OrderRules rules = new OrderRules("rules/liborder_rules.so")) {
+    rules.setMaxOrderQty(1000);
+    rules.setChargeLimit(100_000);
+    rules.onOrderRejected(id -> alertService.flag(id));
+    rules.onFraudFlagged(id  -> fraudService.review(id));
+    int rc = rules.validateOrder(orderId, amount, sku, customerId);
+}
+```
+
+**What works today:** typed setters per `input(...)`, typed event
+handlers per `event(...)`, methods named after each Aether function,
+`AutoCloseable` lifecycle. The script signals events via
+`notify("OrderRejected", id)` — claim-check pattern, host looks up
+detail by id. Worked end-to-end test in
+`tests/integration/embedded_java_trading_e2e/`.
 
 **What needs Shape B (the callback half):** rules that need to *call
 into* the host (look up a SKU in the live catalog, fetch a fraud score
 from a Java service) need `host_call`. Until that ships, those lookups
 have to be passed in as arguments — i.e. the host pre-computes anything
-the rule might need and hands it in as a map. Workable for many cases,
-limiting for others.
+the rule might need and hands it in as a map (or as typed input
+declarations in the manifest). Workable for many cases, limiting for
+others where the script needs to make ad-hoc lookups mid-evaluation.
 
 **The facade is the security boundary.**  The rules file sees only what
 the host exposes — if the host doesn't provide a `db_drop()` function,
@@ -377,17 +394,21 @@ A `rules` module providing:
 ### In the runtime
 
 - ✅ **Done**: capability-empty link profile (no net/fs/exec by default)
+- ✅ **Done (v2)**: `notify(event, id)` claim-check primitive +
+  per-language SDK trampolines for event handlers
 - 📋 **Future**: wall-clock timeout and allocation budget
 - 📋 **Future, optional**: file-watch + hot-swap infrastructure
   (for Option C)
-- 📋 **Future**: callback registry for the bidirectional model
-  (same as Shape B in the config language proposal)
+- 📋 **Future**: `host_call` registry for the bidirectional model
+  — script *calling into* the host (Shape B)
 
 ### Effort
 
 The embedding infrastructure overlapped with the
 [config language proposal](aether-as-a-config-language-for-other-languages.md)
-and **landed there first**. The rules-specific remaining work is:
+and **landed there first**, then the
+[v2 namespace layer](aether-as-config-language-v2-namespaces-and-bindings.md)
+shipped on top of it. The rules-specific remaining work is:
 - The `rules` stdlib module (~200-300 lines of validation functions
   and the `field()` / `computed()` DSL wrappers) — pure stdlib code,
   no compiler changes.
@@ -414,12 +435,15 @@ the host explicitly exposed.  No ambient network.  No ambient filesystem.
 No `exec`.
 
 Status: the **capability-empty runtime is shipped** (`aetherc --emit=lib`
-rejects the I/O-heavy stdlib modules at compile time). The
-**host-controlled facade is half-shipped** — host → script *data* flow
-works today via the `aether_<name>` exports + `aether_config_*`
-accessors. Script → host *function calls* (the `host_call` primitive)
-are still future work; until they ship, the host pre-computes anything
-the rule needs and passes it in as arguments.
+rejects the I/O-heavy stdlib modules at compile time), and the **typed
+host SDK** is shipped (v2: `ae build --namespace` emits a Python ctypes
+module / Java Panama class / Ruby Fiddle module per declared binding).
+**Host-controlled facade is half-shipped** — host → script *data* flow
+works today via typed input setters; script → host *event* flow works
+today via `notify(event, id)`; only script → host *function calls*
+(`host_call`) are still future work. Until that ships, the host
+pre-computes anything the rule needs and passes it in via the
+manifest's `input(...)` declarations.
 
 `hide`/`seal except` adds a secondary layer: rule authors can organize
 their own visibility within the file, making rules more readable and

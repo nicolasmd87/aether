@@ -1,17 +1,23 @@
 # Aether as a Configuration Language — v2: Namespaces and Generated Bindings
 
-A design for the next layer above `--emit=lib`: a host application
-embedding Aether scripts gets a typed, idiomatic SDK in its own
-language (Java, Python, Go, Ruby, ...) generated from a single
-manifest written in Aether itself. The host developer never writes
-JNI, never writes SWIG `.i` files, never registers callback function
-pointers by hand.
+A host application embedding Aether scripts gets a typed, idiomatic SDK
+in its own language (Java, Python, Ruby — Go stubbed) generated from a
+single manifest written in Aether itself. The host developer never
+writes JNI, never writes SWIG `.i` files, never registers callback
+function pointers by hand.
 
-> **Status (2026-04-18):** design proposal. The transport layer
-> (`--emit=lib`, `aether_config.h`, opaque `AetherValue*`) exists
-> locally on branch `emit-shared-lib-v1-draft` but is **not shipped**
-> as a standalone PR — it folds into v2. There is intentionally no
-> "v1 API" to maintain backward compatibility with.
+> **Status (2026-04-18):** **shipped.** Landed on `feature/embedded-namespaces`
+> (PR #172, 11 commits). Worked example at `examples/embedded-java/trading/`,
+> integration tests at `tests/integration/namespace_{python,ruby,java}/` and
+> `tests/integration/embedded_java_trading_e2e/`. See the embedded-namespaces
+> entries in `CHANGELOG.md`.
+>
+> Out of scope for v1 (each tracked below):
+> - Live host-supplied callbacks (`host_call`) — Shape B
+> - Escape-hatch `import trading.manifest` for a non-sibling script
+> - `@private_to_file` annotation
+> - Wall-clock timeout / allocation budget
+> - Go SDK generator (parser captures the binding; emitter is a stub)
 
 ## Goals and non-goals
 
@@ -22,7 +28,7 @@ pointers by hand.
    `notify()` for events back to the host. No mention of the host
    language. No FFI ceremony.
 
-2. The host-side surface a *Java/Python/Go/...* developer reads is a
+2. The host-side surface a *Java/Python/Ruby/...* developer reads is a
    normal typed library in their language. No `dlopen`, no
    `MemorySegment`, no `ctypes.CDLL`, no manual callback registration.
    Methods, events, fields, named like the Aether functions they wrap.
@@ -56,161 +62,110 @@ pointers by hand.
 4. **No hot reload in v2.** A separate concern; if needed, build on
    top.
 
+5. **No SWIG.** Each per-language SDK generator is hand-written against
+   the target's native FFI: ctypes (Python), Panama (Java, JDK 22+),
+   Fiddle (Ruby). The original design called for SWIG; in practice the
+   per-target generators are small enough (~200-400 lines each) and the
+   templating control gained is worth the duplication.
+
 ## The shape, in one example
 
 A **trading** namespace with three scripts that share a single manifest.
+This is the worked example that ships at `examples/embedded-java/trading/`.
 
 ### Directory layout
 
 ```
-trading/
-    manifest.ae          # the namespace definition (one per directory)
-    placeTrade.ae        # contributes place_trade()
-    killTrade.ae         # contributes kill_trade()
-    getTicker.ae         # contributes get_ticker(), get_ticker_history()
+examples/embedded-java/trading/
+    aether/
+        manifest.ae          # the namespace definition (one per directory)
+        placeTrade.ae        # contributes place_trade()
+        killTrade.ae         # contributes kill_trade()
+        getTicker.ae         # contributes get_ticker()
+    java/src/main/java/TradingDemo.java
+    build.sh
 ```
 
 The convention: every `.ae` file in the directory contributes its
 top-level public functions to the namespace declared by `manifest.ae`.
-A script that lives elsewhere can opt in by `import`ing the manifest
-explicitly (the **escape hatch**, described later).
 
-### `trading/manifest.ae`
+### `aether/manifest.ae` (as shipped)
 
 ```aether
 import std.host
 
-namespace("trading") {
-
-    // Inputs the host supplies before any script runs. The compiler
-    // generates a setter on the host-side SDK for each one.
-    input order: map
-    input catalog_has: fn(string) -> bool
-    input compute_score: fn(map) -> int
-    input max_order: int
-
-    // Events scripts can emit. The compiler generates an event-handler
-    // registration on the host-side SDK for each one. Carries are
-    // restricted to int64 in v2 (the claim-check ID).
-    event "OrderPlaced"   carries int64
-    event "OrderRejected" carries int64
-    event "TradeKilled"   carries int64
-    event "UnknownTicker" carries int64
-
-    // Per-target binding descriptors. The generator uses these to
-    // emit one host SDK per language.
-    bindings {
-        java   { package "com.example.trading"; class "Trading" }
-        python { module "trading_rules" }
-        go     { package "trading" }
+abi() {
+    describe("trading") {
+        input("max_order", "int")
+        event("OrderPlaced",   "int64")
+        event("OrderRejected", "int64")
+        event("UnknownTicker", "int64")
+        event("TradeKilled",   "int64")
+        bindings() {
+            java("com.example.trading", "Trading")
+        }
     }
 }
 ```
 
-The manifest is itself an Aether file. It uses the existing trailing-block
-builder DSL — `namespace()`, `input`, `event`, `bindings`, `java`, `python`,
-`go` are all `_ctx`-injected functions in a new `std.host` module. No new
-syntax; the manifest participates in the same lexer/parser/typechecker
-as every other `.ae` file.
+The grammar shipped slightly different from the original `namespace("trading") {...}` design:
+the outermost call is `abi()` (Application Binary Interface — a less-overloaded acronym
+than "API," which now connotes HTTP-over-JSON). Inside, `describe("name") { ... }` carries
+the nested builders. Every form is a function call with a trailing block — pure Aether,
+no new lexer or parser work, same trailing-block + `_ctx`-injection idiom as
+TinyWeb's `path() { end_point(...) }` or `examples/calculator-tui.ae`'s
+`grid() { btn(...) callback { ... } }`.
 
-### `trading/placeTrade.ae`
+### `aether/placeTrade.ae` (as shipped)
 
 ```aether
-place_trade() {
-    if order.amount < 0 || order.amount > max_order {
-        notify("OrderRejected", order.id)
-        return
+place_trade(order_id: int64, amount: int, ticker_known: int) {
+    println("[ae] place_trade order_id=${order_id} amount=${amount}")
+    if amount < 0 || amount > 100000 {
+        notify("OrderRejected", order_id); return 0
     }
-    if !catalog_has(order.ticker) {
-        notify("UnknownTicker", order.id)
-        return
+    if ticker_known == 0 {
+        notify("UnknownTicker", order_id); return 0
     }
-    score = compute_score(order)
-    if score > 80 {
-        notify("OrderRejected", order.id)
-        return
-    }
-    notify("OrderPlaced", order.id)
+    notify("OrderPlaced", order_id); return 1
 }
 ```
 
 What's worth noticing about the script:
 
 - It mentions no host language. Nothing about Java, JVM, JNI.
-- `order`, `catalog_has`, `max_order`, `compute_score` are referenced
-  as if they're ambient — they're declared `input` in the manifest, and
-  the namespace runtime supplies them through the `_ctx`-style mechanism
-  that already powers the builder DSL.
 - `notify(event, id)` is the only host-callback primitive. It's the
   claim check — the host gets the ID, and if it wants the trade detail
-  it calls `get_trade()` (or whatever the script exposes) over the
+  it calls `get_ticker()` (or whatever the script exposes) over the
   normal downcall path.
+- `[ae]` prefix on `println` is a convention so the demo's stdout makes
+  it obvious which lines came from inside the embedded script vs. the
+  Java host.
 
-### `trading/killTrade.ae` (sketch)
-
-```aether
-kill_trade(trade_id: int64) {
-    notify("TradeKilled", trade_id)
-}
-```
-
-### `trading/getTicker.ae` (sketch)
-
-```aether
-get_ticker(symbol: string) {
-    return symbol  // stub for the example
-}
-
-get_ticker_history(symbol: string, days: int) {
-    h = list.new()
-    list.add(h, symbol)
-    return h
-}
-```
-
-### What the Java developer writes against the generated SDK
+### What the Java developer writes (the actual `TradingDemo.java`)
 
 ```java
 import com.example.trading.Trading;
 
-public class TradingDemo {
-    public static void main(String[] args) {
-        Trading rules = new Trading();
+try (Trading t = new Trading("aether/libtrading.so")) {
 
-        // Wire up the host-supplied inputs.
-        rules.setMaxOrder(100_000);
-        rules.setCatalogHas(ticker -> catalog.contains(ticker));
-        rules.setComputeScore(orderMap -> fraudService.score(orderMap));
+    // Discovery — confirm the loaded namespace is what we expected.
+    Trading.Manifest m = t.describe();
+    System.out.println("Loaded " + m);
 
-        // Subscribe to events using the claim-check pattern: thin
-        // notification with an ID, host looks up details if it wants.
-        rules.onOrderRejected(id -> {
-            Trade t = tradeService.getIfAuthorized(id);
-            if (t != null) alertService.flag(t);
-        });
-        rules.onUnknownTicker(id -> alertService.unknownTicker(id));
-        rules.onOrderPlaced(id   -> tradeService.persist(id));
-        rules.onTradeKilled(id   -> tradeService.markKilled(id));
+    // Inputs — typed setters generated per `input(...)` declaration.
+    t.setMaxOrder(100_000);
 
-        // Set the input map and dispatch.
-        Map<String,Object> order = Map.of(
-            "id",     2322223222L,
-            "ticker", "ACME",
-            "amount", 50_000);
-        rules.setOrder(order);
-        rules.placeTrade();
+    // Event handlers — typed `LongConsumer` per `event(...)` declaration.
+    t.onOrderPlaced(id -> trades.put(id, "PLACED"));
+    t.onTradeKilled(id -> trades.put(id, "KILLED"));
+    t.onOrderRejected(id -> System.out.println("[event] OrderRejected " + id));
+    t.onUnknownTicker(id -> System.out.println("[event] UnknownTicker " + id));
 
-        // Direct downcalls — typed, no callback machinery.
-        String s = rules.getTicker("ACME");
-        List<String> hist = rules.getTickerHistory("ACME", 30);
-
-        rules.killTrade(2322223222L);
-
-        // Discovery — the runtime contract, embedded in the .so.
-        Trading.Manifest m = Trading.describe();
-        System.out.printf("Trading SDK: %d functions, %d events%n",
-            m.functions().size(), m.events().size());
-    }
+    // Direct downcalls — typed methods named after the Aether functions.
+    int rc = t.placeTrade(100L, 50_000, 1);
+    t.killTrade(100L);
+    String ticker = t.getTicker("ACME");
 }
 ```
 
@@ -223,27 +178,28 @@ What the Java developer didn't have to write:
 - Any function pointer registration
 
 What's there is a typed Java class with `set*` for inputs, `on*` for
-events, and methods named after the Aether functions.
+events, and methods named after the Aether functions, implementing
+`AutoCloseable` so try-with-resources releases the `Arena`.
 
-## How it composes with what's there today
+## How it composes with `--emit=lib`
 
-The transport layer that already exists (in `emit-shared-lib-v1-draft`):
+The transport layer (shipped on the same branch, foundation commit `991a72e`):
 
 - `aetherc --emit=lib` produces a `.so`/`.dylib`.
 - `aether_<name>(...)` exports for every top-level Aether function.
 - `runtime/aether_config.h` accessors for walking returned maps/lists.
 - Capability-empty default (no `std.net|http|tcp|fs|os` in lib mode).
 
-Layered on top by v2:
+Layered on top by v2 (the rest of the branch):
 
-| New piece | Purpose |
-|---|---|
-| `std.host` Aether module | DSL: `namespace()`, `input`, `event`, `bindings`, `java { }`, etc. — the manifest grammar |
-| `notify(event: string, id: int64)` extern | Claim check; the only host-callback primitive |
-| Manifest interpreter | Reads `<dir>/manifest.ae`, runs it under a special builder context, returns an in-memory `NamespaceDescription` |
-| Embedded discovery struct | Manifest description serialized into a static struct in the `.so`; `aether_describe()` returns it |
-| Generator framework | Templates that turn the `NamespaceDescription` into a Java SDK / Python module / Go package |
-| New compile entrypoint | `aetherc --emit=namespace <dir>` (or `ae build --namespace <dir>`) — orchestrates the manifest interp + transport-layer compile + binding generation |
+| New piece | Where it lives | Purpose |
+|---|---|---|
+| `std.host` Aether module | `std/host/module.ae` + `runtime/aether_host.{h,c}` | DSL: `describe`, `input`, `event`, `bindings`, `java`, `python`, `ruby`, `go` — the manifest grammar |
+| `notify(event: string, id: int64)` extern | `runtime/aether_host.c` | Claim check; the only host-callback primitive |
+| Manifest extractor | `aetherc --emit-namespace-manifest <m.ae>` | Walks the parsed AST, prints declaration-order JSON to stdout |
+| Embedded discovery struct | `aetherc --emit-namespace-describe <m.ae> <out.c>` | Self-contained `.c` stub: static const `AetherNamespaceManifest` + `aether_describe()` entry |
+| Per-language SDK generators | `tools/ae.c::emit_{python,java,ruby}_sdk` | Templates that turn the manifest into a Python ctypes module / Java Panama class / Ruby Fiddle module |
+| New compile entrypoint | `ae build --namespace <dir>` | Orchestrates the manifest extract + transport-layer compile + per-language SDK generation |
 
 The transport layer is not visible to either the script author or the
 host developer in v2. They see the namespace SDK; the transport layer
@@ -257,84 +213,74 @@ call (or builder block) — pure Aether, no new lexer or parser work.
 ```aether
 import std.host
 
-namespace(name: string) {
-    // name becomes the runtime namespace identifier.
-    // Used for the discovery struct, generator output naming, etc.
+abi() {
+    describe(name: string) {
+        // name becomes the runtime namespace identifier.
+        // Used for the discovery struct, generator output naming, etc.
 
-    input <name>: <type>
-        // Declares a host-supplied value or function the namespace
-        // makes ambient inside its script files.
-        //
-        // Allowed types in v2:
-        //   primitives: int, long, float, bool, string
-        //   composites: map, list
-        //   functions:  fn(<primitive-or-map>...) -> <primitive-or-map>
-        //
-        // Each input becomes a `set<Name>(...)` method on the host SDK.
+        input(<name>, <type_signature>)
+            // Declares a host-supplied value the namespace makes
+            // available. v1: stored on the SDK instance — the script
+            // doesn't yet read inputs back at runtime (host_call /
+            // ambient input access is Shape B).
+            //
+            // Allowed types in v1:
+            //   primitives: int, long, float, bool, string
 
-    event "<EventName>" carries <type>
-        // Declares an event the script may emit.
-        // v2: `carries` is restricted to `int64` (the claim-check ID).
-        // Each event becomes an `on<EventName>(handler)` method
-        // on the host SDK.
+        event(<EventName>, <carries_type>)
+            // Declares an event the script may emit.
+            // v1: `carries` is restricted to `int64` (the claim-check ID).
+            // Each event becomes an `on<EventName>(handler)` method
+            // on the host SDK.
 
-    bindings {
-        java   { package "..."; class "..." }
-        python { module  "..." }
-        go     { package "..." }
-        // ... one builder per supported target language
+        bindings() {
+            java(<package>, <class>)
+            python(<module>)
+            ruby(<module>)
+            go(<package>)        // parser accepts; emitter stubbed
+        }
     }
 }
 ```
 
-The DSL choices are conservative: every form is already expressible
-through Aether's existing trailing-block + `_ctx` mechanisms (same
-shape as TinyWeb's `path()`/`end_point()`). No grammar extension.
+Two compiler enhancements were needed to make the trailing-block
+manifest grammar land cleanly (commit `67ffa43`):
+
+1. The `_ctx`-first builder pre-pass in `codegen.c` now also recognizes
+   externs from imported modules — previously it only walked locally-defined
+   functions, so `std.host`'s externs were missed.
+2. Auto-injection at call sites fires whenever the user's arg count is
+   exactly one less than the function's declared param count — previously
+   gated on `gen->in_trailing_block > 0`, which broke the outermost call
+   in a manifest's body.
 
 ## Namespace membership
 
-**Convention (default).** Every `.ae` file in the same directory as
+**Shipped (default).** Every `.ae` file in the same directory as
 `manifest.ae` contributes its top-level functions to the namespace.
 
 ```
 trading/
-    manifest.ae      # declares namespace("trading")
+    manifest.ae      # declares describe("trading")
     placeTrade.ae    # place_trade() automatically in namespace
     killTrade.ae     # kill_trade() automatically in namespace
-    getTicker.ae     # get_ticker(), get_ticker_history() automatically in namespace
+    getTicker.ae     # get_ticker() automatically in namespace
 ```
 
-**Escape hatch (explicit `import`).** A script that lives elsewhere can
-opt into a namespace by importing its manifest:
+`ae build --namespace <dir>` discovers sibling `.ae` files, deduplicates
+`import` lines and at-most-one `main()`, and concatenates them into one
+synthetic translation unit before running `--emit=lib`.
 
-```aether
-// some/other/path/extra_rules.ae
-import trading.manifest    // explicit join — picks up inputs / events
+**Future (`@private_to_file` annotation).** A `.ae` file in the
+namespace directory that does not want to be part of the namespace
+would mark itself with an annotation. Aether doesn't have annotations
+today; alternatives include a manifest-level `exclude ["internal_helpers.ae"]`
+or a leading-underscore convention. Not yet shipped.
 
-extra_check() {
-    if order.amount > 1_000_000 {
-        notify("OrderRejected", order.id)
-    }
-}
-```
-
-Importing the manifest pulls in its `input` and `event` declarations
-into the script's scope, exactly as if the file lived in the namespace
-directory. It also tells the generator: "include my exported functions
-in the namespace SDK."
-
-**Opt-out for sibling files (annotation).** A `.ae` file in the namespace
-directory that does **not** want to be part of the namespace marks itself:
-
-```aether
-// trading/internal_helpers.ae
-@private_to_file
-
-shared_constant_x() { return 42 }
-```
-
-`@private_to_file` (or whatever annotation we settle on) keeps the
-file's functions out of the generated SDK.
+**Future (escape hatch via explicit `import`).** A script that lives
+elsewhere could opt into a namespace by importing its manifest. Would
+require the import resolver to recognize manifest paths as namespace
+joins, not just module pulls. Not yet shipped.
 
 ## The claim-check callback model
 
@@ -344,38 +290,33 @@ Aether-side primitive in `std.host`:
 extern notify(event: string, id: int64) -> int    // 0 = no listener, 1 = delivered
 ```
 
-C-side dispatch table (sketch):
+C-side dispatch table (`runtime/aether_host.c`):
 
 ```c
-// runtime/aether_host.c
 typedef void (*aether_event_handler_t)(int64_t id);
 
-static struct {
-    const char* name;
-    aether_event_handler_t handler;
-} g_event_table[64];
-static int g_event_count = 0;
+int aether_event_register(const char* event_name, aether_event_handler_t handler);
+int aether_event_unregister(const char* event_name);
+void aether_event_clear(void);
 
-void aether_event_register(const char* name, aether_event_handler_t h) {
-    g_event_table[g_event_count++] = (struct ...){ name, h };
-}
-
-int notify(const char* event, int64_t id) {
-    for (int i = 0; i < g_event_count; i++) {
-        if (strcmp(g_event_table[i].name, event) == 0) {
-            g_event_table[i].handler(id);
-            return 1;
-        }
-    }
-    return 0;
+int notify(const char* event_name, int64_t id) {
+    int idx = find_event_index(event_name);
+    if (idx < 0) return 0;
+    fflush(NULL);                       // see "stdio interleaving" below
+    g_events[idx].handler(id);
+    return 1;
 }
 ```
 
-The host SDK's `on<EventName>(handler)` calls `aether_event_register`
-under the covers. SWIG's function-pointer typemaps handle the per-language
-trampoline (Consumer<Long>, callable[[int], None], etc.) — and **that's
-the only place SWIG appears**. The script and the host developer don't
-see SWIG syntax.
+Linear-search registry capped at 64 events (raisable). The host SDK's
+`on<EventName>(handler)` calls `aether_event_register` under the
+covers. Each per-language SDK supplies its own trampoline:
+
+- **Python** uses `CFUNCTYPE`, holds the trampoline in `self._callbacks`
+  so the GC doesn't reclaim it while C still has the pointer.
+- **Java** uses `Linker.upcallStub` via `MethodHandles.publicLookup().findVirtual`
+  on `LongConsumer.accept` (sidesteps the lambda nestmate-private lookup error).
+- **Ruby** uses `Fiddle::Closure::BlockCaller`, holds it in `@callbacks`.
 
 Why claim check and not richer callbacks:
 
@@ -392,16 +333,31 @@ When you genuinely need richer host → script communication, the
 script's typed downcall functions (`get_ticker(symbol)`, `kill_trade(id)`)
 already give you that — the host calls them directly, no events involved.
 
+### Stdio interleaving
+
+When loaded as a `.so` by a host (Java/Python/Ruby) via `dlopen`,
+libc's `stdout` is fully buffered (the `.so` doesn't see a TTY).
+Without intervention, script-side `println()` calls accumulate in
+the C-side buffer and only flush at process exit — so demo console
+output appears scrambled (host event-handler `println`s land in
+order, but the Aether script's preceding lines all come out at the
+very end).
+
+`notify()` calls `fflush(NULL)` before invoking the registered handler
+so anything the script printed leading up to the event surfaces in
+the right order. Cosmetic-only — the values returned by the script
+are unaffected; only the on-screen ordering of pre-event log output.
+
 ## The discovery method
 
 The manifest description is serialized into a static struct embedded in
 the produced `.so`. A standard entry point exposes it:
 
 ```c
-// emitted into every namespace .so
+// runtime/aether_host.h
 typedef struct AetherInputDecl {
     const char* name;
-    const char* type_signature;   // "int", "fn(string)->bool", "map", ...
+    const char* type_signature;   // "int", "string", ...
 } AetherInputDecl;
 
 typedef struct AetherEventDecl {
@@ -409,17 +365,27 @@ typedef struct AetherEventDecl {
     const char* carries_type;     // "int64"
 } AetherEventDecl;
 
-typedef struct AetherFunctionDecl {
-    const char* name;
-    const char* signature;        // "(symbol: string) -> string"
-} AetherFunctionDecl;
+typedef struct {
+    const char* package_name;
+    const char* class_name;
+} AetherJavaBinding;
+
+typedef struct {
+    const char* module_name;
+} AetherPythonBinding;
+
+typedef struct {
+    const char* module_name;
+} AetherRubyBinding;
 
 typedef struct AetherNamespaceManifest {
-    const char* namespace;
-    const char* schema_version;   // semver of the manifest format
-    int input_count;     const AetherInputDecl*    inputs;
-    int event_count;     const AetherEventDecl*    events;
-    int function_count;  const AetherFunctionDecl* functions;
+    const char* namespace_name;
+    int input_count;     const AetherInputDecl* inputs;
+    int event_count;     const AetherEventDecl* events;
+    AetherJavaBinding   java;
+    AetherPythonBinding python;
+    AetherRubyBinding   ruby;
+    AetherGoBinding     go;
 } AetherNamespaceManifest;
 
 const AetherNamespaceManifest* aether_describe(void);
@@ -428,7 +394,7 @@ const AetherNamespaceManifest* aether_describe(void);
 What this gets us:
 
 - **Runtime contract verification.** When the host loads the `.so`, it
-  can confirm "the loaded namespace is `trading` v3" before calling
+  can confirm "the loaded namespace is `trading`" before calling
   anything. Catches the "wrong `.so` deployed" class of bug at startup
   rather than at first call.
 
@@ -436,246 +402,68 @@ What this gets us:
   walk the manifest. No need to ship a sidecar JSON or re-parse the
   Aether source.
 
-- **Convertible to other contract formats.** A 50-line program walks
-  the manifest and emits Swagger, gRPC `.proto`, GraphQL SDL, JSON
-  Schema, or whatever's needed downstream. We don't ship those
-  emissions ourselves; the manifest is canonical.
+- **Convertible to other contract formats.** A small program walks the
+  manifest and emits Swagger, gRPC `.proto`, GraphQL SDL, JSON Schema,
+  or whatever's needed downstream. We don't ship those emissions
+  ourselves; the manifest is canonical.
 
 The discovery struct is also surfaced on each host SDK as a typed
 convenience:
 
 ```java
-Trading.Manifest m = Trading.describe();
-m.events().forEach(e -> System.out.println(e.name() + " carries " + e.carries()));
+Trading.Manifest m = t.describe();
+// m.namespaceName, m.inputs, m.events, m.javaPackage, m.javaClass
 ```
 
-## The generator framework
+```python
+m = ns.describe()   # m.namespace_name, m.inputs, m.events, m.python_module
+```
 
-Conceptual flow when the user runs `ae build --namespace trading/`:
+```ruby
+m = ns.describe     # m.namespace_name, m.inputs, m.events, m.ruby_module
+```
 
-1. Find `trading/manifest.ae`.
-2. Run it under a manifest-only typechecker that resolves the
-   `namespace()` block into an in-memory `NamespaceDescription`.
-3. For every other `.ae` in the directory (and any explicit
-   `import trading.manifest`), typecheck its top-level functions
-   against the manifest's `input` declarations — `order`, `max_order`,
-   etc. resolve from the manifest.
-4. Compile every `.ae` (manifest excluded) via the existing `--emit=lib`
-   pipeline into one `.so`/`.dylib`.
-5. Embed the serialized manifest as the static `AetherNamespaceManifest`
-   struct; emit `aether_describe()`.
-6. For each declared `bindings { java { ... } }` block, run the
-   corresponding generator template:
-   - **Java:** template the SDK class, the input setters, the event
-     handlers (`Consumer<Long>` typed), the typed return DTOs from any
-     functions returning maps/lists.
-   - **Python:** template a module with the same shape.
-   - **Go:** ditto, with cgo build constraints.
-7. SWIG runs once per target with an internally-generated `.i` —
-   the developer doesn't see it. SWIG's job is restricted to the
-   mechanical bit: marshalling primitives, wrapping the opaque
-   `AetherValue*` proxy class, generating function-pointer typemaps
-   for `notify` listeners.
-
-The generator is the new piece. It's a templating exercise on top of
-the data structures the manifest interpreter already produces. Most
-of the language-specific complexity is squeezed into the templates;
-the framework is a few hundred lines.
-
-## Test strategy
-
-A namespace builds out into a lot of integration surface. The test
-strategy mirrors what we did for v1, scaled up.
+## Test coverage
 
 | Test | What it proves |
 |---|---|
-| `tests/integration/namespace_basic/` | manifest interpreter resolves a 1-script namespace correctly |
-| `tests/integration/namespace_multifile/` | 3 sibling scripts contribute to one namespace; SDK exposes all functions |
-| `tests/integration/namespace_escape_hatch/` | `import trading.manifest` from a non-sibling script joins the namespace |
-| `tests/integration/namespace_private/` | `@private_to_file` keeps a sibling out of the SDK |
-| `tests/integration/namespace_inputs/` | Each input type (primitive, map, fn) makes it through the boundary |
-| `tests/integration/namespace_notify/` | `notify(event, id)` reaches a registered handler; missing handler returns 0 |
-| `tests/integration/namespace_describe/` | `aether_describe()` round-trips the manifest faithfully |
-| `tests/integration/namespace_java_smoke/` | Generated Java SDK compiles + a tiny Java program calls into it (skips if no JDK) |
-| `tests/integration/namespace_python_smoke/` | Same for Python (skips if no python3-dev) |
-| `tests/integration/namespace_trading_e2e/` | Full worked example: manifest + 3 scripts + Java host that exercises every input, every event, every function. Asserts the round-trip end-to-end |
-| `tests/integration/namespace_capability_empty/` | A namespace script that imports `std.net` is rejected (inherits from v1) |
-| `tests/integration/namespace_versioning/` | Discovery struct embeds a schema_version; mismatched host code can detect it |
+| `tests/integration/notify/` | `notify(event, id)` reaches a registered handler; missing handler returns 0; replace-in-place re-registration; unregister; clear; NULL-safety |
+| `tests/integration/manifest/` | Every manifest builder (`describe`, `input`, `event`, `bindings`, `java`, `python`, `ruby`, `go`) round-trips through `manifest_get()` |
+| `tests/integration/namespace_basic/` | Manifest interpreter resolves a 1-script namespace correctly |
+| `tests/integration/namespace_multifile/` | Sibling scripts contribute to one namespace; SDK exposes all functions |
+| `tests/integration/namespace_python/` | Generated Python SDK round-trips: discovery, setters, events, functions |
+| `tests/integration/namespace_ruby/` | Same surface, mirrored for Ruby Fiddle |
+| `tests/integration/namespace_java/` | Same surface, mirrored for Java Panama |
+| `tests/integration/embedded_java_trading_e2e/` | Full worked example: manifest + 3 scripts + Java host that exercises every input, every event, every function. Asserts the round-trip end-to-end including `[ae]`-tagged script-side prints interleaving with host event handlers |
+| `tests/integration/emit_lib*/` | The transport layer underneath (8 directories, foundation tests) |
 
-Skip-on-missing-toolchain is the same pattern v1 uses — Java/Python
-targets skip cleanly if their toolchain isn't installed, so CI works
-in minimal environments.
-
-## Worked example, end to end
-
-This is the example I'd ship in the repo as `examples/embedded-java/trading/`.
-Showing it inline so the design surface gets pressure-tested by an
-actual use case.
-
-### Files
-
-```
-examples/embedded-java/trading/
-    aether/
-        manifest.ae
-        placeTrade.ae
-        killTrade.ae
-        getTicker.ae
-    java/
-        src/main/java/com/example/trading/TradingDemo.java
-        pom.xml
-    build.sh
-    README.md
-```
-
-### `aether/manifest.ae`
-
-```aether
-import std.host
-
-namespace("trading") {
-    input order: map
-    input catalog_has: fn(string) -> bool
-    input compute_score: fn(map) -> int
-    input max_order: int
-
-    event "OrderPlaced"   carries int64
-    event "OrderRejected" carries int64
-    event "TradeKilled"   carries int64
-    event "UnknownTicker" carries int64
-
-    bindings {
-        java { package "com.example.trading"; class "Trading" }
-    }
-}
-```
-
-### `aether/placeTrade.ae`
-
-```aether
-place_trade() {
-    if order.amount < 0 || order.amount > max_order {
-        notify("OrderRejected", order.id)
-        return
-    }
-    if !catalog_has(order.ticker) {
-        notify("UnknownTicker", order.id)
-        return
-    }
-    score = compute_score(order)
-    if score > 80 {
-        notify("OrderRejected", order.id)
-        return
-    }
-    notify("OrderPlaced", order.id)
-}
-```
-
-### `aether/killTrade.ae`
-
-```aether
-kill_trade(trade_id: int64) {
-    notify("TradeKilled", trade_id)
-}
-```
-
-### `aether/getTicker.ae`
-
-```aether
-get_ticker(symbol: string) {
-    return symbol
-}
-
-get_ticker_history(symbol: string, days: int) {
-    h = list.new()
-    list.add(h, symbol)
-    return h
-}
-```
-
-### `build.sh`
-
-```sh
-#!/bin/sh
-ae build --namespace aether/ -o build/libtrading.so
-# Side-effects also produced into build/:
-#   build/libtrading.so          — the namespace .so
-#   build/com/example/trading/Trading.java   — the generated Java SDK
-cd java && mvn -q package
-```
-
-### `java/.../TradingDemo.java`
-
-(Same as the worked Java example earlier in this doc.)
-
-### What the test asserts
-
-```sh
-# tests/integration/namespace_trading_e2e/test.sh (sketch)
-cd examples/embedded-java/trading
-./build.sh
-java -cp java/target/trading-1.0.jar:java/target/classes com.example.trading.TradingDemo > out.txt
-grep -q "OrderPlaced for 2322223222" out.txt
-grep -q "TradeKilled  for 2322223222" out.txt
-grep -q "Discovered: 4 functions, 4 events" out.txt
-```
-
-Skips cleanly if `mvn` and `java` aren't installed.
-
-## Implementation roadmap
-
-Roughly six chunks, in dependency order. Each is ideally a separate PR
-unless they're tiny.
-
-| Chunk | Effort | What ships |
-|---|---|---|
-| 1. `notify(event, id)` extern + dispatch table | Small (~1 day) | The claim-check primitive, exposed through a new `std.host` module |
-| 2. Manifest grammar (`namespace()`, `input`, `event`, `bindings`) as Aether DSL | Small-Medium (~2-3 days) | New `std.host` builder functions; manifest files parse and produce in-memory descriptions |
-| 3. Namespace compile pipeline | Medium (~3-5 days) | `ae build --namespace <dir>`: walk dir, run manifest, typecheck siblings, link `--emit=lib`, embed discovery struct, emit `aether_describe()` |
-| 4. Java generator template | Medium (~3-5 days) | `bindings { java { ... } }` produces a typed `Trading.java` with setters, event handlers, function methods, and the `Manifest` accessor. Internally uses SWIG for the function-pointer typemaps |
-| 5. Python generator template | Small (~1-2 days) | Mirrors the Java path with Python idioms |
-| 6. Worked example + e2e tests | Medium (~2-3 days) | `examples/embedded-java/trading/` plus the test directories above |
-
-Order:
-
-1. Land chunks 1 + 2 together (small) — proves the manifest + claim
-   check work in isolation.
-2. Land chunk 3 (the build pipeline) once the data structures it
-   feeds on are stable.
-3. Land chunk 4 (Java). Demands the most generator work; pays for
-   itself by validating the design end to end.
-4. Chunks 5 and 6 come after Java is solid.
-
-Total: roughly **3 weeks of focused work**, distributed across 4-5 PRs.
+Skip-on-missing-toolchain is the standard pattern: Java targets skip
+cleanly if `javac`/`java` aren't installed or the JDK is older than 22;
+Python skips if `python3` isn't installed; Ruby skips if `ruby` isn't
+installed.
 
 ## Open questions
 
-A handful of decisions I'd like to settle when chunks 1-3 land but
-which don't block the design:
+A handful of decisions deferred from the v1 ship:
 
-1. **Manifest discovery strategy.** Hard-coded filename
-   `manifest.ae`? Or look for any file containing a top-level
-   `namespace(...)` call? First is simpler; second is more flexible.
+1. **Multiple manifests in one directory.** Currently undefined behavior.
+   Probably want to ban it explicitly with a clear error.
 
-2. **Multiple manifests in one directory.** Banned, allowed-with-
-   warning, or allowed-and-each-defines-a-separate-namespace? I'd
-   default to "banned" until there's a use case.
+2. **What `aether_describe()` returns when the same `.so` is loaded
+   twice in one process.** Currently fine since it's static state, but
+   worth documenting before someone tries it in earnest.
 
-3. **What `aether_describe()` returns when the same `.so` is loaded
-   twice in one process.** Probably fine since it's static state, but
-   worth confirming before someone tries it.
-
-4. **How the event handler gets called when the script is on a
+3. **How the event handler gets called when the script is on a
    different thread than the host's main loop.** The runtime is
-   single-threaded today and `notify` is synchronous, so v2 inherits
+   single-threaded today and `notify` is synchronous, so v1 inherits
    that — events fire on whatever thread is currently running Aether
-   code. Document and move on; revisit if multi-threading lands.
+   code. Documented; revisit if multi-threading lands.
 
-5. **Annotation syntax for `@private_to_file`.** Aether doesn't have
-   annotations today. Alternatives: a magic file `.aether-private`,
-   a leading underscore convention, or a manifest-level
-   `exclude ["internal_helpers.ae"]`. The last is probably cleanest
-   because it keeps the policy in the namespace owner's hands.
+4. **Annotation syntax for `@private_to_file`.** Aether doesn't have
+   annotations today. Alternatives: a manifest-level
+   `exclude ["internal_helpers.ae"]`, or a leading underscore
+   convention. The manifest-level approach is probably cleanest because
+   it keeps the policy in the namespace owner's hands.
 
 ## Summary
 
@@ -689,15 +477,16 @@ v2 takes the typed transport layer from `--emit=lib` and adds:
   the host's typed downcalls into the script.
 - **A discovery method** (`aether_describe()`) embedded in every
   generated `.so`, exposing the manifest as a typed runtime contract.
-- **A generator framework** that templates per-language SDKs from the
-  manifest, hiding SWIG, JNI, ctypes, cgo, and all FFI plumbing from
-  both the script author and the host developer.
+- **Hand-written per-language SDK generators** (Python ctypes, Java
+  Panama JDK 22+, Ruby Fiddle) that template idiomatic SDKs from the
+  manifest, hiding JNI, ctypes, Panama, Fiddle, and all FFI plumbing
+  from both the script author and the host developer.
 
 The result: a Java developer consuming an Aether-built `trading.so`
-sees a typed `com.example.trading.Trading` class with `setOrder`,
-`onOrderPlaced`, `placeTrade`, `getTicker`, and `Trading.describe()`.
-They write no glue. The script author writes plain Aether and a
-manifest. Neither side knows about the boundary.
+sees a typed `com.example.trading.Trading` class with `setMaxOrder`,
+`onOrderPlaced`, `placeTrade`, `getTicker`, and `t.describe()`. They
+write no glue. The script author writes plain Aether and a manifest.
+Neither side knows about the boundary.
 
 The transport layer (`--emit=lib`, `aether_config.h`, opaque
 `AetherValue*`) folds in as the foundation. There is no v1 to maintain
