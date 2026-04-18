@@ -2564,36 +2564,67 @@ int cmd_build_namespace(int argc, char** argv) {
     }
     fclose(concat);
 
-    /* Step 4: derive the output library path. When the user passes
-     *   -o foo  →  "libfoo.so" in the cwd
-     * Without -o, derive from the directory's basename:
-     *   --namespace trading/  →  libtrading.so
-     *   --namespace .         →  use the cwd's basename
+    /* Step 4: derive the output library path. The artifacts live INSIDE
+     * <dir> by default so they sit next to the manifest and scripts that
+     * produced them — easy to ship as a unit. -o overrides that.
+     *
+     * Naming: lib<basename>.so (or .dylib), where <basename> is the
+     * tail component of <dir>:
+     *   --namespace trading/   →  trading/libtrading.so
+     *   --namespace .          →  ./lib<cwd_basename>.so
      */
+    /* Normalize dir: strip trailing slash so target_dir works for both
+     * "aether" and "aether/". */
+    char target_dir[1024];
+    {
+        strncpy(target_dir, dir, sizeof(target_dir) - 1);
+        target_dir[sizeof(target_dir) - 1] = '\0';
+        size_t dlen = strlen(target_dir);
+        while (dlen > 1 && target_dir[dlen - 1] == '/') {
+            target_dir[--dlen] = '\0';
+        }
+    }
+
+    /* Derive the library basename. Prefer -o, then the manifest's
+     * namespace name (read by re-invoking aetherc to dump the JSON
+     * manifest), then the directory's basename as a fallback. The
+     * manifest name is what users actually want — `namespace("trading")`
+     * → libtrading.so. */
     char base_name[512];
     if (output_name) {
         strncpy(base_name, output_name, sizeof(base_name) - 1);
         base_name[sizeof(base_name) - 1] = '\0';
     } else {
-        const char* base = dir;
-        if (strcmp(dir, ".") == 0) {
-            /* Use cwd's basename when --namespace . was used. */
-            char cwd[1024];
-            if (getcwd(cwd, sizeof(cwd))) {
-                const char* slash = strrchr(cwd, '/');
-                base = slash ? slash + 1 : cwd;
-            }
-        } else {
-            const char* slash = strrchr(dir, '/');
-            if (slash) base = slash + 1;
+        char ns_json[16384];
+        char ns_name[256] = "";
+        if (aetherc_capture_stdout("--emit-namespace-manifest", manifest_path,
+                                   NULL, ns_json, sizeof(ns_json)) == 0) {
+            json_extract_string_field(ns_json, "namespace", ns_name, sizeof(ns_name));
         }
-        strncpy(base_name, base, sizeof(base_name) - 1);
-        base_name[sizeof(base_name) - 1] = '\0';
+        if (ns_name[0]) {
+            strncpy(base_name, ns_name, sizeof(base_name) - 1);
+            base_name[sizeof(base_name) - 1] = '\0';
+        } else {
+            /* Fallback: directory basename. */
+            const char* base = target_dir;
+            if (strcmp(target_dir, ".") == 0) {
+                char cwd[1024];
+                if (getcwd(cwd, sizeof(cwd))) {
+                    const char* slash = strrchr(cwd, '/');
+                    base = slash ? slash + 1 : cwd;
+                }
+            } else {
+                const char* slash = strrchr(target_dir, '/');
+                if (slash) base = slash + 1;
+            }
+            strncpy(base_name, base, sizeof(base_name) - 1);
+            base_name[sizeof(base_name) - 1] = '\0';
+        }
     }
 
-    /* Construct the full output path with lib<base><ext>. */
-    char out_path[1024];
-    snprintf(out_path, sizeof(out_path), "lib%s%s", base_name, lib_ext);
+    /* Full output path with lib<base><ext>, anchored under target_dir. */
+    char out_path[1280];
+    snprintf(out_path, sizeof(out_path), "%s/lib%s%s", target_dir, base_name, lib_ext);
 
     /* Step 5: build the synthetic .ae as --emit=lib, then re-link with
      * the describe.c stub appended. We piggy-back on the existing

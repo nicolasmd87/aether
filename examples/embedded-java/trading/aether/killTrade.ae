@@ -1,0 +1,6 @@
+import std.host
+
+kill_trade(trade_id: long) {
+    notify("TradeKilled", trade_id)
+    return 1
+}
