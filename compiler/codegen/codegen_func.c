@@ -94,9 +94,15 @@ TypeKind lookup_extern_param_kind(CodeGenerator* gen, const char* func_name, int
     return TYPE_UNKNOWN;
 }
 
-// Check if an AST subtree contains a return statement with a value
+// Check if an AST subtree contains a return statement with a value.
+// Stops at AST_CLOSURE boundaries: a nested lambda's `return` belongs
+// to that lambda, not to the enclosing function/closure. Without this
+// stop, `|| { inner = |x| { return x*2 }; call(inner, 3) }` would have
+// its outer closure mis-typed as returning-int (picking up inner's
+// `return`) when the outer actually has no return statement of its own.
 int has_return_value(ASTNode* node) {
     if (!node) return 0;
+    if (node->type == AST_CLOSURE) return 0;
     if (node->type == AST_RETURN_STATEMENT && node->child_count > 0 && node->children[0]) {
         // Print statements don't count as "return values" - they're void
         if (node->children[0]->type == AST_PRINT_STATEMENT) {
