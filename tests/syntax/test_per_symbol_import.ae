@@ -1,0 +1,19 @@
+// Per-symbol import via trailing-component path:
+//   `import mod.sym` makes `sym` usable as a bare identifier.
+// The existing parenthesised form `import mod (sym1, sym2)` is unchanged
+// in spelling — after this feature it also exposes its listed symbols
+// unqualified so callers need not prefix with the module name.
+
+import std.os.argv0
+
+extern exit(code: int)
+
+main() {
+    path = argv0()
+    // Without per-symbol import, `argv0` as a bare identifier would be
+    // unresolved — the caller would write `os.argv0()`. After the
+    // feature, the trailing component of the import path is registered
+    // directly in the caller's scope.
+    if path == null { println("FAIL: argv0 returned null"); exit(1) }
+    println("ok")
+}
