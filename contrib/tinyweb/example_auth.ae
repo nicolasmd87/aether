@@ -1,7 +1,13 @@
-// Cookie + Attribute Auth Example — filter reads cookie, validates,
+// Cookie + Attribute Auth Example — tinyweb.filter reads cookie, validates,
 // passes user to endpoint via attributes
 
 import contrib.tinyweb
+import std.http
+import std.string
+import std.list
+import std.map
+import std.tcp
+
 
 validate_token(token: string) {
     if (token == "valid-session-abc") { return "alice@example.com" }
@@ -12,41 +18,41 @@ validate_token(token: string) {
 main() {
     println("=== TinyWeb Cookie + Attribute Auth Example ===\n")
 
-    server = web_server_host("localhost", 8080) {
+    server = tinyweb.web_server_host("localhost", 8080) {
 
-        path("/api") {
-            filter(ALL, "/.*") |req: ptr, res: ptr, ctx: ptr| {
-                token = request_get_cookie(req, "session")
+        tinyweb.path("/api") {
+            tinyweb.filter(tinyweb.ALL, "/.*") |req: ptr, res: ptr, ctx: ptr| {
+                token = tinyweb.request_get_cookie(req, "session")
                 user = validate_token(token)
 
                 if (user == "") {
-                    response_write_status(res, "Try logging in again", 403)
-                    return STOP
+                    tinyweb.response_write_status(res, "Try logging in again", 403)
+                    return tinyweb.STOP
                 }
 
-                ctx_set_attribute(ctx, "user", user)
-                return CONTINUE
+                tinyweb.ctx_set_attribute(ctx, "user", user)
+                return tinyweb.CONTINUE
             }
 
-            end_point(GET, "/profile") |req: ptr, res: ptr, ctx: ptr| {
-                user = ctx_get_attribute(ctx, "user")
-                response_write(res, "User is logged in: ${user}")
+            tinyweb.end_point(tinyweb.GET, "/profile") |req: ptr, res: ptr, ctx: ptr| {
+                user = tinyweb.ctx_get_attribute(ctx, "user")
+                tinyweb.response_write(res, "User is logged in: ${user}")
             }
 
-            end_point(GET, "/dashboard") |req: ptr, res: ptr, ctx: ptr| {
-                user = ctx_get_attribute(ctx, "user")
-                response_json(res, "{\"user\":\"${user}\",\"dashboard\":true}")
+            tinyweb.end_point(tinyweb.GET, "/dashboard") |req: ptr, res: ptr, ctx: ptr| {
+                user = tinyweb.ctx_get_attribute(ctx, "user")
+                tinyweb.response_json(res, "{\"user\":\"${user}\",\"dashboard\":true}")
             }
         }
 
-        end_point(GET, "/") |req: ptr, res: ptr, ctx: ptr| {
-            response_write(res, "Welcome! Login at /login")
+        tinyweb.end_point(tinyweb.GET, "/") |req: ptr, res: ptr, ctx: ptr| {
+            tinyweb.response_write(res, "Welcome! Login at /login")
         }
 
-        end_point(POST, "/login") |req: ptr, res: ptr, ctx: ptr| {
-            body = request_get_body(req)
-            response_set_header(res, "Set-Cookie", "session=valid-session-abc; Path=/; HttpOnly")
-            response_write(res, "Logged in!")
+        tinyweb.end_point(tinyweb.POST, "/login") |req: ptr, res: ptr, ctx: ptr| {
+            body = tinyweb.request_get_body(req)
+            tinyweb.response_set_header(res, "Set-Cookie", "session=valid-session-abc; Path=/; HttpOnly")
+            tinyweb.response_write(res, "Logged in!")
         }
     }
 
@@ -59,7 +65,7 @@ main() {
     println("  curl -H 'Cookie: session=valid-session-abc' http://localhost:8080/api/profile")
     println("    -> 200 User is logged in: alice@example.com")
 
-    result = server_start(server)
+    result = tinyweb.tw_start(server)
     if result != 0 { println("ERROR: Failed to start server") }
-    server_stop(server)
+    tinyweb.tw_stop(server)
 }

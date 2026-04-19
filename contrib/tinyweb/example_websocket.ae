@@ -1,32 +1,38 @@
 // WebSocket Example — HTTP + WebSocket on separate ports with echo handler
 
 import contrib.tinyweb
+import std.http
+import std.string
+import std.list
+import std.map
+import std.tcp
+
 
 main() {
     println("=== TinyWeb WebSocket Example ===\n")
 
-    server = web_server_with_ws("localhost", 8080, 8081) {
+    server = tinyweb.web_server_with_ws("localhost", 8080, 8081) {
 
-        path("/foo") {
-            end_point(GET, "/bar") |req: ptr, res: ptr, ctx: ptr| {
-                response_write(res, "Hello, World!")
+        tinyweb.path("/foo") {
+            tinyweb.end_point(tinyweb.GET, "/bar") |req: ptr, res: ptr, ctx: ptr| {
+                tinyweb.response_write(res, "Hello, World!")
             }
 
             // Echo the message back 3 times
-            web_socket("/eee") |msg: string, sender: ptr, ctx: ptr| {
-                ws_send_frame(sender, "Server sent: ${msg}-1")
-                ws_send_frame(sender, "Server sent: ${msg}-2")
-                ws_send_frame(sender, "Server sent: ${msg}-3")
+            tinyweb.web_socket("/eee") |msg: string, sender: ptr, ctx: ptr| {
+                tinyweb.ws_send_frame(sender, "Server sent: ${msg}-1")
+                tinyweb.ws_send_frame(sender, "Server sent: ${msg}-2")
+                tinyweb.ws_send_frame(sender, "Server sent: ${msg}-3")
             }
         }
 
-        web_socket("/echo") |msg: string, sender: ptr, ctx: ptr| {
-            ws_send_frame(sender, "Echo: ${msg}")
+        tinyweb.web_socket("/echo") |msg: string, sender: ptr, ctx: ptr| {
+            tinyweb.ws_send_frame(sender, "Echo: ${msg}")
         }
 
-        end_point(GET, "/") |req: ptr, res: ptr, ctx: ptr| {
-            response_set_header(res, "Content-Type", "text/html")
-            response_write(res, "<!DOCTYPE html>
+        tinyweb.end_point(tinyweb.GET, "/") |req: ptr, res: ptr, ctx: ptr| {
+            tinyweb.response_set_header(res, "Content-Type", "text/html")
+            tinyweb.response_write(res, "<!DOCTYPE html>
 <html>
 <head><title>TinyWeb WebSocket Demo</title></head>
 <body>
@@ -55,8 +61,8 @@ main() {
     println("  ws://localhost:8081/echo     — simple echo")
     println("  ws://localhost:8081/foo/eee  — echo x3")
 
-    result = server_start(server)
+    result = tinyweb.tw_start(server)
     if result != 0 { println("ERROR: Failed to start server") }
-    server_stop(server)
+    tinyweb.tw_stop(server)
     println("Server stopped.")
 }

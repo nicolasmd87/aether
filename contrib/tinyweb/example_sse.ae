@@ -1,15 +1,21 @@
 // Server-Sent Events (SSE) Example — streaming events to browser clients
 
 import contrib.tinyweb
+import std.http
+import std.string
+import std.list
+import std.map
+import std.tcp
+
 
 main() {
     println("=== TinyWeb SSE + Chunked Example ===\n")
 
-    server = web_server_full("localhost", 8080, 0, 8082) {
+    server = tinyweb.web_server_full("localhost", 8080, 0, 8082) {
 
-        end_point(GET, "/") |req: ptr, res: ptr, ctx: ptr| {
-            response_set_header(res, "Content-Type", "text/html")
-            response_write(res, "<!DOCTYPE html>
+        tinyweb.end_point(tinyweb.GET, "/") |req: ptr, res: ptr, ctx: ptr| {
+            tinyweb.response_set_header(res, "Content-Type", "text/html")
+            tinyweb.response_write(res, "<!DOCTYPE html>
 <html>
 <head><title>TinyWeb SSE Demo</title></head>
 <body>
@@ -30,16 +36,16 @@ main() {
 </html>")
         }
 
-        path("/sse") {
-            sse_endpoint("/events") |stream: ptr| {
-                sse_send(stream, "Initial event")
-                sse_send_event(stream, "tick", "1")
-                sse_send(stream, "Event 1")
-                sse_send_event(stream, "tick", "2")
-                sse_send(stream, "Event 2")
-                sse_send_event(stream, "tick", "3")
-                sse_comment(stream, "keep-alive")
-                sse_send(stream, "Final event")
+        tinyweb.path("/sse") {
+            tinyweb.sse_endpoint("/events") |stream: ptr| {
+                tinyweb.sse_send(stream, "Initial event")
+                tinyweb.sse_send_event(stream, "tick", "1")
+                tinyweb.sse_send(stream, "Event 1")
+                tinyweb.sse_send_event(stream, "tick", "2")
+                tinyweb.sse_send(stream, "Event 2")
+                tinyweb.sse_send_event(stream, "tick", "3")
+                tinyweb.sse_comment(stream, "keep-alive")
+                tinyweb.sse_send(stream, "Final event")
             }
         }
     }
@@ -49,7 +55,7 @@ main() {
     println("")
     println("Open http://localhost:8080/ or: curl -N http://localhost:8082/sse/events")
 
-    result = server_start(server)
+    result = tinyweb.tw_start(server)
     if result != 0 { println("ERROR: Failed to start server") }
-    server_stop(server)
+    tinyweb.tw_stop(server)
 }

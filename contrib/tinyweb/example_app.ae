@@ -1,64 +1,69 @@
 // Example App — HTTP endpoints with filters and nested paths
 
 import contrib.tinyweb
+import std.http
+import std.string
+import std.list
+import std.map
+import std.tcp
 
 main() {
     println("=== TinyWeb Example App ===\n")
 
-    server = web_server_host("localhost", 8080) {
+    server = tinyweb.web_server_host("localhost", 8080) {
 
-        path("/foo") {
-            filter(GET, "/.*") |req: ptr, res: ptr, ctx: ptr| {
-                hdr = request_get_header(req, "sucks")
+        tinyweb.path("/foo") {
+            tinyweb.filter(tinyweb.GET, "/.*") |req: ptr, res: ptr, ctx: ptr| {
+                hdr = tinyweb.request_get_header(req, "sucks")
                 if (hdr != "") {
-                    response_write_status(res, "Access Denied", 403)
-                    return STOP
+                    tinyweb.response_write_status(res, "Access Denied", 403)
+                    return tinyweb.STOP
                 }
-                return CONTINUE
+                return tinyweb.CONTINUE
             }
 
-            end_point(GET, "/bar") |req: ptr, res: ptr, ctx: ptr| {
-                response_write(res, "Hello, World!")
+            tinyweb.end_point(tinyweb.GET, "/bar") |req: ptr, res: ptr, ctx: ptr| {
+                tinyweb.response_write(res, "Hello, World!")
             }
         }
 
-        end_point(GET, "/users/(\\w+)") |req: ptr, res: ptr, ctx: ptr| {
-            user_id = request_get_path_param(ctx, "1")
-            response_write(res, "User profile: ${user_id}")
+        tinyweb.end_point(tinyweb.GET, "/users/(\\w+)") |req: ptr, res: ptr, ctx: ptr| {
+            user_id = tinyweb.request_get_path_param(ctx, "1")
+            tinyweb.response_write(res, "User profile: ${user_id}")
         }
 
-        end_point(POST, "/echo") |req: ptr, res: ptr, ctx: ptr| {
-            body = request_get_body(req)
-            response_write_status(res, "You sent: ${body}", 201)
+        tinyweb.end_point(tinyweb.POST, "/echo") |req: ptr, res: ptr, ctx: ptr| {
+            body = tinyweb.request_get_body(req)
+            tinyweb.response_write_status(res, "You sent: ${body}", 201)
         }
 
-        end_point(PUT, "/update") |req: ptr, res: ptr, ctx: ptr| {
-            body = request_get_body(req)
-            response_write_status(res, "Updated data: ${body}", 200)
+        tinyweb.end_point(tinyweb.PUT, "/update") |req: ptr, res: ptr, ctx: ptr| {
+            body = tinyweb.request_get_body(req)
+            tinyweb.response_write_status(res, "Updated data: ${body}", 200)
         }
 
-        path("/api") {
-            end_point(GET, "/test/(\\w+)") |req: ptr, res: ptr, ctx: ptr| {
-                param = request_get_path_param(ctx, "1")
-                response_write(res, "Parameter: ${param}")
+        tinyweb.path("/api") {
+            tinyweb.end_point(tinyweb.GET, "/test/(\\w+)") |req: ptr, res: ptr, ctx: ptr| {
+                param = tinyweb.request_get_path_param(ctx, "1")
+                tinyweb.response_write(res, "Parameter: ${param}")
             }
         }
     }
 
     println("Starting server on localhost:8080...")
-    result = server_start(server)
+    result = tinyweb.tw_start(server)
 
     if result == 0 {
         println("Server running! Try:")
         println("  curl http://localhost:8080/foo/bar")
         println("  curl http://localhost:8080/users/alice")
-        println("  curl -X POST -d 'hello' http://localhost:8080/echo")
+        println("  curl -X tinyweb.POST -d 'hello' http://localhost:8080/echo")
         println("  curl http://localhost:8080/api/test/42")
         println("\nPress Ctrl+C to stop.")
     } else {
         println("ERROR: Failed to start server (code ${result})")
     }
 
-    server_stop(server)
+    tinyweb.tw_stop(server)
     println("Server stopped.")
 }

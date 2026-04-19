@@ -44,7 +44,10 @@ actor SrvActor {
     receive {
         StartSrv(raw) -> {
             s = raw
-            http.server_start(raw)
+            // http.server_start is now a Go-style wrapper returning an error
+            // string; we want the raw int-returning extern that actually
+            // runs the accept loop.
+            http_server_start_raw(raw)
         }
     }
 }
@@ -56,12 +59,15 @@ actor SchedHelper {
 
 // ---- Test helpers ----
 
+// _get / _post return the raw HttpResponse ptr so tests can assert on
+// status codes distinct from body (the Go-style http.get/http.post wrappers
+// collapse non-2xx into an error string with no status access).
 _get(path: string) {
-    return http.get("http://127.0.0.1:8080${path}")
+    return http_get_raw("http://127.0.0.1:8080${path}")
 }
 
 _post(path: string, body: string) {
-    return http.post("http://127.0.0.1:8080${path}", body, "text/plain")
+    return http_post_raw("http://127.0.0.1:8080${path}", body, "text/plain")
 }
 
 _chk_resp(resp: ptr, code: int, body: string, msg: string) {
