@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`contrib/tinyweb` compiles on the current stdlib.** `filter_all` now inlines its body instead of calling `filter(_ctx, …)` — the DSL `_ctx` auto-injector was treating that as a 4-arg call against a 3-effective-arg function. Renamed the module's `server_start` / `server_stop` to `tw_start` / `tw_stop` to avoid colliding with `std.http`'s Go-style `server_start` wrapper. Examples now prefix every top-level tinyweb name with `tinyweb.` (non-selective `import contrib.tinyweb` does not expose names as bare) and add `import std.http` / `.string` / `.list` / `.map` / `.tcp` so the inlined module body's `http.xxx` / `string.xxx` / etc. qualified calls resolve in the importer's scope. `test_integration.ae` swapped `http.server_start` / `http.get` / `http.post` for the raw externs (`http_server_start_raw`, `http_get_raw`, `http_post_raw`): the Go-style wrappers now return `(body, err)` tuples that the test's ptr-based `_chk_resp` / `_chk_code` / `_chk_body_contains` assertions can't consume. `test_integration.ae` runs green end-to-end (8/8).
+
 ## [0.71.0]
 
 ### Fixed
