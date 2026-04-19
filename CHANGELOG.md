@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **Closure inside actor handler writing a state field is now rejected at compile time** (`compiler/codegen/codegen_expr.c`). Closures inside actor receive arms have no access to `self`, so a write like `inc = || { count = count + 1 }` (where `count` is an actor `state` field) compiled to a stale local read — a silent wrong answer. Codegen now walks every closure body inside every receive arm and, for each write to a state field, emits a compile-time error pointing at the offending line with a suggestion to use the arm-local workaround. New helper `aether_error_full()` in `compiler/aether_error.c` for line-numbered errors with suggestion + context + code. `aetherc` now checks `aether_error_count()` after codegen (compared against pre-codegen count, so legacy parser-noise tests don't regress) and aborts the build instead of leaving a half-written `.c` behind. Regression test: `tests/integration/closure_actor_state_reject/`. L4 in `docs/closure-lifetime-bugs.md`.
+
+### Changed
+
+- **`docs/closure-lifetime-bugs.md`**: enumerated all five currently-tracked closure limitations (L1–L5), split the previous lumped "Known limitations" paragraph into per-limit sections with minimal reproducer, workaround, and proper-fix shape for each. Added a note on L1 explaining why a trivial `intptr_t` widening in the generic `call()` dispatch doesn't fix the truncation (the destination variable's C type is pinned via the symbol table, not just the AST, so a real fix needs typechecker work).
+
 ## [0.69.0]
 
 ### Fixed

@@ -1513,6 +1513,11 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     // closure functions can call user-defined functions without
     // implicit function declaration errors (C99+).
     discover_closures(gen, program);
+    // L4 validation: reject closures inside actor handlers that write
+    // to actor state fields. aether_error_report increments the error
+    // count; aetherc.c should check aether_error_count() after
+    // generate_program returns and bail if non-zero.
+    validate_closure_state_mutations(gen, program);
     if (gen->closure_count > 0) {
         print_line(gen, "// Closure definitions");
         emit_closure_definitions(gen);

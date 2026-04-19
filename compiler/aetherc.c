@@ -692,6 +692,7 @@ int compile_source(const char* input_path, const char* output_path) {
     if (preempt_mode) codegen->preempt_loops = 1;
     codegen->emit_exe = emit_exe ? 1 : 0;
     codegen->emit_lib = emit_lib ? 1 : 0;
+    int errors_before_codegen = aether_error_count();
     generate_program(codegen, program);
     fclose(output);
     if (header_output) {
@@ -699,6 +700,27 @@ int compile_source(const char* input_path, const char* output_path) {
     }
     if (header_path) {
         free(header_path);
+    }
+
+    // If codegen reported new errors (e.g. L4 closure/state validation),
+    // abort with a non-zero exit so callers see the compile failure rather
+    // than a half-written output file. Only count errors reported by
+    // codegen itself — parse-phase errors are handled separately to avoid
+    // regressing legacy tests that silently tolerate parser noise.
+    if (aether_error_count() > errors_before_codegen) {
+        report_compilation_failure();
+        // Remove the partial output to avoid downstream build steps
+        // picking up an incomplete file.
+        remove(output_path);
+        module_registry_shutdown();
+        free_ast_node(program);
+        for (int i = 0; i < token_count; i++) {
+            free_token(tokens[i]);
+        }
+        free_parser(parser);
+        free_code_generator(codegen);
+        free(source);
+        return 0;
     }
 
     if (verbose_mode) {

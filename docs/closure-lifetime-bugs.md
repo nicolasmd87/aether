@@ -10,6 +10,12 @@ work: emission-ordering for cross-referenced closures, nested-lambda
 return-type bubble-up, and captures across trailing blocks. All three
 are fixed on main.
 
+Five limitations are tracked — three around dynamic `call()` dispatch
+(L1, L2, L3), one correctness hazard in closures inside actor handlers
+(L4), and one memory leak on closure-var reassignment (L5). L4 is now
+rejected at compile time with a clear error; the rest are documented
+in the "Known limitations" section below.
+
 Regression tests live at `tests/syntax/test_closure_*.ae` and
 `tests/integration/closure_*/`.
 
@@ -153,17 +159,134 @@ Nearly all changes are in the codegen layer. The typechecker is unchanged.
 
 ## Known limitations
 
-Bug 5's `call()` type propagation resolves patterns where the target
-closure can be statically identified at codegen time:
+L1/L2/L3 are ergonomic gaps with workarounds; L5 is a correctness
+hazard worth flagging. L4 was previously in this list — it's now a
+compile-time error instead of a silent wrong answer (see L4 below).
+All remaining limits wait on larger language work.
 
-- `x = || { ... }; call(x)` — direct literal assignment.
-- `x = f(); call(x)` where `f` ends `return <closure_var>`.
+### L1. `call(x)` where `x` comes from a list
 
-Patterns that still fall through to the `int` default: closures retrieved
-dynamically from a list, closures chosen via `match`/`if`, closures
-threaded through multiple intermediate function calls. A proper fix needs
-either a parameterised closure type (`fn[T]`) or full return-type
-propagation through the typechecker — out of scope here.
+```aether
+handlers = list.new()
+list.add(handlers, box_closure(|_| { return "hello" }))
+...
+boxed = list.get(handlers, 0)
+h = unbox_closure(boxed)
+r = call(h)                   // h's return type is unknown at codegen
+```
+
+`call(h)` falls back to generic dispatch: `((int(*)(void*))h.fn)(h.env)`
+— it assumes `int` return even if the stored closure returns a string
+or pointer. Strings get their pointer truncated; pointers become
+garbage.
+
+**Workaround:** use a direct-literal closure variable when possible:
+`action = |_| { ... }; call(action)` is statically resolved. Or accept
+that `int`-returning dynamic closures are the only safely dispatchable
+kind today.
+
+**Why a quick `intptr_t` widening doesn't fix it:** the obvious patch —
+emit `((intptr_t(*)(void*))h.fn)(h.env)` instead of `((int(*)(void*))`
+— fixes the cast in isolation but leaves `r`'s declared C type as
+`int`, so the return narrows right back. Widening `r` requires changing
+the variable's registration in the symbol table (not just the AST
+decl); downstream `print(r)` looks up `r`'s type from the symbol table
+and picks `%d` for anything registered as `TYPE_INT`. Propagating
+`TYPE_PTR` through the AST alone was attempted — it segfaulted four
+existing tests whose `call(x)` returns are used in arithmetic or
+comparisons. A real fix threads through the typechecker.
+
+### L2. `call(x)` where `x` is chosen via `match`/`if`
+
+```aether
+op = if user_wants_add { add_fn } else { mul_fn }
+r = call(op, 3, 4)            // op's closure id is not knowable
+```
+
+Same failure mode as L1. `closure_var_map` records a single closure id
+per name, so branch-selected closures fall through to generic dispatch
+with the `int` default.
+
+### L3. `call(x)` where `x` is threaded through intermediate functions
+
+```aether
+x = setup()                   // setup returns a closure
+y = wrap(x)                   // wrap takes fn, returns fn
+r = call(y)                   // y's underlying closure is two hops away
+```
+
+`closure_var_map`'s `w = f()` inheritance (Bug 5's partial fix) only
+handles one hop when `f`'s body ends `return <closure_var>`. Multi-hop
+chains fall through to generic dispatch.
+
+**Proper fix for L1/L2/L3:** parameterised closure types (`fn[T]`, like
+Rust's `Fn(i32) -> i32`) or full typechecker return-type propagation.
+Either is a medium-sized language feature — until it lands, the
+workaround sections on each limit apply.
+
+### L4. Closure inside actor handler mutating actor state
+
+```aether
+actor Counter {
+    state count = 0
+    receive {
+        Go() -> {
+            inc = || { count = count + 1 }   // rejected at compile time
+            call(inc)
+        }
+    }
+}
+```
+
+Closures inside actor handlers correctly capture and mutate arm-local
+variables (Route 1 + arm promotion — tested by
+`tests/syntax/test_closure_in_actor_handler.ae`). But when the closure
+writes a name that's an actor **state field**, the closure has no
+access to `self`, so state accesses would compile to unscoped local
+reads — a silent wrong answer.
+
+**Current status (as of this branch):** codegen walks every closure
+body inside every actor receive-arm and, for each write to a state
+field, emits a compile-time error pointing at the offending line with
+a suggestion to use the arm-local workaround. Regression pinned by
+`tests/integration/closure_actor_state_reject/`.
+
+**Workaround:** copy state into an arm-local first, mutate that, then
+write back. See `tests/syntax/README_closure_actor_state_limitation.md`
+for the full pattern.
+
+**Proper fix:** thread `self` through the closure's env so state
+writes compile to `self->field = ...`. Medium-sized codegen change;
+until it lands, the compile-time rejection prevents silent wrong
+answers.
+
+### L5. Closure-var reassignment leaks the previous env
+
+```aether
+op = |x: int| { return x + 1 }
+op = |x: int| { return x * 2 }  // old env (malloc'd) is leaked
+```
+
+When a closure variable is reassigned, the auto-defer-free fires only
+on the first assignment (to avoid double-free at scope exit, since
+reassignment overwrites `.env` in the variable). The previous env's
+heap block is unreachable — leaked.
+
+**Why not just free on reassignment:** the old env may still be
+reachable via a `box_closure()` copy or another closure's transitive
+capture. Without escape analysis we can't tell if it's safe to free,
+so we lean safe (leak) over unsafe (UAF).
+
+Paired tests pin this trade-off:
+
+- `tests/syntax/test_closure_reassign_leaks_env.ae` — 100-iteration
+  reassignment loop exits cleanly.
+- `tests/syntax/test_closure_reassign_after_box.ae` — box_closure'd
+  copy survives reassignment of the source variable.
+
+**Proper fix:** escape analysis. Track whether a closure variable has
+been captured or stored anywhere before the reassignment; if not, free
+on reassignment. Larger change; deferred.
 
 ## Why the UI calculator works
 
