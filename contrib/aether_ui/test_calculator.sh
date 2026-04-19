@@ -13,10 +13,19 @@ BASE="http://127.0.0.1:$PORT"
 PASS=0
 FAIL=0
 
+# macOS ships BSD grep (no -P). Prefer GNU grep when available; otherwise
+# fall back to python3 for JSON field extraction.
+if [ "$(uname -s)" = "Linux" ] || command -v ggrep >/dev/null 2>&1; then
+    _GREP="${_GREP:-$(command -v ggrep || echo grep)}"
+    extract_value() { "$_GREP" -oP '"value":\K[0-9.-]+'; }
+else
+    extract_value() { python3 -c "import sys,json; print(json.load(sys.stdin).get('value',''))"; }
+fi
+
 assert_display() {
     local desc="$1" expected="$2"
     sleep 0.05
-    actual=$(curl -s "$BASE/state/1" | grep -oP '"value":\K[0-9.-]+')
+    actual=$(curl -s "$BASE/state/1" | extract_value)
     # Truncate .000000
     actual_int=$(echo "$actual" | sed 's/\.0*$//')
     if [ "$actual_int" = "$expected" ]; then
