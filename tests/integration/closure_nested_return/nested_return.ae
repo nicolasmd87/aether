@@ -1,0 +1,13 @@
+// Input for test_closure_nested_return.sh:
+// Outer closure has no return statement. It constructs an inner closure
+// that DOES return. Under the fix, outer is typed `void`. Without the
+// fix, outer is typed `int` but has no return statement — the generated
+// C fails `-Wreturn-type -Werror`.
+
+main() {
+    outer = || {
+        inner = |x: int| { return x * 2 }
+        call(inner, 3)
+    }
+    call(outer)
+}

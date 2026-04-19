@@ -1,0 +1,35 @@
+// Regression: a closure's body constructs and passes other closure
+// literals as arguments to a user function. The C emission must
+// forward-declare all _closure_fn_N functions before emitting any
+// closure body, so that closure N's body can reference closure M for
+// any M — without depending on source-order or the order the
+// discovery pass chose to number them.
+//
+// Without forward decls: `error: '_closure_fn_M' undeclared`.
+//
+// Surfaced by contrib/aether_ui/example_calculator.ae's
+// `call(apply_op, |a,b| { return a + b })` pattern — the outer
+// callback passes an inline lambda to another closure. That shape is
+// common enough in any DSL that the compiler must handle it.
+
+extern exit(code: int)
+
+invoke(f: fn, g: fn, x: int) {
+    r1 = call(f, x)
+    r2 = call(g, x)
+    return r1 + r2
+}
+
+main() {
+    // outer's body constructs and passes two inline lambdas. Each
+    // lambda gets its own _closure_fn_N. Some of them will be
+    // numbered after outer.
+    outer = |x: int| {
+        return invoke(|a: int| { return a * 2 }, |a: int| { return a + 100 }, x)
+    }
+
+    r = call(outer, 5)
+    // 5*2 + (5+100) = 10 + 105 = 115
+    if r != 115 { println("FAIL: expected 115, got:"); println(r); exit(1) }
+    println("ok")
+}

@@ -1,0 +1,43 @@
+// Input for test_closure_trailing_block_capture.sh:
+// A variable declared inside a trailing block; a closure inside a
+// nested trailing block reads it. Trailing blocks are inlined at the
+// call site, so `c`'s binding lives in main's scope — the inner closure
+// should capture `c` like any other main-scope local.
+//
+// Without the fix: `error: 'c' undeclared` in the generated C, because
+// capture discovery's subtree_declares stops at AST_CLOSURE boundaries
+// (including trailing-block closures). With the fix: trailing-block
+// closures are transparent to scope analysis.
+
+import std.list
+
+grid(_ctx: ptr) {
+    return _ctx
+}
+
+row(_ctx: ptr) {
+    return _ctx
+}
+
+btn_do(_ctx: ptr, action: fn) {
+    list.add(_ctx, box_closure(action))
+}
+
+main() {
+    actions = list.new()
+    defer list.free(actions)
+    root = grid(actions) {
+        c = 42                  // declared in an outer trailing block
+        row(actions) {           // nested trailing block
+            btn_do(actions, || { return c })   // inner closure reads c
+        }
+    }
+    // Retrieve and invoke the closure to verify c's value was captured.
+    boxed = list.get(actions, 0)
+    fn = unbox_closure(boxed)
+    r = call(fn)
+    if r != 42 {
+        println("FAIL: expected 42, got:")
+        println(r)
+    }
+}

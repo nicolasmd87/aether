@@ -5,7 +5,13 @@ handling and env lifetime, plus a chained typechecker hole that surfaced
 once the first four were fixed. All five landed together in a single PR
 because testing any one in isolation was blocked by the others.
 
-Regression tests live at `tests/syntax/test_closure_*.ae`.
+Three more closure-related bugs surfaced during the aether_ui toolkit
+work: emission-ordering for cross-referenced closures, nested-lambda
+return-type bubble-up, and captures across trailing blocks. All three
+are fixed on main.
+
+Regression tests live at `tests/syntax/test_closure_*.ae` and
+`tests/integration/closure_*/`.
 
 ## The bugs
 
@@ -87,6 +93,51 @@ declarations whose initializer is such a call. `closure_var_map` seeding
 is extended to inherit a closure id through `w = f()` when `f` ends
 `return <closure_var>`, so chains like `w = build_pair(); call(w)`
 resolve correctly.
+
+### 6. Closure body references a later-numbered closure
+
+A closure's body can construct inline closure literals and pass them
+as arguments to other functions. Each lambda gets its own
+`_closure_fn_N` in the emitted C. When the outer closure is numbered
+before its inline lambdas, its body referenced `_closure_fn_N`
+symbols that hadn't been declared yet at that point in the file.
+Error: `'_closure_fn_N' undeclared`.
+
+**Fix:** `emit_closure_definitions` now runs in two passes. Pass 1
+emits every env typedef and every function prototype. Pass 2 emits
+bodies and constructors. A closure body can reference any
+`_closure_fn_N` by name regardless of numbering.
+
+### 7. Nested lambda's return mis-typed the enclosing closure
+
+`has_return_value` walked an AST subtree looking for return
+statements with values. A nested lambda's `return` bubbled up and
+mis-typed the enclosing closure as `int`, producing a
+`static int _closure_fn_N(...) { ...; }` with no return statement —
+undefined behavior caught by `-Wreturn-type`.
+
+**Fix:** `has_return_value` stops at `AST_CLOSURE` boundaries. A
+nested closure's return belongs to that closure, not to any
+enclosing scope.
+
+### 8. Captures across nested trailing blocks
+
+A variable declared inside a trailing block (e.g.
+`root = grid() { c = 42; ... }`) lives in the enclosing function's
+scope because trailing blocks are inlined at the call site, not
+hoisted. A closure inside a sibling or nested trailing block should
+be able to capture such variables. Previously, capture discovery
+stopped at `AST_CLOSURE` boundaries including trailing-block
+closures (value == `"trailing"`), so names declared inside one
+trailing block were invisible to inner closures.
+
+**Fix:** scope-analysis helpers treat trailing-block closures
+transparently while still stopping at real closures.
+`subtree_declares` recurses through trailing blocks; a new
+`scope_declares_at_top_level` helper is used by
+`is_top_level_decl_in_function` to walk trailing blocks but NOT
+nested if/for/while blocks — preserving the "fresh body-local in
+nested block" Python-style rule that `calculator-tui` relies on.
 
 ## Code layout
 

@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **Closure body references a later-numbered closure** (`compiler/codegen/codegen_expr.c`). A closure's body can construct inline closure literals and pass them as arguments to other functions. Each lambda gets its own `_closure_fn_N` in the emitted C. When the outer closure is numbered before its inline lambdas, its body referenced `_closure_fn_N` symbols that hadn't been declared yet at that point in the file (`'_closure_fn_N' undeclared` error). `emit_closure_definitions` now runs in two passes: pass 1 emits every env typedef and every function prototype, pass 2 emits bodies and constructors. A closure body can reference any `_closure_fn_N` by name regardless of numbering. Three helpers extracted for readability: `resolve_closure_return_type`, `emit_closure_signature`, `emit_closure_env_typedef`. Regression test: `tests/syntax/test_closure_forward_references.ae`.
+
+- **Nested lambda's `return` mis-typed the enclosing closure** (`compiler/codegen/codegen_func.c`). `has_return_value` walked an AST subtree looking for return statements with values. A nested lambda's `return` bubbled up through the recursive walk and mis-typed the enclosing closure as `int` — producing `static int _closure_fn_N(...) { ...; }` with no return statement, undefined behavior caught by `-Wreturn-type`. One-line fix: `has_return_value` now stops at `AST_CLOSURE` boundaries so a nested closure's return belongs to that closure, not to any enclosing scope. Regression test: `tests/integration/closure_nested_return/` (compiles the generated C with `-Werror=return-type` and requires a clean build).
+
+- **Captures across nested trailing blocks** (`compiler/codegen/codegen_expr.c`). A variable declared inside a trailing block (e.g. `root = grid() { c = 42; ... }`) lives in the enclosing function's scope because trailing blocks are inlined at the call site, not hoisted. Previously a closure inside a sibling or nested trailing block could not capture such variables — capture discovery stopped at ANY `AST_CLOSURE`, including trailing-block closures (value == `"trailing"`), so names declared inside one trailing block were invisible to inner closures (`'c' undeclared` in generated C). Two scope-analysis helpers updated: `subtree_declares` now recurses through trailing-block closures while stopping at real closures; a new `scope_declares_at_top_level` helper is used by `is_top_level_decl_in_function` to walk trailing blocks but NOT nested if/for/while blocks — preserving the Python-style rule that `v = ref_get(num)` inside `if key == EQUAL { ... }` stays a block-local (examples/calculator-tui.ae still builds cleanly). Regression test: `tests/integration/closure_trailing_block_capture/`.
+
+  Design note worth flagging: the nested-trailing-block fix was subtler than it looked. A naive "recurse everywhere" version broke calculator-tui. The final version threads the needle — trailing blocks are transparent to scope lookup (they inline at the call site), but nested if/for/while blocks still aren't. That's the right answer mechanically (it matches how trailing blocks work at codegen time) but it's the kind of detail that could surface a different corner case later. Tracked in `docs/closure-lifetime-bugs.md` bugs 6-8.
+
 ## [0.67.0]
 
 ### Added
