@@ -778,8 +778,145 @@ static const char* lookup_var_c_type(CodeGenerator* gen, const char* var_name, c
     return "int"; // fallback
 }
 
-// Emit all hoisted closure environment structs and static functions
+// Resolve a closure's C return type from its body. Extracted so the
+// pre-pass (forward declarations) and main pass (bodies) agree on the
+// same signature. A closure with no return-value statements is void.
+// A closure whose return expression is `call(<captured_closure>)` gets
+// resolved through the captured closure's own body — the typechecker
+// leaves those as TYPE_INT by default which is almost always wrong for
+// call-of-call chains.
+static const char* resolve_closure_return_type(CodeGenerator* gen, int ci) {
+    ASTNode* closure = gen->closures[ci].closure_node;
+    const char* parent_func = gen->closures[ci].parent_func;
+    ASTNode* body_check = NULL;
+    for (int i = closure->child_count - 1; i >= 0; i--) {
+        if (closure->children[i] && closure->children[i]->type == AST_BLOCK) {
+            body_check = closure->children[i];
+            break;
+        }
+    }
+    int has_return = body_check ? has_return_value(body_check) : 0;
+    if (!has_return) return "void";
+    const char* ret_type = "int";
+    ASTNode* ret_expr = find_first_return_expr(body_check);
+    int resolved = 0;
+    if (ret_expr && ret_expr->type == AST_FUNCTION_CALL && ret_expr->value &&
+        strcmp(ret_expr->value, "call") == 0 &&
+        ret_expr->child_count >= 1 &&
+        ret_expr->children[0] &&
+        ret_expr->children[0]->type == AST_IDENTIFIER &&
+        ret_expr->children[0]->value) {
+        const char* callee = ret_expr->children[0]->value;
+        for (int cvi = 0; cvi < gen->closure_var_count; cvi++) {
+            if (gen->closure_var_map[cvi].var_name &&
+                strcmp(gen->closure_var_map[cvi].var_name, callee) == 0) {
+                int callee_id = gen->closure_var_map[cvi].closure_id;
+                for (int cj = 0; cj < gen->closure_count; cj++) {
+                    if (gen->closures[cj].id != callee_id) continue;
+                    ASTNode* callee_node = gen->closures[cj].closure_node;
+                    ASTNode* callee_body = NULL;
+                    for (int k = callee_node->child_count - 1; k >= 0; k--) {
+                        if (callee_node->children[k] &&
+                            callee_node->children[k]->type == AST_BLOCK) {
+                            callee_body = callee_node->children[k];
+                            break;
+                        }
+                    }
+                    ASTNode* callee_ret = callee_body ? find_first_return_expr(callee_body) : NULL;
+                    if (callee_ret) {
+                        if (callee_ret->node_type && callee_ret->node_type->kind != TYPE_UNKNOWN) {
+                            ret_type = get_c_type(callee_ret->node_type);
+                            resolved = 1;
+                        } else if (callee_ret->type == AST_IDENTIFIER && callee_ret->value) {
+                            ret_type = lookup_var_c_type(gen, callee_ret->value,
+                                                         gen->closures[cj].parent_func);
+                            resolved = 1;
+                        }
+                    }
+                    break;
+                }
+                break;
+            }
+        }
+    }
+    if (!resolved && ret_expr) {
+        if (ret_expr->node_type && ret_expr->node_type->kind != TYPE_UNKNOWN) {
+            ret_type = get_c_type(ret_expr->node_type);
+        } else if (ret_expr->type == AST_IDENTIFIER && ret_expr->value) {
+            ret_type = lookup_var_c_type(gen, ret_expr->value, parent_func);
+        }
+    }
+    return ret_type;
+}
+
+// Emit just the signature (no trailing `;` or `{`) of a closure function.
+// Caller appends `;\n` for forward decls or ` {\n` for bodies.
+static void emit_closure_signature(CodeGenerator* gen, int ci, const char* ret_type) {
+    int id = gen->closures[ci].id;
+    ASTNode* closure = gen->closures[ci].closure_node;
+    fprintf(gen->output, "static %s _closure_fn_%d(_closure_env_%d* _env", ret_type, id, id);
+    for (int i = 0; i < closure->child_count; i++) {
+        ASTNode* p = closure->children[i];
+        if (p && p->type == AST_CLOSURE_PARAM) {
+            const char* ptype = "int";
+            if (p->node_type) {
+                ptype = get_c_type(p->node_type);
+            }
+            fprintf(gen->output, ", %s %s", ptype, safe_c_name(p->value));
+        }
+    }
+    fprintf(gen->output, ")");
+}
+
+// Emit the env typedef for a closure.
+static void emit_closure_env_typedef(CodeGenerator* gen, int ci) {
+    int id = gen->closures[ci].id;
+    char** captures = gen->closures[ci].captures;
+    int cap_count = gen->closures[ci].capture_count;
+    const char* parent_func = gen->closures[ci].parent_func;
+    char** parent_promoted = NULL;
+    int parent_promoted_count = 0;
+    get_promoted_names_for_func(gen, parent_func, &parent_promoted, &parent_promoted_count);
+    fprintf(gen->output, "typedef struct {\n");
+    if (cap_count == 0) {
+        fprintf(gen->output, "    int _dummy;\n");
+    } else {
+        for (int i = 0; i < cap_count; i++) {
+            const char* ctype = lookup_var_c_type(gen, captures[i], parent_func);
+            int is_promoted = 0;
+            for (int p = 0; p < parent_promoted_count; p++) {
+                if (parent_promoted[p] && strcmp(parent_promoted[p], captures[i]) == 0) {
+                    is_promoted = 1;
+                    break;
+                }
+            }
+            if (is_promoted) {
+                fprintf(gen->output, "    %s* %s;\n", ctype, safe_c_name(captures[i]));
+            } else {
+                fprintf(gen->output, "    %s %s;\n", ctype, safe_c_name(captures[i]));
+            }
+        }
+    }
+    fprintf(gen->output, "} _closure_env_%d;\n\n", id);
+}
+
+// Emit all hoisted closure environment structs and static functions.
+// Two passes: pass 1 emits every env typedef and every function
+// prototype so a closure body can reference a later-numbered closure
+// (e.g. when an inline `|a,b| { ... }` lambda is passed as an argument
+// inside the outer closure's body). Pass 2 emits bodies + MSVC
+// constructor helpers.
 void emit_closure_definitions(CodeGenerator* gen) {
+    // Pass 1: forward declarations.
+    for (int ci = 0; ci < gen->closure_count; ci++) {
+        emit_closure_env_typedef(gen, ci);
+        const char* ret_type = resolve_closure_return_type(gen, ci);
+        emit_closure_signature(gen, ci, ret_type);
+        fprintf(gen->output, ";\n");
+    }
+    if (gen->closure_count > 0) fprintf(gen->output, "\n");
+
+    // Pass 2: bodies and constructors.
     for (int ci = 0; ci < gen->closure_count; ci++) {
         int id = gen->closures[ci].id;
         ASTNode* closure = gen->closures[ci].closure_node;
@@ -793,114 +930,9 @@ void emit_closure_definitions(CodeGenerator* gen) {
         int parent_promoted_count = 0;
         get_promoted_names_for_func(gen, parent_func, &parent_promoted, &parent_promoted_count);
 
-        // Emit environment struct (even if empty, for uniform calling convention)
-        fprintf(gen->output, "typedef struct {\n");
-        if (cap_count == 0) {
-            fprintf(gen->output, "    int _dummy;\n");
-        } else {
-            for (int i = 0; i < cap_count; i++) {
-                const char* ctype = lookup_var_c_type(gen, captures[i], parent_func);
-                int is_promoted = 0;
-                for (int p = 0; p < parent_promoted_count; p++) {
-                    if (parent_promoted[p] && strcmp(parent_promoted[p], captures[i]) == 0) {
-                        is_promoted = 1;
-                        break;
-                    }
-                }
-                if (is_promoted) {
-                    fprintf(gen->output, "    %s* %s;\n", ctype, safe_c_name(captures[i]));
-                } else {
-                    fprintf(gen->output, "    %s %s;\n", ctype, safe_c_name(captures[i]));
-                }
-            }
-        }
-        fprintf(gen->output, "} _closure_env_%d;\n\n", id);
-
-        // Determine return type. If the body has a return with a value,
-        // try to infer the C type from the returned expression — otherwise
-        // fall back to int. (The old hardcode to int broke any closure that
-        // returned a string or pointer.) A closure with no return-value
-        // statements is void.
-        int has_return = 0;
-        ASTNode* body_check = NULL;
-        for (int i = closure->child_count - 1; i >= 0; i--) {
-            if (closure->children[i] && closure->children[i]->type == AST_BLOCK) {
-                body_check = closure->children[i];
-                break;
-            }
-        }
-        if (body_check) {
-            has_return = has_return_value(body_check);
-        }
-        const char* ret_type = "void";
-        if (has_return) {
-            ret_type = "int";
-            ASTNode* ret_expr = find_first_return_expr(body_check);
-            // Prefer resolving through a known captured-closure target when
-            // the returned value is call(<captured>) — the typechecker leaves
-            // that as TYPE_INT by default, which is almost always wrong.
-            int resolved = 0;
-            if (ret_expr && ret_expr->type == AST_FUNCTION_CALL && ret_expr->value &&
-                strcmp(ret_expr->value, "call") == 0 &&
-                ret_expr->child_count >= 1 &&
-                ret_expr->children[0] &&
-                ret_expr->children[0]->type == AST_IDENTIFIER &&
-                ret_expr->children[0]->value) {
-                const char* callee = ret_expr->children[0]->value;
-                for (int ci = 0; ci < gen->closure_var_count; ci++) {
-                    if (gen->closure_var_map[ci].var_name &&
-                        strcmp(gen->closure_var_map[ci].var_name, callee) == 0) {
-                        int callee_id = gen->closure_var_map[ci].closure_id;
-                        for (int cj = 0; cj < gen->closure_count; cj++) {
-                            if (gen->closures[cj].id != callee_id) continue;
-                            ASTNode* callee_node = gen->closures[cj].closure_node;
-                            ASTNode* callee_body = NULL;
-                            for (int k = callee_node->child_count - 1; k >= 0; k--) {
-                                if (callee_node->children[k] &&
-                                    callee_node->children[k]->type == AST_BLOCK) {
-                                    callee_body = callee_node->children[k];
-                                    break;
-                                }
-                            }
-                            ASTNode* callee_ret = callee_body ? find_first_return_expr(callee_body) : NULL;
-                            if (callee_ret) {
-                                if (callee_ret->node_type && callee_ret->node_type->kind != TYPE_UNKNOWN) {
-                                    ret_type = get_c_type(callee_ret->node_type);
-                                    resolved = 1;
-                                } else if (callee_ret->type == AST_IDENTIFIER && callee_ret->value) {
-                                    ret_type = lookup_var_c_type(gen, callee_ret->value,
-                                                                 gen->closures[cj].parent_func);
-                                    resolved = 1;
-                                }
-                            }
-                            break;
-                        }
-                        break;
-                    }
-                }
-            }
-            if (!resolved && ret_expr) {
-                if (ret_expr->node_type && ret_expr->node_type->kind != TYPE_UNKNOWN) {
-                    ret_type = get_c_type(ret_expr->node_type);
-                } else if (ret_expr->type == AST_IDENTIFIER && ret_expr->value) {
-                    ret_type = lookup_var_c_type(gen, ret_expr->value, parent_func);
-                }
-            }
-        }
-
-        // Emit static function
-        fprintf(gen->output, "static %s _closure_fn_%d(_closure_env_%d* _env", ret_type, id, id);
-        for (int i = 0; i < closure->child_count; i++) {
-            ASTNode* p = closure->children[i];
-            if (p && p->type == AST_CLOSURE_PARAM) {
-                const char* ptype = "int"; // default
-                if (p->node_type) {
-                    ptype = get_c_type(p->node_type);
-                }
-                fprintf(gen->output, ", %s %s", ptype, safe_c_name(p->value));
-            }
-        }
-        fprintf(gen->output, ") {\n");
+        const char* ret_type = resolve_closure_return_type(gen, ci);
+        emit_closure_signature(gen, ci, ret_type);
+        fprintf(gen->output, " {\n");
 
         // Find body first so we can detect which captures are mutated.
         ASTNode* body = NULL;
