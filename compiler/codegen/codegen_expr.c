@@ -122,6 +122,64 @@ static ASTNode* find_receive_arm_by_name(ASTNode* node, const char* func_name) {
     return NULL;
 }
 
+// Forward declaration — subtree_declares is defined below but used here
+// to recurse through trailing-block closures while stopping at real
+// closures.
+static int subtree_declares(ASTNode* node, const char* var_name);
+
+// Does a block declare `var_name` at its top-level, treating trailing-
+// block closures as transparent (their contents inline at the call site)
+// but if/for/while blocks and real closures as opaque? Used by
+// is_top_level_decl_in_function so that a declaration inside a trailing
+// block (e.g. `root = grid() { c = 42 }`) is recognised as living in
+// the enclosing function's scope, while a declaration inside
+// `if cond { v = ... }` correctly stays block-local.
+static int scope_declares_at_top_level(ASTNode* block, const char* var_name) {
+    if (!block) return 0;
+    for (int k = 0; k < block->child_count; k++) {
+        ASTNode* s = block->children[k];
+        if (!s) continue;
+        if ((s->type == AST_VARIABLE_DECLARATION ||
+             s->type == AST_CONST_DECLARATION) &&
+            s->value && strcmp(s->value, var_name) == 0) {
+            return 1;
+        }
+        // Var decls whose initializer is a function call with a trailing
+        // block: `root = grid() { ... }`. The trailing block's body is
+        // part of the enclosing function's scope. Look into it.
+        // Same for bare function-call expression statements with trailing
+        // blocks.
+        ASTNode* call = NULL;
+        if (s->type == AST_VARIABLE_DECLARATION && s->child_count > 0 &&
+            s->children[0] && s->children[0]->type == AST_FUNCTION_CALL) {
+            call = s->children[0];
+        } else if (s->type == AST_EXPRESSION_STATEMENT && s->child_count > 0 &&
+                   s->children[0] && s->children[0]->type == AST_FUNCTION_CALL) {
+            call = s->children[0];
+        } else if (s->type == AST_FUNCTION_CALL) {
+            call = s;
+        }
+        if (call) {
+            for (int ci = 0; ci < call->child_count; ci++) {
+                ASTNode* arg = call->children[ci];
+                if (arg && arg->type == AST_CLOSURE &&
+                    arg->value && strcmp(arg->value, "trailing") == 0) {
+                    // Trailing block's body is this closure's (last) AST_BLOCK child.
+                    for (int bi = arg->child_count - 1; bi >= 0; bi--) {
+                        if (arg->children[bi] && arg->children[bi]->type == AST_BLOCK) {
+                            if (scope_declares_at_top_level(arg->children[bi], var_name)) {
+                                return 1;
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+}
+
 // Is `var_name` declared at the TOP level of the given function's body
 // block (or as a parameter) — i.e. in the function's "own" lexical scope,
 // not inside a nested if/for/while block? This is the scope that closures
@@ -170,18 +228,15 @@ static int is_top_level_decl_in_function(ASTNode* program, const char* func_name
             }
         }
         // Only TOP-LEVEL statements of the body block count — not nested
-        // if/for/while bodies.
+        // if/for/while bodies. But trailing-block closures ARE top-level
+        // for scoping purposes: they inline at the call site, so a
+        // declaration inside a trailing block binds in the enclosing
+        // function's scope. Walk through trailing blocks only, not
+        // through if/for/while blocks or real closures.
         for (int j = 0; j < top->child_count; j++) {
             ASTNode* body = top->children[j];
             if (!body || body->type != AST_BLOCK) continue;
-            for (int k = 0; k < body->child_count; k++) {
-                ASTNode* s = body->children[k];
-                if (s && (s->type == AST_VARIABLE_DECLARATION ||
-                          s->type == AST_CONST_DECLARATION) &&
-                    s->value && strcmp(s->value, var_name) == 0) {
-                    return 1;
-                }
-            }
+            if (scope_declares_at_top_level(body, var_name)) return 1;
         }
         return 0;
     }
@@ -193,7 +248,14 @@ static int is_top_level_decl_in_function(ASTNode* program, const char* func_name
 // to an inner scope, not the enclosing function's.
 static int subtree_declares(ASTNode* node, const char* var_name) {
     if (!node) return 0;
-    if (node->type == AST_CLOSURE) return 0;
+    // Stop at real closures — their locals don't belong to the enclosing
+    // function. But trailing-block closures (value == "trailing") are
+    // inlined at the call site, so they DO contribute declarations to
+    // the enclosing function's scope and must be traversed.
+    if (node->type == AST_CLOSURE &&
+        !(node->value && strcmp(node->value, "trailing") == 0)) {
+        return 0;
+    }
     if ((node->type == AST_VARIABLE_DECLARATION || node->type == AST_CONST_DECLARATION) &&
         node->value && strcmp(node->value, var_name) == 0) {
         return 1;
