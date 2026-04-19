@@ -324,15 +324,15 @@ static void discover_closures_scoped(CodeGenerator* gen, ASTNode* node, const ch
             }
         }
         if (cid_to_bind >= 0) {
-            int already = 0;
+            int existing_idx = -1;
             for (int ci = 0; ci < gen->closure_var_count; ci++) {
                 if (gen->closure_var_map[ci].var_name &&
                     strcmp(gen->closure_var_map[ci].var_name, node->value) == 0) {
-                    already = 1;
+                    existing_idx = ci;
                     break;
                 }
             }
-            if (!already) {
+            if (existing_idx < 0) {
                 if (gen->closure_var_count >= gen->closure_var_capacity) {
                     gen->closure_var_capacity = gen->closure_var_capacity ? gen->closure_var_capacity * 2 : 16;
                     gen->closure_var_map = realloc(gen->closure_var_map,
@@ -341,6 +341,13 @@ static void discover_closures_scoped(CodeGenerator* gen, ASTNode* node, const ch
                 gen->closure_var_map[gen->closure_var_count].var_name = strdup(node->value);
                 gen->closure_var_map[gen->closure_var_count].closure_id = cid_to_bind;
                 gen->closure_var_count++;
+            } else if (gen->closure_var_map[existing_idx].closure_id != cid_to_bind) {
+                // Variable was previously bound to a different closure
+                // (either via declaration or via an earlier reassignment).
+                // The variable's dynamic identity is no longer a single
+                // closure — mark ambiguous so call() falls back to generic
+                // function-pointer dispatch through .fn.
+                gen->closure_var_map[existing_idx].closure_id = -1;
             }
         }
     }
@@ -1530,12 +1537,17 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 // Looks up the closure's hoisted function signature and calls through it
                 else if (strcmp(func_name, "call") == 0 && expr->child_count >= 1) {
                     ASTNode* closure_arg = expr->children[0];
-                    // Look up the closure ID from the variable name
+                    // Look up the closure ID from the variable name. An entry
+                    // with closure_id == -1 means the variable was reassigned
+                    // to a different closure and has no single static identity;
+                    // treat it the same as "not found" and fall back to generic
+                    // function-pointer dispatch.
                     int found_id = -1;
                     if (closure_arg && closure_arg->type == AST_IDENTIFIER && closure_arg->value) {
                         for (int ci = 0; ci < gen->closure_var_count; ci++) {
                             if (strcmp(gen->closure_var_map[ci].var_name, closure_arg->value) == 0) {
-                                found_id = gen->closure_var_map[ci].closure_id;
+                                int cid = gen->closure_var_map[ci].closure_id;
+                                if (cid >= 0) found_id = cid;
                                 break;
                             }
                         }

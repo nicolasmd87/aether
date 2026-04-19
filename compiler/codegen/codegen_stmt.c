@@ -911,37 +911,65 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                             mark_heap_string_var(gen, stmt->value);
                         }
                     }
-                    // Record variable→closure mapping for closure invocation
+                    // Record variable→closure mapping for closure invocation.
+                    // If the variable was previously bound to a different
+                    // closure (e.g. reassigned from |a,b|->a+b to |a,b|->a*b),
+                    // mark the entry as ambiguous (closure_id = -1) so
+                    // call() falls back to generic function-pointer dispatch
+                    // through .fn — which always reflects the currently-stored
+                    // closure, not whichever one was first assigned.
                     if (stmt->child_count > 0 && stmt->children[0] &&
                         stmt->children[0]->type == AST_CLOSURE &&
                         stmt->children[0]->value && stmt->value) {
                         int cid = atoi(stmt->children[0]->value);
-                        if (gen->closure_var_count >= gen->closure_var_capacity) {
-                            gen->closure_var_capacity = gen->closure_var_capacity ? gen->closure_var_capacity * 2 : 16;
-                            gen->closure_var_map = realloc(gen->closure_var_map,
-                                gen->closure_var_capacity * sizeof(gen->closure_var_map[0]));
-                        }
-                        gen->closure_var_map[gen->closure_var_count].var_name = strdup(stmt->value);
-                        gen->closure_var_map[gen->closure_var_count].closure_id = cid;
-                        gen->closure_var_count++;
-
-                        // Emit deferred free for heap-allocated closure environments
-                        for (int ci = 0; ci < gen->closure_count; ci++) {
-                            if (gen->closures[ci].id == cid && gen->closures[ci].capture_count > 0) {
-                                // Create a synthetic defer: free(var.env)
-                                ASTNode* free_call = create_ast_node(AST_FUNCTION_CALL, "free",
-                                    stmt->line, stmt->column);
-                                char env_access[256];
-                                snprintf(env_access, sizeof(env_access), "%s.env", safe_c_name(stmt->value));
-                                ASTNode* env_arg = create_ast_node(AST_IDENTIFIER, env_access,
-                                    stmt->line, stmt->column);
-                                add_child(free_call, env_arg);
-                                // Wrap in expression statement so generate_statement handles it
-                                ASTNode* expr_stmt = create_ast_node(AST_EXPRESSION_STATEMENT, NULL,
-                                    stmt->line, stmt->column);
-                                add_child(expr_stmt, free_call);
-                                push_defer(gen, expr_stmt);
+                        int existing_idx = -1;
+                        for (int ci = 0; ci < gen->closure_var_count; ci++) {
+                            if (gen->closure_var_map[ci].var_name &&
+                                strcmp(gen->closure_var_map[ci].var_name, stmt->value) == 0) {
+                                existing_idx = ci;
                                 break;
+                            }
+                        }
+                        int is_first_assignment = (existing_idx < 0);
+                        if (existing_idx >= 0) {
+                            if (gen->closure_var_map[existing_idx].closure_id != cid) {
+                                gen->closure_var_map[existing_idx].closure_id = -1;
+                            }
+                        } else {
+                            if (gen->closure_var_count >= gen->closure_var_capacity) {
+                                gen->closure_var_capacity = gen->closure_var_capacity ? gen->closure_var_capacity * 2 : 16;
+                                gen->closure_var_map = realloc(gen->closure_var_map,
+                                    gen->closure_var_capacity * sizeof(gen->closure_var_map[0]));
+                            }
+                            gen->closure_var_map[gen->closure_var_count].var_name = strdup(stmt->value);
+                            gen->closure_var_map[gen->closure_var_count].closure_id = cid;
+                            gen->closure_var_count++;
+                        }
+
+                        // Emit deferred free for heap-allocated closure envs
+                        // only on the FIRST assignment — reassignment replaces
+                        // the env pointer in the variable, and the existing
+                        // defer will free whatever env is live at scope exit.
+                        // Pushing a second defer on reassignment would
+                        // double-free when the scope unwinds.
+                        if (is_first_assignment) {
+                            for (int ci = 0; ci < gen->closure_count; ci++) {
+                                if (gen->closures[ci].id == cid && gen->closures[ci].capture_count > 0) {
+                                    // Create a synthetic defer: free(var.env)
+                                    ASTNode* free_call = create_ast_node(AST_FUNCTION_CALL, "free",
+                                        stmt->line, stmt->column);
+                                    char env_access[256];
+                                    snprintf(env_access, sizeof(env_access), "%s.env", safe_c_name(stmt->value));
+                                    ASTNode* env_arg = create_ast_node(AST_IDENTIFIER, env_access,
+                                        stmt->line, stmt->column);
+                                    add_child(free_call, env_arg);
+                                    // Wrap in expression statement so generate_statement handles it
+                                    ASTNode* expr_stmt = create_ast_node(AST_EXPRESSION_STATEMENT, NULL,
+                                        stmt->line, stmt->column);
+                                    add_child(expr_stmt, free_call);
+                                    push_defer(gen, expr_stmt);
+                                    break;
+                                }
                             }
                         }
                     }
