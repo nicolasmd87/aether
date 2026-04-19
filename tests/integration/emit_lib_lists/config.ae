@@ -1,0 +1,35 @@
+// Return lists directly (not nested in a map) so the C host walks them
+// via aether_config_list_* accessors.
+
+import std.list
+
+primes_up_to_20() {
+    l = list.new()
+    list.add(l, 2)
+    list.add(l, 3)
+    list.add(l, 5)
+    list.add(l, 7)
+    list.add(l, 11)
+    list.add(l, 13)
+    list.add(l, 17)
+    list.add(l, 19)
+    return l
+}
+
+weekdays() {
+    l = list.new()
+    list.add(l, "Mon")
+    list.add(l, "Tue")
+    list.add(l, "Wed")
+    list.add(l, "Thu")
+    list.add(l, "Fri")
+    return l
+}
+
+empty_list() {
+    return list.new()
+}
+
+main() {
+    println("skipped in lib mode")
+}

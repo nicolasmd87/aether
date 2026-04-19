@@ -1,0 +1,6 @@
+import std.host
+
+add(a: int, b: int) {
+    notify("Computed", 1)
+    return a + b
+}

@@ -16,6 +16,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <ctype.h>
 #include <limits.h>
 #include <sys/stat.h>
 
@@ -95,12 +96,25 @@ typedef struct {
 
 static Toolchain tc = {0};
 
+// --emit=<exe|lib|both> for the current build. Set by cmd_build before
+// build_aetherc_cmd / build_gcc_cmd run; both helpers read these globals
+// to decide what flags to emit.
+static bool g_emit_exe = true;
+static bool g_emit_lib = false;
+
 // Build an aetherc command string with optional --lib flag
 static void build_aetherc_cmd(char* cmd, size_t cmd_size, const char* input, const char* output) {
+    const char* emit_flag = "";
+    if (g_emit_lib && g_emit_exe)      emit_flag = " --emit=both";
+    else if (g_emit_lib)               emit_flag = " --emit=lib";
+    // exe-only is the default; no flag needed.
+
     if (tc.lib_dir[0]) {
-        snprintf(cmd, cmd_size, "\"%s\" --lib \"%s\" \"%s\" \"%s\"", tc.compiler, tc.lib_dir, input, output);
+        snprintf(cmd, cmd_size, "\"%s\"%s --lib \"%s\" \"%s\" \"%s\"",
+                 tc.compiler, emit_flag, tc.lib_dir, input, output);
     } else {
-        snprintf(cmd, cmd_size, "\"%s\" \"%s\" \"%s\"", tc.compiler, input, output);
+        snprintf(cmd, cmd_size, "\"%s\"%s \"%s\" \"%s\"",
+                 tc.compiler, emit_flag, input, output);
     }
 }
 
@@ -692,6 +706,7 @@ found_root:
                 "%s/runtime/utils/aether_simd_vectorized.c "
                 "%s/runtime/aether_runtime.c "
                 "%s/runtime/aether_numa.c "
+                "%s/runtime/aether_host.c "
                 "%s/runtime/actors/aether_send_buffer.c "
                 "%s/runtime/actors/aether_send_message.c "
                 "%s/runtime/actors/aether_actor_thread.c "
@@ -717,7 +732,8 @@ found_root:
                 tc.root, tc.root, tc.root, tc.root, tc.root,
                 tc.root, tc.root, tc.root, tc.root, tc.root,
                 tc.root, tc.root, tc.root, tc.root, tc.root,
-                tc.root, tc.root, tc.root, tc.root, tc.root, tc.root);
+                tc.root, tc.root, tc.root, tc.root, tc.root,
+                tc.root, tc.root);
         }
     } else {
         // Installed layout: headers in include/aether/, source in share/aether/
@@ -767,6 +783,7 @@ found_root:
                 "%s/runtime/utils/aether_simd_vectorized.c "
                 "%s/runtime/aether_runtime.c "
                 "%s/runtime/aether_numa.c "
+                "%s/runtime/aether_host.c "
                 "%s/runtime/actors/aether_send_buffer.c "
                 "%s/runtime/actors/aether_send_message.c "
                 "%s/runtime/actors/aether_actor_thread.c "
@@ -792,7 +809,8 @@ found_root:
                 src, src, src, src, src,
                 src, src, src, src, src,
                 src, src, src, src, src,
-                src, src, src, src, src, src);
+                src, src, src, src, src,
+                src, src);
         }
     }
 }
@@ -1088,10 +1106,29 @@ static void build_gcc_cmd(char* cmd, size_t size,
         return;
     }
     char opt[600];
+    // --emit=lib adds -fPIC -shared so the output is loadable via dlopen.
+    // --emit=both (exe + lib from one source) is not supported by this
+    // helper — the caller should invoke it twice with different modes,
+    // or a future refactor can produce both artifacts in one gcc call.
+    const char* emit_lib_flags = (g_emit_lib && !g_emit_exe) ? "-fPIC -shared " : "";
     if (user_cflags[0])
-        snprintf(opt, sizeof(opt), "%s %s", optimize ? "-O2 -pipe" : "-O0 -g -pipe", user_cflags);
+        snprintf(opt, sizeof(opt), "%s%s %s", emit_lib_flags, optimize ? "-O2 -pipe" : "-O0 -g -pipe", user_cflags);
     else
-        snprintf(opt, sizeof(opt), "%s", optimize ? "-O2 -pipe" : "-O0 -g -pipe");
+        snprintf(opt, sizeof(opt), "%s%s", emit_lib_flags, optimize ? "-O2 -pipe" : "-O0 -g -pipe");
+
+    // Append aether_config.c to the compile when building a lib so the
+    // aether_config_* accessors are bundled into the .so. The .c file
+    // lives in runtime/ under dev mode and in include/aether/runtime/
+    // (or similar) on installed toolchains.
+    char config_c[2048] = "";
+    if (g_emit_lib) {
+        char candidate[2048];
+        snprintf(candidate, sizeof(candidate), "%s/runtime/aether_config.c", tc.root);
+        if (path_exists(candidate)) {
+            snprintf(config_c, sizeof(config_c), " \"%s\"", candidate);
+        }
+    }
+
     if (tc.has_lib) {
         char lib_dir[1024];
         strncpy(lib_dir, tc.lib, sizeof(lib_dir) - 1);
@@ -1100,12 +1137,12 @@ static void build_gcc_cmd(char* cmd, size_t size,
         if (slash) *slash = '\0';
 
         snprintf(cmd, size,
-            "gcc %s %s \"%s\" %s -L%s -laether -o \"%s\" -pthread -lm %s",
-            opt, tc.include_flags, c_file, extra, lib_dir, out_file, link_flags);
+            "gcc %s %s \"%s\"%s %s -L%s -laether -o \"%s\" -pthread -lm %s",
+            opt, tc.include_flags, c_file, config_c, extra, lib_dir, out_file, link_flags);
     } else {
         snprintf(cmd, size,
-            "gcc %s %s \"%s\" %s %s -o \"%s\" -pthread -lm %s",
-            opt, tc.include_flags, c_file, extra, tc.runtime_srcs, out_file, link_flags);
+            "gcc %s %s \"%s\"%s %s %s -o \"%s\" -pthread -lm %s",
+            opt, tc.include_flags, c_file, config_c, extra, tc.runtime_srcs, out_file, link_flags);
     }
 #endif
 }
@@ -1389,12 +1426,1648 @@ static int cmd_check(int argc, char** argv) {
     return run_cmd(cmd);
 }
 
+// Forward declaration — cmd_build_namespace delegates to cmd_build for the
+// actual link step, but cmd_build is defined further down.
+static int cmd_build(int argc, char** argv);
+
+// =============================================================================
+// Per-language SDK generation for `ae build --namespace`
+//
+// After the namespace .so is built, this layer reads the manifest JSON
+// and the function list (both via aetherc) and emits one host-language
+// SDK per binding target the manifest declared. v1: Python only; Java
+// follows in a separate chunk.
+//
+// The generated SDKs all use the same shape so the user experience is
+// consistent across languages:
+//   - construct an instance pointing at the .so
+//   - set_<input>(value) per input
+//   - on_<event>(callback) per event
+//   - <function>(args...) per script function
+//   - describe() returns the manifest
+// =============================================================================
+
+/* Captured manifest fields used during SDK generation. Mirrors the JSON
+ * shape; only the fields the generators need. */
+typedef struct {
+    char ns_name[128];
+    char py_module[128];
+    char rb_module[128];
+    char java_pkg[256];
+    char java_class[128];
+    int  input_count;
+    struct { char name[128]; char type[128]; } inputs[64];
+    int  event_count;
+    struct { char name[128]; char carries[64]; } events[64];
+} CapturedManifest;
+
+typedef struct {
+    char name[128];
+    char ret[64];
+    int  param_count;
+    struct { char name[128]; char type[64]; } params[16];
+} CapturedFunction;
+
+/* Run aetherc with the given args and capture stdout into out_buf. */
+static int aetherc_capture_stdout(const char* arg1, const char* in_path,
+                                  const char* arg2_or_null,
+                                  char* out_buf, size_t out_size) {
+    char cmd[4096];
+    if (arg2_or_null) {
+        snprintf(cmd, sizeof(cmd), "\"%s\" %s \"%s\" \"%s\"",
+                 tc.compiler, arg1, in_path, arg2_or_null);
+    } else {
+        snprintf(cmd, sizeof(cmd), "\"%s\" %s \"%s\" /dev/null",
+                 tc.compiler, arg1, in_path);
+    }
+    FILE* p = popen(cmd, "r");
+    if (!p) return -1;
+    size_t total = 0;
+    char buf[4096];
+    while (fgets(buf, sizeof(buf), p)) {
+        size_t n = strlen(buf);
+        if (total + n + 1 >= out_size) break;
+        memcpy(out_buf + total, buf, n);
+        total += n;
+    }
+    out_buf[total] = '\0';
+    return pclose(p);
+}
+
+/* Tiny ad-hoc JSON-ish field extractor. The aetherc JSON format is
+ * stable and one-line-per-array-element, so simple substring + scanf
+ * is sufficient — we don't pull in a real JSON parser. Returns 1 if
+ * the field was found, 0 otherwise. Output is the unescaped string
+ * content (no quotes); writes empty string on missing. */
+static int json_extract_string_field(const char* json, const char* key,
+                                     char* out, size_t out_size) {
+    out[0] = '\0';
+    /* Look for `"key":` */
+    char needle[160];
+    snprintf(needle, sizeof(needle), "\"%s\":", key);
+    const char* p = strstr(json, needle);
+    if (!p) return 0;
+    p += strlen(needle);
+    while (*p == ' ' || *p == '\t') p++;
+    if (*p == 'n' && strncmp(p, "null", 4) == 0) return 1; /* present, value null */
+    if (*p != '"') return 0;
+    p++;
+    size_t i = 0;
+    while (*p && *p != '"' && i + 1 < out_size) {
+        if (*p == '\\' && p[1]) {
+            char c = p[1];
+            if (c == 'n') out[i++] = '\n';
+            else if (c == 't') out[i++] = '\t';
+            else out[i++] = c;
+            p += 2;
+        } else {
+            out[i++] = *p++;
+        }
+    }
+    out[i] = '\0';
+    return 1;
+}
+
+/* Parse the manifest JSON produced by aetherc --emit-namespace-manifest.
+ * Returns 0 on success, -1 on failure. */
+static int parse_manifest_json(const char* json, CapturedManifest* m) {
+    memset(m, 0, sizeof(*m));
+    json_extract_string_field(json, "namespace", m->ns_name, sizeof(m->ns_name));
+
+    /* Bindings live under "bindings": { "java": { "package":, "class": },
+     * "python": { "module": }, "go": { "package": } }. Scope each
+     * sub-object before extracting so we don't grab the wrong "package"
+     * (java's vs go's). */
+    const char* java_obj   = strstr(json, "\"java\":");
+    const char* python_obj = strstr(json, "\"python\":");
+    const char* ruby_obj   = strstr(json, "\"ruby\":");
+    const char* go_obj     = strstr(json, "\"go\":");
+    if (java_obj)   {
+        json_extract_string_field(java_obj, "package", m->java_pkg,   sizeof(m->java_pkg));
+        json_extract_string_field(java_obj, "class",   m->java_class, sizeof(m->java_class));
+    }
+    if (python_obj) {
+        json_extract_string_field(python_obj, "module", m->py_module, sizeof(m->py_module));
+    }
+    if (ruby_obj) {
+        json_extract_string_field(ruby_obj, "module", m->rb_module, sizeof(m->rb_module));
+    }
+    /* Go binding stored but unused for now — emitter is a stub. */
+    (void)go_obj;
+
+    /* Inputs and events: each occurrence of `"name":` inside an array
+     * element marks a new entry. We scan linearly to keep declaration
+     * order. The JSON is one entry per pair like
+     *   {"name": "X", "type": "Y"} or {"name": "X", "carries": "Y"}.
+     */
+    const char* inputs_start = strstr(json, "\"inputs\":");
+    const char* events_start = strstr(json, "\"events\":");
+    const char* bindings_start = strstr(json, "\"bindings\":");
+    if (!inputs_start || !events_start || !bindings_start) return -1;
+
+    /* Walk inputs. */
+    const char* p = inputs_start;
+    while ((p = strstr(p, "{\"name\":")) && p < events_start) {
+        if (m->input_count >= 64) break;
+        json_extract_string_field(p, "name", m->inputs[m->input_count].name,
+                                  sizeof(m->inputs[0].name));
+        json_extract_string_field(p, "type", m->inputs[m->input_count].type,
+                                  sizeof(m->inputs[0].type));
+        m->input_count++;
+        p++;
+    }
+    /* Walk events. */
+    p = events_start;
+    while ((p = strstr(p, "{\"name\":")) && p < bindings_start) {
+        if (m->event_count >= 64) break;
+        json_extract_string_field(p, "name", m->events[m->event_count].name,
+                                  sizeof(m->events[0].name));
+        json_extract_string_field(p, "carries", m->events[m->event_count].carries,
+                                  sizeof(m->events[0].carries));
+        m->event_count++;
+        p++;
+    }
+    return 0;
+}
+
+/* Parse the function list `name|return|p1:t1,p2:t2,...` (one per line). */
+static int parse_function_list(const char* text, CapturedFunction* fns,
+                               int max_fns) {
+    int count = 0;
+    const char* p = text;
+    while (*p && count < max_fns) {
+        const char* eol = strchr(p, '\n');
+        if (!eol) break;
+        size_t line_len = eol - p;
+        if (line_len == 0) { p = eol + 1; continue; }
+
+        char line[1024];
+        if (line_len >= sizeof(line)) line_len = sizeof(line) - 1;
+        memcpy(line, p, line_len);
+        line[line_len] = '\0';
+
+        char* bar1 = strchr(line, '|');
+        if (!bar1) { p = eol + 1; continue; }
+        *bar1 = '\0';
+        char* bar2 = strchr(bar1 + 1, '|');
+        if (!bar2) { p = eol + 1; continue; }
+        *bar2 = '\0';
+
+        CapturedFunction* f = &fns[count];
+        memset(f, 0, sizeof(*f));
+        strncpy(f->name, line, sizeof(f->name) - 1);
+        strncpy(f->ret, bar1 + 1, sizeof(f->ret) - 1);
+
+        /* params: comma-separated name:type */
+        char* param_start = bar2 + 1;
+        while (*param_start && f->param_count < 16) {
+            char* comma = strchr(param_start, ',');
+            char piece[256];
+            size_t plen = comma ? (size_t)(comma - param_start) : strlen(param_start);
+            if (plen >= sizeof(piece)) plen = sizeof(piece) - 1;
+            memcpy(piece, param_start, plen);
+            piece[plen] = '\0';
+
+            char* colon = strchr(piece, ':');
+            if (colon) {
+                *colon = '\0';
+                strncpy(f->params[f->param_count].name, piece,
+                        sizeof(f->params[0].name) - 1);
+                strncpy(f->params[f->param_count].type, colon + 1,
+                        sizeof(f->params[0].type) - 1);
+                f->param_count++;
+            }
+
+            if (!comma) break;
+            param_start = comma + 1;
+        }
+
+        count++;
+        p = eol + 1;
+    }
+    return count;
+}
+
+/* Skip functions the user marked or the pipeline synthesized:
+ *   - main() is the synthesized empty entry
+ *   - setup() is the manifest-builder entry from manifest.ae (we don't
+ *     want to expose it as part of the namespace SDK) */
+static int is_skipped_function(const char* name) {
+    return strcmp(name, "main") == 0 || strcmp(name, "setup") == 0;
+}
+
+/* Map an Aether type spelling to a Python ctypes type name. Returns
+ * NULL if the type isn't representable in v1 — caller should skip the
+ * function with a warning. */
+static const char* py_ctype_for(const char* aether_type) {
+    if (strcmp(aether_type, "int")    == 0) return "ctypes.c_int32";
+    if (strcmp(aether_type, "long")   == 0) return "ctypes.c_int64";
+    if (strcmp(aether_type, "ulong")  == 0) return "ctypes.c_uint64";
+    if (strcmp(aether_type, "float")  == 0) return "ctypes.c_float";
+    if (strcmp(aether_type, "bool")   == 0) return "ctypes.c_int32";
+    if (strcmp(aether_type, "string") == 0) return "ctypes.c_char_p";
+    if (strcmp(aether_type, "ptr")    == 0) return "ctypes.c_void_p";
+    if (strcmp(aether_type, "void")   == 0) return "None";
+    return NULL;
+}
+
+/* Map an Aether type to a Ruby Fiddle type constant. Returns NULL for
+ * types not representable in v1 (caller should skip the function with
+ * a warning, same convention as Python and Java). */
+static const char* rb_fiddle_type_for(const char* aether_type) {
+    if (strcmp(aether_type, "int")    == 0) return "Fiddle::TYPE_INT";
+    if (strcmp(aether_type, "long")   == 0) return "Fiddle::TYPE_LONG_LONG";
+    if (strcmp(aether_type, "ulong")  == 0) return "Fiddle::TYPE_LONG_LONG";  /* unsigned view */
+    if (strcmp(aether_type, "float")  == 0) return "Fiddle::TYPE_FLOAT";
+    if (strcmp(aether_type, "bool")   == 0) return "Fiddle::TYPE_INT";
+    if (strcmp(aether_type, "string") == 0) return "Fiddle::TYPE_VOIDP";  /* C string ptr */
+    if (strcmp(aether_type, "ptr")    == 0) return "Fiddle::TYPE_VOIDP";
+    if (strcmp(aether_type, "void")   == 0) return "Fiddle::TYPE_VOID";
+    return NULL;
+}
+
+/* Convert snake_case to CamelCase for class / event method names. */
+static void to_camel(const char* in, char* out, size_t out_size) {
+    size_t i = 0;
+    int next_upper = 1;
+    for (const char* p = in; *p && i + 1 < out_size; p++) {
+        if (*p == '_') { next_upper = 1; continue; }
+        out[i++] = next_upper ? (char)toupper((unsigned char)*p) : *p;
+        next_upper = 0;
+    }
+    out[i] = '\0';
+}
+
+/* Convert PascalCase or camelCase to snake_case for Ruby method names.
+ * Inserts '_' before each uppercase that follows a lowercase or digit.
+ *   "OrderPlaced"   -> "order_placed"
+ *   "TradeKilled"   -> "trade_killed"
+ *   "HTTPResponse"  -> "http_response" (best-effort; consecutive caps
+ *                                       collapse into a single run). */
+static void to_snake(const char* in, char* out, size_t out_size) {
+    size_t i = 0;
+    for (const char* p = in; *p && i + 1 < out_size; p++) {
+        unsigned char c = (unsigned char)*p;
+        if (p > in && isupper(c)) {
+            unsigned char prev = (unsigned char)*(p - 1);
+            unsigned char next = (unsigned char)*(p + 1);
+            int prev_lower = islower(prev) || isdigit(prev);
+            int next_lower = next && islower(next);
+            if ((prev_lower || next_lower) && i + 1 < out_size) {
+                out[i++] = '_';
+            }
+        }
+        if (i + 1 < out_size) out[i++] = (char)tolower(c);
+    }
+    out[i] = '\0';
+}
+
+/* Generate the Python SDK file for a namespace. Single self-contained
+ * .py module — no imports beyond stdlib (ctypes, pathlib). */
+static int emit_python_sdk(const CapturedManifest* m,
+                           const CapturedFunction* fns, int fn_count,
+                           const char* lib_path,
+                           const char* out_dir) {
+    if (!m->py_module[0]) return 0;  /* no python binding declared */
+
+    char out_path[1024];
+    snprintf(out_path, sizeof(out_path), "%s/%s.py", out_dir, m->py_module);
+    FILE* f = fopen(out_path, "w");
+    if (!f) {
+        fprintf(stderr, "Error: cannot write %s\n", out_path);
+        return -1;
+    }
+
+    /* Convert namespace name to a Python class name (snake_case → CamelCase). */
+    char cls[128];
+    to_camel(m->ns_name, cls, sizeof(cls));
+
+    fprintf(f,
+"\"\"\"Auto-generated Aether namespace binding for `%s`.\n"
+"\n"
+"Do not edit by hand — regenerated by `ae build --namespace`.\n"
+"\n"
+"Usage:\n"
+"    from %s import %s\n"
+"    ns = %s()\n"
+"    ns.on_<event>(lambda id: ...)\n"
+"    ns.set_<input>(value)\n"
+"    result = ns.<function>(args)\n"
+"\"\"\"\n"
+"import ctypes\n"
+"import pathlib\n"
+"from typing import Callable, List, Optional\n"
+"\n",
+        m->ns_name, m->py_module, cls, cls);
+
+    /* Manifest mirror types — small dataclasses populated by walking the
+     * AetherNamespaceManifest struct returned by aether_describe(). The
+     * struct layout MUST match runtime/aether_host.h. */
+    fprintf(f,
+"# --- Discovery: mirror of AetherNamespaceManifest in runtime/aether_host.h.\n"
+"# Layout MUST stay in sync with the C struct — change both at once.\n"
+"\n"
+"class _InputDecl(ctypes.Structure):\n"
+"    _fields_ = [(\"name\", ctypes.c_char_p),\n"
+"                (\"type_signature\", ctypes.c_char_p)]\n"
+"\n"
+"class _EventDecl(ctypes.Structure):\n"
+"    _fields_ = [(\"name\", ctypes.c_char_p),\n"
+"                (\"carries_type\", ctypes.c_char_p)]\n"
+"\n"
+"class _JavaBinding(ctypes.Structure):\n"
+"    _fields_ = [(\"package_name\", ctypes.c_char_p),\n"
+"                (\"class_name\", ctypes.c_char_p)]\n"
+"\n"
+"class _PythonBinding(ctypes.Structure):\n"
+"    _fields_ = [(\"module_name\", ctypes.c_char_p)]\n"
+"\n"
+"class _RubyBinding(ctypes.Structure):\n"
+"    _fields_ = [(\"module_name\", ctypes.c_char_p)]\n"
+"\n"
+"class _GoBinding(ctypes.Structure):\n"
+"    _fields_ = [(\"package_name\", ctypes.c_char_p)]\n"
+"\n"
+"class _NamespaceManifest(ctypes.Structure):\n"
+"    _fields_ = [(\"namespace_name\", ctypes.c_char_p),\n"
+"                (\"input_count\", ctypes.c_int),\n"
+"                (\"inputs\", _InputDecl * 64),\n"
+"                (\"event_count\", ctypes.c_int),\n"
+"                (\"events\", _EventDecl * 64),\n"
+"                (\"java\", _JavaBinding),\n"
+"                (\"python\", _PythonBinding),\n"
+"                (\"ruby\", _RubyBinding),\n"
+"                (\"go\", _GoBinding)]\n"
+"\n"
+"\n"
+"class Manifest:\n"
+"    \"\"\"Typed view of the namespace's compile-time manifest.\"\"\"\n"
+"    def __init__(self, c_manifest: _NamespaceManifest):\n"
+"        self.namespace_name = c_manifest.namespace_name.decode() if c_manifest.namespace_name else None\n"
+"        self.inputs = [(c_manifest.inputs[i].name.decode(),\n"
+"                        c_manifest.inputs[i].type_signature.decode())\n"
+"                       for i in range(c_manifest.input_count)]\n"
+"        self.events = [(c_manifest.events[i].name.decode(),\n"
+"                        c_manifest.events[i].carries_type.decode())\n"
+"                       for i in range(c_manifest.event_count)]\n"
+"        self.java_package = c_manifest.java.package_name.decode() if c_manifest.java.package_name else None\n"
+"        self.java_class   = c_manifest.java.class_name.decode()   if c_manifest.java.class_name   else None\n"
+"        self.python_module = c_manifest.python.module_name.decode() if c_manifest.python.module_name else None\n"
+"        self.ruby_module   = c_manifest.ruby.module_name.decode()   if c_manifest.ruby.module_name   else None\n"
+"        self.go_package    = c_manifest.go.package_name.decode()    if c_manifest.go.package_name    else None\n"
+"\n"
+"    def __repr__(self):\n"
+"        return f\"Manifest(namespace={self.namespace_name!r}, inputs={self.inputs}, events={self.events})\"\n"
+"\n");
+
+    /* Default lib path — relative to where the .py lives. The user can
+     * override by passing lib_path to the constructor. */
+    const char* lib_basename = strrchr(lib_path, '/');
+    lib_basename = lib_basename ? lib_basename + 1 : lib_path;
+    fprintf(f,
+"# Default location of the namespace .so/.dylib. The constructor accepts\n"
+"# an override for projects that ship the lib elsewhere.\n"
+"_DEFAULT_LIB = pathlib.Path(__file__).parent / \"%s\"\n"
+"\n"
+"\n"
+"class %s:\n"
+"    \"\"\"Aether namespace `%s` exposed as a Python class.\"\"\"\n"
+"\n"
+"    def __init__(self, lib_path: Optional[str] = None):\n"
+"        self._lib = ctypes.CDLL(str(lib_path) if lib_path else str(_DEFAULT_LIB))\n"
+"        self._callbacks: List = []  # keep refs so the C side keeps working\n"
+"\n"
+"        # Discovery\n"
+"        self._lib.aether_describe.restype = ctypes.POINTER(_NamespaceManifest)\n"
+"        self._lib.aether_describe.argtypes = []\n"
+"\n"
+"        # Event registration (declared in runtime/aether_host.h)\n"
+"        self._event_handler_t = ctypes.CFUNCTYPE(None, ctypes.c_int64)\n"
+"        self._lib.aether_event_register.restype  = ctypes.c_int\n"
+"        self._lib.aether_event_register.argtypes = [ctypes.c_char_p, self._event_handler_t]\n"
+"\n",
+        lib_basename, cls, m->ns_name);
+
+    /* Bind each script function. */
+    for (int i = 0; i < fn_count; i++) {
+        const CapturedFunction* fn = &fns[i];
+        if (is_skipped_function(fn->name)) continue;
+
+        const char* ret_ct = py_ctype_for(fn->ret);
+        if (!ret_ct) {
+            fprintf(stderr, "Warning: skipping Python binding for %s — return type %s not supported\n",
+                    fn->name, fn->ret);
+            continue;
+        }
+
+        /* Verify all params are bindable. */
+        int ok = 1;
+        for (int p = 0; p < fn->param_count; p++) {
+            if (!py_ctype_for(fn->params[p].type)) {
+                fprintf(stderr, "Warning: skipping Python binding for %s — param %s has unsupported type %s\n",
+                        fn->name, fn->params[p].name, fn->params[p].type);
+                ok = 0;
+                break;
+            }
+        }
+        if (!ok) continue;
+
+        /* C-side aether_<name> bind: argtypes + restype. */
+        fprintf(f, "        self._lib.aether_%s.restype = %s\n", fn->name,
+                strcmp(fn->ret, "void") == 0 ? "None" : ret_ct);
+        fprintf(f, "        self._lib.aether_%s.argtypes = [", fn->name);
+        for (int p = 0; p < fn->param_count; p++) {
+            if (p > 0) fputs(", ", f);
+            fputs(py_ctype_for(fn->params[p].type), f);
+        }
+        fprintf(f, "]\n");
+    }
+
+    fprintf(f, "\n");
+
+    /* Per-input setter — stores Python-side, no C call yet (inputs are
+     * consumed by scripts at execution time; passing them through is
+     * future work tied to host_call(). For v1, set_<input> is a no-op
+     * placeholder so the API surface is consistent.) */
+    for (int i = 0; i < m->input_count; i++) {
+        char setter_name[160];
+        snprintf(setter_name, sizeof(setter_name), "set_%s", m->inputs[i].name);
+        fprintf(f,
+"    def %s(self, value):\n"
+"        \"\"\"Stash %s for the script to read. v1: stored on the instance only;\n"
+"        a future host_call() bridge will surface it to the running script.\"\"\"\n"
+"        self.%s = value\n"
+"\n",
+            setter_name, m->inputs[i].name, m->inputs[i].name);
+    }
+
+    /* Per-event registration. */
+    for (int i = 0; i < m->event_count; i++) {
+        const char* ev = m->events[i].name;
+        fprintf(f,
+"    def on_%s(self, handler: Callable[[int], None]):\n"
+"        \"\"\"Register a handler for the `%s` event. Holds the callback ref so\n"
+"        Python's GC doesn't reclaim the trampoline while C still has a pointer.\"\"\"\n"
+"        cb = self._event_handler_t(handler)\n"
+"        self._callbacks.append(cb)  # keepalive\n"
+"        rc = self._lib.aether_event_register(b\"%s\", cb)\n"
+"        if rc != 0:\n"
+"            raise RuntimeError(f\"aether_event_register(%s) failed: rc={rc}\")\n"
+"\n",
+            ev, ev, ev, ev);
+    }
+
+    /* Per-function method wrapper. */
+    for (int i = 0; i < fn_count; i++) {
+        const CapturedFunction* fn = &fns[i];
+        if (is_skipped_function(fn->name)) continue;
+        if (!py_ctype_for(fn->ret)) continue;
+        int ok = 1;
+        for (int p = 0; p < fn->param_count; p++) {
+            if (!py_ctype_for(fn->params[p].type)) { ok = 0; break; }
+        }
+        if (!ok) continue;
+
+        fprintf(f, "    def %s(self", fn->name);
+        for (int p = 0; p < fn->param_count; p++) {
+            fprintf(f, ", %s", fn->params[p].name);
+        }
+        fprintf(f, "):\n");
+        fprintf(f, "        \"\"\"Call the Aether function `%s`.\"\"\"\n", fn->name);
+
+        /* Marshal string args via .encode() */
+        for (int p = 0; p < fn->param_count; p++) {
+            if (strcmp(fn->params[p].type, "string") == 0) {
+                fprintf(f, "        _%s = %s.encode() if isinstance(%s, str) else %s\n",
+                        fn->params[p].name, fn->params[p].name,
+                        fn->params[p].name, fn->params[p].name);
+            }
+        }
+
+        fprintf(f, "        result = self._lib.aether_%s(", fn->name);
+        for (int p = 0; p < fn->param_count; p++) {
+            if (p > 0) fputs(", ", f);
+            if (strcmp(fn->params[p].type, "string") == 0) {
+                fprintf(f, "_%s", fn->params[p].name);
+            } else {
+                fprintf(f, "%s", fn->params[p].name);
+            }
+        }
+        fprintf(f, ")\n");
+
+        /* Unmarshal string return via .decode() */
+        if (strcmp(fn->ret, "string") == 0) {
+            fprintf(f, "        return result.decode() if result else None\n");
+        } else if (strcmp(fn->ret, "void") == 0) {
+            fprintf(f, "        return None\n");
+        } else {
+            fprintf(f, "        return result\n");
+        }
+        fprintf(f, "\n");
+    }
+
+    /* describe() */
+    fprintf(f,
+"    def describe(self) -> Manifest:\n"
+"        \"\"\"Return the namespace's compile-time manifest as a typed view.\"\"\"\n"
+"        ptr = self._lib.aether_describe()\n"
+"        if not ptr:\n"
+"            raise RuntimeError(\"aether_describe returned NULL\")\n"
+"        return Manifest(ptr.contents)\n");
+
+    fclose(f);
+    printf("Generated Python SDK: %s\n", out_path);
+    return 0;
+}
+
+/* Generate the Ruby SDK file. Single self-contained .rb that uses
+ * Fiddle (Ruby's stdlib FFI). Same shape as the Python SDK — the
+ * pattern translates almost line-for-line. The user-facing API:
+ *
+ *     require_relative 'calc_sdk'
+ *     ns = CalcSdk::Calc.new('./libcalc.so')
+ *     ns.set_limit(100)
+ *     ns.on_computed { |id| puts "computed #{id}" }
+ *     ns.double_it(7)               # => 14
+ *     ns.describe.namespace_name    # => "calc"
+ */
+static int emit_ruby_sdk(const CapturedManifest* m,
+                         const CapturedFunction* fns, int fn_count,
+                         const char* lib_path,
+                         const char* out_dir) {
+    if (!m->rb_module[0]) return 0;  /* no ruby binding declared */
+
+    char out_path[1024];
+    snprintf(out_path, sizeof(out_path), "%s/%s.rb", out_dir, m->rb_module);
+    FILE* f = fopen(out_path, "w");
+    if (!f) {
+        fprintf(stderr, "Error: cannot write %s\n", out_path);
+        return -1;
+    }
+
+    /* Module name from the manifest's `ruby("module")` declaration —
+     * conventionally snake_case. Class name is the namespace's name
+     * mapped to CamelCase. */
+    char outer_module[160];
+    to_camel(m->rb_module, outer_module, sizeof(outer_module));
+    char cls[128];
+    to_camel(m->ns_name, cls, sizeof(cls));
+
+    const char* lib_basename = strrchr(lib_path, '/');
+    lib_basename = lib_basename ? lib_basename + 1 : lib_path;
+
+    fprintf(f,
+"# Auto-generated Aether namespace binding for `%s`.\n"
+"#\n"
+"# Do not edit by hand — regenerated by `ae build --namespace`.\n"
+"#\n"
+"# Usage:\n"
+"#     require_relative '%s'\n"
+"#     ns = %s::%s.new\n"
+"#     ns.on_<event> { |id| ... }\n"
+"#     ns.set_<input>(value)\n"
+"#     result = ns.<function>(args)\n"
+"#\n"
+"# Requires Ruby's stdlib Fiddle module (ships with MRI Ruby 1.9.2+).\n"
+"require 'fiddle'\n"
+"require 'fiddle/import'\n"
+"\n"
+"module %s\n"
+"\n"
+"# Default location of the namespace .so/.dylib. Constructor accepts an\n"
+"# override for projects that ship the lib elsewhere.\n"
+"DEFAULT_LIB = File.expand_path('%s', __dir__)\n"
+"\n",
+        m->ns_name, m->rb_module, outer_module, cls, outer_module, lib_basename);
+
+    /* Manifest mirror — tied to runtime/aether_host.h. Layout MUST stay
+     * binary-compatible. */
+    fprintf(f,
+"# Mirror of AetherNamespaceManifest in runtime/aether_host.h.\n"
+"# Layout MUST stay in sync with the C struct — change both at once.\n"
+"# These mirror types are unused at runtime today (the Manifest class\n"
+"# walks the struct manually with raw pointer reads to avoid CStruct\n"
+"# version differences across Fiddle releases) but document the layout\n"
+"# for future readers.\n"
+"\n");
+
+    /* Manifest typed view — populated from the ptr returned by
+     * aether_describe. Walks the same fields as Python's Manifest class. */
+    fprintf(f,
+"class Manifest\n"
+"  attr_reader :namespace_name, :inputs, :events,\n"
+"              :java_package, :java_class, :python_module,\n"
+"              :ruby_module, :go_package\n"
+"\n"
+"  def initialize(raw_ptr)\n"
+"    base = raw_ptr.to_i\n"
+"    # namespace_name: const char* at offset 0\n"
+"    @namespace_name = _read_cstr_at(base, 0)\n"
+"    # input_count: int at offset 8 (after const char* on 64-bit)\n"
+"    input_count = _read_int_at(base, 8)\n"
+"    # inputs: AetherInputDecl[64] at offset 16 (4 bytes int + 4 padding)\n"
+"    @inputs = []\n"
+"    input_count.times do |i|\n"
+"      off = 16 + i * 16  # each entry: 2 pointers = 16 bytes on 64-bit\n"
+"      @inputs << [_read_cstr_at(base, off), _read_cstr_at(base, off + 8)]\n"
+"    end\n"
+"    # event_count: int at offset 16 + 16*64 = 1040\n"
+"    events_base = 16 + 16 * 64\n"
+"    event_count = _read_int_at(base, events_base)\n"
+"    @events = []\n"
+"    events_arr = events_base + 8  # skip int + 4 padding\n"
+"    event_count.times do |i|\n"
+"      off = events_arr + i * 16\n"
+"      @events << [_read_cstr_at(base, off), _read_cstr_at(base, off + 8)]\n"
+"    end\n"
+"    # bindings: AetherJavaBinding (16 bytes), AetherPythonBinding (8),\n"
+"    #          AetherRubyBinding (8), AetherGoBinding (8)\n"
+"    bindings = events_arr + 16 * 64\n"
+"    @java_package   = _read_cstr_at(base, bindings)\n"
+"    @java_class     = _read_cstr_at(base, bindings + 8)\n"
+"    @python_module  = _read_cstr_at(base, bindings + 16)\n"
+"    @ruby_module    = _read_cstr_at(base, bindings + 24)\n"
+"    @go_package     = _read_cstr_at(base, bindings + 32)\n"
+"  end\n"
+"\n"
+"  def to_s\n"
+"    \"Manifest(namespace=#{@namespace_name.inspect}, inputs=#{@inputs.size}, events=#{@events.size})\"\n"
+"  end\n"
+"\n"
+"  private\n"
+"\n"
+"  def _read_cstr_at(base, offset)\n"
+"    # Each pointer field is 8 bytes on 64-bit. Fiddle::Pointer.new(addr)\n"
+"    # gives us a typed view; reading the pointer slot then dereferencing\n"
+"    # the pointer yields the C string.\n"
+"    slot = Fiddle::Pointer.new(base + offset)\n"
+"    addr = slot[0, Fiddle::SIZEOF_VOIDP].unpack1('Q')\n"
+"    return nil if addr.zero?\n"
+"    Fiddle::Pointer.new(addr).to_s\n"
+"  end\n"
+"\n"
+"  def _read_int_at(base, offset)\n"
+"    slot = Fiddle::Pointer.new(base + offset)\n"
+"    slot[0, 4].unpack1('l')\n"
+"  end\n"
+"end\n"
+"\n");
+
+    /* The main SDK class. Wrap the Fiddle dlopen handle and bind every
+     * exported function once at constructor time. */
+    fprintf(f,
+"class %s\n"
+"  attr_accessor",
+        cls);
+    /* List the input ivars as accessors. */
+    for (int i = 0; i < m->input_count; i++) {
+        fprintf(f, "%s :%s", i == 0 ? "" : ",", m->inputs[i].name);
+    }
+    if (m->input_count == 0) fprintf(f, " :_unused");
+    fprintf(f, "\n\n");
+
+    fprintf(f,
+"  def initialize(lib_path = nil)\n"
+"    @lib = Fiddle.dlopen(lib_path || DEFAULT_LIB)\n"
+"    @callbacks = []  # keepalive — the C side holds raw fn pointers\n"
+"\n"
+"    # Discovery + event registration helpers from runtime/aether_host.h.\n"
+"    @h_aether_describe = Fiddle::Function.new(\n"
+"      @lib['aether_describe'], [], Fiddle::TYPE_VOIDP)\n"
+"    @h_aether_event_register = Fiddle::Function.new(\n"
+"      @lib['aether_event_register'],\n"
+"      [Fiddle::TYPE_VOIDP, Fiddle::TYPE_VOIDP],\n"
+"      Fiddle::TYPE_INT)\n"
+"\n");
+
+    /* Bind each script function. */
+    for (int i = 0; i < fn_count; i++) {
+        const CapturedFunction* fn = &fns[i];
+        if (is_skipped_function(fn->name)) continue;
+        const char* ret_ft = rb_fiddle_type_for(fn->ret);
+        if (!ret_ft) {
+            fprintf(stderr, "Warning: skipping Ruby binding for %s — return type %s not supported\n",
+                    fn->name, fn->ret);
+            continue;
+        }
+        int ok = 1;
+        for (int p = 0; p < fn->param_count; p++) {
+            if (!rb_fiddle_type_for(fn->params[p].type)) {
+                fprintf(stderr, "Warning: skipping Ruby binding for %s — param %s has unsupported type %s\n",
+                        fn->name, fn->params[p].name, fn->params[p].type);
+                ok = 0; break;
+            }
+        }
+        if (!ok) continue;
+
+        fprintf(f, "    @h_%s = Fiddle::Function.new(\n", fn->name);
+        fprintf(f, "      @lib['aether_%s'],\n", fn->name);
+        fprintf(f, "      [");
+        for (int p = 0; p < fn->param_count; p++) {
+            if (p > 0) fputs(", ", f);
+            fputs(rb_fiddle_type_for(fn->params[p].type), f);
+        }
+        fprintf(f, "],\n");
+        fprintf(f, "      %s)\n", ret_ft);
+    }
+    fprintf(f, "  end\n\n");
+
+    /* Per-input setter. Ruby has accessors above; setX wraps for symmetry
+     * with the Python/Java APIs. */
+    for (int i = 0; i < m->input_count; i++) {
+        fprintf(f,
+"  def set_%s(value)\n"
+"    # v1: stored on the instance only; future host_call() bridge will\n"
+"    # surface it to the running script.\n"
+"    @%s = value\n"
+"  end\n\n",
+            m->inputs[i].name, m->inputs[i].name);
+    }
+
+    /* Per-event handler with proper trampoline keepalive. Ruby methods
+     * are snake_case, so PascalCase event names (OrderPlaced) become
+     * on_order_placed. */
+    for (int i = 0; i < m->event_count; i++) {
+        const char* ev = m->events[i].name;
+        char ev_snake[160];
+        to_snake(ev, ev_snake, sizeof(ev_snake));
+        fprintf(f,
+"  # Register a handler for the `%s` event. The block receives the int64 id.\n"
+"  # Holds the trampoline ref so Ruby's GC doesn't reclaim it while C still\n"
+"  # has the function pointer.\n"
+"  def on_%s(&handler)\n"
+"    cb = Fiddle::Closure::BlockCaller.new(\n"
+"      Fiddle::TYPE_VOID, [Fiddle::TYPE_LONG_LONG], &handler)\n"
+"    @callbacks << cb  # keepalive\n"
+"    name_ptr = Fiddle::Pointer[\"%s\"]\n"
+"    rc = @h_aether_event_register.call(name_ptr, cb)\n"
+"    raise \"aether_event_register(%s) failed: rc=#{rc}\" if rc != 0\n"
+"  end\n\n",
+            ev, ev_snake, ev, ev);
+    }
+
+    /* Per-function method. Marshal strings to/from C string pointers. */
+    for (int i = 0; i < fn_count; i++) {
+        const CapturedFunction* fn = &fns[i];
+        if (is_skipped_function(fn->name)) continue;
+        if (!rb_fiddle_type_for(fn->ret)) continue;
+        int ok = 1;
+        for (int p = 0; p < fn->param_count; p++) {
+            if (!rb_fiddle_type_for(fn->params[p].type)) { ok = 0; break; }
+        }
+        if (!ok) continue;
+
+        fprintf(f, "  def %s(", fn->name);
+        for (int p = 0; p < fn->param_count; p++) {
+            if (p > 0) fputs(", ", f);
+            fprintf(f, "%s", fn->params[p].name);
+        }
+        fprintf(f, ")\n");
+
+        /* Marshal string args to Fiddle::Pointer wrapped C strings. */
+        for (int p = 0; p < fn->param_count; p++) {
+            if (strcmp(fn->params[p].type, "string") == 0) {
+                fprintf(f, "    _%s = %s.is_a?(String) ? Fiddle::Pointer[%s] : %s\n",
+                        fn->params[p].name, fn->params[p].name,
+                        fn->params[p].name, fn->params[p].name);
+            }
+        }
+
+        fprintf(f, "    result = @h_%s.call(", fn->name);
+        for (int p = 0; p < fn->param_count; p++) {
+            if (p > 0) fputs(", ", f);
+            if (strcmp(fn->params[p].type, "string") == 0) {
+                fprintf(f, "_%s", fn->params[p].name);
+            } else {
+                fprintf(f, "%s", fn->params[p].name);
+            }
+        }
+        fprintf(f, ")\n");
+
+        if (strcmp(fn->ret, "string") == 0) {
+            /* result is an integer address; wrap in Fiddle::Pointer to
+             * read the C string. */
+            fprintf(f,
+"    return nil if result.nil? || result == 0\n"
+"    Fiddle::Pointer.new(result.to_i).to_s\n");
+        } else if (strcmp(fn->ret, "void") == 0) {
+            fprintf(f, "    nil\n");
+        } else {
+            fprintf(f, "    result\n");
+        }
+        fprintf(f, "  end\n\n");
+    }
+
+    /* describe() */
+    fprintf(f,
+"  # Return the namespace's compile-time manifest as a typed view.\n"
+"  def describe\n"
+"    ptr = @h_aether_describe.call\n"
+"    raise 'aether_describe returned NULL' if ptr.nil? || ptr.to_i == 0\n"
+"    Manifest.new(Fiddle::Pointer.new(ptr.to_i))\n"
+"  end\n"
+"end  # class\n"
+"\n"
+"end  # module\n");
+
+    fclose(f);
+    printf("Generated Ruby SDK: %s\n", out_path);
+    return 0;
+}
+
+/* Map an Aether type to the Panama ValueLayout symbolic name (used in
+ * FunctionDescriptor) and to the Java method-handle invokeExact return
+ * cast / param type. Returns NULL if the type isn't representable. */
+static const char* java_layout_for(const char* aether_type) {
+    if (strcmp(aether_type, "int")    == 0) return "JAVA_INT";
+    if (strcmp(aether_type, "long")   == 0) return "JAVA_LONG";
+    if (strcmp(aether_type, "ulong")  == 0) return "JAVA_LONG";   /* signed view */
+    if (strcmp(aether_type, "float")  == 0) return "JAVA_FLOAT";
+    if (strcmp(aether_type, "bool")   == 0) return "JAVA_INT";
+    if (strcmp(aether_type, "string") == 0) return "ADDRESS";
+    if (strcmp(aether_type, "ptr")    == 0) return "ADDRESS";
+    return NULL;
+}
+static const char* java_jtype_for(const char* aether_type) {
+    if (strcmp(aether_type, "int")    == 0) return "int";
+    if (strcmp(aether_type, "long")   == 0) return "long";
+    if (strcmp(aether_type, "ulong")  == 0) return "long";
+    if (strcmp(aether_type, "float")  == 0) return "float";
+    if (strcmp(aether_type, "bool")   == 0) return "int";
+    if (strcmp(aether_type, "string") == 0) return "String";
+    if (strcmp(aether_type, "ptr")    == 0) return "MemorySegment";
+    if (strcmp(aether_type, "void")   == 0) return "void";
+    return NULL;
+}
+
+/* Convert snake_case to camelCase for Java method names. Simpler than
+ * to_camel above — Java methods start lowercase. */
+static void to_lower_camel(const char* in, char* out, size_t out_size) {
+    size_t i = 0;
+    int next_upper = 0;
+    int first = 1;
+    for (const char* p = in; *p && i + 1 < out_size; p++) {
+        if (*p == '_') { next_upper = 1; continue; }
+        if (first) { out[i++] = (char)tolower((unsigned char)*p); first = 0; }
+        else       { out[i++] = next_upper ? (char)toupper((unsigned char)*p) : *p; }
+        next_upper = 0;
+    }
+    out[i] = '\0';
+}
+
+/* Generate a Java SDK file. Targets Java 22+ (Panama stable). The
+ * generated class is self-contained — no external deps beyond the JDK
+ * — so consumers compile with `javac` and run with
+ *   java --enable-native-access=ALL-UNNAMED -cp ... MyApp
+ * (or the more restrictive --enable-native-access=<module>). */
+static int emit_java_sdk(const CapturedManifest* m,
+                         const CapturedFunction* fns, int fn_count,
+                         const char* lib_path,
+                         const char* out_dir) {
+    if (!m->java_class[0] || !m->java_pkg[0]) return 0;
+
+    /* package name → directory path: com.example.foo → com/example/foo */
+    char pkg_dir[1024];
+    snprintf(pkg_dir, sizeof(pkg_dir), "%s/%s", out_dir, m->java_pkg);
+    for (char* p = pkg_dir + strlen(out_dir); *p; p++) {
+        if (*p == '.') *p = '/';
+    }
+    mkdirs(pkg_dir);
+
+    char out_path[1280];
+    snprintf(out_path, sizeof(out_path), "%s/%s.java", pkg_dir, m->java_class);
+    FILE* f = fopen(out_path, "w");
+    if (!f) {
+        fprintf(stderr, "Error: cannot write %s\n", out_path);
+        return -1;
+    }
+
+    /* Default lib path — relative to the .java's compiled class location
+     * is brittle, so we accept a constructor argument and document the
+     * default as the basename of the .so for users who put both files
+     * side by side in their resources. */
+    const char* lib_basename = strrchr(lib_path, '/');
+    lib_basename = lib_basename ? lib_basename + 1 : lib_path;
+
+    fprintf(f,
+"/*\n"
+" * Auto-generated Aether namespace binding for `%s`.\n"
+" * Do not edit by hand — regenerated by `ae build --namespace`.\n"
+" *\n"
+" * Requires Java 22+ (Foreign Function & Memory API). Run with:\n"
+" *   java --enable-native-access=ALL-UNNAMED -cp ... YourApp\n"
+" *\n"
+" * Usage:\n"
+" *   %s.%s ns = new %s.%s(\"./%s\");\n"
+" *   ns.on<EventName>(id -> ...);\n"
+" *   ns.set<InputName>(value);\n"
+" *   var result = ns.<functionName>(args);\n"
+" */\n"
+"package %s;\n"
+"\n"
+"import java.lang.foreign.*;\n"
+"import java.lang.invoke.*;\n"
+"import java.nio.file.*;\n"
+"import java.util.*;\n"
+"import java.util.function.*;\n"
+"import static java.lang.foreign.ValueLayout.*;\n"
+"\n",
+        m->ns_name,
+        m->java_pkg, m->java_class, m->java_pkg, m->java_class, lib_basename,
+        m->java_pkg);
+
+    /* Class header + state. */
+    fprintf(f,
+"public class %s implements AutoCloseable {\n"
+"\n"
+"    private final Arena arena = Arena.ofShared();\n"
+"    private final SymbolLookup lib;\n"
+"    private final Linker linker = Linker.nativeLinker();\n"
+"\n"
+"    /** Holds upcall stubs so the JVM doesn't reclaim them while the\n"
+"     *  C side still has function pointers. */\n"
+"    private final List<MemorySegment> _callbackKeepalive = new ArrayList<>();\n"
+"\n",
+        m->java_class);
+
+    /* Cached method handles for every function + the runtime helpers. */
+    fprintf(f,
+"    private final MethodHandle h_aether_event_register;\n"
+"    private final MethodHandle h_aether_describe;\n");
+    for (int i = 0; i < fn_count; i++) {
+        const CapturedFunction* fn = &fns[i];
+        if (is_skipped_function(fn->name)) continue;
+        if (!java_jtype_for(fn->ret)) continue;
+        int ok = 1;
+        for (int p = 0; p < fn->param_count; p++) {
+            if (!java_jtype_for(fn->params[p].type)) { ok = 0; break; }
+        }
+        if (!ok) continue;
+        fprintf(f, "    private final MethodHandle h_%s;\n", fn->name);
+    }
+
+    /* Input fields (v1: stored on the instance, public so callers can
+     * also read them back). */
+    fprintf(f, "\n");
+    for (int i = 0; i < m->input_count; i++) {
+        /* Input types come from the manifest as freeform strings
+         * ("int", "string", "fn(string) -> bool", "map", etc.). For v1,
+         * Java fields are typed only when the type is in the simple
+         * vocabulary; everything else falls back to Object. */
+        const char* jt = java_jtype_for(m->inputs[i].type);
+        if (!jt) jt = "Object";
+        fprintf(f, "    public %s %s;\n", jt, m->inputs[i].name);
+    }
+    fprintf(f, "\n");
+
+    /* Constructor */
+    fprintf(f,
+"    public %s(String libPath) {\n"
+"        this.lib = SymbolLookup.libraryLookup(Path.of(libPath), arena);\n"
+"        h_aether_event_register = linker.downcallHandle(\n"
+"            lib.find(\"aether_event_register\").orElseThrow(),\n"
+"            FunctionDescriptor.of(JAVA_INT, ADDRESS, ADDRESS));\n"
+"        h_aether_describe = linker.downcallHandle(\n"
+"            lib.find(\"aether_describe\").orElseThrow(),\n"
+"            FunctionDescriptor.of(ADDRESS));\n",
+        m->java_class);
+
+    /* Bind each script function. */
+    for (int i = 0; i < fn_count; i++) {
+        const CapturedFunction* fn = &fns[i];
+        if (is_skipped_function(fn->name)) continue;
+        if (!java_jtype_for(fn->ret)) continue;
+        int ok = 1;
+        for (int p = 0; p < fn->param_count; p++) {
+            if (!java_jtype_for(fn->params[p].type)) { ok = 0; break; }
+        }
+        if (!ok) {
+            fprintf(stderr, "Warning: skipping Java binding for %s — unsupported type\n", fn->name);
+            continue;
+        }
+        fprintf(f, "        h_%s = linker.downcallHandle(\n", fn->name);
+        fprintf(f, "            lib.find(\"aether_%s\").orElseThrow(),\n", fn->name);
+        fprintf(f, "            FunctionDescriptor.");
+        if (strcmp(fn->ret, "void") == 0) {
+            fprintf(f, "ofVoid(");
+            for (int p = 0; p < fn->param_count; p++) {
+                if (p > 0) fputs(", ", f);
+                fputs(java_layout_for(fn->params[p].type), f);
+            }
+            fputs("));\n", f);
+        } else {
+            fprintf(f, "of(%s", java_layout_for(fn->ret));
+            for (int p = 0; p < fn->param_count; p++) {
+                fprintf(f, ", %s", java_layout_for(fn->params[p].type));
+            }
+            fputs("));\n", f);
+        }
+    }
+    fprintf(f, "    }\n\n");
+
+    /* Per-input setter (camelCase). */
+    for (int i = 0; i < m->input_count; i++) {
+        char setter[160];
+        char input_camel[160];
+        to_camel(m->inputs[i].name, input_camel, sizeof(input_camel));
+        snprintf(setter, sizeof(setter), "set%s", input_camel);
+        const char* jt = java_jtype_for(m->inputs[i].type);
+        if (!jt) jt = "Object";
+        fprintf(f,
+"    public void %s(%s value) {\n"
+"        /* v1: stored on the instance; future host_call() will surface to script. */\n"
+"        this.%s = value;\n"
+"    }\n\n",
+            setter, jt, m->inputs[i].name);
+    }
+
+    /* Per-event registrar: on<EventName>(LongConsumer handler). */
+    for (int i = 0; i < m->event_count; i++) {
+        const char* ev = m->events[i].name;
+        char ev_camel[160];
+        to_camel(ev, ev_camel, sizeof(ev_camel));
+        fprintf(f,
+"    public void on%s(LongConsumer handler) {\n"
+"        try {\n"
+"            /* Look up LongConsumer.accept (a public interface method) and\n"
+"             * bind to the user-supplied lambda. We don't bind directly\n"
+"             * via lookup().bind(handler, ...) because the lambda's class\n"
+"             * is nestmate-private and the lookup from this generated\n"
+"             * class can't reach it. */\n"
+"            MethodHandle target = MethodHandles.publicLookup()\n"
+"                .findVirtual(LongConsumer.class, \"accept\",\n"
+"                    MethodType.methodType(void.class, long.class))\n"
+"                .bindTo(handler);\n"
+"            MemorySegment stub = linker.upcallStub(\n"
+"                target,\n"
+"                FunctionDescriptor.ofVoid(JAVA_LONG),\n"
+"                arena);\n"
+"            _callbackKeepalive.add(stub);\n"
+"            int rc = (int) h_aether_event_register.invokeExact(\n"
+"                arena.allocateFrom(\"%s\"), stub);\n"
+"            if (rc != 0) throw new RuntimeException(\"aether_event_register %s: rc=\" + rc);\n"
+"        } catch (Throwable t) { throw new RuntimeException(t); }\n"
+"    }\n\n",
+            ev_camel, ev, ev);
+    }
+
+    /* Per-function method (lowerCamel). */
+    for (int i = 0; i < fn_count; i++) {
+        const CapturedFunction* fn = &fns[i];
+        if (is_skipped_function(fn->name)) continue;
+        if (!java_jtype_for(fn->ret)) continue;
+        int ok = 1;
+        for (int p = 0; p < fn->param_count; p++) {
+            if (!java_jtype_for(fn->params[p].type)) { ok = 0; break; }
+        }
+        if (!ok) continue;
+
+        char m_camel[160];
+        to_lower_camel(fn->name, m_camel, sizeof(m_camel));
+        const char* jret = java_jtype_for(fn->ret);
+
+        fprintf(f, "    public %s %s(", jret, m_camel);
+        for (int p = 0; p < fn->param_count; p++) {
+            if (p > 0) fputs(", ", f);
+            fprintf(f, "%s %s", java_jtype_for(fn->params[p].type), fn->params[p].name);
+        }
+        fprintf(f, ") {\n");
+        fprintf(f, "        try {\n");
+
+        /* Marshal string args via arena.allocateFrom. */
+        for (int p = 0; p < fn->param_count; p++) {
+            if (strcmp(fn->params[p].type, "string") == 0) {
+                fprintf(f, "            MemorySegment _%s = arena.allocateFrom(%s);\n",
+                        fn->params[p].name, fn->params[p].name);
+            }
+        }
+
+        /* Build the invokeExact arg list. */
+        const char* invoke_cast =
+            strcmp(jret, "void")  == 0 ? "" :
+            strcmp(jret, "int")   == 0 ? "(int) " :
+            strcmp(jret, "long")  == 0 ? "(long) " :
+            strcmp(jret, "float") == 0 ? "(float) " :
+            "(MemorySegment) ";
+
+        if (strcmp(jret, "void") == 0) {
+            fprintf(f, "            h_%s.invokeExact(", fn->name);
+        } else if (strcmp(fn->ret, "string") == 0) {
+            fprintf(f, "            MemorySegment _r = (MemorySegment) h_%s.invokeExact(", fn->name);
+        } else {
+            fprintf(f, "            return %sh_%s.invokeExact(", invoke_cast, fn->name);
+        }
+        for (int p = 0; p < fn->param_count; p++) {
+            if (p > 0) fputs(", ", f);
+            if (strcmp(fn->params[p].type, "string") == 0) {
+                fprintf(f, "_%s", fn->params[p].name);
+            } else {
+                fprintf(f, "%s", fn->params[p].name);
+            }
+        }
+        fprintf(f, ");\n");
+
+        if (strcmp(jret, "void") == 0) {
+            /* nothing to return */
+        } else if (strcmp(fn->ret, "string") == 0) {
+            fprintf(f,
+"            if (_r.equals(MemorySegment.NULL)) return null;\n"
+"            return _r.reinterpret(Long.MAX_VALUE).getString(0);\n");
+        }
+
+        fprintf(f,
+"        } catch (Throwable t) { throw new RuntimeException(t); }\n"
+"    }\n\n");
+    }
+
+    /* Manifest accessor — describe(). */
+    fprintf(f,
+"    /** Native-side manifest layout — must mirror runtime/aether_host.h. */\n"
+"    private static final MemoryLayout INPUT_DECL = MemoryLayout.structLayout(\n"
+"        ADDRESS.withName(\"name\"),\n"
+"        ADDRESS.withName(\"type_signature\"));\n"
+"    private static final MemoryLayout EVENT_DECL = MemoryLayout.structLayout(\n"
+"        ADDRESS.withName(\"name\"),\n"
+"        ADDRESS.withName(\"carries_type\"));\n"
+"\n"
+"    /** Typed view of the namespace's compile-time manifest. */\n"
+"    public static final class Manifest {\n"
+"        public final String namespaceName;\n"
+"        public final List<String[]> inputs;  // each: { name, type }\n"
+"        public final List<String[]> events;  // each: { name, carries }\n"
+"        public final String javaPackage, javaClass, pythonModule,\n"
+"                            rubyModule, goPackage;\n"
+"\n"
+"        Manifest(String ns, List<String[]> in, List<String[]> ev,\n"
+"                 String jp, String jc, String pm, String rm, String gp) {\n"
+"            this.namespaceName = ns;\n"
+"            this.inputs = in;\n"
+"            this.events = ev;\n"
+"            this.javaPackage = jp; this.javaClass = jc;\n"
+"            this.pythonModule = pm; this.rubyModule = rm;\n"
+"            this.goPackage = gp;\n"
+"        }\n"
+"        @Override public String toString() {\n"
+"            return \"Manifest(namespace=\\\"\" + namespaceName + \"\\\", inputs=\" + inputs.size()\n"
+"                + \", events=\" + events.size() + \")\";\n"
+"        }\n"
+"    }\n"
+"\n"
+"    /** Walk the AetherNamespaceManifest static struct in the .so and\n"
+"     *  return a typed copy. Layout must stay in sync with the C struct. */\n"
+"    public Manifest describe() {\n"
+"        try {\n"
+"            MemorySegment p = (MemorySegment) h_aether_describe.invokeExact();\n"
+"            if (p.equals(MemorySegment.NULL))\n"
+"                throw new RuntimeException(\"aether_describe returned NULL\");\n"
+"            MemorySegment view = p.reinterpret(8 + 4 + 16 * 64 + 4 + 16 * 64 + 16 + 8 + 8 + 8 + 8);\n"
+"            String ns = view.get(ADDRESS, 0).reinterpret(Long.MAX_VALUE).getString(0);\n"
+"            int inputCount = view.get(JAVA_INT, 8);\n"
+"            List<String[]> inputs = new ArrayList<>();\n"
+"            long base = 16; // after namespace_name(8) + input_count(4) + 4 padding\n"
+"            for (int i = 0; i < inputCount; i++) {\n"
+"                long off = base + (long)i * 16;\n"
+"                MemorySegment nm = view.get(ADDRESS, off);\n"
+"                MemorySegment ty = view.get(ADDRESS, off + 8);\n"
+"                inputs.add(new String[]{\n"
+"                    nm.equals(MemorySegment.NULL) ? null : nm.reinterpret(Long.MAX_VALUE).getString(0),\n"
+"                    ty.equals(MemorySegment.NULL) ? null : ty.reinterpret(Long.MAX_VALUE).getString(0)});\n"
+"            }\n"
+"            long eventsBase = 16 + 16L * 64;     // after inputs[64]\n"
+"            int eventCount = view.get(JAVA_INT, eventsBase);\n"
+"            long eventsArr = eventsBase + 8;     // skip int+pad\n"
+"            List<String[]> events = new ArrayList<>();\n"
+"            for (int i = 0; i < eventCount; i++) {\n"
+"                long off = eventsArr + (long)i * 16;\n"
+"                MemorySegment nm = view.get(ADDRESS, off);\n"
+"                MemorySegment ca = view.get(ADDRESS, off + 8);\n"
+"                events.add(new String[]{\n"
+"                    nm.equals(MemorySegment.NULL) ? null : nm.reinterpret(Long.MAX_VALUE).getString(0),\n"
+"                    ca.equals(MemorySegment.NULL) ? null : ca.reinterpret(Long.MAX_VALUE).getString(0)});\n"
+"            }\n"
+"            long bindings = eventsArr + 16L * 64;\n"
+"            MemorySegment jp = view.get(ADDRESS, bindings);\n"
+"            MemorySegment jc = view.get(ADDRESS, bindings + 8);\n"
+"            MemorySegment pm = view.get(ADDRESS, bindings + 16);\n"
+"            MemorySegment rm = view.get(ADDRESS, bindings + 24);\n"
+"            MemorySegment gp = view.get(ADDRESS, bindings + 32);\n"
+"            return new Manifest(ns, inputs, events,\n"
+"                jp.equals(MemorySegment.NULL) ? null : jp.reinterpret(Long.MAX_VALUE).getString(0),\n"
+"                jc.equals(MemorySegment.NULL) ? null : jc.reinterpret(Long.MAX_VALUE).getString(0),\n"
+"                pm.equals(MemorySegment.NULL) ? null : pm.reinterpret(Long.MAX_VALUE).getString(0),\n"
+"                rm.equals(MemorySegment.NULL) ? null : rm.reinterpret(Long.MAX_VALUE).getString(0),\n"
+"                gp.equals(MemorySegment.NULL) ? null : gp.reinterpret(Long.MAX_VALUE).getString(0));\n"
+"        } catch (Throwable t) { throw new RuntimeException(t); }\n"
+"    }\n"
+"\n"
+"    @Override public void close() { arena.close(); }\n"
+"}\n");
+
+    fclose(f);
+    printf("Generated Java SDK: %s\n", out_path);
+    return 0;
+}
+
+/* Driver: gather manifest + function list, dispatch to per-language emitters. */
+static void emit_namespace_bindings(const char* manifest_path,
+                                    const char* concat_path,
+                                    const char* lib_path,
+                                    const char* dir) {
+    /* Run aetherc --emit-namespace-manifest to capture JSON. */
+    char json[16384];
+    if (aetherc_capture_stdout("--emit-namespace-manifest", manifest_path,
+                               NULL, json, sizeof(json)) != 0) {
+        fprintf(stderr, "Warning: --emit-namespace-manifest failed; skipping SDK generation\n");
+        return;
+    }
+
+    CapturedManifest m;
+    if (parse_manifest_json(json, &m) != 0) {
+        fprintf(stderr, "Warning: could not parse manifest JSON; skipping SDK generation\n");
+        return;
+    }
+
+    /* Run aetherc --list-functions on the synthetic concat file. */
+    char fn_list[16384];
+    if (aetherc_capture_stdout("--list-functions", concat_path,
+                               NULL, fn_list, sizeof(fn_list)) != 0) {
+        fprintf(stderr, "Warning: --list-functions failed; skipping SDK generation\n");
+        return;
+    }
+
+    CapturedFunction fns[64];
+    int fn_count = parse_function_list(fn_list, fns, 64);
+
+    /* Determine where to write SDKs. Place them next to the .so so
+     * users can `cp libfoo.so foo_module.py /target/` together. */
+    char out_dir[1024];
+    strncpy(out_dir, lib_path, sizeof(out_dir) - 1);
+    out_dir[sizeof(out_dir) - 1] = '\0';
+    char* slash = strrchr(out_dir, '/');
+    if (slash) *slash = '\0';
+    else strcpy(out_dir, ".");
+
+    if (m.py_module[0]) {
+        emit_python_sdk(&m, fns, fn_count, lib_path, out_dir);
+    }
+    if (m.rb_module[0]) {
+        emit_ruby_sdk(&m, fns, fn_count, lib_path, out_dir);
+    }
+    if (m.java_class[0] && m.java_pkg[0]) {
+        emit_java_sdk(&m, fns, fn_count, lib_path, out_dir);
+    }
+
+    (void)dir;  /* may be needed for relative-path resolution later */
+}
+
+// =============================================================================
+// `ae build --namespace <dir>` — build a namespace into a single .so
+//
+// A namespace is a directory containing:
+//   - manifest.ae               (declares namespace name, inputs, events,
+//                                 bindings — see std.host module DSL)
+//   - one or more sibling *.ae  (contribute their top-level functions
+//                                 to the namespace; auto-discovered by
+//                                 directory convention)
+//
+// The pipeline:
+//   1. Find <dir>/manifest.ae. Error if missing.
+//   2. Run aetherc --emit-namespace-describe to produce a .c stub
+//      containing the static AetherNamespaceManifest + aether_describe().
+//   3. Discover sibling .ae files (everything under <dir> except
+//      manifest.ae and files marked @private — annotation deferred to
+//      a later chunk; for v1 every sibling is included).
+//   4. Concatenate all sibling .ae files into one synthetic .ae and
+//      compile via the existing --emit=lib pipeline. (Single-file
+//      compile fits the one-file-per-build constraint of aetherc.)
+//   5. Link the describe.c stub alongside the resulting .c into a
+//      single libnamespace.so.
+//
+// The default output is lib<namespace>.so (or .dylib on macOS), placed
+// in the current directory unless -o is supplied.
+// =============================================================================
+
+#include <dirent.h>
+
+int cmd_build_namespace(int argc, char** argv) {
+    const char* dir = NULL;
+    const char* output_name = NULL;
+
+    for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "--namespace") == 0 && i + 1 < argc) {
+            dir = argv[++i];
+        } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
+            output_name = argv[++i];
+        }
+    }
+
+    if (!dir) {
+        fprintf(stderr, "Error: --namespace requires a directory argument\n");
+        return 1;
+    }
+    if (!dir_exists(dir)) {
+        fprintf(stderr, "Error: namespace directory '%s' not found\n", dir);
+        return 1;
+    }
+
+    char manifest_path[1024];
+    snprintf(manifest_path, sizeof(manifest_path), "%s/manifest.ae", dir);
+    if (!path_exists(manifest_path)) {
+        fprintf(stderr, "Error: %s not found — every namespace needs a manifest.ae\n", manifest_path);
+        return 1;
+    }
+
+#ifdef __APPLE__
+    const char* lib_ext = ".dylib";
+#elif defined(_WIN32)
+    const char* lib_ext = ".dll";
+#else
+    const char* lib_ext = ".so";
+#endif
+
+    /* Set up a temp workspace for the synthesized .ae, the .c outputs,
+     * and the describe stub. Nothing here outlives the build. */
+    char tmpdir[1024];
+    snprintf(tmpdir, sizeof(tmpdir), "%s/aether_ns_%d", get_temp_dir(), (int)getpid());
+    mkdirs(tmpdir);
+
+    /* Step 1: produce the describe.c stub from manifest.ae. */
+    char describe_c[1024];
+    snprintf(describe_c, sizeof(describe_c), "%s/aether_describe.c", tmpdir);
+    char cmd[16384];
+    snprintf(cmd, sizeof(cmd),
+        "\"%s\" --emit-namespace-describe \"%s\" \"%s\"",
+        tc.compiler, manifest_path, describe_c);
+    if (run_cmd_quiet(cmd) != 0) {
+        fprintf(stderr, "Error: aetherc --emit-namespace-describe failed\n");
+        fprintf(stderr, "       cmd: %s\n", cmd);
+        return 1;
+    }
+    if (!path_exists(describe_c)) {
+        fprintf(stderr, "Error: describe stub was not produced at %s\n", describe_c);
+        return 1;
+    }
+
+    /* Step 2: discover sibling .ae files (skip manifest.ae). Sort by
+     * name for reproducible build output. */
+    DIR* d = opendir(dir);
+    if (!d) {
+        fprintf(stderr, "Error: opendir(%s) failed\n", dir);
+        return 1;
+    }
+    char  siblings[64][512];
+    int   sibling_count = 0;
+    struct dirent* ent;
+    while ((ent = readdir(d)) != NULL) {
+        const char* name = ent->d_name;
+        size_t n = strlen(name);
+        if (n < 4) continue;
+        if (strcmp(name + n - 3, ".ae") != 0) continue;
+        if (strcmp(name, "manifest.ae") == 0) continue;
+        if (sibling_count >= 64) break;
+        snprintf(siblings[sibling_count++], 512, "%s/%s", dir, name);
+    }
+    closedir(d);
+
+    if (sibling_count == 0) {
+        fprintf(stderr, "Error: namespace '%s' contains a manifest but no scripts (*.ae)\n", dir);
+        return 1;
+    }
+
+    /* sort with qsort+strcmp for determinism */
+    for (int i = 1; i < sibling_count; i++) {
+        for (int j = i; j > 0 && strcmp(siblings[j], siblings[j-1]) < 0; j--) {
+            char tmp[512];
+            strncpy(tmp, siblings[j], sizeof(tmp));
+            strncpy(siblings[j], siblings[j-1], sizeof(siblings[j]));
+            strncpy(siblings[j-1], tmp, sizeof(siblings[j-1]));
+        }
+    }
+
+    /* Step 3: concatenate the siblings into one synthetic .ae. We
+     * deduplicate `import` lines (a script uses `import std.host` for
+     * notify/manifest builders; concatenating two such siblings would
+     * import twice). Everything else passes through unchanged. */
+    char concat_path[1024];
+    snprintf(concat_path, sizeof(concat_path), "%s/_namespace.ae", tmpdir);
+    FILE* concat = fopen(concat_path, "w");
+    if (!concat) { perror("fopen concat"); return 1; }
+
+    /* Track imports we've already emitted to avoid duplicates. */
+    char seen_imports[64][128];
+    int  seen_count = 0;
+    int  has_main = 0;
+
+    for (int i = 0; i < sibling_count; i++) {
+        FILE* in = fopen(siblings[i], "r");
+        if (!in) {
+            fprintf(stderr, "Error: cannot read sibling %s\n", siblings[i]);
+            fclose(concat);
+            return 1;
+        }
+        fprintf(concat, "// === from %s ===\n", siblings[i]);
+        char line[2048];
+        while (fgets(line, sizeof(line), in)) {
+            /* Detect duplicate import lines. */
+            const char* p = line;
+            while (*p == ' ' || *p == '\t') p++;
+            if (strncmp(p, "import ", 7) == 0) {
+                int dup = 0;
+                for (int s = 0; s < seen_count; s++) {
+                    if (strcmp(seen_imports[s], p) == 0) { dup = 1; break; }
+                }
+                if (dup) continue;
+                if (seen_count < 64) {
+                    strncpy(seen_imports[seen_count], p, sizeof(seen_imports[0]) - 1);
+                    seen_imports[seen_count][sizeof(seen_imports[0]) - 1] = '\0';
+                    seen_count++;
+                }
+            }
+            /* Skip duplicate main()s — keep only the first. */
+            if (strncmp(p, "main(", 5) == 0 || strncmp(p, "main (", 6) == 0) {
+                if (has_main) {
+                    /* Skip until matching close brace. Naive but
+                     * sufficient for a synthesized namespace where
+                     * scripts shouldn't normally have main(). */
+                    int depth = 0;
+                    int seen_open = 0;
+                    while (fgets(line, sizeof(line), in)) {
+                        for (char* q = line; *q; q++) {
+                            if (*q == '{') { depth++; seen_open = 1; }
+                            else if (*q == '}') { depth--; if (seen_open && depth <= 0) goto done_main; }
+                        }
+                    }
+                done_main:
+                    continue;
+                }
+                has_main = 1;
+            }
+            fputs(line, concat);
+        }
+        fputs("\n", concat);
+        fclose(in);
+    }
+
+    /* If no script declared main(), emit a synthetic one so --emit=lib
+     * is happy (it tolerates main() but the lib drops it). */
+    if (!has_main) {
+        fputs("\nmain() {}\n", concat);
+    }
+    fclose(concat);
+
+    /* Step 4: derive the output library path. The artifacts live INSIDE
+     * <dir> by default so they sit next to the manifest and scripts that
+     * produced them — easy to ship as a unit. -o overrides that.
+     *
+     * Naming: lib<basename>.so (or .dylib), where <basename> is the
+     * tail component of <dir>:
+     *   --namespace trading/   →  trading/libtrading.so
+     *   --namespace .          →  ./lib<cwd_basename>.so
+     */
+    /* Normalize dir: strip trailing slash so target_dir works for both
+     * "aether" and "aether/". */
+    char target_dir[1024];
+    {
+        strncpy(target_dir, dir, sizeof(target_dir) - 1);
+        target_dir[sizeof(target_dir) - 1] = '\0';
+        size_t dlen = strlen(target_dir);
+        while (dlen > 1 && target_dir[dlen - 1] == '/') {
+            target_dir[--dlen] = '\0';
+        }
+    }
+
+    /* Derive the library basename. Prefer -o, then the manifest's
+     * namespace name (read by re-invoking aetherc to dump the JSON
+     * manifest), then the directory's basename as a fallback. The
+     * manifest name is what users actually want — `namespace("trading")`
+     * → libtrading.so. */
+    char base_name[512];
+    if (output_name) {
+        strncpy(base_name, output_name, sizeof(base_name) - 1);
+        base_name[sizeof(base_name) - 1] = '\0';
+    } else {
+        char ns_json[16384];
+        char ns_name[256] = "";
+        if (aetherc_capture_stdout("--emit-namespace-manifest", manifest_path,
+                                   NULL, ns_json, sizeof(ns_json)) == 0) {
+            json_extract_string_field(ns_json, "namespace", ns_name, sizeof(ns_name));
+        }
+        if (ns_name[0]) {
+            strncpy(base_name, ns_name, sizeof(base_name) - 1);
+            base_name[sizeof(base_name) - 1] = '\0';
+        } else {
+            /* Fallback: directory basename. */
+            const char* base = target_dir;
+            if (strcmp(target_dir, ".") == 0) {
+                char cwd[1024];
+                if (getcwd(cwd, sizeof(cwd))) {
+                    const char* slash = strrchr(cwd, '/');
+                    base = slash ? slash + 1 : cwd;
+                }
+            } else {
+                const char* slash = strrchr(target_dir, '/');
+                if (slash) base = slash + 1;
+            }
+            strncpy(base_name, base, sizeof(base_name) - 1);
+            base_name[sizeof(base_name) - 1] = '\0';
+        }
+    }
+
+    /* Full output path with lib<base><ext>, anchored under target_dir. */
+    char out_path[1280];
+    snprintf(out_path, sizeof(out_path), "%s/lib%s%s", target_dir, base_name, lib_ext);
+
+    /* Step 5: build the synthetic .ae as --emit=lib, then re-link with
+     * the describe.c stub appended. We piggy-back on the existing
+     * pipeline: invoke cmd_build with --emit=lib --extra <describe.c>.
+     * cmd_build's output-name override (lib<X>.so) only fires when -o
+     * is omitted; we pass an explicit -o that already has the lib<>
+     * prefix and the .ext, but cmd_build appends EXE_EXT to the -o
+     * value as-is. To make sure no extra extension creeps in, we strip
+     * the trailing lib_ext and let cmd_build's lib-mode logic re-add
+     * it (or actually, since we pass -o, cmd_build uses the value
+     * literally — see cmd_build l.1532). So pass the path WITHOUT
+     * the .so/.dylib/.dll suffix and let cmd_build's existing override
+     * take effect. */
+    char out_no_ext[1024];
+    strncpy(out_no_ext, out_path, sizeof(out_no_ext) - 1);
+    out_no_ext[sizeof(out_no_ext) - 1] = '\0';
+    char* dot = strrchr(out_no_ext, '.');
+    if (dot && (strcmp(dot, ".so") == 0 || strcmp(dot, ".dylib") == 0 || strcmp(dot, ".dll") == 0)) {
+        *dot = '\0';
+    }
+
+    g_emit_lib = true;
+    g_emit_exe = false;
+
+    char* sub_argv[10];
+    int sub_argc = 0;
+    sub_argv[sub_argc++] = (char*)concat_path;
+    sub_argv[sub_argc++] = (char*)"--emit=lib";
+    sub_argv[sub_argc++] = (char*)"--extra";
+    sub_argv[sub_argc++] = (char*)describe_c;
+    sub_argv[sub_argc++] = (char*)"-o";
+    sub_argv[sub_argc++] = out_no_ext;
+
+    int rc = cmd_build(sub_argc, sub_argv);
+    if (rc == 0) {
+        /* cmd_build with -o uses the value literally with EXE_EXT (empty
+         * on POSIX), so the actual file at this point is `out_no_ext`
+         * with no extension. Rename to add the proper lib extension. */
+        if (path_exists(out_no_ext) && !path_exists(out_path)) {
+            if (rename(out_no_ext, out_path) != 0) {
+                /* Rename failed; report what's actually there. */
+                fprintf(stderr, "Warning: built %s but couldn't rename to %s\n",
+                        out_no_ext, out_path);
+                printf("Built namespace: %s\n", out_no_ext);
+                return rc;
+            }
+        }
+#ifdef __APPLE__
+        /* macOS clang bakes the `-o` value into the dylib's install_name
+         * at link time (Linux ld does not record a SONAME unless asked).
+         * Because we pass `-o out_no_ext` to get the base name right and
+         * rename afterwards, the library now has install_name equal to
+         * the extension-less interim path. Any consumer statically linked
+         * against the dylib inherits that broken path as its load-time
+         * dependency (e.g. `./libgreet`), which dyld cannot resolve.
+         *
+         * Rewrite the id to @rpath/<basename> so consumers that pass
+         * -Wl,-rpath,<dir> at link time can find the lib regardless of
+         * where it was built. */
+        {
+            const char* base = strrchr(out_path, '/');
+            base = base ? base + 1 : out_path;
+            char id_cmd[4096];
+            snprintf(id_cmd, sizeof(id_cmd),
+                     "install_name_tool -id '@rpath/%s' '%s' 2>/dev/null",
+                     base, out_path);
+            if (system(id_cmd) != 0) {
+                fprintf(stderr, "Warning: install_name_tool failed on %s; "
+                                "consumers may fail to dlopen.\n", out_path);
+            }
+        }
+#endif
+        printf("Built namespace: %s\n", out_path);
+
+        /* Step 6: per-language SDK generation. Reads the manifest JSON
+         * + the function list, then dispatches to the emitter for each
+         * binding target the manifest declared. */
+        emit_namespace_bindings(manifest_path, concat_path, out_path, dir);
+    }
+    return rc;
+}
+
 static int cmd_build(int argc, char** argv) {
     const char* file = NULL;
     const char* output_name = NULL;
     char extra_files[2048] = "";
 
     const char* target = NULL;
+
+    // Reset emit mode to the default (exe-only) for this build.
+    g_emit_exe = true;
+    g_emit_lib = false;
 
     for (int i = 0; i < argc; i++) {
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
@@ -1407,6 +3080,30 @@ static int cmd_build(int argc, char** argv) {
         } else if (strcmp(argv[i], "--lib") == 0 && i + 1 < argc) {
             strncpy(tc.lib_dir, argv[++i], sizeof(tc.lib_dir) - 1);
             tc.lib_dir[sizeof(tc.lib_dir) - 1] = '\0';
+        } else if (strncmp(argv[i], "--emit=", 7) == 0) {
+            const char* val = argv[i] + 7;
+            if (strcmp(val, "exe") == 0) {
+                g_emit_exe = true;
+                g_emit_lib = false;
+            } else if (strcmp(val, "lib") == 0) {
+                g_emit_exe = false;
+                g_emit_lib = true;
+            } else if (strcmp(val, "both") == 0) {
+                // v1 scope: `ae build --emit=both` is not supported because
+                // producing both a .so and an executable from one gcc call
+                // needs either two invocations or a two-pass build. Users
+                // who need both artifacts today should run `ae build --emit=exe`
+                // and `ae build --emit=lib -o ...` separately.
+                fprintf(stderr, "Error: --emit=both is not yet implemented for `ae build`.\n");
+                fprintf(stderr, "       Run `ae build --emit=exe` and `ae build --emit=lib` separately.\n");
+                return 1;
+            } else {
+                fprintf(stderr, "Error: --emit must be one of: exe, lib (got '%s')\n", val);
+                return 1;
+            }
+        } else if (strcmp(argv[i], "--namespace") == 0 && i + 1 < argc) {
+            // Handled in a dedicated function defined above.
+            return cmd_build_namespace(argc, argv);
         } else if (argv[i][0] != '-') {
             file = argv[i];
         }
@@ -1504,6 +3201,43 @@ static int cmd_build(int argc, char** argv) {
         }
     }
 
+    // Override output name for --emit=lib: swap <name> for lib<name>.so
+    // (or .dylib on macOS). Only applies when the user didn't supply -o
+    // with an explicit name; if they did, we honor their choice.
+    if (g_emit_lib && !g_emit_exe && !is_wasm && !output_name) {
+#ifdef __APPLE__
+        const char* lib_ext = ".dylib";
+#elif defined(_WIN32)
+        const char* lib_ext = ".dll";
+#else
+        const char* lib_ext = ".so";
+#endif
+        // Find the basename portion in exe_file and insert "lib" prefix.
+        // Strategy: walk back from the end to the last separator, copy the
+        // prefix, append "lib", then the basename with its extension swapped.
+        char buf[2048];
+        const char* last_sep = exe_file;
+        for (const char* p = exe_file; *p; p++) {
+            if (*p == '/' || *p == '\\') last_sep = p + 1;
+        }
+        size_t prefix_len = (size_t)(last_sep - exe_file);
+        if (prefix_len >= sizeof(buf)) prefix_len = sizeof(buf) - 1;
+        memcpy(buf, exe_file, prefix_len);
+        buf[prefix_len] = '\0';
+        // Strip EXE_EXT (empty on POSIX) from the basename before adding lib_ext.
+        char basename_noext[512];
+        strncpy(basename_noext, last_sep, sizeof(basename_noext) - 1);
+        basename_noext[sizeof(basename_noext) - 1] = '\0';
+        if (EXE_EXT[0]) {
+            size_t elen = strlen(EXE_EXT);
+            size_t blen = strlen(basename_noext);
+            if (blen >= elen && strcmp(basename_noext + blen - elen, EXE_EXT) == 0) {
+                basename_noext[blen - elen] = '\0';
+            }
+        }
+        snprintf(exe_file, sizeof(exe_file), "%slib%s%s", buf, basename_noext, lib_ext);
+    }
+
     // Pre-flight: verify emcc for wasm target before starting compilation
     if (is_wasm && run_cmd_quiet("emcc --version") != 0) {
         fprintf(stderr, "Error: Emscripten (emcc) not found on PATH.\n");
@@ -1567,6 +3301,30 @@ static int cmd_build(int argc, char** argv) {
 
     // Clean up intermediate C file — ae build produces a binary, not C source
     remove(c_file);
+
+#ifdef __APPLE__
+    /* macOS clang bakes the `-o` value into the dylib's install_name at
+     * link time. A dylib built via `--emit=lib -o libfoo` ends up with
+     * install_name `libfoo` (no extension, no directory), which dyld
+     * cannot resolve when a statically-linked consumer tries to load it.
+     * Rewrite the id to @rpath/<basename> so consumers that pass
+     * -Wl,-rpath,<dir> at link time can find the lib.
+     *
+     * cmd_build_namespace does its own install_name fixup after its
+     * post-rename step — this block is for direct `ae build --emit=lib`. */
+    if (g_emit_lib && !g_emit_exe) {
+        const char* base = strrchr(exe_file, '/');
+        base = base ? base + 1 : exe_file;
+        char id_cmd[4096];
+        snprintf(id_cmd, sizeof(id_cmd),
+                 "install_name_tool -id '@rpath/%s' '%s' 2>/dev/null",
+                 base, exe_file);
+        if (system(id_cmd) != 0) {
+            fprintf(stderr, "Warning: install_name_tool failed on %s; "
+                            "consumers may fail to dlopen.\n", exe_file);
+        }
+    }
+#endif
 
     printf("Built: %s\n", exe_file);
     if (is_wasm) {

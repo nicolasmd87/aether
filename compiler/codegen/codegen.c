@@ -74,6 +74,8 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->emit_header = 0;
     gen->header_file = NULL;
     gen->header_path = NULL;
+    gen->emit_exe = 1;
+    gen->emit_lib = 0;
     gen->generated_functions = NULL;
     gen->generated_function_count = 0;
     // Initialize defer tracking
@@ -690,6 +692,142 @@ const char* get_c_type(Type* type) {
     }
 }
 
+// Map an Aether type to the stable public ABI type used in aether_<name>
+// alias stubs emitted by --emit=lib. This is a *public contract* — language
+// bindings (Java Panama, Python ctypes, SWIG) see these signatures.
+//
+// Returns NULL if the type cannot be represented across the FFI boundary
+// in v1 (e.g. tuples, structs, closures). Callers should skip emitting
+// an alias for that function and emit a diagnostic instead.
+//
+// Type mapping:
+//   int     -> int32_t         (fixed width for cross-language clarity)
+//   int64   -> int64_t
+//   uint64  -> uint64_t
+//   float   -> float           (IEEE 754 binary32, matches C float)
+//   bool    -> int32_t         (0/1)
+//   string  -> const char*
+//   ptr     -> AetherValue*    (opaque handle; see runtime/aether_config.h)
+//   void    -> void            (return type only; rejected as a parameter)
+//
+// AetherValue* is a forward-declared opaque type in aether_config.h that
+// wraps whatever internal representation Aether uses for maps/lists/ptrs.
+static const char* get_abi_type(Type* type) {
+    if (!type) return NULL;
+    switch (type->kind) {
+        case TYPE_INT:    return "int32_t";
+        case TYPE_INT64:  return "int64_t";
+        case TYPE_UINT64: return "uint64_t";
+        case TYPE_FLOAT:  return "float";
+        case TYPE_BOOL:   return "int32_t";
+        case TYPE_STRING: return "const char*";
+        case TYPE_VOID:   return "void";
+        case TYPE_PTR:    return "AetherValue*";
+        default:          return NULL;
+    }
+}
+
+// Emit `aether_<name>` alias stubs after normal top-level function emission.
+// Called from generate_program only when --emit=lib or --emit=both is set.
+//
+// For each top-level AST_FUNCTION_DEFINITION whose parameter and return types
+// are all representable in the public ABI, emit a wrapper:
+//
+//   int32_t aether_sum(int32_t a, int32_t b) { return sum(a, b); }
+//
+// Functions with unsupported types (tuples, structs, closures) are skipped
+// with a compile-time warning so the user knows the function won't be
+// exposed across the FFI boundary.
+static void emit_lib_alias_stubs(CodeGenerator* gen, ASTNode* program) {
+    if (!gen || !gen->emit_lib || !program) return;
+
+    fprintf(gen->output, "\n/* --- aether_<name> alias stubs (--emit=lib) --- */\n");
+    fprintf(gen->output, "#include <stdint.h>\n");
+    fprintf(gen->output, "typedef struct AetherValue AetherValue;  /* opaque */\n\n");
+
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* child = program->children[i];
+        ASTNode* fn = child;
+        // Unwrap `export` declarations.
+        if (child->type == AST_EXPORT_STATEMENT && child->child_count > 0) {
+            fn = child->children[0];
+        }
+        if (!fn || fn->type != AST_FUNCTION_DEFINITION || !fn->value) continue;
+        // Skip cloned-from-import functions (they're marked static and
+        // are an implementation detail of the importer).
+        if (fn->is_imported) continue;
+
+        // Check that every param type is ABI-representable.
+        // The last non-guard, non-block child is the body; everything before
+        // is parameters (plus optional guard clauses).
+        int ok = 1;
+        const char* param_types[32];
+        const char* param_names[32];
+        int param_count = 0;
+        ASTNode* body = NULL;
+        for (int p = 0; p < fn->child_count; p++) {
+            ASTNode* c = fn->children[p];
+            if (c->type == AST_GUARD_CLAUSE) continue;
+            if (c->type == AST_BLOCK) { body = c; continue; }
+            if (c->type == AST_VARIABLE_DECLARATION || c->type == AST_PATTERN_VARIABLE) {
+                const char* t = get_abi_type(c->node_type);
+                if (!t || strcmp(t, "void") == 0 || param_count >= 32) { ok = 0; break; }
+                param_types[param_count] = t;
+                param_names[param_count] = c->value ? c->value : "_unnamed";
+                param_count++;
+            } else {
+                // Pattern literals, struct patterns, list patterns — not ABI-safe.
+                ok = 0;
+                break;
+            }
+        }
+        (void)body;
+        if (!ok) {
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                     "function '%s' has a parameter type that isn't representable in the --emit=lib ABI; skipping alias stub",
+                     fn->value);
+            AetherError w = {NULL, NULL, fn->line, fn->column, msg,
+                             "use only int, int64, uint64, float, bool, string, or ptr in public API functions",
+                             NULL, AETHER_ERR_NONE};
+            aether_warning_report(&w);
+            continue;
+        }
+
+        // Return type. If the function has a return-with-value but node_type
+        // is void/unknown, fall back to int32_t (mirrors the internal rule
+        // of defaulting unknown returns to int).
+        const char* ret_abi = get_abi_type(fn->node_type);
+        int returns_value = has_return_value(fn);
+        if (!ret_abi) {
+            if (returns_value) {
+                ret_abi = "int32_t";
+            } else {
+                ret_abi = "void";
+            }
+        }
+
+        // Emit: RET aether_NAME(PARAMS) { [return] NAME(args); }
+        fprintf(gen->output, "%s aether_%s(", ret_abi, fn->value);
+        if (param_count == 0) {
+            fprintf(gen->output, "void");
+        } else {
+            for (int k = 0; k < param_count; k++) {
+                if (k > 0) fprintf(gen->output, ", ");
+                fprintf(gen->output, "%s %s", param_types[k], param_names[k]);
+            }
+        }
+        fprintf(gen->output, ") {\n    ");
+        if (strcmp(ret_abi, "void") != 0) fprintf(gen->output, "return ");
+        fprintf(gen->output, "%s(", fn->value);
+        for (int k = 0; k < param_count; k++) {
+            if (k > 0) fprintf(gen->output, ", ");
+            fprintf(gen->output, "%s", param_names[k]);
+        }
+        fprintf(gen->output, ");\n}\n");
+    }
+}
+
 // Emit a typedef for a tuple type if not already emitted
 void ensure_tuple_typedef(CodeGenerator* gen, Type* type) {
     if (!type || type->kind != TYPE_TUPLE) return;
@@ -794,6 +932,14 @@ static int has_return_statement(ASTNode* node) {
 
 void generate_main_function(CodeGenerator* gen, ASTNode* main) {
     if (!main || main->type != AST_MAIN_FUNCTION) return;
+
+    // --emit=lib only: suppress the C `int main(int,char**)` entry point.
+    // If the .ae file defined main(), its body is currently dropped in
+    // lib-only mode — library consumers call the exported top-level
+    // functions directly, not main(). A future Shape B extension could
+    // emit an `aether_main()` wrapper so hosts can invoke the script's
+    // entry point explicitly.
+    if (!gen->emit_exe) return;
 
     print_line(gen, "int main(int argc, char** argv) {");
     indent(gen);
@@ -1177,29 +1323,67 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     }
     print_line(gen, "");
 
-    // Pre-pass: identify builder functions (first param is _ctx: ptr)
-    // These get builder_context() auto-injected at call sites inside trailing blocks
+    // Pre-pass: identify builder functions (first param is _ctx: ptr).
+    // These get builder_context() auto-injected at call sites inside
+    // trailing blocks. We walk:
+    //   1. program->children — locally defined functions (incl. those
+    //      cloned in by module_merge_into_program) and any locally
+    //      declared externs.
+    //   2. for each AST_IMPORT_STATEMENT, the imported module's externs.
+    //      Module externs aren't merged into program->children; they're
+    //      emitted as C declarations during the import codegen pass and
+    //      otherwise live only in the module registry. To recognize
+    //      std.host's manifest builders (describe, input, event, etc.)
+    //      as builder funcs, we walk those externs here too.
+    //
+    // Function params are AST_VARIABLE_DECLARATION / AST_PATTERN_VARIABLE;
+    // extern params are AST_IDENTIFIER (different parser path) but carry
+    // the same .value and .node_type info we need.
+
+    // First, helper that registers a node if its first param is _ctx: ptr.
+    // (Inlined as a lambda-style block to keep the pre-pass self-contained.)
+    #define MAYBE_REGISTER_BUILDER(node) do { \
+        ASTNode* _n = (node); \
+        if (!_n || !_n->value) break; \
+        int _is_func   = _n->type == AST_FUNCTION_DEFINITION; \
+        int _is_extern = _n->type == AST_EXTERN_FUNCTION; \
+        if (!_is_func && !_is_extern) break; \
+        for (int _j = 0; _j < _n->child_count; _j++) { \
+            ASTNode* _p = _n->children[_j]; \
+            if (!_p) continue; \
+            if (_p->type == AST_GUARD_CLAUSE || _p->type == AST_BLOCK) continue; \
+            int _ok = _p->type == AST_PATTERN_VARIABLE \
+                   || _p->type == AST_VARIABLE_DECLARATION \
+                   || _p->type == AST_IDENTIFIER; \
+            if (_ok && _p->value && strcmp(_p->value, "_ctx") == 0 && \
+                _p->node_type && _p->node_type->kind == TYPE_PTR) { \
+                if (gen->builder_func_count >= gen->builder_func_capacity) { \
+                    gen->builder_func_capacity = gen->builder_func_capacity ? gen->builder_func_capacity * 2 : 16; \
+                    gen->builder_funcs = realloc(gen->builder_funcs, \
+                        gen->builder_func_capacity * sizeof(char*)); \
+                } \
+                gen->builder_funcs[gen->builder_func_count++] = strdup(_n->value); \
+            } \
+            break; \
+        } \
+    } while (0)
+
     for (int i = 0; i < program->child_count; i++) {
         ASTNode* child = program->children[i];
-        if (!child || child->type != AST_FUNCTION_DEFINITION || !child->value) continue;
-        // Check if first non-guard, non-block child is _ctx: ptr
-        for (int j = 0; j < child->child_count; j++) {
-            ASTNode* param = child->children[j];
-            if (param->type == AST_GUARD_CLAUSE || param->type == AST_BLOCK) continue;
-            if ((param->type == AST_PATTERN_VARIABLE || param->type == AST_VARIABLE_DECLARATION) &&
-                param->value && strcmp(param->value, "_ctx") == 0 &&
-                param->node_type && param->node_type->kind == TYPE_PTR) {
-                // Register as builder function
-                if (gen->builder_func_count >= gen->builder_func_capacity) {
-                    gen->builder_func_capacity = gen->builder_func_capacity ? gen->builder_func_capacity * 2 : 16;
-                    gen->builder_funcs = realloc(gen->builder_funcs,
-                        gen->builder_func_capacity * sizeof(char*));
+        if (!child) continue;
+        if (child->type == AST_IMPORT_STATEMENT && child->value) {
+            /* Walk the imported module's externs. */
+            AetherModule* mod = module_find(child->value);
+            if (mod && mod->ast) {
+                for (int j = 0; j < mod->ast->child_count; j++) {
+                    MAYBE_REGISTER_BUILDER(mod->ast->children[j]);
                 }
-                gen->builder_funcs[gen->builder_func_count++] = strdup(child->value);
             }
-            break; // only check first param
+        } else {
+            MAYBE_REGISTER_BUILDER(child);
         }
     }
+    #undef MAYBE_REGISTER_BUILDER
 
     // Pre-pass: identify builder functions (marked with 'builder' keyword)
     // These get block-first execution: block fills config, then function runs with it
@@ -1625,6 +1809,11 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                 break;
         }
     }
+
+    // --emit=lib / --emit=both: append aether_<name> alias stubs that form
+    // the public FFI surface. Must come after all normal function emission
+    // so the aliases see the wrapped functions via their forward decls.
+    emit_lib_alias_stubs(gen, program);
 
     // Close header file if emitting
     if (gen->emit_header && gen->header_file) {

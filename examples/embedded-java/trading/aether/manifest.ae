@@ -1,0 +1,29 @@
+// Trading namespace manifest. Authored once; the generator templates
+// the host-side SDK in the language(s) declared under bindings.
+//
+// See docs/embedded-namespaces-and-host-bindings.md
+// for the full design.
+
+import std.host
+
+abi() {
+    describe("trading") {
+
+        // Inputs the host supplies before the script runs. v1 stores them
+        // on the SDK instance; a future host_call() will surface them as
+        // ambient values inside the script body.
+        input("max_order", "int")
+
+        // Events the script emits via notify(name, id). The host registers
+        // typed handlers via on<EventName>(handler).
+        event("OrderPlaced",   "int64")
+        event("OrderRejected", "int64")
+        event("TradeKilled",   "int64")
+        event("UnknownTicker", "int64")
+
+        // Per-language SDK targets.
+        bindings() {
+            java("com.example.trading", "Trading")
+        }
+    }
+}

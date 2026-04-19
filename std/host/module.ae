@@ -1,0 +1,75 @@
+// std.host — primitives for Aether scripts embedded in a host application.
+//
+// Used in conjunction with `aetherc --emit=lib`. The script imports
+// std.host and calls notify() to emit events back to the host process;
+// the host registers handlers for those events via the C-side
+// aether_event_register() function (declared in runtime/aether_host.h).
+//
+// The pattern is the EAI / Hohpe "claim check": notify() carries only
+// an event name and an int64 ID. If the host needs more detail, it
+// calls back into the script through normal typed downcalls (the
+// aether_<name>() exports the script declares as top-level functions).
+
+// Emit an event to the host process. Returns 1 if a handler was found
+// and invoked, 0 if no listener is registered for this event name.
+//
+// `long` is Aether's 64-bit integer (TOKEN_INT64); the C-side ABI is
+// int64_t per the public host header (runtime/aether_host.h).
+extern notify(event: string, id: long) -> int
+
+// ---------------------------------------------------------------------------
+// Manifest DSL — used inside an `abi() { ... }` function body in a
+// namespace's manifest.ae. The pipeline walks every top-level function
+// in the manifest, locates these calls structurally, and captures the
+// arguments. Each builder also appends to a process-global manifest
+// registry at runtime (used by tests that exercise the manifest via
+// dlopen + manifest_get()).
+//
+// Idiom (matches the existing Aether builder DSL pattern, e.g.
+// calculator-tui.ae's grid() { btn(...) ... } or tinyweb's
+// web_server() { path(...) ... }):
+//
+//     abi() {
+//         describe("trading") {
+//             input("order", "map")
+//             event("OrderPlaced", "int64")
+//             bindings() {
+//                 java("com.example.trading", "Trading")
+//             }
+//         }
+//     }
+//
+// All manifest builders take `_ctx: ptr` first so the codegen's auto-
+// _ctx-injection fires when they're called inside an outer trailing
+// block. The C side ignores _ctx — the manifest registry is global
+// state, written in declaration order.
+//
+// Type signatures are strings ("int", "long", "string", "map", "list",
+// "fn(string) -> bool", etc.) — the namespace pipeline parses them
+// when it generates host SDKs.
+// ---------------------------------------------------------------------------
+
+// Begin a namespace declaration. The trailing block contains input(),
+// event(), and bindings() calls.
+extern describe(_ctx: ptr, name: string)
+
+// Inside a `describe() { }` block.
+extern input(_ctx: ptr, name: string, type_signature: string)
+extern event(_ctx: ptr, name: string, carries_type: string)
+
+// Bindings — visual grouping for the per-language binding builders.
+// Each binding extern appends to its slot in the manifest.
+extern bindings(_ctx: ptr)
+extern java(_ctx: ptr, package_name: string, class_name: string)
+extern python(_ctx: ptr, module_name: string)
+extern ruby(_ctx: ptr, module_name: string)
+extern go(_ctx: ptr, package_name: string)
+
+// Read the captured manifest. Returns a ptr to an opaque
+// AetherManifest struct (see runtime/aether_host.h). Used by tests
+// and the dlopen pipeline; user code rarely calls this.
+extern manifest_get() -> ptr
+
+// Reset the captured manifest. Intended for tests and for the
+// pipeline to start each compilation from a clean slate.
+extern manifest_clear()

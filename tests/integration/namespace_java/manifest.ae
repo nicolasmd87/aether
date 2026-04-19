@@ -1,0 +1,17 @@
+// Java SDK generator end-to-end. Mirrors namespace_python's shape so
+// the two generators can be compared side-by-side: same inputs, same
+// events, same script functions.
+
+import std.host
+
+abi() {
+    describe("calc") {
+        input("limit", "int")
+        input("name", "string")
+        event("Computed", "int64")
+        event("Overflow", "int64")
+        bindings() {
+            java("com.example.calc", "CalcGeneratedSdk")
+        }
+    }
+}

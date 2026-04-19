@@ -1,0 +1,10 @@
+import std.host
+
+abi() {
+    describe("calc") {
+        event("Computed", "int64")
+        bindings() {
+            java("com.example.calc", "Calc")
+        }
+    }
+}

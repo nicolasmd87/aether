@@ -1,0 +1,7 @@
+import std.host
+
+kill_trade(trade_id: long) {
+    println("[ae] kill_trade trade_id=${trade_id}")
+    notify("TradeKilled", trade_id)
+    return 1
+}

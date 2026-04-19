@@ -1,0 +1,16 @@
+import std.host
+
+abi() {
+    describe("describe_test") {
+        input("alpha", "string")
+        input("beta", "int")
+        input("gamma", "fn(int) -> int")
+        event("Aaa", "int64")
+        event("Bbb", "int64")
+        bindings() {
+            java("com.example.dt", "DescribeTest")
+            python("dt_module")
+            go("dt")
+        }
+    }
+}

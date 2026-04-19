@@ -6,6 +6,17 @@ Planned features and improvements for upcoming Aether releases.
 
 ## Language Features
 
+### Structured Concurrency — supervision trees + capability-scoped spawn/send
+
+Actors exist, but when a handler panics nobody finds out. And `hide` /
+`seal except` constrain variable reads but not `spawn` / `!` / `ask`.
+Both gaps have the same fix shape. The design direction is documented
+separately in [`docs/structured-concurrency.md`](structured-concurrency.md):
+supervision trees (Erlang-style, library-level on top of a small
+runtime hook for actor failure notification) plus capability-scoped
+concurrency (extending the existing scope-denial primitives to cover
+concurrency sites at compile time).
+
 ### Structured Error Types (`std.errors`)
 
 Stdlib wrappers currently return error *strings*. A follow-up step is a

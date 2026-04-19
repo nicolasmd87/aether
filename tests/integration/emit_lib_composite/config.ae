@@ -1,0 +1,31 @@
+// Flagship --emit=lib integration: build a structured config map
+// and return it so a C host can walk it via aether_config_* accessors.
+
+import std.map
+import std.list
+
+build_config(env: string, port: int) {
+    root = map_new()
+    map_put(root, "env", env)
+    map_put(root, "port", port)
+
+    // Nested map — database settings
+    db = map_new()
+    map_put(db, "host", "db.internal")
+    map_put(db, "port", 5432)
+    map_put(root, "db", db)
+
+    // Nested list — feature flags as strings
+    flags = list.new()
+    list.add(flags, "dark_mode")
+    list.add(flags, "new_billing")
+    list.add(flags, "v2_ui")
+    map_put(root, "flags", flags)
+
+    return root
+}
+
+main() {
+    // unused in --emit=lib
+    println("skipped in lib mode")
+}

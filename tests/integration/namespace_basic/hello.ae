@@ -1,0 +1,6 @@
+import std.host
+
+say_hi(name: string) {
+    notify("Greeted", 42)
+    return name
+}

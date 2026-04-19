@@ -1,0 +1,23 @@
+// Test fixture for the notify() claim-check primitive.
+// Three top-level functions, each fires a different event so the C
+// host can verify event routing, missing-handler defaults, and
+// repeated calls.
+
+import std.host
+
+emit_one(id: long) {
+    return notify("OneEvent", id)
+}
+
+emit_two(id: long) {
+    return notify("TwoEvent", id)
+}
+
+emit_unknown(id: long) {
+    // No handler registered for this event — should return 0.
+    return notify("NoListener", id)
+}
+
+main() {
+    println("unused in lib mode")
+}
