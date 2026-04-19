@@ -1,0 +1,28 @@
+// Route 1 edge: a closure parameter with the same name as an outer
+// promoted variable. The parameter wins within the closure body — its
+// reference should be the parameter value, not the outer heap cell.
+//
+// This tests that is_closure_param takes precedence over the
+// promotion rewrite.
+
+extern exit(code: int)
+
+main() {
+    n = 0
+    bumper = || { n = n + 1 }    // captures and mutates outer n
+    shadow = |n: int| { return n * 2 }   // local n — parameter wins
+
+    call(bumper)
+    call(bumper)
+    call(bumper)
+    if n != 3 { println("FAIL: outer n, expected 3, got:"); println(n); exit(1) }
+
+    // Inside shadow, n is the parameter (42), not the outer n (3).
+    r = call(shadow, 42)
+    if r != 84 { println("FAIL: shadow param, expected 84, got:"); println(r); exit(1) }
+
+    // After call(shadow), outer n is still 3 — shadow didn't touch it.
+    if n != 3 { println("FAIL: outer n mutated by shadow, got:"); println(n); exit(1) }
+
+    println("ok")
+}

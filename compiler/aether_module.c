@@ -627,6 +627,62 @@ ASTNode* module_parse_file(const char* file_path) {
     return ast;
 }
 
+// Try to resolve an import path. If the full path fails to resolve as a
+// module, split at the last dot and treat the tail as a selective-import
+// symbol (Java-style `import java.util.List` — class name tacked on the
+// end). On success with split, mutates the import_node in place: shortens
+// `value` to the module path and inserts the symbol name as an
+// AST_IDENTIFIER first child (matching the shape of the parenthesised
+// `import mod (a, b)` selective form). Caller owns the returned file
+// path on success; returns NULL on failure.
+static char* resolve_import_path(ASTNode* import_node) {
+    const char* module_path = import_node->value;
+    if (!module_path) return NULL;
+
+    char* file_path;
+    if (strncmp(module_path, "std.", 4) == 0) {
+        file_path = module_resolve_stdlib_path(module_path + 4);
+    } else {
+        file_path = module_resolve_local_path(module_path);
+    }
+    if (file_path) return file_path;
+
+    const char* last_dot = strrchr(module_path, '.');
+    if (!last_dot) return NULL;
+
+    int prefix_len = (int)(last_dot - module_path);
+    if (prefix_len <= 0 || prefix_len >= 512) return NULL;
+    char prefix[512];
+    memcpy(prefix, module_path, prefix_len);
+    prefix[prefix_len] = '\0';
+    const char* symbol = last_dot + 1;
+    if (!*symbol) return NULL;
+
+    if (strncmp(prefix, "std.", 4) == 0) {
+        file_path = module_resolve_stdlib_path(prefix + 4);
+    } else {
+        file_path = module_resolve_local_path(prefix);
+    }
+    if (!file_path) return NULL;
+
+    ASTNode* sym_node = create_ast_node(AST_IDENTIFIER, symbol,
+                                        import_node->line, import_node->column);
+
+    ASTNode** new_children = malloc(sizeof(ASTNode*) * (import_node->child_count + 1));
+    new_children[0] = sym_node;
+    for (int i = 0; i < import_node->child_count; i++) {
+        new_children[i + 1] = import_node->children[i];
+    }
+    free(import_node->children);
+    import_node->children = new_children;
+    import_node->child_count++;
+
+    free(import_node->value);
+    import_node->value = strdup(prefix);
+
+    return file_path;
+}
+
 // Recursive helper: load a single module and its transitive imports
 static int orchestrate_module(const char* module_name, const char* file_path,
                               DependencyGraph* graph) {
@@ -661,14 +717,8 @@ static int orchestrate_module(const char* module_name, const char* file_path,
         ASTNode* child = ast->children[i];
         if (child->type != AST_IMPORT_STATEMENT || !child->value) continue;
 
+        char* sub_file = resolve_import_path(child);
         const char* sub_path = child->value;
-        char* sub_file = NULL;
-
-        if (strncmp(sub_path, "std.", 4) == 0) {
-            sub_file = module_resolve_stdlib_path(sub_path + 4);
-        } else {
-            sub_file = module_resolve_local_path(sub_path);
-        }
 
         dependency_graph_add_edge(graph, module_name, sub_path);
         module_add_import(mod, sub_path);
@@ -698,14 +748,8 @@ int module_orchestrate(ASTNode* program) {
         ASTNode* child = program->children[i];
         if (child->type != AST_IMPORT_STATEMENT || !child->value) continue;
 
+        char* file_path = resolve_import_path(child);
         const char* module_path = child->value;
-        char* file_path = NULL;
-
-        if (strncmp(module_path, "std.", 4) == 0) {
-            file_path = module_resolve_stdlib_path(module_path + 4);
-        } else {
-            file_path = module_resolve_local_path(module_path);
-        }
 
         dependency_graph_add_edge(graph, "__main__", module_path);
 
@@ -996,6 +1040,59 @@ void module_merge_into_program(ASTNode* program) {
                 insert_child_at(program, clone, insert_idx++);
             }
             // Skip AST_MAIN_FUNCTION, AST_IMPORT_STATEMENT, etc.
+        }
+    }
+
+    // Second pass: for each selective import (either the parenthesised
+    // `import mod (a, b, c)` form or the trailing-component `import mod.a`
+    // form, which resolve_import_path rewrites into the same shape),
+    // rewrite bare-name references in user code to their module-prefixed
+    // form so callers can write `button("1")` instead of
+    // `aether_ui.button("1")` after `import contrib.aether_ui.button` or
+    // `import contrib.aether_ui (button, hstack, ...)`.
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* import_node = program->children[i];
+        if (!import_node || import_node->type != AST_IMPORT_STATEMENT || !import_node->value) continue;
+        if (import_node->child_count == 0 ||
+            import_node->children[0]->type != AST_IDENTIFIER) continue;
+
+        const char* module_path = import_node->value;
+        AetherModule* mod = module_find(module_path);
+        if (!mod || !mod->ast) continue;
+        const char* ns = module_get_namespace(module_path);
+
+        const char* sel_func_names[128];
+        int sel_func_count = 0;
+        const char* sel_const_names[128];
+        int sel_const_count = 0;
+
+        const char* mod_func_names[128];
+        int mod_func_count = collect_module_func_names(mod->ast, mod_func_names, 128);
+        const char* mod_const_names[128];
+        int mod_const_count = collect_module_const_names(mod->ast, mod_const_names, 128);
+
+        for (int k = 0; k < import_node->child_count; k++) {
+            ASTNode* sel = import_node->children[k];
+            if (!sel || sel->type != AST_IDENTIFIER || !sel->value) continue;
+            // Skip alias nodes — the parser marks them with annotation="module_alias".
+            if (sel->annotation && strcmp(sel->annotation, "module_alias") == 0) continue;
+            if (name_in_list(sel->value, mod_func_names, mod_func_count) &&
+                sel_func_count < 128) {
+                sel_func_names[sel_func_count++] = sel->value;
+            } else if (name_in_list(sel->value, mod_const_names, mod_const_count) &&
+                       sel_const_count < 128) {
+                sel_const_names[sel_const_count++] = sel->value;
+            }
+        }
+        if (sel_func_count == 0 && sel_const_count == 0) continue;
+
+        for (int m = 0; m < program->child_count; m++) {
+            ASTNode* top = program->children[m];
+            if (!top) continue;
+            if (top->type == AST_IMPORT_STATEMENT) continue;
+            if (top->is_imported) continue;
+            rename_intra_module_refs(top, ns, sel_func_names, sel_func_count,
+                                     sel_const_names, sel_const_count, NULL, 0);
         }
     }
 }

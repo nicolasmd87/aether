@@ -1,0 +1,34 @@
+// Route 1 regression: two distinct closures both write the same outer
+// variable. They must share one heap cell — not each get their own
+// env copy — otherwise their writes drift apart and observers see
+// stale values.
+
+extern exit(code: int)
+
+main() {
+    balance = 0
+    deposit  = || { balance = balance + 10 }
+    withdraw = || { balance = balance - 3 }
+
+    call(deposit)   // 10
+    call(deposit)   // 20
+    call(withdraw)  // 17
+    call(deposit)   // 27
+    call(withdraw)  // 24
+
+    if balance != 24 { println("FAIL: balance=24 expected, got:"); println(balance); exit(1) }
+
+    // A third closure that captures the same var should also see the
+    // current state, even though it was defined after deposits happened.
+    report = || { return balance }
+    r = call(report)
+    if r != 24 { println("FAIL: report=24 expected, got:"); println(r); exit(1) }
+
+    // And a writing closure defined after the reader — they still share.
+    doubler = || { balance = balance * 2 }
+    call(doubler)
+    if call(report) != 48 { println("FAIL: post-double expected 48"); exit(1) }
+    if balance != 48 { println("FAIL: outer after double expected 48, got:"); println(balance); exit(1) }
+
+    println("ok")
+}

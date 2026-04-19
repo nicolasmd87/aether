@@ -1,0 +1,39 @@
+// Paired with test_closure_reassign_leaks_env: this test verifies the
+// leak-preserving behavior is also the correct-behavior choice when a
+// closure's env has escaped via box_closure. If someone "fixes" the
+// leak by freeing the previous env at reassignment time without escape
+// analysis, this test will fail — the boxed copy still points at the
+// freed env and the call through it would UAF.
+
+import std.list
+
+extern exit(code: int)
+
+main() {
+    held = list.new()
+    defer list.free(held)
+
+    base = 100
+    op = |x: int| { return x + base }
+
+    // Capture a boxed reference to op-v1. The box_closure copies the
+    // {fn, env} struct, so the list now holds a pointer to op-v1's env.
+    list.add(held, box_closure(op))
+
+    // Reassign op. op now points at a different closure. The original
+    // env is still reachable via `held` and must NOT be freed — otherwise
+    // the call through the boxed copy below would read freed memory.
+    op = |x: int| { return x * base }
+
+    // Call the new op.
+    r2 = call(op, 5)
+    if r2 != 500 { println("FAIL: op v2"); exit(1) }
+
+    // Call through the boxed v1 — must still work.
+    boxed = list.get(held, 0)
+    v1 = unbox_closure(boxed)
+    r1 = call(v1, 5)
+    if r1 != 105 { println("FAIL: boxed v1 via dynamic dispatch"); exit(1) }
+
+    println("ok")
+}

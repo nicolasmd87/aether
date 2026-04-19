@@ -1,0 +1,43 @@
+// Escape + promoted: a user function heap-promotes a local, returns
+// a closure that captures it, and the caller invokes the returned
+// closure after the creating function has returned. The promoted
+// cell's defer must be suppressed so the caller's calls see a live
+// pointer, and the cell eventually gets freed (ownership transfers).
+
+extern exit(code: int)
+
+make_counter(initial: int) {
+    n = initial
+    return || { n = n + 1; return n }
+}
+
+make_lazy_adder(base: int) {
+    // base is a parameter, promoted because the closure writes it.
+    step = || { base = base + 10 }
+    call(step)
+    call(step)
+    return || { return base }
+}
+
+main() {
+    c = make_counter(100)
+    r1 = call(c)
+    r2 = call(c)
+    r3 = call(c)
+    if r1 != 101 { println("FAIL: c first, expected 101, got:"); println(r1); exit(1) }
+    if r2 != 102 { println("FAIL: c second, expected 102, got:"); println(r2); exit(1) }
+    if r3 != 103 { println("FAIL: c third, expected 103, got:"); println(r3); exit(1) }
+
+    // Second counter starts fresh.
+    c2 = make_counter(-5)
+    r4 = call(c2)
+    if r4 != -4 { println("FAIL: c2 first, expected -4, got:"); println(r4); exit(1) }
+
+    // Lazy adder: param mutated inside the function before return.
+    la = make_lazy_adder(50)
+    rla = call(la)
+    // After make_lazy_adder called step() twice, base = 50 + 20 = 70
+    if rla != 70 { println("FAIL: lazy adder, expected 70, got:"); println(rla); exit(1) }
+
+    println("ok")
+}

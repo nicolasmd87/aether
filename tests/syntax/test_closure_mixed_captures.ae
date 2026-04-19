@@ -1,12 +1,14 @@
 // Regression: one read-only capture and one mutated capture in the same
-// closure. Read-only captures keep the cheap alias in the body prologue;
-// mutated captures route through _env->. Both must coexist.
+// closure. Read-only captures keep the cheap value alias in the body
+// prologue; mutated captures get heap-promoted (Route 1) so the outer
+// scope and the closure share the same cell. Both must coexist inside
+// one closure.
 
 extern exit(code: int)
 
 main() {
-    base = 100           // read-only in closure
-    count = 0            // mutated in closure
+    base = 100           // read-only in closure — captured by value
+    count = 0            // mutated in closure — heap-promoted
     step = || {
         count = count + 1
         return base + count
@@ -17,10 +19,13 @@ main() {
     if r2 != 102 { println("FAIL: r2"); exit(1) }
     r3 = call(step)
     if r3 != 103 { println("FAIL: r3"); exit(1) }
-    // Outer `base` unchanged — read-only captures are by value, unaffected
-    // by anything the closure could have done.
+    // Outer `base` unchanged — read-only captures are by value, so even
+    // if some other code wrote to an outer base after the closure was
+    // made, the closure's view wouldn't change. And the closure can't
+    // write to base since its body doesn't.
     if base != 100 { println("FAIL: base mutated"); exit(1) }
-    // Outer `count` unchanged — by-value semantics, mutations live in env.
-    if count != 0 { println("FAIL: outer count mutated"); exit(1) }
+    // Outer `count` SHARES the heap cell with the closure — the three
+    // increments are visible here.
+    if count != 3 { println("FAIL: outer count, expected 3, got:"); println(count); exit(1) }
     println("ok")
 }

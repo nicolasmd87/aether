@@ -1,0 +1,25 @@
+// Per-symbol imports: parenthesised form with multiple symbols must
+// expose each listed symbol as a bare identifier. std.string has
+// Aether-level wrappers (to_int, to_long, etc.) whose bare-name
+// exposure is gated by the parenthesised list.
+
+import std.string (to_int, to_long)
+
+extern exit(code: int)
+
+main() {
+    // Bare calls to each listed wrapper.
+    v1, e1 = to_int("42")
+    if e1 != "" { println("FAIL: to_int error:"); println(e1); exit(1) }
+    if v1 != 42 { println("FAIL: to_int, expected 42, got:"); println(v1); exit(1) }
+
+    v2, e2 = to_long("-123")
+    if e2 != "" { println("FAIL: to_long error:"); println(e2); exit(1) }
+    if v2 != -123 { println("FAIL: to_long, expected -123, got:"); println(v2); exit(1) }
+
+    // Error path — bare wrappers still return the (value, err) tuple correctly.
+    _, e3 = to_int("not a number")
+    if e3 == "" { println("FAIL: to_int should have errored on garbage"); exit(1) }
+
+    println("ok")
+}

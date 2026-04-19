@@ -1,0 +1,38 @@
+// Route 1 regression: a user function's parameter is captured and
+// mutated by a closure inside that function. The parameter is a
+// local binding just like a declared variable; it must heap-promote
+// the same way.
+
+extern exit(code: int)
+
+bumper(start: int) {
+    n = start    // declaration forced by the write below — is n promoted?
+    inc = || { n = n + 1 }
+    call(inc)
+    call(inc)
+    return n
+}
+
+// Same idea but the parameter itself is the mutated name (no local copy).
+paramwriter(x: int) {
+    f = || { x = x + 100 }
+    call(f)
+    return x
+}
+
+main() {
+    r1 = bumper(10)
+    if r1 != 12 { println("FAIL: bumper(10), expected 12, got:"); println(r1); exit(1) }
+
+    r2 = bumper(100)
+    if r2 != 102 { println("FAIL: bumper(100), expected 102, got:"); println(r2); exit(1) }
+
+    // Each call to bumper allocates its own heap cell — no leakage between
+    // invocations, no shared state.
+    if r1 + r2 != 114 { println("FAIL: per-call isolation broken"); exit(1) }
+
+    r3 = paramwriter(5)
+    if r3 != 105 { println("FAIL: paramwriter, expected 105, got:"); println(r3); exit(1) }
+
+    println("ok")
+}

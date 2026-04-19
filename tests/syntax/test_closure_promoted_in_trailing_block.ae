@@ -1,0 +1,53 @@
+// Edge: a mutable-capturing closure inside a trailing DSL block.
+// Trailing blocks are inlined at the call site (not hoisted to a
+// static function), so their statements live in the caller's scope.
+// If a closure inside the trailing block writes a main-scope variable
+// that's promoted elsewhere, the inline emission must still
+// dereference through the pointer correctly.
+
+import std.map
+
+extern exit(code: int)
+
+// Builder function: block runs first, configuring `_ctx` (a map),
+// then function executes using it.
+configure(_ctx: ptr, key: string, value: string) {
+    map_put(_ctx, key, value)
+}
+
+// This one doubles as a trigger for trailing-block inline emission.
+build() {
+    _ctx = map_new()
+    return _ctx
+}
+
+main() {
+    // A promoted variable in main (written by a closure below).
+    counter = 0
+    bumper = || { counter = counter + 1 }
+
+    // Trailing block inlines into main. If the DSL's configure()
+    // call body doesn't know about main's promoted `counter`, it
+    // would read a stale value.
+    result = build() {
+        configure("a", "1")
+        configure("b", "2")
+        call(bumper)                     // inside trailing block
+        configure("c", "3")
+        call(bumper)
+    }
+
+    // After the block: counter bumped twice. Outer sees 2 (if
+    // promotion propagated into the inline) or 0 (if not).
+    if counter != 2 {
+        println("FAIL: trailing-block closure calls should bump counter to 2, got:")
+        println(counter)
+        exit(1)
+    }
+
+    // Map was configured correctly (unrelated sanity check).
+    v_a = map_get(result, "a")
+    if v_a == null { println("FAIL: map not configured"); exit(1) }
+
+    println("ok")
+}

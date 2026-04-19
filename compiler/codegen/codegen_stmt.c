@@ -41,13 +41,55 @@ static void collect_returned_closures(CodeGenerator* gen, ASTNode* expr,
         if (lookup_closure_var(gen, expr->value, &cid)) {
             add_protected_name(names, count, cap, expr->value);
             // Transitive: any capture of this closure that is itself a
-            // closure variable must also be protected.
+            // closure variable must also be protected. Likewise, any
+            // capture of this closure that is a Route 1 promoted cell
+            // must have its free suppressed — the cell's pointer is
+            // inside the returned closure's env.
             for (int ci = 0; ci < gen->closure_count; ci++) {
                 if (gen->closures[ci].id != cid) continue;
+                const char* pfn = gen->closures[ci].parent_func;
+                char** promoted = NULL;
+                int promoted_count = 0;
+                get_promoted_names_for_func(gen, pfn, &promoted, &promoted_count);
                 for (int k = 0; k < gen->closures[ci].capture_count; k++) {
                     const char* cap_name = gen->closures[ci].captures[k];
-                    if (cap_name && lookup_closure_var(gen, cap_name, NULL)) {
+                    if (!cap_name) continue;
+                    if (lookup_closure_var(gen, cap_name, NULL)) {
                         add_protected_name(names, count, cap, cap_name);
+                    }
+                    for (int pp = 0; pp < promoted_count; pp++) {
+                        if (promoted[pp] && strcmp(promoted[pp], cap_name) == 0) {
+                            add_protected_name(names, count, cap, cap_name);
+                            break;
+                        }
+                    }
+                }
+                break;
+            }
+        }
+    }
+    // Inline closure literal in the return expression (e.g.
+    // `return || { count = count + 1; return count }`). Protect any
+    // promoted captures this closure carries — the pointer lives inside
+    // the returned closure's env and must not be freed before the
+    // caller uses it.
+    if (expr->type == AST_CLOSURE && expr->value) {
+        int cid = atoi(expr->value);
+        if (cid >= 0) {
+            for (int ci = 0; ci < gen->closure_count; ci++) {
+                if (gen->closures[ci].id != cid) continue;
+                const char* pfn = gen->closures[ci].parent_func;
+                char** promoted = NULL;
+                int promoted_count = 0;
+                get_promoted_names_for_func(gen, pfn, &promoted, &promoted_count);
+                for (int k = 0; k < gen->closures[ci].capture_count; k++) {
+                    const char* cap_name = gen->closures[ci].captures[k];
+                    if (!cap_name) continue;
+                    for (int pp = 0; pp < promoted_count; pp++) {
+                        if (promoted[pp] && strcmp(promoted[pp], cap_name) == 0) {
+                            add_protected_name(names, count, cap, cap_name);
+                            break;
+                        }
                     }
                 }
                 break;
@@ -628,9 +670,60 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     break;
                 }
 
+                // Route 1: promoted captures are heap-allocated cells. In an
+                // outer function body, the FIRST assignment declares
+                // `int* name = malloc(...); *name = <init>;` and queues a
+                // defer for free(). Subsequent writes emit `*name = <expr>;`.
+                // In a closure body, the name is never newly declared (it's
+                // aliased from _env->name in the prologue), so all writes
+                // are dereferences.
+                if (is_promoted_capture(gen, stmt->value)) {
+                    if (!is_var_declared(gen, stmt->value)) {
+                        // First occurrence in this scope — declaration:
+                        // allocate, initialise, defer the free.
+                        const char* c_type = get_c_type(stmt->node_type);
+                        if (!c_type || c_type[0] == 0) c_type = "int";
+                        fprintf(gen->output, "%s* %s = malloc(sizeof(%s)); *%s = ",
+                                c_type, stmt->value, c_type, stmt->value);
+                        if (stmt->child_count > 0) {
+                            generate_expression(gen, stmt->children[0]);
+                        } else {
+                            fprintf(gen->output, "0");
+                        }
+                        fprintf(gen->output, ";\n");
+                        mark_var_declared(gen, stmt->value);
+                        // Defer free(name) at scope exit.
+                        ASTNode* free_call = create_ast_node(AST_FUNCTION_CALL, "free",
+                            stmt->line, stmt->column);
+                        ASTNode* arg = create_ast_node(AST_IDENTIFIER, stmt->value,
+                            stmt->line, stmt->column);
+                        // Mark so the AST_IDENTIFIER emission doesn't dereference it
+                        // (free takes the pointer itself, not `*name`).
+                        if (arg->annotation) free(arg->annotation);
+                        arg->annotation = strdup("raw_promoted");
+                        add_child(free_call, arg);
+                        ASTNode* expr_stmt = create_ast_node(AST_EXPRESSION_STATEMENT, NULL,
+                            stmt->line, stmt->column);
+                        add_child(expr_stmt, free_call);
+                        push_defer(gen, expr_stmt);
+                    } else {
+                        // Reassignment: write through the pointer.
+                        fprintf(gen->output, "*%s", stmt->value);
+                        if (stmt->child_count > 0) {
+                            fprintf(gen->output, " = ");
+                            generate_expression(gen, stmt->children[0]);
+                        }
+                        fprintf(gen->output, ";\n");
+                    }
+                    break;
+                }
+
                 // If we're in a closure body and this name is a mutated capture,
                 // route the write through _env-> so mutations persist on the env
                 // struct rather than dying with a stack-local alias.
+                // NOTE: with Route 1, this path is bypassed for promoted names
+                // (handled above). It remains as a fallback for the pre-Route-1
+                // env-cap mechanism.
                 int is_env_cap = 0;
                 for (int ec = 0; ec < gen->current_env_capture_count; ec++) {
                     if (gen->current_env_captures[ec] &&
@@ -911,37 +1004,65 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                             mark_heap_string_var(gen, stmt->value);
                         }
                     }
-                    // Record variable→closure mapping for closure invocation
+                    // Record variable→closure mapping for closure invocation.
+                    // If the variable was previously bound to a different
+                    // closure (e.g. reassigned from |a,b|->a+b to |a,b|->a*b),
+                    // mark the entry as ambiguous (closure_id = -1) so
+                    // call() falls back to generic function-pointer dispatch
+                    // through .fn — which always reflects the currently-stored
+                    // closure, not whichever one was first assigned.
                     if (stmt->child_count > 0 && stmt->children[0] &&
                         stmt->children[0]->type == AST_CLOSURE &&
                         stmt->children[0]->value && stmt->value) {
                         int cid = atoi(stmt->children[0]->value);
-                        if (gen->closure_var_count >= gen->closure_var_capacity) {
-                            gen->closure_var_capacity = gen->closure_var_capacity ? gen->closure_var_capacity * 2 : 16;
-                            gen->closure_var_map = realloc(gen->closure_var_map,
-                                gen->closure_var_capacity * sizeof(gen->closure_var_map[0]));
-                        }
-                        gen->closure_var_map[gen->closure_var_count].var_name = strdup(stmt->value);
-                        gen->closure_var_map[gen->closure_var_count].closure_id = cid;
-                        gen->closure_var_count++;
-
-                        // Emit deferred free for heap-allocated closure environments
-                        for (int ci = 0; ci < gen->closure_count; ci++) {
-                            if (gen->closures[ci].id == cid && gen->closures[ci].capture_count > 0) {
-                                // Create a synthetic defer: free(var.env)
-                                ASTNode* free_call = create_ast_node(AST_FUNCTION_CALL, "free",
-                                    stmt->line, stmt->column);
-                                char env_access[256];
-                                snprintf(env_access, sizeof(env_access), "%s.env", safe_c_name(stmt->value));
-                                ASTNode* env_arg = create_ast_node(AST_IDENTIFIER, env_access,
-                                    stmt->line, stmt->column);
-                                add_child(free_call, env_arg);
-                                // Wrap in expression statement so generate_statement handles it
-                                ASTNode* expr_stmt = create_ast_node(AST_EXPRESSION_STATEMENT, NULL,
-                                    stmt->line, stmt->column);
-                                add_child(expr_stmt, free_call);
-                                push_defer(gen, expr_stmt);
+                        int existing_idx = -1;
+                        for (int ci = 0; ci < gen->closure_var_count; ci++) {
+                            if (gen->closure_var_map[ci].var_name &&
+                                strcmp(gen->closure_var_map[ci].var_name, stmt->value) == 0) {
+                                existing_idx = ci;
                                 break;
+                            }
+                        }
+                        int is_first_assignment = (existing_idx < 0);
+                        if (existing_idx >= 0) {
+                            if (gen->closure_var_map[existing_idx].closure_id != cid) {
+                                gen->closure_var_map[existing_idx].closure_id = -1;
+                            }
+                        } else {
+                            if (gen->closure_var_count >= gen->closure_var_capacity) {
+                                gen->closure_var_capacity = gen->closure_var_capacity ? gen->closure_var_capacity * 2 : 16;
+                                gen->closure_var_map = realloc(gen->closure_var_map,
+                                    gen->closure_var_capacity * sizeof(gen->closure_var_map[0]));
+                            }
+                            gen->closure_var_map[gen->closure_var_count].var_name = strdup(stmt->value);
+                            gen->closure_var_map[gen->closure_var_count].closure_id = cid;
+                            gen->closure_var_count++;
+                        }
+
+                        // Emit deferred free for heap-allocated closure envs
+                        // only on the FIRST assignment — reassignment replaces
+                        // the env pointer in the variable, and the existing
+                        // defer will free whatever env is live at scope exit.
+                        // Pushing a second defer on reassignment would
+                        // double-free when the scope unwinds.
+                        if (is_first_assignment) {
+                            for (int ci = 0; ci < gen->closure_count; ci++) {
+                                if (gen->closures[ci].id == cid && gen->closures[ci].capture_count > 0) {
+                                    // Create a synthetic defer: free(var.env)
+                                    ASTNode* free_call = create_ast_node(AST_FUNCTION_CALL, "free",
+                                        stmt->line, stmt->column);
+                                    char env_access[256];
+                                    snprintf(env_access, sizeof(env_access), "%s.env", safe_c_name(stmt->value));
+                                    ASTNode* env_arg = create_ast_node(AST_IDENTIFIER, env_access,
+                                        stmt->line, stmt->column);
+                                    add_child(free_call, env_arg);
+                                    // Wrap in expression statement so generate_statement handles it
+                                    ASTNode* expr_stmt = create_ast_node(AST_EXPRESSION_STATEMENT, NULL,
+                                        stmt->line, stmt->column);
+                                    add_child(expr_stmt, free_call);
+                                    push_defer(gen, expr_stmt);
+                                    break;
+                                }
                             }
                         }
                     }
@@ -1573,6 +1694,44 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     int protected_count = 0, protected_cap = 0;
                     collect_returned_closures(gen, stmt->children[0],
                                               &protected_names, &protected_count, &protected_cap);
+                    // Transitive closure-of-captures fixpoint: if bump
+                    // escapes and bump captures digit, digit's captures
+                    // must also be protected. collect_returned_closures
+                    // only handled the first hop; iterate until stable.
+                    int scan_idx = 0;
+                    while (scan_idx < protected_count) {
+                        int start_count = protected_count;
+                        for (int i = scan_idx; i < start_count; i++) {
+                            const char* name = protected_names[i];
+                            if (!name) continue;
+                            int cid;
+                            if (!lookup_closure_var(gen, name, &cid)) continue;
+                            for (int ci = 0; ci < gen->closure_count; ci++) {
+                                if (gen->closures[ci].id != cid) continue;
+                                const char* pfn = gen->closures[ci].parent_func;
+                                char** promoted = NULL;
+                                int promoted_count = 0;
+                                get_promoted_names_for_func(gen, pfn, &promoted, &promoted_count);
+                                for (int k = 0; k < gen->closures[ci].capture_count; k++) {
+                                    const char* cap_name = gen->closures[ci].captures[k];
+                                    if (!cap_name) continue;
+                                    if (lookup_closure_var(gen, cap_name, NULL)) {
+                                        add_protected_name(&protected_names, &protected_count,
+                                                           &protected_cap, cap_name);
+                                    }
+                                    for (int pp = 0; pp < promoted_count; pp++) {
+                                        if (promoted[pp] && strcmp(promoted[pp], cap_name) == 0) {
+                                            add_protected_name(&protected_names, &protected_count,
+                                                               &protected_cap, cap_name);
+                                            break;
+                                        }
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                        scan_idx = start_count;
+                    }
                     emit_all_defers_protected(gen, protected_names, protected_count);
                     for (int p = 0; p < protected_count; p++) free(protected_names[p]);
                     free(protected_names);

@@ -1,22 +1,29 @@
-// Pinning test: a closure body that writes a name without ever reading
-// it treats that name as a fresh local, shadowing any same-named outer
-// binding. This is Python-style implicit shadowing (`x = expr` with no
-// RHS read of x introduces x).
+// Pinning test: Route 1 rule for write-only assignment to a name that
+// exists in the enclosing scope.
 //
-// Observationally the outer scope is untouched either way (by-value
-// capture + no read-back would produce the same result), but this
-// test pins the behaviour so changes to scope analysis are noticed.
+// A closure body that writes a name without reading it, where the same
+// name exists in the enclosing function, is treated as a mutation of
+// the outer binding — not a fresh local. This matches Ruby/Groovy
+// semantics and makes the aether_ui calculator's DSL work without
+// surprise. (Python would shadow here; Aether does not.)
+//
+// When the outer function has NO such name, `x = expr` in a closure
+// is still a fresh local — see test_calculator_tui / the `v = ref_get(num)`
+// idiom where outer main has no `v`.
 
 extern exit(code: int)
 
 main() {
     count = 99
     reset = || {
-        count = 0        // fresh local inside the closure; outer count safe
+        count = 0       // mutates the outer `count` — capture-and-promote
     }
     call(reset)
+    if count != 0 { println("FAIL: outer not mutated after reset"); exit(1) }
+
+    // Second call — outer stays at 0.
+    count = 42
     call(reset)
-    // Outer count untouched regardless of interpretation.
-    if count != 99 { println("FAIL: outer mutated"); exit(1) }
+    if count != 0 { println("FAIL: second reset"); exit(1) }
     println("ok")
 }

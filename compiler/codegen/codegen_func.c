@@ -276,11 +276,30 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
         }
         
         // Handle different parameter pattern types
-        if (child->type == AST_PATTERN_VARIABLE || 
+        if (child->type == AST_PATTERN_VARIABLE ||
             child->type == AST_VARIABLE_DECLARATION) {
             if (param_count > 0) fprintf(gen->output, ", ");
             generate_type(gen, child->node_type);
-            fprintf(gen->output, " %s", child->value);
+            // If this parameter is a Route 1 promoted name in this function,
+            // emit it as `_param_<name>` so the body's heap cell can use
+            // the short name. Body prologue below does
+            // `T* name = malloc(...); *name = _param_name;`.
+            char** promoted = NULL;
+            int promoted_count = 0;
+            get_promoted_names_for_func(gen, func->value, &promoted, &promoted_count);
+            int is_promoted = 0;
+            for (int pp = 0; pp < promoted_count; pp++) {
+                if (promoted[pp] && child->value &&
+                    strcmp(promoted[pp], child->value) == 0) {
+                    is_promoted = 1;
+                    break;
+                }
+            }
+            if (is_promoted) {
+                fprintf(gen->output, " _param_%s", child->value);
+            } else {
+                fprintf(gen->output, " %s", child->value);
+            }
             param_count++;
         } else if (child->type == AST_PATTERN_LITERAL) {
             // Pattern literal becomes regular parameter
@@ -320,7 +339,7 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
     clear_heap_string_vars(gen);
 
     // Mark function parameters as declared so they aren't re-declared
-    // (e.g., by hoist_loop_vars when a parameter is reassigned in a loop)
+    // (e.g., by hoist_loop_vars when a parameter is reassigned in a loop).
     for (int i = 0; i < func->child_count; i++) {
         ASTNode* child = func->children[i];
         if (!child) continue;
@@ -334,6 +353,51 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
     gen->defer_count = 0;
     gen->scope_depth = 0;
     enter_scope(gen);
+
+    // Route 1: for any parameter whose name is in this function's
+    // promoted set, the signature was emitted as `_param_<name>`. Emit a
+    // heap cell `T* name = malloc(...); *name = _param_name;` and push a
+    // defer so the rest of the body can use the short name through the
+    // promotion-aware access path. Must happen AFTER enter_scope so the
+    // defer lands in this function's scope, not the caller's.
+    char** promoted_here = NULL;
+    int promoted_here_count = 0;
+    get_promoted_names_for_func(gen, func->value, &promoted_here, &promoted_here_count);
+    for (int i = 0; i < func->child_count; i++) {
+        ASTNode* child = func->children[i];
+        if (!child) continue;
+        if ((child->type == AST_PATTERN_VARIABLE || child->type == AST_VARIABLE_DECLARATION)
+            && child->value) {
+            int is_promoted = 0;
+            for (int pp = 0; pp < promoted_here_count; pp++) {
+                if (promoted_here[pp] &&
+                    strcmp(promoted_here[pp], child->value) == 0) {
+                    is_promoted = 1;
+                    break;
+                }
+            }
+            if (is_promoted) {
+                const char* c_type = "int";
+                if (child->node_type && child->node_type->kind != TYPE_UNKNOWN) {
+                    c_type = get_c_type(child->node_type);
+                }
+                print_indent(gen);
+                fprintf(gen->output, "%s* %s = malloc(sizeof(%s)); *%s = _param_%s;\n",
+                        c_type, child->value, c_type, child->value, child->value);
+                // Defer free(name) at function exit.
+                ASTNode* free_call = create_ast_node(AST_FUNCTION_CALL, "free",
+                    child->line, child->column);
+                ASTNode* arg = create_ast_node(AST_IDENTIFIER, child->value,
+                    child->line, child->column);
+                arg->annotation = strdup("raw_promoted");
+                add_child(free_call, arg);
+                ASTNode* expr_stmt = create_ast_node(AST_EXPRESSION_STATEMENT, NULL,
+                    child->line, child->column);
+                add_child(expr_stmt, free_call);
+                push_defer(gen, expr_stmt);
+            }
+        }
+    }
     
     // Generate pattern matching checks
     int pattern_idx = 0;
@@ -430,6 +494,13 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
         }
     }
     
+    // Publish this function's promoted-captures set so var decls malloc
+    // heap cells and reads/writes dereference. (Route 1.)
+    char** prev_promoted = gen->current_promoted_captures;
+    int prev_promoted_count = gen->current_promoted_capture_count;
+    get_promoted_names_for_func(gen, func->value,
+        &gen->current_promoted_captures, &gen->current_promoted_capture_count);
+
     // Generate body
     if (body) {
         // If body is a block, it handles its own scope
@@ -447,6 +518,9 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
 
     // Emit function-level defers at implicit return (end of function)
     exit_scope(gen);
+
+    gen->current_promoted_captures = prev_promoted;
+    gen->current_promoted_capture_count = prev_promoted_count;
 
     unindent(gen);
     print_line(gen, "}");

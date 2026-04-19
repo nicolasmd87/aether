@@ -72,6 +72,10 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main);
 /* Closure support (codegen_expr.c) */
 void discover_closures(CodeGenerator* gen, ASTNode* node);
 void emit_closure_definitions(CodeGenerator* gen);
+/* Route 1 promotion queries (populated by discover_closures): */
+void get_promoted_names_for_func(CodeGenerator* gen, const char* func_name,
+                                 char*** out_names, int* out_count);
+int is_promoted_capture(CodeGenerator* gen, const char* name);
 
 /* Internal helpers shared across files */
 int contains_send_expression(ASTNode* node);

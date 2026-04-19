@@ -1,0 +1,27 @@
+// Chained closure captures: outer closure captures inner closure which
+// captures a promoted outer variable. All three layers must agree on
+// the shared heap cell.
+
+extern exit(code: int)
+
+main() {
+    total = 0
+
+    // inner captures and writes `total`.
+    inner = |d: int| { total = total + d }
+
+    // outer captures inner and writes through it.
+    outer = |d: int| { call(inner, d); call(inner, d) }
+
+    call(outer, 5)   // inner called twice with 5 => total += 10
+    if total != 10 { println("FAIL: after first outer, expected 10, got:"); println(total); exit(1) }
+
+    call(outer, 3)   // total += 6 => 16
+    if total != 16 { println("FAIL: after second outer, expected 16, got:"); println(total); exit(1) }
+
+    // Direct call to inner also lands on the same cell.
+    call(inner, 100)
+    if total != 116 { println("FAIL: after direct inner, expected 116, got:"); println(total); exit(1) }
+
+    println("ok")
+}

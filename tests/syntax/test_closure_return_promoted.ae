@@ -1,0 +1,43 @@
+// Edge: a user function that heap-promotes a local (because a closure
+// in it writes the local) then returns the promoted VALUE directly
+// (not the closure, not the pointer — the scalar value at the current
+// state of the cell). Caller should see a plain int, not a dangling
+// pointer.
+
+extern exit(code: int)
+
+compute_sum(stop: int) {
+    total = 0
+    // Closure writes `total` — promotes it in compute_sum's scope.
+    add = |n: int| { total = total + n }
+    for (i = 1; i <= stop; i++) {
+        call(add, i)
+    }
+    // Return the promoted var — just the int value, cell freed on exit.
+    return total
+}
+
+first_of(a: int, b: int) {
+    // Similar but the promoted param is returned after mutation.
+    call(|| { a = a + b })
+    return a
+}
+
+main() {
+    r1 = compute_sum(4)     // 1+2+3+4 = 10
+    if r1 != 10 { println("FAIL: compute_sum(4), expected 10, got:"); println(r1); exit(1) }
+
+    r2 = compute_sum(10)    // sum 1..10 = 55
+    if r2 != 55 { println("FAIL: compute_sum(10), expected 55, got:"); println(r2); exit(1) }
+
+    r3 = first_of(3, 7)     // 3 + 7 = 10
+    if r3 != 10 { println("FAIL: first_of(3,7), expected 10, got:"); println(r3); exit(1) }
+
+    // Repeated calls — each invocation gets its own heap cell that's
+    // freed on exit. No leakage between calls (confirm by repeating).
+    if compute_sum(4) != 10 { println("FAIL: compute_sum(4) second call"); exit(1) }
+    if compute_sum(4) != 10 { println("FAIL: compute_sum(4) third call"); exit(1) }
+    if compute_sum(5) != 15 { println("FAIL: compute_sum(5)"); exit(1) }
+
+    println("ok")
+}
