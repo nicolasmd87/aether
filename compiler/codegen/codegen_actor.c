@@ -262,12 +262,28 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
                             }
                         }
 
+                        // Publish this arm's Route 1 promoted names so
+                        // variable decls in the handler malloc heap cells
+                        // and reads/writes dereference. The synthetic name
+                        // matches what discover_closures_scoped emitted:
+                        // `__recv_arm_<arm_ptr>`.
+                        char** prev_promoted = gen->current_promoted_captures;
+                        int prev_promoted_count = gen->current_promoted_capture_count;
+                        char arm_name[256];
+                        snprintf(arm_name, sizeof(arm_name), "__recv_arm_%p", (void*)arm);
+                        get_promoted_names_for_func(gen, arm_name,
+                            &gen->current_promoted_captures,
+                            &gen->current_promoted_capture_count);
+
                         // Generate handler body
                         if (arm_body && arm_body->type == AST_BLOCK) {
                             for (int k = 0; k < arm_body->child_count; k++) {
                                 generate_statement(gen, arm_body->children[k]);
                             }
                         }
+
+                        gen->current_promoted_captures = prev_promoted;
+                        gen->current_promoted_capture_count = prev_promoted_count;
 
                         unindent(gen);
                         print_line(gen, "}");

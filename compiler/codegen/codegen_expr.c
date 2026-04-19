@@ -103,6 +103,25 @@ static int is_local_var(ASTNode* block, const char* name) {
     return 0;
 }
 
+// Find an AST_RECEIVE_ARM anywhere in the program whose synthetic name
+// (format `__recv_arm_<pointer>`) matches `func_name`. Returns NULL if
+// not found. Used so that actor message handlers — which are effectively
+// mini-functions for closure-promotion purposes — can be looked up the
+// same way as top-level functions.
+static ASTNode* find_receive_arm_by_name(ASTNode* node, const char* func_name) {
+    if (!node || !func_name) return NULL;
+    if (node->type == AST_RECEIVE_ARM) {
+        char arm_name[256];
+        snprintf(arm_name, sizeof(arm_name), "__recv_arm_%p", (void*)node);
+        if (strcmp(arm_name, func_name) == 0) return node;
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        ASTNode* found = find_receive_arm_by_name(node->children[i], func_name);
+        if (found) return found;
+    }
+    return NULL;
+}
+
 // Is `var_name` declared at the TOP level of the given function's body
 // block (or as a parameter) — i.e. in the function's "own" lexical scope,
 // not inside a nested if/for/while block? This is the scope that closures
@@ -111,6 +130,24 @@ static int is_local_var(ASTNode* block, const char* name) {
 // capture targets.
 static int is_top_level_decl_in_function(ASTNode* program, const char* func_name, const char* var_name) {
     if (!program || !func_name || !var_name) return 0;
+    // Actor receive arms use synthetic function names `__recv_arm_<ptr>`.
+    if (strncmp(func_name, "__recv_arm_", 11) == 0) {
+        ASTNode* arm = find_receive_arm_by_name(program, func_name);
+        if (!arm) return 0;
+        // Arm body is children[1] (children[0] is the pattern).
+        if (arm->child_count < 2) return 0;
+        ASTNode* body = arm->children[1];
+        if (!body || body->type != AST_BLOCK) return 0;
+        for (int k = 0; k < body->child_count; k++) {
+            ASTNode* s = body->children[k];
+            if (s && (s->type == AST_VARIABLE_DECLARATION ||
+                      s->type == AST_CONST_DECLARATION) &&
+                s->value && strcmp(s->value, var_name) == 0) {
+                return 1;
+            }
+        }
+        return 0;
+    }
     for (int i = 0; i < program->child_count; i++) {
         ASTNode* top = program->children[i];
         if (!top) continue;
@@ -173,6 +210,13 @@ static int subtree_declares(ASTNode* node, const char* var_name) {
 // if/else bodies) but does not descend into inner closures.
 static int is_declared_in_function(ASTNode* program, const char* func_name, const char* var_name) {
     if (!program || !func_name || !var_name) return 0;
+    if (strncmp(func_name, "__recv_arm_", 11) == 0) {
+        ASTNode* arm = find_receive_arm_by_name(program, func_name);
+        if (!arm || arm->child_count < 2) return 0;
+        ASTNode* body = arm->children[1];
+        if (!body) return 0;
+        return subtree_declares(body, var_name);
+    }
     for (int i = 0; i < program->child_count; i++) {
         ASTNode* top = program->children[i];
         if (!top) continue;
@@ -266,6 +310,23 @@ static void discover_closures_scoped(CodeGenerator* gen, ASTNode* node, const ch
     if (node->type == AST_MAIN_FUNCTION) {
         for (int i = 0; i < node->child_count; i++) {
             discover_closures_scoped(gen, node->children[i], "main");
+        }
+        return;
+    }
+    // Actor message handlers are mini-functions for promotion purposes.
+    // Give each receive arm a synthetic enclosing-function name so captures
+    // inside closures in a handler are promoted in that arm's scope alone.
+    // Arm locals don't escape; each arm starts fresh. The name shape
+    // `__actor_<ActorName>__arm_<idx>` is emitted by actor codegen when it
+    // publishes the promoted set at the handler's generate_statement site.
+    if (node->type == AST_RECEIVE_ARM) {
+        char arm_name[256];
+        // Use the pointer as a quasi-unique disambiguator since we don't
+        // have an arm index accessible here. Actor codegen will use the
+        // same scheme.
+        snprintf(arm_name, sizeof(arm_name), "__recv_arm_%p", (void*)node);
+        for (int i = 0; i < node->child_count; i++) {
+            discover_closures_scoped(gen, node->children[i], arm_name);
         }
         return;
     }

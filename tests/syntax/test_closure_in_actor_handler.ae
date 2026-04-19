@@ -1,0 +1,33 @@
+// Edge: a mutating closure inside an actor's message handler.
+// The handler has its own locals; a closure created inside the
+// handler captures and mutates those locals. Route 1 should
+// heap-promote them in the handler's scope just like in any
+// user function.
+
+extern exit(code: int)
+
+message Go {}
+
+actor Worker {
+    receive {
+        Go() -> {
+            total = 0
+            add  = |n: int| { total = total + n }
+            call(add, 10)
+            call(add, 20)
+            call(add, 5)
+            if total != 35 {
+                println("FAIL: actor handler total, expected 35, got:")
+                println(total)
+                exit(1)
+            }
+            println("ok")
+        }
+    }
+}
+
+main() {
+    w = spawn(Worker())
+    w ! Go {}
+    wait_for_idle()
+}
