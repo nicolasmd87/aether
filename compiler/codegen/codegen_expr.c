@@ -103,6 +103,54 @@ static int is_local_var(ASTNode* block, const char* name) {
     return 0;
 }
 
+// Is `var_name` declared at the TOP level of the given function's body
+// block (or as a parameter) — i.e. in the function's "own" lexical scope,
+// not inside a nested if/for/while block? This is the scope that closures
+// capture from in languages like JavaScript and Ruby. Names declared
+// inside nested blocks share names only by coincidence and are not
+// capture targets.
+static int is_top_level_decl_in_function(ASTNode* program, const char* func_name, const char* var_name) {
+    if (!program || !func_name || !var_name) return 0;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* top = program->children[i];
+        if (!top) continue;
+        int matches = 0;
+        if (strcmp(func_name, "main") == 0 && top->type == AST_MAIN_FUNCTION) {
+            matches = 1;
+        } else if ((top->type == AST_FUNCTION_DEFINITION || top->type == AST_BUILDER_FUNCTION) &&
+                   top->value && strcmp(top->value, func_name) == 0) {
+            matches = 1;
+        }
+        if (!matches) continue;
+        // Parameters count as top-level declarations.
+        if (top->type != AST_MAIN_FUNCTION) {
+            for (int j = 0; j < top->child_count; j++) {
+                ASTNode* p = top->children[j];
+                if (p && p->type == AST_PATTERN_VARIABLE && p->value &&
+                    strcmp(p->value, var_name) == 0) {
+                    return 1;
+                }
+            }
+        }
+        // Only TOP-LEVEL statements of the body block count — not nested
+        // if/for/while bodies.
+        for (int j = 0; j < top->child_count; j++) {
+            ASTNode* body = top->children[j];
+            if (!body || body->type != AST_BLOCK) continue;
+            for (int k = 0; k < body->child_count; k++) {
+                ASTNode* s = body->children[k];
+                if (s && (s->type == AST_VARIABLE_DECLARATION ||
+                          s->type == AST_CONST_DECLARATION) &&
+                    s->value && strcmp(s->value, var_name) == 0) {
+                    return 1;
+                }
+            }
+        }
+        return 0;
+    }
+    return 0;
+}
+
 // Recursively scan an AST subtree for a declaration whose value matches
 // `var_name`. Stops descending into AST_CLOSURE nodes — their locals belong
 // to an inner scope, not the enclosing function's.
@@ -285,12 +333,25 @@ static void discover_closures_scoped(CodeGenerator* gen, ASTNode* node, const ch
         free(all_ids);
 
         // Second pass for write-only captures: names that appear as
-        // AST_VARIABLE_DECLARATION targets but NEVER as reads in the
-        // closure body. `msg = "world"` in a closure, where outer scope
-        // declares `msg`, is a mutation of the outer binding — not a
-        // fresh local — and must be treated as a capture so Route 1
-        // heap-promotes it. Without this, write-only mutations silently
-        // fail to reach the outer scope.
+        // AST_VARIABLE_DECLARATION targets but are NOT captured via
+        // the read path. `msg = "world"` in a closure where outer scope
+        // declares `msg` at the top level is a mutation of the outer
+        // binding, not a fresh local.
+        //
+        // Use TOP-LEVEL-ONLY declaration lookup here: if `v` is declared
+        // at function top-level, a closure's `v = ...` captures it. If
+        // `v` is only declared inside a nested block of the enclosing
+        // function (e.g. main's `if key == EQUAL { v = ref_get(num) }`),
+        // the two `v`s share a name by coincidence and are
+        // independently-scoped locals — the closure's `v` is a fresh
+        // local. This matches JavaScript/Ruby closure semantics where
+        // captures lift from the function's own scope, not arbitrary
+        // inner blocks.
+        //
+        // The reverse case (name appears as both read and write) is
+        // handled above via the read-path — is_local_var returns false
+        // when init_reads_self, so the read-path's enclosing-scope
+        // check makes it a capture.
         if (enclosing_func) {
             char** writes = NULL;
             int write_count = 0, write_cap = 0;
@@ -307,8 +368,9 @@ static void discover_closures_scoped(CodeGenerator* gen, ASTNode* node, const ch
                     free(writes[i]);
                     continue;
                 }
-                // Promote only if the name exists in the enclosing function.
-                if (is_declared_in_function(gen->program, enclosing_func, writes[i])) {
+                // Promote only if the name is declared at the enclosing
+                // function's top level (or is one of its parameters).
+                if (is_top_level_decl_in_function(gen->program, enclosing_func, writes[i])) {
                     if (cap_count >= cap_cap) {
                         cap_cap = cap_cap ? cap_cap * 2 : 8;
                         captures = realloc(captures, cap_cap * sizeof(char*));
