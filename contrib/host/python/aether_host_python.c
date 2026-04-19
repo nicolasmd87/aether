@@ -8,10 +8,6 @@
 #include "../../../runtime/aether_sandbox.h"
 #include "../../../runtime/aether_shared_map.h"
 
-// Forward declarations for context stack (compiler-generated, linked in)
-extern void* _aether_ctx_stack[];
-extern int _aether_ctx_depth;
-
 #ifdef AETHER_HAS_PYTHON
 #include <Python.h>
 #include <stdlib.h>
@@ -19,12 +15,25 @@ extern int _aether_ctx_depth;
 
 static int python_initialized = 0;
 
+// Bridge-owned permission stack. Self-contained — does not reference
+// the compiler-emitted preamble's _aether_ctx_stack (which is static
+// per translation unit and not cross-file visible).
+static void* python_perms_stack[64];
+static int   python_perms_depth = 0;
+
 // Permission checker that reads from the Aether context stack
 // (same logic as the compiler-generated _aether_sandbox_check_impl)
 extern int list_size(void*);
 extern void* list_get(void*, int);
 
 static int pattern_match(const char* pat, const char* resource) {
+    // Normalize IPv4-mapped IPv6 addresses so a grant for "10.0.0.1"
+    // matches a TCP resource reported as "::ffff:10.0.0.1" (and
+    // vice versa). Safe for non-TCP categories because "::ffff:"
+    // doesn't appear in filesystem paths, env var names, or exec
+    // command strings.
+    if (pat && strncmp(pat, "::ffff:", 7) == 0) pat += 7;
+    if (resource && strncmp(resource, "::ffff:", 7) == 0) resource += 7;
     int plen = strlen(pat);
     int rlen = strlen(resource);
     if (plen == 1 && pat[0] == '*') return 1;
@@ -53,9 +62,9 @@ static int perms_allow(void* ctx, const char* category, const char* resource) {
 }
 
 static int host_python_checker(const char* category, const char* resource) {
-    if (_aether_ctx_depth <= 0) return 1;
-    for (int level = 0; level < _aether_ctx_depth; level++) {
-        if (!perms_allow(_aether_ctx_stack[level], category, resource)) return 0;
+    if (python_perms_depth <= 0) return 1;
+    for (int level = 0; level < python_perms_depth; level++) {
+        if (!perms_allow(python_perms_stack[level], category, resource)) return 0;
     }
     return 1;
 }
@@ -83,9 +92,10 @@ int python_run(const char* code) {
 int python_run_sandboxed(void* perms, const char* code) {
     if (!code) return -1;
     python_init();
+    if (python_perms_depth >= 64) return -1;
 
-    // Push perms onto context stack and install checker
-    _aether_ctx_stack[_aether_ctx_depth++] = perms;
+    // Push perms onto our stack and install our checker
+    python_perms_stack[python_perms_depth++] = perms;
     aether_sandbox_check_fn prev = _aether_sandbox_checker;
     _aether_sandbox_checker = host_python_checker;
 
@@ -93,7 +103,7 @@ int python_run_sandboxed(void* perms, const char* code) {
 
     // Restore
     _aether_sandbox_checker = prev;
-    _aether_ctx_depth--;
+    python_perms_depth--;
 
     return result;
 }
@@ -159,8 +169,10 @@ int python_run_sandboxed_with_map(void* perms, const char* code, uint64_t map_to
     const char* preamble =
         "from _aether_map import aether_map_get, aether_map_put\n";
 
+    if (python_perms_depth >= 64) return -1;
+
     // Push perms and install checker
-    _aether_ctx_stack[_aether_ctx_depth++] = perms;
+    python_perms_stack[python_perms_depth++] = perms;
     aether_sandbox_check_fn prev = _aether_sandbox_checker;
     _aether_sandbox_checker = host_python_checker;
 
@@ -170,7 +182,7 @@ int python_run_sandboxed_with_map(void* perms, const char* code, uint64_t map_to
 
     // Restore
     _aether_sandbox_checker = prev;
-    _aether_ctx_depth--;
+    python_perms_depth--;
     py_current_map_token = 0;
 
     return result;
@@ -180,7 +192,7 @@ int python_run_sandboxed_with_map(void* perms, const char* code, uint64_t map_to
 // Stubs when Python is not available
 #include <stdio.h>
 int python_init(void) {
-    fprintf(stderr, "error: std.host.python not available (compile with AETHER_HAS_PYTHON)\n");
+    fprintf(stderr, "error: contrib.host.python not available (compile with AETHER_HAS_PYTHON)\n");
     return -1;
 }
 void python_finalize(void) {}

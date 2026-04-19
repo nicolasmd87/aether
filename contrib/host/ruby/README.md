@@ -1,4 +1,4 @@
-# std.host.ruby — Embedded CRuby
+# contrib.host.ruby — Embedded CRuby
 
 ## Prerequisites
 
@@ -22,6 +22,6 @@ link_flags = "$(pkg-config --libs ruby)"
 ## Usage
 
 ```aether
-import std.host.ruby
+import contrib.host.ruby
 ruby.run_sandboxed(perms, "puts 'hello'")
 ```

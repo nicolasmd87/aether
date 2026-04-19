@@ -47,6 +47,9 @@ typedef enum {
     TOKEN_HIDE,             // 'hide' scope-level directive: blocks named outer bindings
     TOKEN_SEAL,             // 'seal' scope-level directive: blocks all but a whitelist
     TOKEN_EXCEPT,           // 'except' modifier following 'seal'
+    TOKEN_TRY,              // 'try' — start of a try/catch block
+    TOKEN_CATCH,            // 'catch' — catch clause binding the panic reason
+    TOKEN_PANIC,            // 'panic' — unwind the current actor/try frame
 
     // Types
     TOKEN_INT,

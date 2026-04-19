@@ -1,11 +1,11 @@
-// std.host.js — Embedded JavaScript Language Host Module (Duktape)
+// contrib.host.js — Embedded JavaScript Language Host Module (Duktape)
 //
 // Runs JavaScript code inside an Aether sandbox. JS calls to
 // readFile, env, etc. are provided as Duktape bindings that
 // check Aether's sandbox grants before executing.
 //
 // Usage:
-//   import std.host.js
+//   import contrib.host.js
 //
 //   worker = sandbox("worker") {
 //       grant_env("HOME")

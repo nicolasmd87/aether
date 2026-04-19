@@ -53,6 +53,8 @@ ASTNode* parse_spawn_actor_statement(Parser* parser);
 ASTNode* parse_block(Parser* parser);
 ASTNode* parse_receive_statement(Parser* parser);
 ASTNode* parse_defer_statement(Parser* parser);
+ASTNode* parse_try_statement(Parser* parser);
+ASTNode* parse_panic_statement(Parser* parser);
 
 // Actor V2 parsing functions
 ASTNode* parse_message_definition(Parser* parser);

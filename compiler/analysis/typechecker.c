@@ -1948,6 +1948,52 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
             // Function call used as a statement (e.g. println(...), user_fn(...))
             return typecheck_function_call(stmt, table);
 
+        case AST_TRY_STATEMENT: {
+            // children: [0] body block, [1] AST_CATCH_CLAUSE (value = name, child[0] = handler)
+            if (stmt->child_count != 2) {
+                type_error("malformed try/catch", stmt->line, stmt->column);
+                return 0;
+            }
+            ASTNode* body = stmt->children[0];
+            ASTNode* catch_clause = stmt->children[1];
+
+            // Body runs in its own scope (already handled by AST_BLOCK typecheck).
+            typecheck_statement(body, table);
+
+            // Catch binds `name` to a string (panic reason) and typechecks
+            // the handler in a scope where that name is visible.
+            if (!catch_clause || catch_clause->type != AST_CATCH_CLAUSE ||
+                !catch_clause->value || catch_clause->child_count < 1) {
+                type_error("malformed catch clause", stmt->line, stmt->column);
+                return 0;
+            }
+
+            SymbolTable* catch_table = create_symbol_table(table);
+            Type* str_type = create_type(TYPE_STRING);
+            add_symbol(catch_table, catch_clause->value, str_type, 0, 0, 0);
+            typecheck_statement(catch_clause->children[0], catch_table);
+            free_symbol_table(catch_table);
+            return 1;
+        }
+
+        case AST_PANIC_STATEMENT: {
+            // panic(reason) — reason must typecheck and evaluate to a string.
+            if (stmt->child_count < 1) {
+                type_error("panic() requires a reason argument", stmt->line, stmt->column);
+                return 0;
+            }
+            ASTNode* reason = stmt->children[0];
+            typecheck_expression(reason, table);
+            Type* rt = infer_type(reason, table);
+            if (rt && rt->kind != TYPE_STRING && rt->kind != TYPE_UNKNOWN) {
+                type_error("panic() reason must be a string", reason->line, reason->column);
+                free_type(rt);
+                return 0;
+            }
+            if (rt) free_type(rt);
+            return 1;
+        }
+
         case AST_PRINT_STATEMENT: {
             for (int i = 0; i < stmt->child_count; i++) {
                 typecheck_expression(stmt->children[i], table);

@@ -1,11 +1,11 @@
-// std.host.python — Embedded Python Language Host Module
+// contrib.host.python — Embedded Python Language Host Module
 //
 // Runs Python code inside an Aether sandbox. Python's libc calls
 // (connect, open, getenv, execve) are intercepted and checked against
 // the sandbox grant list. Python has no idea it's contained.
 //
 // Usage:
-//   import std.host.python
+//   import contrib.host.python
 //
 //   worker = sandbox("worker") {
 //       grant_env("HOME")

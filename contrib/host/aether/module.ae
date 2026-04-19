@@ -1,4 +1,4 @@
-// std.host.aether — Aether-hosts-Aether Sandbox Module
+// contrib.host.aether — Aether-hosts-Aether Sandbox Module
 //
 // Compiles and runs an Aether script as a sandboxed subprocess.
 // The child process runs with LD_PRELOAD=libaether_sandbox.so so its
@@ -12,7 +12,7 @@
 // at the OS level (LD_PRELOAD), not the language level.
 //
 // Usage:
-//   import std.host.aether
+//   import contrib.host.aether
 //
 //   worker = sandbox("worker") {
 //       grant_fs_read("/etc/app/config.yaml")

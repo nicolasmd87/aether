@@ -169,6 +169,64 @@ Ariel's PR proposes dispatching incoming HTTP connections as file descriptors di
 - `ae version list` columns: version, status (active/installed/available)
 - Windows: `ae version use` should preserve the initial install in `versions/` before switching (POSIX side shipped with the macOS Gatekeeper fix).
 
+## Host Language Bridges (`contrib/host/`)
+
+These are cross-cutting items that touch every in-process host bridge
+(Lua, Python, Perl, Ruby, Tcl, JS) plus the separate-process hosts
+(Aether, Go, Java). They were deferred from the 0.72.x host cleanup
+because the shape of the solution isn't obvious yet — they need an
+explicit API decision, not a per-host hack.
+
+### Capture stdout/stderr from hosted code
+
+Today hosted code prints straight to the Aether process's stdout. That
+works for demos but breaks two use cases: (a) an Aether supervisor that
+wants to filter or route a sandboxed script's output, and (b) embedding
+the output in a structured response (HTTP body, actor message).
+
+**Design space**:
+- Pipe-based: each `run_sandboxed()` invocation creates a pair of
+  pipes, rewires the host's stdout/stderr FDs for the duration, and
+  returns the captured bytes. Works uniformly across all 7 in-process
+  hosts since they all emit through libc `write(1, ...)`. Thread-unsafe
+  though — concurrent sandboxed calls would race on the FD swap.
+- Shared-map key convention: reserve `_stdout` / `_stderr` keys in the
+  per-run shared map and have each bridge's print binding also write
+  to those keys. Thread-safe (map is per-token) but requires touching
+  every host's print binding.
+- Pass-through (status quo): don't capture, let the Aether program
+  capture its own process output if it cares. Simplest but punts the
+  problem onto every user.
+
+**Decision needed**: which of the three shapes, and whether it applies
+to the separate-process hosts (Go/Java/Aether) the same way or gets
+mapped onto their existing `execvp` output.
+
+### Shared-map native bindings for Perl and Ruby
+
+`aether_map_get` / `aether_map_put` for Perl and Ruby currently work
+via `eval`-injected hashes — reads pull from a tied hash, but writes
+stay in the hosted language and never reach the C-side shared map.
+Python, Lua, Tcl, and JS all have proper C/Tcl bindings.
+
+**Fix shape**: Perl XS module (`AetherMap.xs`) and Ruby C extension
+(`aether_map_ext.c`) that export `aether_map_get`/`aether_map_put` as
+native functions calling `aether_shared_map_get_by_token` /
+`aether_shared_map_put_by_token` directly.
+
+### `string:bytes` mode for shared map
+
+The shared map stores strings. Passing binary data (images, protobufs,
+raw MIDI) currently forces the caller to base64-encode, which is a 33%
+size overhead and an encode/decode cost at both ends.
+
+**Fix shape**: a sibling API `aether_shared_map_put_bytes(token, key,
+buf, len)` + `aether_shared_map_get_bytes(token, key, &len) -> buf`
+that doesn't null-terminate or encode. The C-side map already stores
+length-prefixed values; the change is API-only on the C side. Each
+bridge then needs a new binding (`aether_map_put_bytes` / `_get_bytes`)
+in the language that surfaces it as bytes/blob rather than string.
+
 ## Tooling
 
 ### Planned

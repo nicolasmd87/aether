@@ -49,6 +49,9 @@ typedef enum {
     AST_STATE_DECLARATION,
     AST_HIDE_DIRECTIVE,        // hide name1, name2  — block named outer bindings in this scope
     AST_SEAL_DIRECTIVE,        // seal except a, b   — block all outer bindings except whitelist
+    AST_TRY_STATEMENT,         // try { body } catch e { handler } — cooperative panic recovery
+    AST_CATCH_CLAUSE,          // catch name { body }  — attached as child of AST_TRY_STATEMENT
+    AST_PANIC_STATEMENT,       // panic("reason") — unwinds to innermost try or actor barrier
 
     // Actor V2 - Message system
     AST_MESSAGE_DEFINITION,

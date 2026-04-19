@@ -1,4 +1,4 @@
-# std.host.java — Java Sandbox Agent (Panama FFI)
+# contrib.host.java — Java Sandbox Agent (Panama FFI)
 
 ## Prerequisites
 
@@ -16,7 +16,7 @@ javac -version
 ## Build the agent jar
 
 ```bash
-./std/host/java/build.sh
+./contrib/host/java/build.sh
 # Creates: build/aether-sandbox.jar
 ```
 
@@ -31,6 +31,35 @@ java --enable-native-access=ALL-UNNAMED \
      -cp build/aether-sandbox.jar:your-app.jar \
      com.example.Main
 ```
+
+### `grant_jvm_runtime()` helper
+
+JVM startup needs ~30 grants for the linker, trust stores, locale, and
+`JAVA_*` env vars before any application code runs. Bundling them once
+keeps spawn scripts readable:
+
+```aether
+import std.list
+import contrib.host.java
+
+main() {
+    worker = sandbox("my-java-app") {
+        java.grant_jvm_runtime()         // JVM bring-up (29 grants)
+        grant_fs_read("/app/data/*")      // application-specific
+        grant_tcp("api.example.com")
+    }
+    spawn_sandboxed(worker, "java",
+        "--enable-native-access=ALL-UNNAMED",
+        "-javaagent:build/aether-sandbox.jar",
+        "-jar", "my-app.jar")
+    list.free(worker)
+}
+```
+
+The grant set is conservative — it permits reads the JVM performs
+during class loading and TLS init, and nothing more. Source paths were
+captured empirically via `strace java -version` on Corretto 24 (Debian)
+and Temurin 21 (Ubuntu).
 
 ## Notes
 

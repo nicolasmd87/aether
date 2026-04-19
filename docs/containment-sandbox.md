@@ -1141,13 +1141,14 @@ contrib/host/lua/     — import contrib.host.lua      (Lua 5.3)
 contrib/host/js/      — import contrib.host.js       (Duktape ES5)
 contrib/host/perl/    — import contrib.host.perl     (Perl 5.x)
 contrib/host/ruby/    — import contrib.host.ruby     (CRuby 3.x)
+contrib/host/tcl/     — import contrib.host.tcl      (Tcl 8.5+)
 ```
 
 ### Two containment models
 
 | Model | How it works | Used by |
 |-------|-------------|---------|
-| **LD_PRELOAD interception** | Intercept libc calls (connect, open, getenv, execve). The hosted language has ambient access to libc; we filter it. | Python, Lua, Perl, Ruby |
+| **LD_PRELOAD interception** | Intercept libc calls (connect, open, getenv, execve). The hosted language has ambient access to libc; we filter it. | Python, Lua, Perl, Ruby, Tcl |
 | **Native bindings only** | The hosted engine has NO ambient access. We expose only the functions we choose (env, readFile, etc.), each with a sandbox check built in. | JS (Duktape) |
 
 The native bindings model (Duktape) is the purest containment — there
@@ -1156,23 +1157,41 @@ code can only call functions we explicitly provide.
 
 ### Host module matrix
 
-| | Python | Lua | JS (Duktape) | Perl | Ruby |
-|---|--------|-----|-------------|------|------|
-| **Runtime** | CPython 3.x | Lua 5.3 | Duktape 2.x | Perl 5.x | CRuby 3.x |
-| **Dev package** | python3-dev | liblua5.3-dev | duktape-dev | (ships with perl) | ruby-dev |
-| **Compile flag** | AETHER_HAS_PYTHON | AETHER_HAS_LUA | AETHER_HAS_JS | AETHER_HAS_PERL | AETHER_HAS_RUBY |
-| **Link** | -lpython3.11 | -llua5.3 | -lduktape | -lperl | -lruby-3.1 |
-| **Containment model** | LD_PRELOAD | LD_PRELOAD | Native bindings | LD_PRELOAD | LD_PRELOAD |
-| **Needs LD_PRELOAD .so** | Yes | Yes | No | Yes | Yes |
-| **env var access** | libc getenv (intercepted) | libc getenv (intercepted) | `env()` binding (checked) | %ENV scrubbed at entry | ENV scrubbed at entry |
-| **File access** | libc open/fopen (intercepted) | libc fopen (intercepted) | `readFile()` binding (checked) | libc open (intercepted) | libc open (intercepted) |
-| **Network** | libc connect (intercepted) | libc connect (intercepted) | Not exposed | libc connect (intercepted) | libc connect (intercepted) |
-| **Process exec** | libc execve (intercepted) | libc execve (intercepted) | Not exposed | libc execve (intercepted) | libc execve (intercepted) |
-| **Env cache issue** | Yes — os.environ cached at startup; use ctypes.CDLL(None).getenv | No — os.getenv goes through libc | No — no cache | Yes — %ENV cached; scrubbed by host module | Yes — ENV cached; scrubbed by host module |
-| **Sandbox grants honoured** | Yes | Yes | Yes | Yes | Yes |
-| **Glob patterns work** | Yes (prefix, suffix, exact, wildcard) | Yes | Yes | Yes | Yes |
-| **Nested sandbox** | Yes | Yes | Yes | Yes | Yes |
-| **Guest knows it's sandboxed** | No | No | No | No | No |
+| | Python | Lua | JS (Duktape) | Perl | Ruby | Tcl |
+|---|--------|-----|-------------|------|------|-----|
+| **Runtime** | CPython 3.x | Lua 5.3 | Duktape 2.x | Perl 5.x | CRuby 3.x | Tcl 8.5+ |
+| **Dev package** | python3-dev | liblua5.3-dev | duktape-dev | (ships with perl) | ruby-dev | tcl-dev |
+| **Compile flag** | AETHER_HAS_PYTHON | AETHER_HAS_LUA | AETHER_HAS_JS | AETHER_HAS_PERL | AETHER_HAS_RUBY | AETHER_HAS_TCL |
+| **Link** | -lpython3.11 | -llua5.3 | -lduktape | -lperl | -lruby-3.1 | -framework Tcl / -ltcl |
+| **Containment model** | LD_PRELOAD | LD_PRELOAD | Native bindings | LD_PRELOAD | LD_PRELOAD | LD_PRELOAD |
+| **Needs LD_PRELOAD .so** | Yes | Yes | No | Yes | Yes | Yes |
+| **env var access** | libc getenv (intercepted) | libc getenv (intercepted) | `env()` binding (checked) | %ENV scrubbed at entry | ENV scrubbed at entry | ::env lazy via getenv (intercepted) |
+| **File access** | libc open/fopen (intercepted) | libc fopen (intercepted) | `readFile()` binding (checked) | libc open (intercepted) | libc open (intercepted) | libc open (intercepted) |
+| **Network** | libc connect (intercepted) | libc connect (intercepted) | Not exposed | libc connect (intercepted) | libc connect (intercepted) | libc connect (intercepted) |
+| **Process exec** | libc execve (intercepted) | libc execve (intercepted) | Not exposed | libc execve (intercepted) | libc execve (intercepted) | libc execve (intercepted) |
+| **Env cache issue** | Yes — os.environ cached at startup; use ctypes.CDLL(None).getenv | No — os.getenv goes through libc | No — no cache | Yes — %ENV cached; scrubbed by host module | Yes — ENV cached; scrubbed by host module | Yes — ::env cached; not auto-scrubbed |
+| **Sandbox grants honoured** | Yes | Yes | Yes | Yes | Yes | Yes |
+| **Glob patterns work** | Yes (prefix, suffix, exact, wildcard) | Yes | Yes | Yes | Yes | Yes |
+| **Nested sandbox** | Yes | Yes | Yes | Yes | Yes | Yes |
+| **Guest knows it's sandboxed** | No | No | No | No | No | No |
+
+### Shared-interpreter caveats
+
+Perl, Ruby, and Tcl keep a single long-lived interpreter across calls.
+`run_sandboxed` scrubs the environment on entry but does **not** restore
+the original state on exit — a subsequent unsandboxed `run()` in the same
+process sees the scrubbed environment. Two safe usage patterns: (a) use
+one mode per process, restart the host between them; or (b) snapshot the
+environment from the guest language before entering the sandbox and
+reassign it on exit. Python does not have this issue because its cached
+`os.environ` is a separate copy from libc's environ. Lua and JS don't
+cache.
+
+Ruby has one cosmetic surprise: `Fiddle.dlopen("libc.so.6")` inside a
+sandbox succeeds (returns a handle), but any libc function invoked
+through it still goes through the Aether preload layer and respects
+grants. Not a real sandbox escape — just visually alarming when logs or
+tests expect the `dlopen` itself to fail.
 
 ### Usage pattern
 
@@ -1180,7 +1199,7 @@ All host modules follow the same pattern:
 
 ```aether
 import std.list
-import contrib.host.python   // or lua, js, perl
+import contrib.host.python   // or lua, js, perl, ruby, tcl
 
 // Define sandbox grants
 worker = sandbox("worker") {

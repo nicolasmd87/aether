@@ -8,9 +8,6 @@
 #include "../../../runtime/aether_sandbox.h"
 #include "../../../runtime/aether_shared_map.h"
 
-extern void* _aether_ctx_stack[];
-extern int _aether_ctx_depth;
-
 #ifdef AETHER_HAS_LUA
 #include <lua.h>
 #include <lualib.h>
@@ -20,11 +17,23 @@ extern int _aether_ctx_depth;
 
 static lua_State* L = NULL;
 
+// Bridge-owned permission stack. Self-contained — see comment in
+// contrib/host/tcl/aether_host_tcl.c for rationale.
+static void* lua_perms_stack[64];
+static int   lua_perms_depth = 0;
+
 // Permission checker — same as Python host module
 extern int list_size(void*);
 extern void* list_get(void*, int);
 
 static int pattern_match(const char* pat, const char* resource) {
+    // Normalize IPv4-mapped IPv6 addresses so a grant for "10.0.0.1"
+    // matches a TCP resource reported as "::ffff:10.0.0.1" (and
+    // vice versa). Safe for non-TCP categories because "::ffff:"
+    // doesn't appear in filesystem paths, env var names, or exec
+    // command strings.
+    if (pat && strncmp(pat, "::ffff:", 7) == 0) pat += 7;
+    if (resource && strncmp(resource, "::ffff:", 7) == 0) resource += 7;
     int plen = strlen(pat);
     int rlen = strlen(resource);
     if (plen == 1 && pat[0] == '*') return 1;
@@ -53,9 +62,9 @@ static int perms_allow(void* ctx, const char* category, const char* resource) {
 }
 
 static int host_lua_checker(const char* category, const char* resource) {
-    if (_aether_ctx_depth <= 0) return 1;
-    for (int level = 0; level < _aether_ctx_depth; level++) {
-        if (!perms_allow(_aether_ctx_stack[level], category, resource)) return 0;
+    if (lua_perms_depth <= 0) return 1;
+    for (int level = 0; level < lua_perms_depth; level++) {
+        if (!perms_allow(lua_perms_stack[level], category, resource)) return 0;
     }
     return 1;
 }
@@ -89,9 +98,10 @@ int lua_run(const char* code) {
 int lua_run_sandboxed(void* perms, const char* code) {
     if (!code) return -1;
     lua_init();
+    if (lua_perms_depth >= 64) return -1;
 
     // Push perms and install checker
-    _aether_ctx_stack[_aether_ctx_depth++] = perms;
+    lua_perms_stack[lua_perms_depth++] = perms;
     aether_sandbox_check_fn prev = _aether_sandbox_checker;
     _aether_sandbox_checker = host_lua_checker;
 
@@ -104,7 +114,7 @@ int lua_run_sandboxed(void* perms, const char* code) {
 
     // Restore
     _aether_sandbox_checker = prev;
-    _aether_ctx_depth--;
+    lua_perms_depth--;
 
     return result;
 }
@@ -154,8 +164,10 @@ int lua_run_sandboxed_with_map(void* perms, const char* code, uint64_t map_token
     // Set the active token for this invocation
     current_map_token = map_token;
 
+    if (lua_perms_depth >= 64) return -1;
+
     // Push perms and install checker
-    _aether_ctx_stack[_aether_ctx_depth++] = perms;
+    lua_perms_stack[lua_perms_depth++] = perms;
     aether_sandbox_check_fn prev = _aether_sandbox_checker;
     _aether_sandbox_checker = host_lua_checker;
 
@@ -168,7 +180,7 @@ int lua_run_sandboxed_with_map(void* perms, const char* code, uint64_t map_token
 
     // Restore and revoke token
     _aether_sandbox_checker = prev;
-    _aether_ctx_depth--;
+    lua_perms_depth--;
     current_map_token = 0;
 
     return result;
@@ -177,7 +189,7 @@ int lua_run_sandboxed_with_map(void* perms, const char* code, uint64_t map_token
 #else
 #include <stdio.h>
 int lua_init(void) {
-    fprintf(stderr, "error: std.host.lua not available (compile with AETHER_HAS_LUA)\n");
+    fprintf(stderr, "error: contrib.host.lua not available (compile with AETHER_HAS_LUA)\n");
     return -1;
 }
 void lua_finalize(void) {}

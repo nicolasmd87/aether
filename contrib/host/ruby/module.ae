@@ -1,11 +1,11 @@
-// std.host.ruby — Embedded Ruby Language Host Module
+// contrib.host.ruby — Embedded Ruby Language Host Module
 //
 // Runs Ruby code inside an Aether sandbox. Ruby's File.open,
 // ENV[], system() etc. go through libc and are intercepted
 // via LD_PRELOAD.
 //
 // Usage:
-//   import std.host.ruby
+//   import contrib.host.ruby
 //
 //   worker = sandbox("worker") {
 //       grant_env("HOME")

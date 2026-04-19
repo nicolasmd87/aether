@@ -1106,7 +1106,13 @@ ASTNode* parse_statement(Parser* parser) {
             
         case TOKEN_DEFER:
             return parse_defer_statement(parser);
-            
+
+        case TOKEN_TRY:
+            return parse_try_statement(parser);
+
+        case TOKEN_PANIC:
+            return parse_panic_statement(parser);
+
         case TOKEN_PRINT:
             return parse_print_statement(parser);
             
@@ -1853,8 +1859,79 @@ ASTNode* parse_defer_statement(Parser* parser) {
     
     ASTNode* defer_node = create_ast_node(AST_DEFER_STATEMENT, NULL, defer_token->line, defer_token->column);
     add_child(defer_node, deferred_stmt);
-    
+
     return defer_node;
+}
+
+// try { body } catch name { handler }
+//
+// Shape:
+//   AST_TRY_STATEMENT
+//     [0] AST_BLOCK (body)
+//     [1] AST_CATCH_CLAUSE, value = bound name
+//       [0] AST_BLOCK (handler)
+ASTNode* parse_try_statement(Parser* parser) {
+    Token* try_token = peek_token(parser);
+    advance_token(parser); // consume 'try'
+
+    ASTNode* body = parse_block(parser);
+    if (!body) {
+        parser_error(parser, "Expected '{ ... }' after 'try'");
+        return NULL;
+    }
+
+    Token* catch_tok = peek_token(parser);
+    if (!catch_tok || catch_tok->type != TOKEN_CATCH) {
+        parser_error(parser, "Expected 'catch' after try block");
+        return NULL;
+    }
+    advance_token(parser); // consume 'catch'
+
+    Token* name = expect_token(parser, TOKEN_IDENTIFIER);
+    if (!name) {
+        parser_error(parser, "Expected identifier after 'catch' to bind the panic reason");
+        return NULL;
+    }
+
+    ASTNode* handler = parse_block(parser);
+    if (!handler) {
+        parser_error(parser, "Expected '{ ... }' for catch handler");
+        return NULL;
+    }
+
+    ASTNode* catch_node = create_ast_node(AST_CATCH_CLAUSE, name->value,
+                                          catch_tok->line, catch_tok->column);
+    add_child(catch_node, handler);
+
+    ASTNode* try_node = create_ast_node(AST_TRY_STATEMENT, NULL,
+                                        try_token->line, try_token->column);
+    add_child(try_node, body);
+    add_child(try_node, catch_node);
+    return try_node;
+}
+
+// panic("reason") — a statement form. The argument is parsed as a normal
+// expression (so interpolation and variables work) and stored as the
+// single child.
+ASTNode* parse_panic_statement(Parser* parser) {
+    Token* panic_tok = peek_token(parser);
+    advance_token(parser); // consume 'panic'
+
+    if (!expect_token(parser, TOKEN_LEFT_PAREN)) return NULL;
+
+    ASTNode* reason_expr = parse_expression(parser);
+    if (!reason_expr) {
+        parser_error(parser, "Expected reason expression inside panic(...)");
+        return NULL;
+    }
+
+    if (!expect_token(parser, TOKEN_RIGHT_PAREN)) return NULL;
+    match_token(parser, TOKEN_SEMICOLON);
+
+    ASTNode* panic_node = create_ast_node(AST_PANIC_STATEMENT, NULL,
+                                          panic_tok->line, panic_tok->column);
+    add_child(panic_node, reason_expr);
+    return panic_node;
 }
 
 // Actor V2 - Message Definition Parsing

@@ -1,4 +1,4 @@
-# std.host.lua — Embedded Lua
+# contrib.host.lua — Embedded Lua
 
 ## Prerequisites
 
@@ -22,6 +22,6 @@ link_flags = "$(pkg-config --libs lua5.4)"
 ## Usage
 
 ```aether
-import std.host.lua
+import contrib.host.lua
 lua.run_sandboxed(perms, "print('hello')")
 ```

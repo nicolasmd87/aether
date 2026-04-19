@@ -1088,6 +1088,8 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "#include <stdatomic.h>");
     print_line(gen, "#include <stdint.h>");
     print_line(gen, "#include <time.h>");
+    print_line(gen, "#include <setjmp.h>");
+    print_line(gen, "#include \"aether_panic.h\"");
     print_line(gen, "#ifdef _WIN32");
     print_line(gen, "#define NOMINMAX");
     print_line(gen, "#include <windows.h>");

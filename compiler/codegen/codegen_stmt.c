@@ -1813,6 +1813,64 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                 push_defer(gen, stmt->children[0]);
             }
             break;
+
+        case AST_TRY_STATEMENT: {
+            // try { body } catch name { handler }
+            // Emit:
+            //   { AetherJmpFrame* _af = aether_try_push();
+            //     if (sigsetjmp(_af->buf, 1) == 0) {
+            //         body
+            //         aether_try_pop();
+            //     } else {
+            //         const char* NAME = _af->reason ? _af->reason : "panic";
+            //         aether_try_pop();
+            //         handler
+            //     }
+            //   }
+            //
+            // Each try site gets a uniquely-named frame variable so nested
+            // try blocks don't shadow each other at the C level.
+            if (stmt->child_count != 2) break;
+            ASTNode* body = stmt->children[0];
+            ASTNode* catch_clause = stmt->children[1];
+            if (!body || !catch_clause || catch_clause->type != AST_CATCH_CLAUSE ||
+                !catch_clause->value || catch_clause->child_count < 1) break;
+
+            static int s_try_counter = 0;
+            int uid = ++s_try_counter;
+
+            print_line(gen, "{");
+            indent(gen);
+            print_line(gen, "AetherJmpFrame* _aether_try_%d = aether_try_push();", uid);
+            print_line(gen, "if (sigsetjmp(_aether_try_%d->buf, 1) == 0) {", uid);
+            indent(gen);
+            // Body runs inside the if; it already emits its own { } via AST_BLOCK.
+            generate_statement(gen, body);
+            print_line(gen, "aether_try_pop();");
+            unindent(gen);
+            print_line(gen, "} else {");
+            indent(gen);
+            print_line(gen, "const char* %s = _aether_try_%d->reason ? _aether_try_%d->reason : \"panic\";",
+                      catch_clause->value, uid, uid);
+            print_line(gen, "aether_try_pop();");
+            generate_statement(gen, catch_clause->children[0]);
+            print_line(gen, "(void)%s;", catch_clause->value);
+            unindent(gen);
+            print_line(gen, "}");
+            unindent(gen);
+            print_line(gen, "}");
+            break;
+        }
+
+        case AST_PANIC_STATEMENT: {
+            // panic(reason_expr);  →  aether_panic(reason_expr);
+            if (stmt->child_count < 1) break;
+            print_indent(gen);
+            fprintf(gen->output, "aether_panic(");
+            generate_expression(gen, stmt->children[0]);
+            fprintf(gen->output, ");\n");
+            break;
+        }
             
         case AST_EXPRESSION_STATEMENT:
             if (stmt->child_count > 0) {

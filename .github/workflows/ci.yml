@@ -53,6 +53,39 @@ jobs:
       run: CC=${{ matrix.cc }} make ci
 
   # ============================================================
+  # contrib/host bridge check — syntax check of every host bridge
+  # in stub mode (always-on), plus end-to-end build+link+run of
+  # host demos for every language whose dev library is installed
+  # on the runner. Linux-only since apt installs most dev libs
+  # in one shot; other platforms can be added if needed.
+  # ============================================================
+  ci-contrib-host:
+    name: contrib/host bridges (Linux)
+    runs-on: ubuntu-22.04
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install host language dev libraries
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          gcc make bc pkg-config \
+          liblua5.3-dev \
+          python3-dev \
+          ruby-dev \
+          libperl-dev \
+          duktape-dev \
+          tcl-dev \
+          golang-go
+
+    - name: Build compiler + stdlib
+      run: make compiler ae stdlib
+
+    - name: Run contrib/host check
+      run: make contrib-host-check
+
+  # ============================================================
   # Windows CI — MinGW via MSYS2
   # Runs `make ci` — compiler, ae, stdlib, unit tests,
   # .ae integration tests (includes REPL tests), examples.

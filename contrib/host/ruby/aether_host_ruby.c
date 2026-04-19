@@ -8,20 +8,29 @@
 #include "../../../runtime/aether_sandbox.h"
 #include "../../../runtime/aether_shared_map.h"
 
-extern void* _aether_ctx_stack[];
-extern int _aether_ctx_depth;
-
 #ifdef AETHER_HAS_RUBY
 #include <ruby.h>
 #include <string.h>
 
 static int ruby_initialized = 0;
 
+// Bridge-owned permission stack. Self-contained — see comment in
+// contrib/host/tcl/aether_host_tcl.c for rationale.
+static void* ruby_perms_stack[64];
+static int   ruby_perms_depth = 0;
+
 // Permission checker — shared pattern with other host modules
 extern int list_size(void*);
 extern void* list_get(void*, int);
 
 static int pattern_match(const char* pat, const char* resource) {
+    // Normalize IPv4-mapped IPv6 addresses so a grant for "10.0.0.1"
+    // matches a TCP resource reported as "::ffff:10.0.0.1" (and
+    // vice versa). Safe for non-TCP categories because "::ffff:"
+    // doesn't appear in filesystem paths, env var names, or exec
+    // command strings.
+    if (pat && strncmp(pat, "::ffff:", 7) == 0) pat += 7;
+    if (resource && strncmp(resource, "::ffff:", 7) == 0) resource += 7;
     int plen = strlen(pat);
     int rlen = strlen(resource);
     if (plen == 1 && pat[0] == '*') return 1;
@@ -50,9 +59,9 @@ static int perms_allow(void* perms, const char* category, const char* resource) 
 }
 
 static int host_ruby_checker(const char* category, const char* resource) {
-    if (_aether_ctx_depth <= 0) return 1;
-    for (int level = 0; level < _aether_ctx_depth; level++) {
-        if (!perms_allow(_aether_ctx_stack[level], category, resource)) return 0;
+    if (ruby_perms_depth <= 0) return 1;
+    for (int level = 0; level < ruby_perms_depth; level++) {
+        if (!perms_allow(ruby_perms_stack[level], category, resource)) return 0;
     }
     return 1;
 }
@@ -101,7 +110,8 @@ int ruby_run_sandboxed(void* perms, const char* code) {
     if (!code) return -1;
     ruby_init_host();
 
-    _aether_ctx_stack[_aether_ctx_depth++] = perms;
+    if (ruby_perms_depth >= 64) return -1;
+    ruby_perms_stack[ruby_perms_depth++] = perms;
     aether_sandbox_check_fn prev = _aether_sandbox_checker;
     _aether_sandbox_checker = host_ruby_checker;
 
@@ -133,7 +143,7 @@ int ruby_run_sandboxed(void* perms, const char* code) {
     int result = eval_ruby(code);
 
     _aether_sandbox_checker = prev;
-    _aether_ctx_depth--;
+    ruby_perms_depth--;
 
     return result;
 }
@@ -192,14 +202,15 @@ int ruby_run_sandboxed_with_map(void* perms, const char* code, uint64_t map_toke
         eval_ruby(scrub);
     }
 
-    _aether_ctx_stack[_aether_ctx_depth++] = perms;
+    if (ruby_perms_depth >= 64) return -1;
+    ruby_perms_stack[ruby_perms_depth++] = perms;
     aether_sandbox_check_fn prev = _aether_sandbox_checker;
     _aether_sandbox_checker = host_ruby_checker;
 
     int result = eval_ruby(code);
 
     _aether_sandbox_checker = prev;
-    _aether_ctx_depth--;
+    ruby_perms_depth--;
 
     return result;
 }
@@ -207,7 +218,7 @@ int ruby_run_sandboxed_with_map(void* perms, const char* code, uint64_t map_toke
 #else
 #include <stdio.h>
 int ruby_init_host(void) {
-    fprintf(stderr, "error: std.host.ruby not available (compile with AETHER_HAS_RUBY)\n");
+    fprintf(stderr, "error: contrib.host.ruby not available (compile with AETHER_HAS_RUBY)\n");
     return -1;
 }
 void ruby_finalize_host(void) {}
