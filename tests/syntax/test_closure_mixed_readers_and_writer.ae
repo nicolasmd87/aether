@@ -1,0 +1,30 @@
+// Route 1 regression: a read-only capturing closure and a writing
+// closure that share the same outer variable must agree. The writer
+// forces heap promotion; the reader must capture the same pointer,
+// not a pre-promotion value copy, otherwise the reader sees stale
+// zero while the writer thinks the state moved on.
+//
+// This is the non-local analysis test — Route 1 has to scan ALL
+// closures to decide promotion, not just the one it's emitting.
+
+extern exit(code: int)
+
+main() {
+    count = 0
+    reader = || { return count }
+    writer = || { count = count + 1 }
+
+    call(writer)
+    r1 = call(reader)
+    if r1 != 1 { println("FAIL: reader after 1 write, expected 1, got:"); println(r1); exit(1) }
+
+    call(writer)
+    call(writer)
+    r2 = call(reader)
+    if r2 != 3 { println("FAIL: reader after 3 writes, expected 3, got:"); println(r2); exit(1) }
+
+    // Outer also sees the shared state.
+    if count != 3 { println("FAIL: outer count, expected 3, got:"); println(count); exit(1) }
+
+    println("ok")
+}

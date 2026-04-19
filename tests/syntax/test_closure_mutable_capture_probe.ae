@@ -1,0 +1,23 @@
+// Route 1 regression: closures that assign to a captured variable cause
+// the variable to be heap-promoted, so both outer reads and other
+// closures see the update. This is the Ruby/Groovy model.
+//
+// Required for contrib/aether_ui/example_calculator.ae to work
+// elegantly — its digit/apply_op/equals/clear closures all share
+// `num`, `prev`, `op` without ref cells.
+
+extern exit(code: int)
+
+main() {
+    n = 0
+    inc = || { n = n + 1 }
+    call(inc)
+    call(inc)
+    call(inc)
+    // Under pre-Route-1 by-value: n would still be 0 (closure wrote to
+    // its env copy, outer untouched).
+    // Under Route 1: n is 3 — outer binding was heap-promoted, closure
+    // captured the pointer, writes go to the shared cell.
+    if n != 3 { println("FAIL: expected n=3, got:"); println(n); exit(1) }
+    println("ok")
+}
