@@ -1,0 +1,33 @@
+// Integration: a user function takes a closure argument (`f: fn`) and
+// calls it. The argument closure captures an outer promoted variable.
+// Tests that the dispatch through `f: fn` still reaches the closure's
+// function pointer + its env correctly — and that the captured
+// promoted cell is reachable.
+
+extern exit(code: int)
+
+apply_twice(x: int, f: fn) {
+    return call(f, call(f, x))
+}
+
+main() {
+    base = 1
+    // Closure that adds `base` to its argument. `base` is outer-scope
+    // and written below — so promoted.
+    adder = |x: int| { return x + base }
+
+    r = apply_twice(10, adder)
+    // adder(10) = 10 + 1 = 11; adder(11) = 11 + 1 = 12
+    if r != 12 { println("FAIL: initial, expected 12, got:"); println(r); exit(1) }
+
+    // Mutate base through a writer closure. adder captured a pointer to
+    // base's cell, so the next invocation sees the new value.
+    set_base = |v: int| { base = v }
+    call(set_base, 100)
+
+    r2 = apply_twice(10, adder)
+    // adder(10) = 10 + 100 = 110; adder(110) = 110 + 100 = 210
+    if r2 != 210 { println("FAIL: after base=100, expected 210, got:"); println(r2); exit(1) }
+
+    println("ok")
+}

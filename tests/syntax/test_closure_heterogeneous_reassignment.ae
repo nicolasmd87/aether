@@ -1,0 +1,26 @@
+// Closure variable reassigned to closures with different arg counts
+// or types. Each call() must see the signature of whatever's currently
+// stored. Forces the generic-dispatch fallback.
+
+extern exit(code: int)
+
+main() {
+    // Two-arg closure.
+    fn = |a: int, b: int| { return a + b }
+    r1 = call(fn, 10, 20)
+    if r1 != 30 { println("FAIL: two-arg"); exit(1) }
+
+    // Reassign to a two-arg closure with different body.
+    fn = |a: int, b: int| { return a - b }
+    r2 = call(fn, 10, 20)
+    if r2 != -10 { println("FAIL: reassigned two-arg"); exit(1) }
+
+    // Reassign again.
+    fn = |a: int, b: int| { if a > b { return a } return b }
+    r3 = call(fn, 7, 3)
+    if r3 != 7 { println("FAIL: max closure"); exit(1) }
+    r4 = call(fn, 2, 9)
+    if r4 != 9 { println("FAIL: max closure 2"); exit(1) }
+
+    println("ok")
+}

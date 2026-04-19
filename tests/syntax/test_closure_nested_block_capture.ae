@@ -1,0 +1,29 @@
+// Route 1 regression: a mutable-capturing closure declared inside a
+// nested block (if / for) still heap-promotes the outer variable.
+// is_declared_in_function must recurse into nested blocks (does, per
+// the previous subtree_declares fix) — this test pins that.
+
+extern exit(code: int)
+
+main() {
+    n = 0
+    cond = 1
+    if cond == 1 {
+        // Closure declared inside an if-block, captures and writes main's `n`.
+        inc = || { n = n + 10 }
+        call(inc)
+        call(inc)
+    }
+    // Outer sees the mutation from inside the nested block.
+    if n != 20 { println("FAIL: expected 20, got:"); println(n); exit(1) }
+
+    // Same with a for-loop: multiple closures across iterations all hit
+    // the same heap cell.
+    for (i = 0; i < 3; i++) {
+        step = || { n = n + 1 }
+        call(step)
+    }
+    if n != 23 { println("FAIL: after for-loop, expected 23, got:"); println(n); exit(1) }
+
+    println("ok")
+}

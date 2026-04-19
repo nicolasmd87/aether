@@ -1,0 +1,32 @@
+// Route 1 regression: promotion works identically in a user function
+// body, not just main. Each call to the function gets its own heap
+// cell; mutations don't leak across invocations.
+
+extern exit(code: int)
+
+counter_of(start: int) {
+    total = start
+    inc = || { total = total + 1 }
+    dec = || { total = total - 1 }
+    call(inc)
+    call(inc)
+    call(inc)
+    call(dec)
+    return total
+}
+
+main() {
+    r1 = counter_of(0)
+    if r1 != 2 { println("FAIL: counter_of(0) expected 2, got:"); println(r1); exit(1) }
+
+    r2 = counter_of(100)
+    if r2 != 102 { println("FAIL: counter_of(100) expected 102, got:"); println(r2); exit(1) }
+
+    r3 = counter_of(-5)
+    if r3 != -3 { println("FAIL: counter_of(-5) expected -3, got:"); println(r3); exit(1) }
+
+    // Isolation: calls don't share state.
+    if r1 + r2 + r3 != 101 { println("FAIL: isolation"); exit(1) }
+
+    println("ok")
+}

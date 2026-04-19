@@ -4,9 +4,7 @@
 
 // Collect identifiers (reads) referenced in an AST subtree. Does NOT
 // collect assignment targets — a name that only appears as an LHS and
-// never as an RHS is treated as a fresh local, matching Aether's
-// Python-style implicit declaration where `v = expr` introduces `v`
-// unless `v` is already in scope and read elsewhere in the same body.
+// never as an RHS is handled separately by collect_write_targets below.
 static void collect_identifiers(ASTNode* node, char*** names, int* count, int* cap) {
     if (!node) return;
     if (node->type == AST_IDENTIFIER && node->value) {
@@ -22,6 +20,31 @@ static void collect_identifiers(ASTNode* node, char*** names, int* count, int* c
     }
     for (int i = 0; i < node->child_count; i++) {
         collect_identifiers(node->children[i], names, count, cap);
+    }
+}
+
+// Collect write-target names (AST_VARIABLE_DECLARATION.value) in a closure
+// body, stopping at nested closures. Used by the capture filter so that
+// `x = expr` in a closure body — where x never appears on a read side —
+// still gets a chance to be classified as a capture if x exists in the
+// enclosing scope.
+static void collect_write_targets(ASTNode* node, char*** names, int* count, int* cap) {
+    if (!node) return;
+    if (node->type == AST_CLOSURE) return;  // nested closures have their own scope
+    if ((node->type == AST_VARIABLE_DECLARATION || node->type == AST_CONST_DECLARATION) &&
+        node->value) {
+        for (int i = 0; i < *count; i++) {
+            if (strcmp((*names)[i], node->value) == 0) goto skip;
+        }
+        if (*count >= *cap) {
+            *cap = *cap ? *cap * 2 : 8;
+            *names = realloc(*names, *cap * sizeof(char*));
+        }
+        (*names)[(*count)++] = strdup(node->value);
+    skip:;
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        collect_write_targets(node->children[i], names, count, cap);
     }
 }
 
@@ -260,6 +283,42 @@ static void discover_closures_scoped(CodeGenerator* gen, ASTNode* node, const ch
             free(all_ids[i]);
         }
         free(all_ids);
+
+        // Second pass for write-only captures: names that appear as
+        // AST_VARIABLE_DECLARATION targets but NEVER as reads in the
+        // closure body. `msg = "world"` in a closure, where outer scope
+        // declares `msg`, is a mutation of the outer binding — not a
+        // fresh local — and must be treated as a capture so Route 1
+        // heap-promotes it. Without this, write-only mutations silently
+        // fail to reach the outer scope.
+        if (enclosing_func) {
+            char** writes = NULL;
+            int write_count = 0, write_cap = 0;
+            collect_write_targets(body, &writes, &write_count, &write_cap);
+            for (int i = 0; i < write_count; i++) {
+                // Already captured via the read path?
+                int already = 0;
+                for (int k = 0; k < cap_count; k++) {
+                    if (strcmp(captures[k], writes[i]) == 0) { already = 1; break; }
+                }
+                if (already) { free(writes[i]); continue; }
+                // Skip closure params / builtins.
+                if (is_closure_param(node, writes[i]) || is_builtin_name(writes[i])) {
+                    free(writes[i]);
+                    continue;
+                }
+                // Promote only if the name exists in the enclosing function.
+                if (is_declared_in_function(gen->program, enclosing_func, writes[i])) {
+                    if (cap_count >= cap_cap) {
+                        cap_cap = cap_cap ? cap_cap * 2 : 8;
+                        captures = realloc(captures, cap_cap * sizeof(char*));
+                    }
+                    captures[cap_count++] = strdup(writes[i]);
+                }
+                free(writes[i]);
+            }
+            free(writes);
+        }
 
         // Register closure
         if (gen->closure_count >= gen->closure_capacity) {
@@ -806,11 +865,23 @@ void emit_closure_definitions(CodeGenerator* gen) {
             gen->current_env_capture_count = env_capture_count;
             // Publish promoted names visible to this closure body so
             // reads/writes dereference through the pointer alias we just
-            // emitted above.
+            // emitted above. EXCLUDE names that are closure parameters of
+            // this closure — those are regular-typed values (int, string,
+            // etc.), not pointers, and dereferencing them would be wrong.
+            char** body_promoted = NULL;
+            int body_promoted_count = 0;
+            if (parent_promoted_count > 0) {
+                body_promoted = malloc(parent_promoted_count * sizeof(char*));
+                for (int p = 0; p < parent_promoted_count; p++) {
+                    if (!parent_promoted[p]) continue;
+                    if (is_closure_param(closure, parent_promoted[p])) continue;
+                    body_promoted[body_promoted_count++] = parent_promoted[p];
+                }
+            }
             char** prev_promoted = gen->current_promoted_captures;
             int prev_promoted_count = gen->current_promoted_capture_count;
-            gen->current_promoted_captures = parent_promoted;
-            gen->current_promoted_capture_count = parent_promoted_count;
+            gen->current_promoted_captures = body_promoted;
+            gen->current_promoted_capture_count = body_promoted_count;
             // Mark promoted captures as already-declared in this local scope
             // so writes in the body hit the reassignment branch (emits
             // *name = ...) rather than trying to declare+malloc again.
@@ -825,6 +896,7 @@ void emit_closure_definitions(CodeGenerator* gen) {
             gen->current_env_capture_count = prev_env_count;
             gen->current_promoted_captures = prev_promoted;
             gen->current_promoted_capture_count = prev_promoted_count;
+            free(body_promoted);
             // Free the body's declared_vars and restore the outer scope's set.
             if (gen->declared_vars) {
                 for (int i = 0; i < gen->declared_var_count; i++) free(gen->declared_vars[i]);
@@ -1721,13 +1793,18 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     // to a different closure and has no single static identity;
                     // treat it the same as "not found" and fall back to generic
                     // function-pointer dispatch.
+                    // A closure variable that is ALSO a Route 1 promoted name
+                    // is reassignable by construction (some closure writes it)
+                    // and must go through the generic path too.
                     int found_id = -1;
                     if (closure_arg && closure_arg->type == AST_IDENTIFIER && closure_arg->value) {
-                        for (int ci = 0; ci < gen->closure_var_count; ci++) {
-                            if (strcmp(gen->closure_var_map[ci].var_name, closure_arg->value) == 0) {
-                                int cid = gen->closure_var_map[ci].closure_id;
-                                if (cid >= 0) found_id = cid;
-                                break;
+                        if (!is_promoted_capture(gen, closure_arg->value)) {
+                            for (int ci = 0; ci < gen->closure_var_count; ci++) {
+                                if (strcmp(gen->closure_var_map[ci].var_name, closure_arg->value) == 0) {
+                                    int cid = gen->closure_var_map[ci].closure_id;
+                                    if (cid >= 0) found_id = cid;
+                                    break;
+                                }
                             }
                         }
                     }
@@ -1740,7 +1817,12 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         fprintf(gen->output, ".env");
                         for (int i = 1; i < expr->child_count; i++) {
                             ASTNode* arg = expr->children[i];
-                            if (arg && arg->type == AST_CLOSURE) continue;
+                            // Skip trailing-DSL-block closures (handled via
+                            // _ctx injection, not passed as args). Regular
+                            // closure-literal args are real arguments and
+                            // must be forwarded.
+                            if (arg && arg->type == AST_CLOSURE &&
+                                arg->value && strcmp(arg->value, "trailing") == 0) continue;
                             fprintf(gen->output, ", ");
                             generate_expression(gen, arg);
                         }
@@ -1755,11 +1837,14 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         fprintf(gen->output, "((%s(*)(void*", ret);
                         for (int i = 1; i < expr->child_count; i++) {
                             ASTNode* arg = expr->children[i];
-                            if (arg && arg->type == AST_CLOSURE) continue;
+                            if (arg && arg->type == AST_CLOSURE &&
+                                arg->value && strcmp(arg->value, "trailing") == 0) continue;
                             // Infer arg type
                             const char* atype = "int";
                             if (arg && arg->node_type) {
                                 atype = get_c_type(arg->node_type);
+                            } else if (arg && arg->type == AST_CLOSURE) {
+                                atype = "_AeClosure";
                             }
                             fprintf(gen->output, ", %s", atype);
                         }
@@ -1770,7 +1855,8 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                         fprintf(gen->output, ".env");
                         for (int i = 1; i < expr->child_count; i++) {
                             ASTNode* arg = expr->children[i];
-                            if (arg && arg->type == AST_CLOSURE) continue;
+                            if (arg && arg->type == AST_CLOSURE &&
+                                arg->value && strcmp(arg->value, "trailing") == 0) continue;
                             fprintf(gen->output, ", ");
                             generate_expression(gen, arg);
                         }

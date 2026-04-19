@@ -1,0 +1,29 @@
+// Route 1 regression: a string (const char*) captured and mutated by a
+// closure should heap-promote like any other type. Without proper
+// handling, the cell type would degrade to `int*` and truncate the
+// pointer. The get_c_type lookup needs to resolve to "const char*" and
+// `T* name = malloc(sizeof(T))` has to sizeof(const char*) not int.
+
+extern exit(code: int)
+extern str_eq(a: string, b: string) -> int
+
+main() {
+    msg = "hello"
+    swap = || { msg = "world" }
+
+    if str_eq(msg, "hello") == 0 { println("FAIL: initial"); exit(1) }
+
+    call(swap)
+
+    // Outer reads the mutated value.
+    if str_eq(msg, "world") == 0 { println("FAIL: after swap"); exit(1) }
+
+    // Restore, then check again — shows mutation works both ways.
+    msg = "hello"
+    if str_eq(msg, "hello") == 0 { println("FAIL: restored"); exit(1) }
+
+    call(swap)
+    if str_eq(msg, "world") == 0 { println("FAIL: second swap"); exit(1) }
+
+    println("ok")
+}

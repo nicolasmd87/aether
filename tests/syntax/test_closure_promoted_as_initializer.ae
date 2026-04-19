@@ -1,0 +1,30 @@
+// Route 1 edge: a promoted variable used as the initializer expression
+// of another variable. The reader should dereference through the
+// pointer, not read a stale non-promoted value.
+
+extern exit(code: int)
+
+main() {
+    n = 0
+    inc = || { n = n + 1 }
+    call(inc)
+    call(inc)
+
+    // n is 2 now. Use it as an initializer.
+    m = n           // reads *n through the promotion path
+    if m != 2 { println("FAIL: m = n, expected 2, got:"); println(m); exit(1) }
+
+    // Use n in arithmetic, comparison, as a function argument.
+    sum = n + 10
+    if sum != 12 { println("FAIL: sum, expected 12, got:"); println(sum); exit(1) }
+
+    if n < 0 { println("FAIL: n should be positive"); exit(1) }
+    if n > 100 { println("FAIL: n should not exceed 100"); exit(1) }
+
+    // Mutate again, verify m is unchanged (m is a fresh local, not a ref).
+    call(inc)
+    if n != 3 { println("FAIL: after third inc"); exit(1) }
+    if m != 2 { println("FAIL: m should be unchanged at 2, got:"); println(m); exit(1) }
+
+    println("ok")
+}
