@@ -420,12 +420,100 @@ static void propagate_call_return_types(CodeGenerator* gen, ASTNode* node) {
     }
 }
 
+// Add `name` to a function's promoted-names entry in gen->promoted_funcs,
+// creating the entry if absent, de-duplicating names within it.
+static void add_promoted_name(CodeGenerator* gen, const char* func_name, const char* name) {
+    if (!func_name || !name) return;
+    int idx = -1;
+    for (int i = 0; i < gen->promoted_func_count; i++) {
+        if (strcmp(gen->promoted_funcs[i].func_name, func_name) == 0) {
+            idx = i;
+            break;
+        }
+    }
+    if (idx < 0) {
+        if (gen->promoted_func_count >= gen->promoted_func_capacity) {
+            gen->promoted_func_capacity = gen->promoted_func_capacity ? gen->promoted_func_capacity * 2 : 8;
+            gen->promoted_funcs = realloc(gen->promoted_funcs,
+                gen->promoted_func_capacity * sizeof(gen->promoted_funcs[0]));
+        }
+        idx = gen->promoted_func_count++;
+        gen->promoted_funcs[idx].func_name = strdup(func_name);
+        gen->promoted_funcs[idx].names = NULL;
+        gen->promoted_funcs[idx].count = 0;
+    }
+    for (int i = 0; i < gen->promoted_funcs[idx].count; i++) {
+        if (strcmp(gen->promoted_funcs[idx].names[i], name) == 0) return;
+    }
+    gen->promoted_funcs[idx].names = realloc(gen->promoted_funcs[idx].names,
+        (gen->promoted_funcs[idx].count + 1) * sizeof(char*));
+    gen->promoted_funcs[idx].names[gen->promoted_funcs[idx].count++] = strdup(name);
+}
+
+// Route 1 promotion analysis. After discover_closures has run, we know every
+// closure's captures and its parent function. Scan each closure's body for
+// captures that are assigned to; those names must be heap-promoted in the
+// parent function (so outer reads/writes, and sibling closures, all share
+// the same cell).
+static void compute_promoted_captures(CodeGenerator* gen) {
+    for (int ci = 0; ci < gen->closure_count; ci++) {
+        const char* parent_func = gen->closures[ci].parent_func;
+        if (!parent_func) continue;
+        ASTNode* cnode = gen->closures[ci].closure_node;
+        ASTNode* body = NULL;
+        for (int k = cnode->child_count - 1; k >= 0; k--) {
+            if (cnode->children[k] && cnode->children[k]->type == AST_BLOCK) {
+                body = cnode->children[k];
+                break;
+            }
+        }
+        if (!body) continue;
+        for (int j = 0; j < gen->closures[ci].capture_count; j++) {
+            const char* cap = gen->closures[ci].captures[j];
+            if (!cap) continue;
+            if (is_assigned_to(body, cap)) {
+                add_promoted_name(gen, parent_func, cap);
+            }
+        }
+    }
+}
+
+// Lookup: are the promoted names for `func_name` non-empty? Returns the list
+// and count via out params; both may be NULL/0 when the function has none.
+void get_promoted_names_for_func(CodeGenerator* gen, const char* func_name,
+                                 char*** out_names, int* out_count) {
+    *out_names = NULL;
+    *out_count = 0;
+    if (!func_name) return;
+    for (int i = 0; i < gen->promoted_func_count; i++) {
+        if (strcmp(gen->promoted_funcs[i].func_name, func_name) == 0) {
+            *out_names = gen->promoted_funcs[i].names;
+            *out_count = gen->promoted_funcs[i].count;
+            return;
+        }
+    }
+}
+
+// Convenience: is `name` promoted in the current codegen context?
+int is_promoted_capture(CodeGenerator* gen, const char* name) {
+    if (!name) return 0;
+    for (int i = 0; i < gen->current_promoted_capture_count; i++) {
+        if (gen->current_promoted_captures[i] &&
+            strcmp(gen->current_promoted_captures[i], name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 // Public entry point — starts at program root with no enclosing function.
 void discover_closures(CodeGenerator* gen, ASTNode* node) {
     discover_closures_scoped(gen, node, NULL);
     // Second pass: now that closure_var_map is fully populated, propagate
     // return types back onto call() expressions the typechecker left as int.
     propagate_call_return_types(gen, node);
+    // Third pass: compute which captures need heap promotion per function.
+    compute_promoted_captures(gen);
 }
 
 // Search a single function node for `var_name` as either a parameter
@@ -517,6 +605,12 @@ void emit_closure_definitions(CodeGenerator* gen) {
         int cap_count = gen->closures[ci].capture_count;
         const char* parent_func = gen->closures[ci].parent_func;
 
+        // Look up the parent function's promoted names — captures matching
+        // them get a pointer-typed env slot and pointer-typed body alias.
+        char** parent_promoted = NULL;
+        int parent_promoted_count = 0;
+        get_promoted_names_for_func(gen, parent_func, &parent_promoted, &parent_promoted_count);
+
         // Emit environment struct (even if empty, for uniform calling convention)
         fprintf(gen->output, "typedef struct {\n");
         if (cap_count == 0) {
@@ -524,7 +618,18 @@ void emit_closure_definitions(CodeGenerator* gen) {
         } else {
             for (int i = 0; i < cap_count; i++) {
                 const char* ctype = lookup_var_c_type(gen, captures[i], parent_func);
-                fprintf(gen->output, "    %s %s;\n", ctype, safe_c_name(captures[i]));
+                int is_promoted = 0;
+                for (int p = 0; p < parent_promoted_count; p++) {
+                    if (parent_promoted[p] && strcmp(parent_promoted[p], captures[i]) == 0) {
+                        is_promoted = 1;
+                        break;
+                    }
+                }
+                if (is_promoted) {
+                    fprintf(gen->output, "    %s* %s;\n", ctype, safe_c_name(captures[i]));
+                } else {
+                    fprintf(gen->output, "    %s %s;\n", ctype, safe_c_name(captures[i]));
+                }
             }
         }
         fprintf(gen->output, "} _closure_env_%d;\n\n", id);
@@ -624,31 +729,60 @@ void emit_closure_definitions(CodeGenerator* gen) {
             }
         }
 
-        // Partition captures into mutated (env-backed) and read-only (aliased).
-        // Mutated captures are reassigned in the body — for those we skip the
-        // alias and route reassignments through _env->name in generate_statement.
-        // Read-only captures get the conventional alias so body reads stay cheap.
+        // Partition captures into mutated (env-backed), promoted (heap cell
+        // alias), and read-only (value alias).
+        // - Promoted: parent function has this name in its promoted set.
+        //   Env slot is already `T*`; prologue aliases as `T* name`;
+        //   reads/writes in body dereference (is_promoted_capture path).
+        // - Env-backed (pre-Route-1 path): assigned-to in body but NOT
+        //   promoted. Skip the alias and route writes through _env->. Only
+        //   fires when a closure writes a capture that isn't promoted
+        //   in its parent — shouldn't happen after Route 1, but kept as
+        //   a safety net.
+        // - Read-only: value-typed alias `T name = _env->name;`.
         char** env_captures = NULL;
         int env_capture_count = 0;
         if (body && cap_count > 0) {
             env_captures = malloc(cap_count * sizeof(char*));
             for (int i = 0; i < cap_count; i++) {
-                if (is_assigned_to(body, captures[i])) {
+                int is_promoted_for_parent = 0;
+                for (int p = 0; p < parent_promoted_count; p++) {
+                    if (parent_promoted[p] && strcmp(parent_promoted[p], captures[i]) == 0) {
+                        is_promoted_for_parent = 1;
+                        break;
+                    }
+                }
+                if (is_assigned_to(body, captures[i]) && !is_promoted_for_parent) {
                     env_captures[env_capture_count++] = captures[i];
                 }
             }
         }
 
-        // Emit capture aliases — skip mutated ones, they read/write _env-> directly.
+        // Emit capture aliases.
         for (int i = 0; i < cap_count; i++) {
             int is_env_backed = 0;
             for (int j = 0; j < env_capture_count; j++) {
                 if (env_captures[j] == captures[i]) { is_env_backed = 1; break; }
             }
             if (is_env_backed) continue;
+            int is_promoted_for_parent = 0;
+            for (int p = 0; p < parent_promoted_count; p++) {
+                if (parent_promoted[p] && strcmp(parent_promoted[p], captures[i]) == 0) {
+                    is_promoted_for_parent = 1;
+                    break;
+                }
+            }
             const char* ctype = lookup_var_c_type(gen, captures[i], parent_func);
-            fprintf(gen->output, "    %s %s = _env->%s;\n",
-                    ctype, safe_c_name(captures[i]), safe_c_name(captures[i]));
+            if (is_promoted_for_parent) {
+                // Pointer alias: body reads/writes dereference through the
+                // AST_IDENTIFIER emit path when the name is in
+                // current_promoted_captures.
+                fprintf(gen->output, "    %s* %s = _env->%s;\n",
+                        ctype, safe_c_name(captures[i]), safe_c_name(captures[i]));
+            } else {
+                fprintf(gen->output, "    %s %s = _env->%s;\n",
+                        ctype, safe_c_name(captures[i]), safe_c_name(captures[i]));
+            }
         }
 
         if (body) {
@@ -656,17 +790,48 @@ void emit_closure_definitions(CodeGenerator* gen) {
             // Closures called from trailing blocks need builder context injection
             // for _ctx: ptr functions. Set the flag so codegen injects _aether_ctx_get().
             gen->in_trailing_block++;
+            // Save and reset the declared-vars set so closure body declarations
+            // don't bleed into sibling closures or the outer function body.
+            // We then register the promoted captures (they're "declared" via
+            // the prologue alias) plus any closure params.
+            char** prev_declared = gen->declared_vars;
+            int prev_declared_count = gen->declared_var_count;
+            gen->declared_vars = NULL;
+            gen->declared_var_count = 0;
             // Publish env-backed captures so generate_statement routes writes
             // through _env-> instead of a local alias.
             char** prev_env = gen->current_env_captures;
             int prev_env_count = gen->current_env_capture_count;
             gen->current_env_captures = env_captures;
             gen->current_env_capture_count = env_capture_count;
+            // Publish promoted names visible to this closure body so
+            // reads/writes dereference through the pointer alias we just
+            // emitted above.
+            char** prev_promoted = gen->current_promoted_captures;
+            int prev_promoted_count = gen->current_promoted_capture_count;
+            gen->current_promoted_captures = parent_promoted;
+            gen->current_promoted_capture_count = parent_promoted_count;
+            // Mark promoted captures as already-declared in this local scope
+            // so writes in the body hit the reassignment branch (emits
+            // *name = ...) rather than trying to declare+malloc again.
+            // The prologue alias `T* name = _env->name;` is the declaration.
+            for (int p = 0; p < parent_promoted_count; p++) {
+                if (parent_promoted[p]) mark_var_declared(gen, parent_promoted[p]);
+            }
             for (int i = 0; i < body->child_count; i++) {
                 generate_statement(gen, body->children[i]);
             }
             gen->current_env_captures = prev_env;
             gen->current_env_capture_count = prev_env_count;
+            gen->current_promoted_captures = prev_promoted;
+            gen->current_promoted_capture_count = prev_promoted_count;
+            // Free the body's declared_vars and restore the outer scope's set.
+            if (gen->declared_vars) {
+                for (int i = 0; i < gen->declared_var_count; i++) free(gen->declared_vars[i]);
+                free(gen->declared_vars);
+            }
+            gen->declared_vars = prev_declared;
+            gen->declared_var_count = prev_declared_count;
             gen->in_trailing_block--;
             gen->indent_level = 0;
         }
@@ -868,8 +1033,22 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
 
         case AST_IDENTIFIER:
             if (!expr->value) { fprintf(gen->output, "/* NULL identifier */0"); break; }
+            // Route 1: promoted captures are `int* name` — dereference on read.
+            // Applies uniformly in outer function bodies and in closure bodies;
+            // the difference is only at declaration time (outer: malloc+init;
+            // closure: alias from _env->name).
+            // Exception: nodes annotated "raw_promoted" are passing the raw
+            // pointer (e.g. to free()) and must not be dereferenced.
+            if (is_promoted_capture(gen, expr->value) &&
+                !(expr->annotation && strcmp(expr->annotation, "raw_promoted") == 0)) {
+                fprintf(gen->output, "(*%s)", expr->value);
+                break;
+            }
             // Env-backed captures (mutated inside a closure body) have no local
             // alias — reads and writes must go through _env->name.
+            // NOTE: with Route 1, mutated captures are promoted instead, so
+            // this path is only taken when current_env_captures is populated
+            // with a name that is NOT also promoted (legacy fallback).
             {
                 int is_env_cap = 0;
                 for (int i = 0; i < gen->current_env_capture_count; i++) {

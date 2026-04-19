@@ -104,6 +104,11 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->in_trailing_block = 0;
     gen->current_env_captures = NULL;
     gen->current_env_capture_count = 0;
+    gen->current_promoted_captures = NULL;
+    gen->current_promoted_capture_count = 0;
+    gen->promoted_funcs = NULL;
+    gen->promoted_func_count = 0;
+    gen->promoted_func_capacity = 0;
     // Builder function registry
     gen->builder_funcs_reg = NULL;
     gen->builder_func_reg_count = 0;
@@ -380,18 +385,39 @@ static int is_env_free_for(ASTNode* deferred, const char* name) {
     return 1;
 }
 
+// Is `deferred` the synthetic "free(<name>)" defer for a Route 1 promoted
+// cell? Shape: EXPRESSION_STATEMENT > FUNCTION_CALL "free" > IDENTIFIER
+// "<name>" where the arg was marked `raw_promoted` by codegen_stmt.c.
+static int is_promoted_free_for(ASTNode* deferred, const char* name) {
+    if (!deferred || !name) return 0;
+    if (deferred->type != AST_EXPRESSION_STATEMENT || deferred->child_count < 1) return 0;
+    ASTNode* call = deferred->children[0];
+    if (!call || call->type != AST_FUNCTION_CALL || !call->value ||
+        strcmp(call->value, "free") != 0 || call->child_count < 1) return 0;
+    ASTNode* arg = call->children[0];
+    if (!arg || arg->type != AST_IDENTIFIER || !arg->value) return 0;
+    if (!arg->annotation || strcmp(arg->annotation, "raw_promoted") != 0) return 0;
+    return strcmp(arg->value, name) == 0;
+}
+
 // Emit ALL deferred statements (for return - unwinds entire function).
 // `protected_names` and `protected_count` list closure variable names whose
 // env-free defer should be suppressed — used at return sites where the
 // closure's env is still live through the returned value.
 void emit_all_defers_protected(CodeGenerator* gen, char** protected_names, int protected_count) {
-    // Emit all defers in LIFO order across all scopes
+    // Emit all defers in LIFO order across all scopes. A defer is suppressed
+    // when either (a) it frees the env of a closure variable in the protected
+    // list, or (b) it frees a Route 1 promoted cell whose name matches a
+    // protected name (because the escaping closure's env captures the
+    // pointer, and the caller now owns the cell).
     for (int i = gen->defer_count - 1; i >= 0; i--) {
         ASTNode* deferred = gen->defer_stack[i];
         if (!deferred) continue;
         int skip = 0;
         for (int p = 0; p < protected_count; p++) {
-            if (protected_names[p] && is_env_free_for(deferred, protected_names[p])) {
+            if (!protected_names[p]) continue;
+            if (is_env_free_for(deferred, protected_names[p]) ||
+                is_promoted_free_for(deferred, protected_names[p])) {
                 skip = 1;
                 break;
             }
@@ -985,7 +1011,15 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
     
     if (main->child_count > 0) {
         gen->in_main_function = 1;
+        // Publish main's promoted-captures set so var decls malloc
+        // heap cells and reads/writes dereference.
+        char** prev_promoted = gen->current_promoted_captures;
+        int prev_promoted_count = gen->current_promoted_capture_count;
+        get_promoted_names_for_func(gen, "main",
+            &gen->current_promoted_captures, &gen->current_promoted_capture_count);
         generate_statement(gen, main->children[0]);
+        gen->current_promoted_captures = prev_promoted;
+        gen->current_promoted_capture_count = prev_promoted_count;
         gen->in_main_function = 0;
     }
     

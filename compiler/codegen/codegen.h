@@ -97,6 +97,28 @@ typedef struct {
     char** current_env_captures;
     int current_env_capture_count;
 
+    // Route 1 heap-promotion: variables in this list are heap-allocated
+    // cells (`int* name`) in the current function scope. Reads emit
+    // `(*name)`; writes emit `(*name) = expr`. Set at the start of any
+    // function/closure body whose enclosing function has promoted names,
+    // cleared on exit. The set is the union of captures that ANY closure
+    // in the enclosing function assigns to.
+    char** current_promoted_captures;
+    int current_promoted_capture_count;
+
+    // Per-function promoted-name map. Built during discover_closures as
+    // a precompute of which variables need heap promotion in each
+    // function body. Looked up when generating that function's body
+    // (either main's, a regular user function's, or a closure's — closures
+    // inherit from their parent_func).
+    struct PromotedFuncEntry {
+        char* func_name;    // "main" for main, user function name otherwise
+        char** names;       // promoted variable names
+        int count;
+    }* promoted_funcs;
+    int promoted_func_count;
+    int promoted_func_capacity;
+
     // Builder function registry: functions marked with 'builder' keyword
     // Block runs first (filling config), then function executes with config
     struct BuilderFuncEntry {

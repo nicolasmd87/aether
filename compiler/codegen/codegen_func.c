@@ -430,6 +430,13 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
         }
     }
     
+    // Publish this function's promoted-captures set so var decls malloc
+    // heap cells and reads/writes dereference. (Route 1.)
+    char** prev_promoted = gen->current_promoted_captures;
+    int prev_promoted_count = gen->current_promoted_capture_count;
+    get_promoted_names_for_func(gen, func->value,
+        &gen->current_promoted_captures, &gen->current_promoted_capture_count);
+
     // Generate body
     if (body) {
         // If body is a block, it handles its own scope
@@ -447,6 +454,9 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
 
     // Emit function-level defers at implicit return (end of function)
     exit_scope(gen);
+
+    gen->current_promoted_captures = prev_promoted;
+    gen->current_promoted_capture_count = prev_promoted_count;
 
     unindent(gen);
     print_line(gen, "}");
