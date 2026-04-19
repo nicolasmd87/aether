@@ -1,0 +1,38 @@
+// Edge: a closure is DECLARED inside a trailing DSL block, not just
+// invoked there. The closure captures and mutates a main-scope var.
+// Trailing-block inlining emits the closure body in-place; promotion
+// rewriting must apply to those inlined statements the same way it
+// applies to the outer function body.
+
+import std.map
+
+extern exit(code: int)
+
+configure(_ctx: ptr, key: string, value: string) {
+    map_put(_ctx, key, value)
+}
+
+build() {
+    _ctx = map_new()
+    return _ctx
+}
+
+main() {
+    score = 0
+    result = build() {
+        configure("initial", "set")
+        // Closure declared inside the trailing block, captures main's score.
+        add_point = || { score = score + 1 }
+        call(add_point)
+        call(add_point)
+        call(add_point)
+    }
+
+    if score != 3 {
+        println("FAIL: expected 3, got:")
+        println(score)
+        exit(1)
+    }
+
+    println("ok")
+}

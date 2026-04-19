@@ -1,0 +1,58 @@
+// Edge: an actor's state field holds a closure. When the actor
+// receives a message, it invokes the stored closure. Tests that
+// actor state marshalling and closures coexist — the state slot
+// holds an _AeClosure struct (two pointers: fn and env) and the
+// actor's step function dispatches through whatever's stored.
+//
+// This test uses a SELF-CONTAINED closure (no capture of actor
+// state) because closures that mutate actor state fields is a
+// separate, unimplemented feature. A closure inside an actor
+// handler can capture arm-local variables (Route 1, tested by
+// test_closure_in_actor_handler) but NOT state fields — that
+// would require threading `self` through the closure's env,
+// which isn't done.
+
+extern exit(code: int)
+extern string_new(s: string) -> ptr
+
+message SetHandlerA {}
+message SetHandlerB {}
+message Fire {}
+message Finish {}
+
+actor Dispatcher {
+    state handler = |x: int| { return x }   // identity default
+    state last_result = 0
+
+    receive {
+        SetHandlerA() -> {
+            // Fresh closure with no captures — body returns x*10
+            handler = |x: int| { return x * 10 }
+        }
+        SetHandlerB() -> {
+            handler = |x: int| { return x + 100 }
+        }
+        Fire() -> {
+            last_result = call(handler, 5)
+        }
+        Finish() -> {
+            // Last handler set was B, called with 5 → 105
+            if last_result != 105 {
+                println("FAIL: expected 105, got:")
+                println(last_result)
+                exit(1)
+            }
+            println("ok")
+        }
+    }
+}
+
+main() {
+    d = spawn(Dispatcher())
+    d ! SetHandlerA {}
+    d ! Fire {}            // last_result = 50 (A: 5*10)
+    d ! SetHandlerB {}
+    d ! Fire {}            // last_result = 105 (B: 5+100)
+    d ! Finish {}
+    wait_for_idle()
+}

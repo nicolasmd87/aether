@@ -1,0 +1,27 @@
+// Edge: a variable initialised to null, then captured and mutated
+// by a closure. Tests the null-init path through promotion, both
+// for pointer-typed and untyped vars.
+
+extern exit(code: int)
+
+main() {
+    // Pointer-typed null init.
+    cached = null
+    fill = || {
+        if cached == null {
+            cached = ref(42)
+        }
+    }
+
+    call(fill)
+    if cached == null { println("FAIL: cached still null after fill"); exit(1) }
+
+    // Second call: shouldn't overwrite because cached is non-null now.
+    call(fill)
+    // We can't easily check pointer identity without more plumbing, but
+    // we can verify cached still points to a 42.
+    if ref_get(cached) != 42 { println("FAIL: cached value wrong"); exit(1) }
+
+    ref_free(cached)
+    println("ok")
+}

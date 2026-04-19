@@ -1,0 +1,73 @@
+// Edge: a recursive user function where the parameter is heap-
+// promoted. Each recursive call allocates its own heap cell for
+// the parameter. The defer-free fires at each return, freeing only
+// that frame's cell. Mutations in one frame's closure don't leak
+// into another frame.
+
+extern exit(code: int)
+
+count_down(n: int) {
+    // n is promoted because the closure below writes it.
+    tick = || { n = n - 1 }
+
+    // Recursion: if n > 0, recurse (with decremented n — but
+    // importantly, we recurse with the VALUE, not by mutating).
+    if n <= 0 {
+        return 0
+    }
+
+    call(tick)  // decrements n in THIS frame's heap cell
+    // n is now n-1 in this frame. Recursive call gets a new frame
+    // with its own promoted n.
+    return 1 + count_down(n)
+}
+
+// Fibonacci using a closure to memoize-ish — actually just a plain
+// recursive Fibonacci, but the accumulator is promoted via a
+// closure that sums. Tests recursion depth isn't foiled by promotion.
+sum_down(n: int) {
+    total = 0
+    acc = |v: int| { total = total + v }
+
+    if n <= 0 {
+        call(acc, 0)
+        return total
+    }
+
+    call(acc, n)
+    // Recurse — each frame has its own `total` on the heap.
+    return total + sum_down(n - 1)
+}
+
+main() {
+    // count_down(5): each frame decrements its own n once, then returns
+    //   1 + count_down(<new frame with fresh n-1>).
+    //   count_down(5) → 1 + count_down(5-1=4). But wait — after tick, n
+    //   is 4 in this frame. We recurse with n (which is 4 via deref).
+    //   So really count_down starts with n=5, ticks to 4, recurses with 4.
+    //   count_down(4) ticks to 3, recurses with 3.
+    //   ... until count_down(1) ticks to 0, recurses with 0.
+    //   count_down(0) returns 0.
+    //   So the chain is count_down(5)=1+count_down(4)=1+1+count_down(3)
+    //     =1+1+1+count_down(2)=...=1+1+1+1+1+count_down(0)=5.
+    r = count_down(5)
+    if r != 5 { println("FAIL: count_down(5) expected 5, got:"); println(r); exit(1) }
+
+    // sum_down(3): total=0; acc(3) → total=3; recurse with 2.
+    //              total=0; acc(2) → total=2; recurse with 1.
+    //              total=0; acc(1) → total=1; recurse with 0.
+    //              total=0; acc(0) → total=0; return 0.
+    //              unwinds: 0; 1+0=1; 2+1=3; 3+3=6.
+    r2 = sum_down(3)
+    if r2 != 6 { println("FAIL: sum_down(3) expected 6, got:"); println(r2); exit(1) }
+
+    r3 = sum_down(5)    // 5+4+3+2+1+0 = 15
+    if r3 != 15 { println("FAIL: sum_down(5) expected 15, got:"); println(r3); exit(1) }
+
+    // Run a deep recursion to make sure we don't leak or corrupt across
+    // many frames.
+    r4 = sum_down(20)   // 20+19+...+1+0 = 210
+    if r4 != 210 { println("FAIL: sum_down(20) expected 210, got:"); println(r4); exit(1) }
+
+    println("ok")
+}
