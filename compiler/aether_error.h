@@ -43,6 +43,10 @@ void aether_error_simple(const char* message, int line, int column);
 void aether_error_with_suggestion(const char* message, int line, int column, const char* suggestion);
 void aether_error_in_context(const char* message, int line, int column, const char* context);
 void aether_error_with_code(const char* message, int line, int column, AetherErrorCode code);
+// All four fields. filename + source come from the global init state.
+void aether_error_full(const char* message, int line, int column,
+                       const char* suggestion, const char* context,
+                       AetherErrorCode code);
 
 // Terminal color support: disabled by NO_COLOR env var or non-tty stderr
 const char* aether_color_reset(void);

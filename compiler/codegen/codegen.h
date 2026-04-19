@@ -170,6 +170,10 @@ CodeGenerator* create_code_generator(FILE* output);
 CodeGenerator* create_code_generator_with_header(FILE* output, FILE* header, const char* header_path);
 void free_code_generator(CodeGenerator* gen);
 void generate_program(CodeGenerator* gen, ASTNode* program);
+/* L4 validation: reject closures inside actor handlers that write to
+   actor state fields. Call before generate_program. Returns 1 on
+   success, 0 if errors were reported (compilation should abort). */
+int validate_closure_state_mutations(CodeGenerator* gen, ASTNode* program);
 
 // Header generation (for C embedding)
 void emit_header_prologue(CodeGenerator* gen, const char* guard_name);

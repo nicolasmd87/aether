@@ -293,6 +293,25 @@ void aether_error_in_context(const char* message, int line, int column, const ch
     aether_error_report(&error);
 }
 
+// Richest variant: all four fields (message, suggestion, context, code).
+// filename and source_code are pulled from the global init state so the
+// caller doesn't have to.
+void aether_error_full(const char* message, int line, int column,
+                       const char* suggestion, const char* context,
+                       AetherErrorCode code) {
+    AetherError error = {
+        .filename = current_filename,
+        .source_code = current_source,
+        .line = line,
+        .column = column,
+        .message = message,
+        .suggestion = suggestion,
+        .context = context,
+        .code = code
+    };
+    aether_error_report(&error);
+}
+
 void aether_error_with_code(const char* message, int line, int column, AetherErrorCode code) {
     AetherError error = {
         .filename = current_filename,

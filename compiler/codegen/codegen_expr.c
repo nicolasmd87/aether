@@ -1,4 +1,5 @@
 #include "codegen_internal.h"
+#include "../aether_error.h"
 
 // ---- Closure support ----
 
@@ -758,6 +759,102 @@ void discover_closures(CodeGenerator* gen, ASTNode* node) {
     propagate_call_return_types(gen, node);
     // Third pass: compute which captures need heap promotion per function.
     compute_promoted_captures(gen);
+}
+
+// Find the enclosing AST_ACTOR_DEFINITION that contains `arm_node`.
+// Returns NULL if arm_node isn't inside any actor.
+static ASTNode* find_enclosing_actor(ASTNode* root, ASTNode* arm_node) {
+    if (!root || !arm_node) return NULL;
+    if (root->type == AST_ACTOR_DEFINITION) {
+        // Check if arm_node is a descendant of this actor.
+        for (int i = 0; i < root->child_count; i++) {
+            ASTNode* child = root->children[i];
+            if (!child) continue;
+            if (child == arm_node) return root;
+            // Dive one level deeper — the receive block sits under actor,
+            // arms sit under the receive block.
+            for (int j = 0; j < child->child_count; j++) {
+                if (child->children[j] == arm_node) return root;
+            }
+        }
+    }
+    for (int i = 0; i < root->child_count; i++) {
+        ASTNode* found = find_enclosing_actor(root->children[i], arm_node);
+        if (found) return found;
+    }
+    return NULL;
+}
+
+// L4 validation: a closure inside an actor handler that writes to an
+// actor state field is currently miscompiled (the closure has no access
+// to `self`, so `state_field = ...` emits a stale-local write). Until
+// threading self through the closure env is implemented, reject the
+// pattern at compile time with a clear error. Returns 0 on failure
+// (errors were reported via aether_error_report), 1 otherwise.
+int validate_closure_state_mutations(CodeGenerator* gen, ASTNode* program) {
+    int ok = 1;
+    for (int ci = 0; ci < gen->closure_count; ci++) {
+        const char* parent_func = gen->closures[ci].parent_func;
+        if (!parent_func || strncmp(parent_func, "__recv_arm_", 11) != 0) continue;
+
+        // Find the arm node, then its enclosing actor.
+        ASTNode* arm = find_receive_arm_by_name(program, parent_func);
+        if (!arm) continue;
+        ASTNode* actor = find_enclosing_actor(program, arm);
+        if (!actor) continue;
+
+        // Collect state field names: AST_STATE_DECLARATION or
+        // AST_VARIABLE_DECLARATION children of the actor with
+        // annotation marking them as state vars. Actors typically list
+        // state decls as top-level children of AST_ACTOR_DEFINITION.
+        const char* state_names[64];
+        int state_count = 0;
+        for (int j = 0; j < actor->child_count && state_count < 64; j++) {
+            ASTNode* c = actor->children[j];
+            if (!c || !c->value) continue;
+            if (c->type == AST_STATE_DECLARATION ||
+                (c->type == AST_VARIABLE_DECLARATION && c->annotation &&
+                 strcmp(c->annotation, "state") == 0)) {
+                state_names[state_count++] = c->value;
+            }
+        }
+        if (state_count == 0) continue;
+
+        // Walk the closure body looking for assignments to any of the
+        // state field names.
+        ASTNode* closure = gen->closures[ci].closure_node;
+        ASTNode* body = NULL;
+        for (int k = closure->child_count - 1; k >= 0; k--) {
+            if (closure->children[k] && closure->children[k]->type == AST_BLOCK) {
+                body = closure->children[k];
+                break;
+            }
+        }
+        if (!body) continue;
+
+        for (int n = 0; n < state_count; n++) {
+            if (!is_assigned_to(body, state_names[n])) continue;
+            // Report error. Location: closure node.
+            char msg[512];
+            const char* actor_name = actor->value ? actor->value : "actor";
+            snprintf(msg, sizeof(msg),
+                "closure inside actor '%s' handler writes state field '%s' — "
+                "not yet supported (closures can't mutate actor state; the "
+                "closure has no access to self)",
+                actor_name, state_names[n]);
+            char suggestion[256];
+            snprintf(suggestion, sizeof(suggestion),
+                "copy '%s' into an arm-local, mutate the local, then write "
+                "back. See tests/syntax/README_closure_actor_state_limitation.md "
+                "for the workaround pattern.",
+                state_names[n]);
+            aether_error_full(msg, closure->line, closure->column,
+                              suggestion, "in actor handler",
+                              AETHER_ERR_ACTOR_ERROR);
+            ok = 0;
+        }
+    }
+    return ok;
 }
 
 // Search a single function node for `var_name` as either a parameter
