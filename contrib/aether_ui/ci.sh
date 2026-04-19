@@ -3,9 +3,13 @@
 #
 # Phases:
 #   1. Build every example (catches C/Aether compile regressions).
-#   2. Launch example_calculator with the AetherUIDriver test server
-#      and run test_calculator.sh (11 assertions).
-#   3. Launch example_testable and run test_automation.sh.
+#   2. Smoke-launch the non-driver examples to catch runtime crashes the
+#      HTTP-driven tests can't reach (widget wiring, reactive state init,
+#      platform-backend regressions). Each binary is launched, given 1.5s
+#      to render, then killed; still-alive = pass.
+#   3. Launch example_calculator with the AetherUIDriver test server and
+#      run test_calculator.sh (11 assertions).
+#   4. Launch example_testable and run test_automation.sh (17 assertions).
 #
 # Platform handling:
 #   macOS    — runs directly (AppKit).
@@ -29,7 +33,12 @@ PORT="${1:-9222}"
 cd "$ROOT"
 mkdir -p build
 
+# All examples that must compile in Phase 1.
 EXAMPLES=(counter form picker styled system canvas testable calculator)
+# Examples without a test server — Phase 2 smoke-launches each.
+# calculator and testable are exercised through their HTTP drivers in
+# Phases 3-4, so they are not smoke-tested here.
+SMOKE_EXAMPLES=(counter form picker styled system canvas)
 FAIL=0
 
 OS="$(uname -s)"
@@ -93,6 +102,26 @@ run_server_test() {
     return $rc
 }
 
+run_smoke_test() {
+    # Launch a GUI binary, give it 1.5s to open its window, then kill it.
+    # Pass iff the process is still alive at the deadline. A process that
+    # exited early is a crash (missing widget impl, null deref on init,
+    # backend API mismatch) — propagate non-zero and dump the tail.
+    local bin="$1" name="$2"
+    $LAUNCH_PREFIX "$bin" > "/tmp/ci_smoke_${name}.log" 2>&1 &
+    local pid=$!
+    sleep 1.5
+    if kill -0 "$pid" 2>/dev/null; then
+        echo "  OK   $name (alive 1.5s)"
+        kill "$pid" 2>/dev/null; wait "$pid" 2>/dev/null
+        return 0
+    fi
+    wait "$pid" 2>/dev/null; local rc=$?
+    echo "  FAIL $name (exited early, rc=$rc)"
+    tail -15 "/tmp/ci_smoke_${name}.log" | sed 's/^/       /'
+    return 1
+}
+
 echo "=== Phase 1: build all aether_ui examples ==="
 for ex in "${EXAMPLES[@]}"; do
     src="contrib/aether_ui/example_${ex}.ae"
@@ -119,12 +148,18 @@ if [ "$LAUNCH_PREFIX" = "SKIP_RUNTIME" ]; then
 fi
 
 echo
-echo "=== Phase 2: AetherUIDriver calculator tests ==="
+echo "=== Phase 2: smoke-launch non-driver examples ==="
+for ex in "${SMOKE_EXAMPLES[@]}"; do
+    run_smoke_test "$ROOT/build/${ex}" "$ex" || FAIL=$((FAIL + 1))
+done
+
+echo
+echo "=== Phase 3: AetherUIDriver calculator tests ==="
 run_server_test "$ROOT/build/calculator" \
                 "$SCRIPT_DIR/test_calculator.sh" calculator || FAIL=$((FAIL + 1))
 
 echo
-echo "=== Phase 3: AetherUIDriver testable tests ==="
+echo "=== Phase 4: AetherUIDriver testable tests ==="
 run_server_test "$ROOT/build/testable" \
                 "$SCRIPT_DIR/test_automation.sh" testable || FAIL=$((FAIL + 1))
 
