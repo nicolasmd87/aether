@@ -257,7 +257,12 @@ filter(_ctx: ptr, method: int, pattern: string, handler: fn) {
 
 // filter(pattern) |req, res, ctx| { ... }  — applies to ALL methods
 filter_all(_ctx: ptr, pattern: string, handler: fn) {
-    filter(_ctx, ALL, pattern, handler)
+    // Inlined: calling filter() directly would trip the DSL _ctx auto-injector
+    // (it treats filter as a 3-arg builder, so filter(_ctx, ...) looks like 4 args).
+    filters = map_get(_ctx, "filters")
+    prefix = map_get(_ctx, "prefix")
+    full_path = "${prefix}${pattern}"
+    list.add(filters, filter_entry(ALL, full_path, handler))
 }
 
 // web_socket(path) |message, sender, ctx| { ... }
@@ -791,7 +796,7 @@ chunked_end(sock: ptr) {
 // Server lifecycle
 // ---------------------------------------------------------------------------
 
-server_start(srv: ptr) {
+tw_start(srv: ptr) {
     port = map_get(srv, "port")
     host = map_get(srv, "host")
     raw = http.server_create(port)
@@ -803,7 +808,7 @@ server_start(srv: ptr) {
     }
 
     // Register all routes with the C server
-    // Uses http_server_add_route for all methods (GET, POST, PUT, DELETE,
+    // Uses http.server_add_route for all methods (GET, POST, PUT, DELETE,
     // PATCH, HEAD, OPTIONS, and the extended WebDAV/REST methods)
     routes = map_get(srv, "routes")
     n = list.size(routes)
@@ -819,7 +824,7 @@ server_start(srv: ptr) {
 
     // Register static file serving routes
     // Register a wildcard GET that delegates to the C static file handler
-    // We use the C http_serve_static which handles MIME types, traversal protection, etc.
+    // We use the C http.serve_static which handles MIME types, traversal protection, etc.
     statics = map_get(srv, "statics")
     n_static = list.size(statics)
     for (i = 0; i < n_static; i++) {
@@ -883,7 +888,7 @@ server_start_sse(srv: ptr) {
     }
 }
 
-server_stop(srv: ptr) {
+tw_stop(srv: ptr) {
     raw = map_get(srv, "raw_server")
     if raw != 0 {
         http.server_stop(raw)

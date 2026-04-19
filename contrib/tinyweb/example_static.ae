@@ -1,17 +1,23 @@
 // Static File Serving Example — MIME detection, traversal protection, index.html fallback
 
 import contrib.tinyweb
+import std.http
+import std.string
+import std.list
+import std.map
+import std.tcp
+
 
 main() {
     println("=== TinyWeb Static File Server ===\n")
 
-    server = web_server_host("localhost", 8080) {
+    server = tinyweb.web_server_host("localhost", 8080) {
 
-        serve_static("/static", ".")
+        tinyweb.serve_static("/static", ".")
 
-        end_point(GET, "/") |req: ptr, res: ptr, ctx: ptr| {
-            response_set_header(res, "Content-Type", "text/html")
-            response_write(res, "<!DOCTYPE html>
+        tinyweb.end_point(tinyweb.GET, "/") |req: ptr, res: ptr, ctx: ptr| {
+            tinyweb.response_set_header(res, "Content-Type", "text/html")
+            tinyweb.response_write(res, "<!DOCTYPE html>
 <html>
 <head><title>Static File Server</title></head>
 <body>
@@ -25,8 +31,8 @@ main() {
 </html>")
         }
 
-        end_point(GET, "/api/health") |req: ptr, res: ptr, ctx: ptr| {
-            response_json(res, "{\"status\":\"ok\"}")
+        tinyweb.end_point(tinyweb.GET, "/api/health") |req: ptr, res: ptr, ctx: ptr| {
+            tinyweb.response_json(res, "{\"status\":\"ok\"}")
         }
     }
 
@@ -35,7 +41,7 @@ main() {
     println("  http://localhost:8080/static/...    — static files from cwd")
     println("  http://localhost:8080/api/health    — JSON health check")
 
-    result = server_start(server)
+    result = tinyweb.tw_start(server)
     if result != 0 { println("ERROR: Failed to start server") }
-    server_stop(server)
+    tinyweb.tw_stop(server)
 }

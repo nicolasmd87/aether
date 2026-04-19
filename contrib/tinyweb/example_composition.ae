@@ -1,59 +1,65 @@
 // Composition Example — modular route registration with nested paths and auth filters
 
 import contrib.tinyweb
+import std.http
+import std.string
+import std.list
+import std.map
+import std.tcp
+
 
 // Reusable handler function
 handle_greeting(req: ptr, res: ptr, ctx: ptr) {
-    first = request_get_path_param(ctx, "1")
-    last  = request_get_path_param(ctx, "2")
-    response_write(res, "Hello, ${first} ${last}!")
+    first = tinyweb.request_get_path_param(ctx, "1")
+    last  = tinyweb.request_get_path_param(ctx, "2")
+    tinyweb.response_write(res, "Hello, ${first} ${last}!")
 }
 
 main() {
     println("=== TinyWeb Composition Example ===\n")
 
-    server = web_server_host("localhost", 8080) {
+    server = tinyweb.web_server_host("localhost", 8080) {
 
         // Module 1: Public API
-        path("/api") {
-            path("/v1") {
-                end_point(GET, "/health") |req: ptr, res: ptr, ctx: ptr| {
-                    response_write(res, "OK")
+        tinyweb.path("/api") {
+            tinyweb.path("/v1") {
+                tinyweb.end_point(tinyweb.GET, "/health") |req: ptr, res: ptr, ctx: ptr| {
+                    tinyweb.response_write(res, "OK")
                 }
 
-                end_point(GET, "/greeting/(\\w+)/(\\w+)") |req: ptr, res: ptr, ctx: ptr| {
+                tinyweb.end_point(tinyweb.GET, "/greeting/(\\w+)/(\\w+)") |req: ptr, res: ptr, ctx: ptr| {
                     handle_greeting(req, res, ctx)
                 }
             }
         }
 
-        // Module 2: Admin with auth filter
-        path("/admin") {
-            filter(GET, "/.*") |req: ptr, res: ptr, ctx: ptr| {
-                token = request_get_header(req, "X-Admin-Token")
+        // Module 2: Admin with auth tinyweb.filter
+        tinyweb.path("/admin") {
+            tinyweb.filter(tinyweb.GET, "/.*") |req: ptr, res: ptr, ctx: ptr| {
+                token = tinyweb.request_get_header(req, "X-Admin-Token")
                 if (token == "secret42") {
-                    return CONTINUE
+                    return tinyweb.CONTINUE
                 }
-                response_write_status(res, "Forbidden", 403)
-                return STOP
+                tinyweb.response_write_status(res, "Forbidden", 403)
+                return tinyweb.STOP
             }
 
-            end_point(GET, "/dashboard") |req: ptr, res: ptr, ctx: ptr| {
-                response_write(res, "Welcome to admin dashboard")
+            tinyweb.end_point(tinyweb.GET, "/dashboard") |req: ptr, res: ptr, ctx: ptr| {
+                tinyweb.response_write(res, "Welcome to admin dashboard")
             }
 
-            end_point(GET, "/users") |req: ptr, res: ptr, ctx: ptr| {
-                response_json(res, "[{\"name\":\"alice\"},{\"name\":\"bob\"}]")
+            tinyweb.end_point(tinyweb.GET, "/users") |req: ptr, res: ptr, ctx: ptr| {
+                tinyweb.response_json(res, "[{\"name\":\"alice\"},{\"name\":\"bob\"}]")
             }
         }
 
         // Module 3: Deeply nested paths
-        path("/shop") {
-            path("/catalog") {
-                path("/products") {
-                    end_point(GET, "/(\\d+)") |req: ptr, res: ptr, ctx: ptr| {
-                        id = request_get_path_param(ctx, "1")
-                        response_json(res, "{\"id\":${id},\"name\":\"Widget\"}")
+        tinyweb.path("/shop") {
+            tinyweb.path("/catalog") {
+                tinyweb.path("/products") {
+                    tinyweb.end_point(tinyweb.GET, "/(\\d+)") |req: ptr, res: ptr, ctx: ptr| {
+                        id = tinyweb.request_get_path_param(ctx, "1")
+                        tinyweb.response_json(res, "{\"id\":${id},\"name\":\"Widget\"}")
                     }
                 }
             }
@@ -61,16 +67,16 @@ main() {
     }
 
     // Second composition block — adds routes to existing server
-    compose(server) {
-        path("/extra") {
-            end_point(GET, "/ping") |req: ptr, res: ptr, ctx: ptr| {
-                response_write(res, "pong")
+    tinyweb.compose(server) {
+        tinyweb.path("/extra") {
+            tinyweb.end_point(tinyweb.GET, "/ping") |req: ptr, res: ptr, ctx: ptr| {
+                tinyweb.response_write(res, "pong")
             }
         }
     }
 
     println("Starting server on localhost:8080...")
-    result = server_start(server)
+    result = tinyweb.tw_start(server)
 
     if result == 0 {
         println("Server running! Try:")
@@ -84,5 +90,5 @@ main() {
         println("ERROR: Failed to start server")
     }
 
-    server_stop(server)
+    tinyweb.tw_stop(server)
 }
