@@ -335,6 +335,7 @@ The runtime employs a tiered optimization strategy:
 - [C Interoperability](docs/c-interop.md) - Using C libraries and the `extern` keyword
 - [Architecture Overview](docs/architecture.md) - Runtime and compiler design
 - [Memory Management](docs/memory-management.md) - defer-first manual model, arena allocators
+- [Structured Concurrency](docs/structured-concurrency.md) - Proposal: supervision trees + capability-scoped spawn/send (not yet shipped)
 - [Runtime Optimizations](docs/runtime-optimizations.md) - Performance techniques
 - [Cross-Language Benchmarks](benchmarks/cross-language/README.md) - Comparative performance analysis
 - [Docker Setup](docker/README.md) - Container development environment
