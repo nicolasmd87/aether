@@ -72,6 +72,10 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main);
 /* Closure support (codegen_expr.c) */
 void discover_closures(CodeGenerator* gen, ASTNode* node);
 void emit_closure_definitions(CodeGenerator* gen);
+/* L4 validation: reject closures inside actor handlers that write to
+   actor state fields. Run after discover_closures, before codegen.
+   Returns 1 on success, 0 if errors were reported. */
+int validate_closure_state_mutations(CodeGenerator* gen, ASTNode* program);
 /* Route 1 promotion queries (populated by discover_closures): */
 void get_promoted_names_for_func(CodeGenerator* gen, const char* func_name,
                                  char*** out_names, int* out_count);
