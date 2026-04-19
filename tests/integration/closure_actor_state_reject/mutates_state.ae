@@ -1,0 +1,24 @@
+// L4: closure inside an actor handler tries to mutate an actor state
+// field. This compiles on pre-fix main but silently emits broken code
+// (the closure doesn't have `self`, so `count = count + 1` refers to
+// an uninitialised stack local). After the fix, the compiler rejects
+// this with a clear error.
+
+message Go {}
+
+actor Counter {
+    state count = 0
+
+    receive {
+        Go() -> {
+            inc = || { count = count + 1 }   // mutates state — rejected
+            call(inc)
+        }
+    }
+}
+
+main() {
+    c = spawn(Counter())
+    c ! Go {}
+    wait_for_idle()
+}
