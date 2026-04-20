@@ -120,7 +120,7 @@ endif
 
 COMPILER_SRC = compiler/aetherc.c compiler/parser/lexer.c compiler/parser/parser.c compiler/ast.c compiler/analysis/typechecker.c compiler/codegen/codegen.c compiler/codegen/codegen_expr.c compiler/codegen/codegen_stmt.c compiler/codegen/codegen_actor.c compiler/codegen/codegen_func.c compiler/aether_error.c compiler/aether_module.c compiler/analysis/type_inference.c compiler/codegen/optimizer.c compiler/aether_diagnostics.c runtime/actors/aether_message_registry.c
 COMPILER_LIB_SRC = compiler/parser/lexer.c compiler/parser/parser.c compiler/ast.c compiler/analysis/typechecker.c compiler/codegen/codegen.c compiler/codegen/codegen_expr.c compiler/codegen/codegen_stmt.c compiler/codegen/codegen_actor.c compiler/codegen/codegen_func.c compiler/aether_error.c compiler/aether_module.c compiler/analysis/type_inference.c compiler/codegen/optimizer.c compiler/aether_diagnostics.c runtime/actors/aether_message_registry.c
-RUNTIME_SRC = $(SCHEDULER_SRC) runtime/scheduler/scheduler_optimizations.c runtime/scheduler/aether_io_poller_epoll.c runtime/scheduler/aether_io_poller_kqueue.c runtime/scheduler/aether_io_poller_poll.c runtime/config/aether_optimization_config.c runtime/memory/memory.c runtime/memory/aether_arena.c runtime/memory/aether_pool.c runtime/memory/aether_memory_stats.c runtime/utils/aether_tracing.c runtime/utils/aether_bounds_check.c runtime/utils/aether_test.c runtime/memory/aether_arena_optimized.c runtime/aether_runtime_types.c runtime/utils/aether_cpu_detect.c runtime/memory/aether_batch.c runtime/utils/aether_simd_vectorized.c runtime/aether_runtime.c runtime/aether_numa.c runtime/aether_sandbox.c runtime/aether_spawn_sandboxed.c runtime/aether_shared_map.c runtime/aether_host.c runtime/actors/aether_send_buffer.c runtime/actors/aether_send_message.c runtime/actors/aether_actor_thread.c
+RUNTIME_SRC = $(SCHEDULER_SRC) runtime/scheduler/scheduler_optimizations.c runtime/scheduler/aether_io_poller_epoll.c runtime/scheduler/aether_io_poller_kqueue.c runtime/scheduler/aether_io_poller_poll.c runtime/config/aether_optimization_config.c runtime/memory/memory.c runtime/memory/aether_arena.c runtime/memory/aether_pool.c runtime/memory/aether_memory_stats.c runtime/utils/aether_tracing.c runtime/utils/aether_bounds_check.c runtime/utils/aether_test.c runtime/memory/aether_arena_optimized.c runtime/aether_runtime_types.c runtime/utils/aether_cpu_detect.c runtime/memory/aether_batch.c runtime/utils/aether_simd_vectorized.c runtime/aether_runtime.c runtime/aether_numa.c runtime/aether_sandbox.c runtime/aether_spawn_sandboxed.c runtime/aether_shared_map.c runtime/aether_host.c runtime/actors/aether_send_buffer.c runtime/actors/aether_send_message.c runtime/actors/aether_actor_thread.c runtime/actors/aether_panic.c
 STD_SRC = std/string/aether_string.c std/math/aether_math.c std/net/aether_http.c std/net/aether_http_server.c std/net/aether_net.c std/collections/aether_collections.c std/json/aether_json.c std/fs/aether_fs.c std/log/aether_log.c std/io/aether_io.c std/os/aether_os.c
 # Stdlib sources that reference scheduler internals (scheduler_io_register,
 # g_sync_step_actor, current_core_id). Excluded from the compiler binary
@@ -478,7 +478,7 @@ examples: compiler
 	@echo "==================================="
 	@$(MKDIR) $(BUILD_DIR)/examples $(BUILD_DIR)/examples/basics $(BUILD_DIR)/examples/actors $(BUILD_DIR)/examples/applications $(BUILD_DIR)/examples/c-interop $(BUILD_DIR)/examples/stdlib
 	@pass=0; fail=0; \
-	for src in $$(find examples -name '*.ae' | grep -v '/lib/' | grep -v '/packages/' | grep -v '/embedded-java/' | sort); do \
+	for src in $$(find examples -name '*.ae' | grep -v '/lib/' | grep -v '/packages/' | grep -v '/embedded-java/' | grep -v '/host-.*-demo\.ae$$' | sort); do \
 		name=$$(echo $$src | sed 's|examples/||;s|\.ae$$||'); \
 		dir=$$(dirname $$src); \
 		extra_c=""; \
@@ -1022,6 +1022,67 @@ ci: clean
 	@echo ""
 	@echo "==================================="
 	@echo "  CI PASSED — all checks green"
+	@echo "==================================="
+
+# -----------------------------------------------------------------
+# contrib/host bridge check
+#
+# Each contrib/host/<lang>/ directory ships a C bridge (and usually a
+# module.ae) that embeds a foreign language runtime. Every bridge
+# compiles in two modes:
+#
+#   - stub mode (no dev library available): always compiles clean
+#     because the AETHER_HAS_<LANG> guard selects stub implementations.
+#     Useful as a universal syntax check.
+#
+#   - linked mode (dev library + header available): probed via
+#     pkg-config or a header-existence check. Compiles the bridge
+#     with -DAETHER_HAS_<LANG> and tries to link a minimal demo.
+#
+# Goals:
+#   - Fast ($0 marginal CI cost): always-on syntax sweep proves the
+#     bridges compile on every build.
+#   - Opportunistic: where dev libs are installed, link and run demos
+#     end-to-end as a real integration check.
+#   - No hard dependency: missing dev libs degrade gracefully to a
+#     "skipped" status, never a failure.
+# -----------------------------------------------------------------
+
+# The 7 in-process host bridges. (The aether host is separate-process
+# and doesn't follow this pattern — it's covered by the main build.)
+CONTRIB_HOST_LANGS = js lua perl python ruby tcl go
+
+contrib-host-check: compiler ae stdlib
+	@echo "==================================="
+	@echo "  contrib/host bridge check"
+	@echo "==================================="
+	@echo ""
+	@echo "[1/2] Syntax check — every bridge in stub mode..."
+	@pass=0; fail=0; \
+	for lang in $(CONTRIB_HOST_LANGS); do \
+		src="contrib/host/$$lang/aether_host_$$lang.c"; \
+		if [ ! -f "$$src" ]; then \
+			printf "  %-10s SKIP (no bridge)\n" "$$lang"; \
+			continue; \
+		fi; \
+		printf "  %-10s " "$$lang"; \
+		if $(CC) -fsyntax-only -Wall -Wextra -I. "$$src" 2>/tmp/contrib_host_err.txt; then \
+			echo "OK"; \
+			pass=$$((pass + 1)); \
+		else \
+			echo "FAIL (stub mode)"; \
+			head -5 /tmp/contrib_host_err.txt; \
+			fail=$$((fail + 1)); \
+		fi; \
+	done; \
+	echo "  $$pass passed, $$fail failed (stub mode)"; \
+	if [ "$$fail" -gt 0 ]; then exit 1; fi
+	@echo ""
+	@echo "[2/2] Link + run — demos for bridges with dev libs available..."
+	@bash tests/scripts/contrib_host_demos.sh || exit 1
+	@echo ""
+	@echo "==================================="
+	@echo "  contrib/host check PASSED"
 	@echo "==================================="
 
 valgrind-check: clean

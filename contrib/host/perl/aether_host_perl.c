@@ -8,9 +8,6 @@
 #include "../../../runtime/aether_sandbox.h"
 #include "../../../runtime/aether_shared_map.h"
 
-extern void* _aether_ctx_stack[];
-extern int _aether_ctx_depth;
-
 #ifdef AETHER_HAS_PERL
 #include <EXTERN.h>
 #include <perl.h>
@@ -18,11 +15,23 @@ extern int _aether_ctx_depth;
 
 static PerlInterpreter* my_perl = NULL;
 
+// Bridge-owned permission stack. Self-contained — see comment in
+// contrib/host/tcl/aether_host_tcl.c for rationale.
+static void* perl_perms_stack[64];
+static int   perl_perms_depth = 0;
+
 // Permission checker — same as other host modules
 extern int list_size(void*);
 extern void* list_get(void*, int);
 
 static int pattern_match(const char* pat, const char* resource) {
+    // Normalize IPv4-mapped IPv6 addresses so a grant for "10.0.0.1"
+    // matches a TCP resource reported as "::ffff:10.0.0.1" (and
+    // vice versa). Safe for non-TCP categories because "::ffff:"
+    // doesn't appear in filesystem paths, env var names, or exec
+    // command strings.
+    if (pat && strncmp(pat, "::ffff:", 7) == 0) pat += 7;
+    if (resource && strncmp(resource, "::ffff:", 7) == 0) resource += 7;
     int plen = strlen(pat);
     int rlen = strlen(resource);
     if (plen == 1 && pat[0] == '*') return 1;
@@ -51,9 +60,9 @@ static int perms_allow(void* perms, const char* category, const char* resource) 
 }
 
 static int host_perl_checker(const char* category, const char* resource) {
-    if (_aether_ctx_depth <= 0) return 1;
-    for (int level = 0; level < _aether_ctx_depth; level++) {
-        if (!perms_allow(_aether_ctx_stack[level], category, resource)) return 0;
+    if (perl_perms_depth <= 0) return 1;
+    for (int level = 0; level < perl_perms_depth; level++) {
+        if (!perms_allow(perl_perms_stack[level], category, resource)) return 0;
     }
     return 1;
 }
@@ -99,7 +108,8 @@ int aether_perl_run_sandboxed(void* perms, const char* code) {
     if (!code) return -1;
     aether_perl_init();
 
-    _aether_ctx_stack[_aether_ctx_depth++] = perms;
+    if (perl_perms_depth >= 64) return -1;
+    perl_perms_stack[perl_perms_depth++] = perms;
     aether_sandbox_check_fn prev = _aether_sandbox_checker;
     _aether_sandbox_checker = host_perl_checker;
 
@@ -132,7 +142,7 @@ int aether_perl_run_sandboxed(void* perms, const char* code) {
     int result = run_perl_code(code);
 
     _aether_sandbox_checker = prev;
-    _aether_ctx_depth--;
+    perl_perms_depth--;
 
     return result;
 }
@@ -168,14 +178,15 @@ int aether_perl_run_sandboxed_with_map(void* perms, const char* code, uint64_t m
         run_perl_code(inject);
     }
 
-    _aether_ctx_stack[_aether_ctx_depth++] = perms;
+    if (perl_perms_depth >= 64) return -1;
+    perl_perms_stack[perl_perms_depth++] = perms;
     aether_sandbox_check_fn prev = _aether_sandbox_checker;
     _aether_sandbox_checker = host_perl_checker;
 
     int result = run_perl_code(code);
 
     _aether_sandbox_checker = prev;
-    _aether_ctx_depth--;
+    perl_perms_depth--;
 
     // Note: outputs written via aether_map_put stay in Perl's
     // %_aether_output hash. Reading them back into C would require
@@ -187,19 +198,19 @@ int aether_perl_run_sandboxed_with_map(void* perms, const char* code, uint64_t m
 #else
 #include <stdio.h>
 int aether_perl_init(void) {
-    fprintf(stderr, "error: std.host.perl not available (compile with AETHER_HAS_PERL)\n");
+    fprintf(stderr, "error: contrib.host.perl not available (compile with AETHER_HAS_PERL)\n");
     return -1;
 }
 void aether_perl_finalize(void) {}
-int aether_perl_run(const char* code) { (void)code; return perl_init(); }
+int aether_perl_run(const char* code) { (void)code; return aether_perl_init(); }
 int aether_perl_run_sandboxed(void* perms,
     const char* code) {
   (void)perms; (void)code;
-  return perl_init();
+  return aether_perl_init();
 }
 int aether_perl_run_sandboxed_with_map(void* perms, const char* code,
     uint64_t token) {
   (void)perms; (void)code; (void)token;
-  return perl_init();
+  return aether_perl_init();
 }
 #endif

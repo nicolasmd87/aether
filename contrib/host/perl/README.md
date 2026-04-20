@@ -1,4 +1,4 @@
-# std.host.perl — Embedded Perl
+# contrib.host.perl — Embedded Perl
 
 ## Prerequisites
 
@@ -25,7 +25,7 @@ link_flags = "$(perl -MExtUtils::Embed -e ldopts)"
 ## Usage
 
 ```aether
-import std.host.perl
+import contrib.host.perl
 aether_perl.run_sandboxed(perms, "print \"hello\\n\"")
 ```
 

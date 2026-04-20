@@ -28,7 +28,8 @@ fi
 # `-Werror=return-type` alone (not a blanket -Wall -Wextra -Werror)
 # avoids blessing the compiler's other warning decisions.
 if ! gcc -Werror=return-type \
-         -I"$ROOT/runtime" -I"$ROOT/std" -I"$ROOT/std/io" \
+         -I"$ROOT/runtime" -I"$ROOT/runtime/actors" \
+         -I"$ROOT/std" -I"$ROOT/std/io" \
          -c "$C_FILE" -o "$TMPDIR/out.o" 2>"$TMPDIR/gcc.log"; then
     echo "  [FAIL] gcc -Werror=return-type on generated C"
     cat "$TMPDIR/gcc.log" | head -20

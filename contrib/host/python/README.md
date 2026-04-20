@@ -1,4 +1,4 @@
-# std.host.python — Embedded CPython
+# contrib.host.python — Embedded CPython
 
 ## Prerequisites
 
@@ -22,6 +22,6 @@ link_flags = "$(python3-config --ldflags --embed)"
 ## Usage
 
 ```aether
-import std.host.python
+import contrib.host.python
 python.run_sandboxed(perms, "print('hello')")
 ```

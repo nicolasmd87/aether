@@ -104,6 +104,10 @@ typedef struct {
     // Timeout support: fire handler if no message within timeout_ns nanoseconds
     uint64_t timeout_ns;        // 0 = no timeout
     uint64_t last_activity_ns;  // timestamp when idle started; 0 = not idle
+    // Panic state: set to 1 when the actor's step() unwound via aether_panic()
+    // or a caught signal. Dead actors are skipped by the scheduler and incoming
+    // messages are dropped. One-way transition; never un-set.
+    atomic_int dead;
 } ActorBase;
 
 typedef struct {

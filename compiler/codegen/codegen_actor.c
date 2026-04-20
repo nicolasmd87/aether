@@ -147,6 +147,7 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
     print_line(gen, "atomic_flag step_lock;   // Prevents concurrent step() during work-steal handoff");
     print_line(gen, "uint64_t timeout_ns;     // Receive timeout (0 = none)");
     print_line(gen, "uint64_t last_activity_ns; // Idle start timestamp (0 = not idle)");
+    print_line(gen, "atomic_int dead;         // Set when step() unwound via panic/signal");
     print_line(gen, "");
 
     // State fields (user-defined)
@@ -421,7 +422,12 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
         print_line(gen, "void* _msg_data = msg.payload_ptr;");
         print_line(gen, "int _msg_id = msg.type;");
         print_line(gen, "");
-        print_line(gen, "#if AETHER_GCC_COMPAT");
+        // Emscripten/wasm32 doesn't support label-address tables (GCC's
+        // "labels as values") because they require relocations in code
+        // sections, which wasm disallows ("relocations for function or
+        // section offsets are only supported in metadata sections").
+        // Route wasm through the MSVC switch-case fallback the same way.
+        print_line(gen, "#if AETHER_GCC_COMPAT && !defined(__EMSCRIPTEN__)");
         print_line(gen, "// COMPUTED GOTO DISPATCH - 15-30%% faster than switch");
         print_line(gen, "static void* dispatch_table[256] = {");
         indent(gen);
@@ -592,6 +598,7 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
     print_line(gen, "}");
     print_line(gen, "atomic_init(&actor->active, 0);  // inactive until first message send");
     print_line(gen, "atomic_init(&actor->migrate_to, -1);");
+    print_line(gen, "atomic_init(&actor->dead, 0);");
     print_line(gen, "actor->auto_process = 0;");
     print_line(gen, "");
     

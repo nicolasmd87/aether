@@ -1,4 +1,4 @@
-# std.host.aether — Aether-hosts-Aether Sandbox
+# contrib.host.aether — Aether-hosts-Aether Sandbox
 
 Run Aether scripts as sandboxed subprocesses from an Aether host
 application.  The child process is compiled to a native binary and
@@ -14,9 +14,9 @@ Aether is compiled, not interpreted.
 
 | Module | Mechanism | Containment |
 |---|---|---|
-| `std.host.lua` | Embed Lua interpreter in-process | Sandbox checker on libc calls |
-| `std.host.python` | Embed CPython in-process | Sandbox checker on libc calls |
-| **`std.host.aether`** | **Compile to binary, fork+exec** | **LD_PRELOAD on child process** |
+| `contrib.host.lua` | Embed Lua interpreter in-process | Sandbox checker on libc calls |
+| `contrib.host.python` | Embed CPython in-process | Sandbox checker on libc calls |
+| **`contrib.host.aether`** | **Compile to binary, fork+exec** | **LD_PRELOAD on child process** |
 
 The LD_PRELOAD approach is stronger: even if the child binary contains
 unexpected `extern` calls or inline C, the interception still catches
@@ -30,7 +30,7 @@ The `ae` compiler must be on `$PATH` (or set `AETHER_AE_PATH`), and
 ## Usage
 
 ```aether
-import std.host.aether
+import contrib.host.aether
 
 // Set up sandbox grants
 worker = sandbox("worker") {
@@ -54,7 +54,7 @@ println(output)
 ## Data exchange via shared map
 
 ```aether
-import std.host.aether
+import contrib.host.aether
 
 // Create shared map with inputs
 map, token = shared_map_new()

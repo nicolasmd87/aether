@@ -1,0 +1,104 @@
+// host-python-demo — Run Python scripts under Aether sandbox grants.
+//
+// CPython is embedded in this Aether binary via contrib/host/python.
+// python.run_sandboxed installs the Aether permission checker before
+// running the Python code; when Python calls `open`, `os.system`, or
+// issues a socket connect, the underlying libc calls are intercepted
+// and checked against the active grant list.
+//
+// Build (requires Python 3 development headers):
+//   CFLAGS="-DAETHER_HAS_PYTHON $(python3-config --includes)" \
+//   LDFLAGS="$(python3-config --ldflags --embed)" \
+//   ae build examples/host-python-demo.ae -o host-python-demo
+//
+// Without AETHER_HAS_PYTHON the host module compiles to stubs that
+// print "not available" and return -1.
+
+import std.list
+import contrib.host.python
+
+// --- Minimal sandbox library (matches examples/sandbox-demo.ae) ---
+
+add_perm(target: ptr, cat: string, pat: string) {
+    list.add(target, cat)
+    list.add(target, pat)
+}
+
+grant_fs_read(_ctx: ptr, path: string)    { add_perm(_ctx, "fs_read", path) }
+grant_exec(_ctx: ptr, cmd: string)        { add_perm(_ctx, "exec", cmd) }
+grant_env(_ctx: ptr, var_name: string)    { add_perm(_ctx, "env", var_name) }
+
+sandbox(name: string) {
+    perms = list.new()
+    println("sandbox: ${name}")
+    return perms
+}
+
+main() {
+    println("=== host-python demo ===")
+    println()
+
+    // Sandbox 1 — can read HOME, can read /etc/*.
+    // Note: os.environ is cached at CPython startup (before the sandbox
+    // is active) so Python code should use ctypes.CDLL(None).getenv for
+    // sandbox-aware env reads. See docs/containment-sandbox.md.
+    worker = sandbox("worker") {
+        grant_env("HOME")
+        grant_fs_read("/etc/*")
+    }
+
+    println("--- worker (env HOME + fs_read /etc/*) ---")
+    python.run_sandboxed(worker, "print('  hello from python')")
+
+    python.run_sandboxed(worker, <<SCRIPT
+import ctypes
+libc = ctypes.CDLL(None)
+libc.getenv.restype = ctypes.c_char_p
+libc.getenv.argtypes = [ctypes.c_char_p]
+v = libc.getenv(b'HOME')
+print('  HOME=' + (v.decode() if v else '<denied>'))
+SCRIPT
+)
+
+    rc = python.run_sandboxed(worker,
+        "print('  /etc/hostname=' + open('/etc/hostname').read().strip())")
+    if rc != 0 { println("  [DENY]  /etc/hostname") }
+
+    // Sandbox 2 — only TERM grant. Reading HOME should be hidden.
+    minimal = sandbox("minimal") {
+        grant_env("TERM")
+    }
+
+    println()
+    println("--- minimal (env TERM only) ---")
+    python.run_sandboxed(minimal, <<SCRIPT
+import ctypes
+libc = ctypes.CDLL(None)
+libc.getenv.restype = ctypes.c_char_p
+libc.getenv.argtypes = [ctypes.c_char_p]
+v = libc.getenv(b'TERM')
+print('  TERM=' + (v.decode() if v else '<denied>'))
+SCRIPT
+)
+
+    python.run_sandboxed(minimal, <<SCRIPT
+import ctypes
+libc = ctypes.CDLL(None)
+libc.getenv.restype = ctypes.c_char_p
+libc.getenv.argtypes = [ctypes.c_char_p]
+v = libc.getenv(b'HOME')
+print('  HOME=' + (v.decode() if v else '<denied, expected>'))
+SCRIPT
+)
+
+    rc = python.run_sandboxed(minimal,
+        "print(open('/etc/hostname').read())")
+    if rc != 0 { println("  [DENY]  /etc/hostname (expected)") }
+
+    list.free(worker)
+    list.free(minimal)
+
+    python.finalize()
+    println()
+    println("=== done ===")
+}

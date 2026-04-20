@@ -333,6 +333,9 @@ const char* ast_node_type_to_string(ASTNodeType type) {
         case AST_STATE_DECLARATION: return "STATE_DECLARATION";
         case AST_HIDE_DIRECTIVE: return "HIDE_DIRECTIVE";
         case AST_SEAL_DIRECTIVE: return "SEAL_DIRECTIVE";
+        case AST_TRY_STATEMENT: return "TRY_STATEMENT";
+        case AST_CATCH_CLAUSE: return "CATCH_CLAUSE";
+        case AST_PANIC_STATEMENT: return "PANIC_STATEMENT";
         case AST_MESSAGE_DEFINITION: return "MESSAGE_DEFINITION";
         case AST_MESSAGE_FIELD: return "MESSAGE_FIELD";
         case AST_RECEIVE_ARM: return "RECEIVE_ARM";

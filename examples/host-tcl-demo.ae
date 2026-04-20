@@ -1,0 +1,81 @@
+// host-tcl-demo — Run Tcl scripts under Aether sandbox grants.
+//
+// The Tcl interpreter is embedded in this Aether binary via
+// contrib/host/tcl. tcl.run_sandboxed installs the Aether permission
+// checker before evaluating the Tcl script; when Tcl code calls
+// `open`, `exec`, or reads `$::env(FOO)`, the underlying libc calls
+// are intercepted and checked against the active grant list.
+//
+// Build (requires libtcl):
+//   CFLAGS="-DAETHER_HAS_TCL $(pkg-config --cflags tcl)" \
+//   LDFLAGS="$(pkg-config --libs tcl)" \
+//   ae build examples/host-tcl-demo.ae -o host-tcl-demo
+//
+// Without AETHER_HAS_TCL the host module compiles to stubs that
+// print "not available" and return -1.
+
+import std.list
+import contrib.host.tcl
+
+// --- Minimal sandbox library (matches examples/sandbox-demo.ae) ---
+
+add_perm(target: ptr, cat: string, pat: string) {
+    list.add(target, cat)
+    list.add(target, pat)
+}
+
+grant_fs_read(_ctx: ptr, path: string)    { add_perm(_ctx, "fs_read", path) }
+grant_exec(_ctx: ptr, cmd: string)        { add_perm(_ctx, "exec", cmd) }
+grant_env(_ctx: ptr, var_name: string)    { add_perm(_ctx, "env", var_name) }
+
+sandbox(name: string) {
+    perms = list.new()
+    println("sandbox: ${name}")
+    return perms
+}
+
+main() {
+    println("=== host-tcl demo ===")
+    println()
+
+    // Sandbox 1 — can read HOME, can read /etc/*, can exec /bin/echo.
+    worker = sandbox("worker") {
+        grant_env("HOME")
+        grant_fs_read("/etc/*")
+        grant_exec("/bin/echo")
+    }
+
+    println("--- worker (env HOME + fs_read /etc/* + exec /bin/echo) ---")
+    tcl.run_sandboxed(worker, "puts \"  hello from tcl\"")
+
+    rc = tcl.run_sandboxed(worker, "puts \"  HOME=$::env(HOME)\"")
+    if rc != 0 { println("  [DENY]  HOME") }
+
+    rc = tcl.run_sandboxed(worker,
+        "set f [open /etc/hostname r]; puts \"  hostname=[string trim [read $f]]\"; close $f")
+    if rc != 0 { println("  [DENY]  /etc/hostname") }
+
+    // Sandbox 2 — only TERM grant. Everything else denies.
+    minimal = sandbox("minimal") {
+        grant_env("TERM")
+    }
+
+    println()
+    println("--- minimal (env TERM only) ---")
+    rc = tcl.run_sandboxed(minimal, "puts \"  TERM=$::env(TERM)\"")
+    if rc != 0 { println("  [DENY]  TERM") }
+
+    rc = tcl.run_sandboxed(minimal, "puts \"  HOME=$::env(HOME)\"")
+    if rc != 0 { println("  [DENY]  HOME (expected)") }
+
+    rc = tcl.run_sandboxed(minimal,
+        "set f [open /etc/hostname r]; puts [read $f]; close $f")
+    if rc != 0 { println("  [DENY]  /etc/hostname (expected)") }
+
+    list.free(worker)
+    list.free(minimal)
+
+    tcl.finalize()
+    println()
+    println("=== done ===")
+}

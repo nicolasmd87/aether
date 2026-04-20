@@ -1,0 +1,107 @@
+// host-go-demo — Run a Go program under Aether sandbox grants.
+//
+// Unlike Lua/Python/Perl/Ruby/Tcl/JS (which embed a runtime in the
+// Aether process), Go has its own runtime that doesn't share a
+// process. The bridge spawns `go run script.go` as a subprocess
+// with LD_PRELOAD pointed at libaether_sandbox.so, the same way
+// contrib/host/aether runs a compiled Aether binary.
+//
+// This demo:
+//   1. Writes a tiny Go program to /tmp/aether_host_go_demo.go
+//   2. Runs it under a sandbox that permits reading HOME and the
+//      Go toolchain's own directories
+//   3. Runs it under a second sandbox that denies most things, to
+//      demonstrate the deny path
+//
+// Build (requires the `go` toolchain at runtime; no dev library):
+//   ae build examples/host-go-demo.ae -o host-go-demo
+//
+// Linux: sandbox enforcement is real (LD_PRELOAD intercepts libc).
+// macOS: sandbox is advisory (SIP blocks DYLD_INSERT_LIBRARIES).
+
+import std.list
+import std.io
+import contrib.host.go
+
+// --- Minimal sandbox library (matches examples/sandbox-demo.ae) ---
+
+add_perm(target: ptr, cat: string, pat: string) {
+    list.add(target, cat)
+    list.add(target, pat)
+}
+
+grant_all(_ctx: ptr)                    { add_perm(_ctx, "*", "*") }
+grant_fs_read(_ctx: ptr, path: string)  { add_perm(_ctx, "fs_read", path) }
+grant_exec(_ctx: ptr, cmd: string)      { add_perm(_ctx, "exec", cmd) }
+grant_env(_ctx: ptr, var_name: string)  { add_perm(_ctx, "env", var_name) }
+
+sandbox(name: string) {
+    perms = list.new()
+    println("sandbox: ${name}")
+    return perms
+}
+
+main() {
+    println("=== host-go demo ===")
+    println()
+
+    // Write a tiny Go program to a tmpfile.
+    go_src = "/tmp/aether_host_go_demo.go"
+    io.write_file(go_src, <<GOCODE
+package main
+
+import (
+	"fmt"
+	"os"
+)
+
+func main() {
+	if home, ok := os.LookupEnv("HOME"); ok {
+		fmt.Println("  HOME =", home)
+	} else {
+		fmt.Println("  HOME = <not set>")
+	}
+	fmt.Println("  PID  =", os.Getpid())
+}
+GOCODE
+)
+
+    // Wide-open sandbox: grant_all lets `go run` read everything it
+    // needs from $GOROOT, $GOPATH, and the linker toolchain. Useful
+    // as a baseline "does the bridge even work?" check.
+    open_box = sandbox("open") {
+        grant_all()
+    }
+
+    println("--- open (grant_all) ---")
+    rc = go.run_script_sandboxed(open_box, go_src)
+    if rc != 0 {
+        println("  [FAIL] go.run_script_sandboxed exited ${rc}")
+    }
+
+    // Narrow sandbox: only HOME env + /tmp/* fs_read. `go run` itself
+    // needs more grants than this, so it's expected to fail. Shows
+    // the deny path is live.
+    narrow = sandbox("narrow") {
+        grant_env("HOME")
+        grant_fs_read("/tmp/*")
+    }
+
+    println()
+    println("--- narrow (env HOME + fs_read /tmp/* only) ---")
+    rc = go.run_script_sandboxed(narrow, go_src)
+    if rc == 0 {
+        println("  [note] script ran — on macOS sandbox is advisory")
+        println("         because LD_PRELOAD is unavailable under SIP")
+    } else {
+        println("  [DENY] narrow grants not enough for `go run` toolchain (exit ${rc})")
+        println("         — this is the expected Linux path. Pre-build the binary")
+        println("         with `go build` and run via go.run_sandboxed for tighter grants.")
+    }
+
+    list.free(open_box)
+    list.free(narrow)
+
+    println()
+    println("=== done ===")
+}

@@ -25,6 +25,7 @@
 #include "../config/aether_optimization_config.h"
 #include "../aether_numa.h"
 #include "../actors/aether_send_buffer.h"
+#include "../actors/aether_panic.h"
 
 // Portable nanosecond clock for preemption timing
 static inline uint64_t aether_now_ns(void) {
@@ -85,6 +86,81 @@ static inline void aether_sched_yield(void) { SwitchToThread(); }
 static inline void aether_usleep(unsigned int us) { usleep(us); }
 static inline void aether_sched_yield(void) { sched_yield(); }
 #endif
+
+// Forward reference: defined below (line ~195). Needed in aether_step_safe
+// for per-core death-drain accounting.
+extern AETHER_TLS int current_core_id;
+
+// --------------------------------------------------------------------------
+// aether_step_safe — call actor->step() inside a sigsetjmp barrier.
+//
+// If the handler calls aether_panic() or takes a caught signal, the barrier
+// unwinds: we mark the actor dead, fire the death hook, and return normally.
+// The scheduler loop keeps running; other actors are unaffected.
+//
+// Dead actors are skipped on entry: a second attempt to step a crashed
+// actor is a no-op.
+//
+// sigsetjmp(buf, 1) saves the signal mask so siglongjmp from a signal
+// handler (Phase 2) restores it. Overhead per call is a handful of
+// instructions plus one sigprocmask on systems where glibc implements it
+// as a syscall — measurable but small (~30ns on modern x86_64).
+//
+// We use a function rather than a macro so the 8 step() sites stay
+// readable; `inline` lets the compiler devirtualize where it can.
+// --------------------------------------------------------------------------
+static inline void aether_step_safe(ActorBase* actor) {
+    if (!actor || !actor->step) return;
+    if (atomic_load_explicit(&actor->dead, memory_order_acquire)) return;
+
+    AetherJmpFrame* f = aether_try_push();
+    if (AETHER_SIGSETJMP(f->buf, 1) == 0) {
+        g_aether_in_actor_step = 1;
+        g_aether_current_actor_id = actor->id;
+        actor->step(actor);
+        g_aether_in_actor_step = 0;
+        g_aether_current_actor_id = -1;
+        aether_try_pop();
+        return;
+    }
+
+    // Unwound via panic or signal.
+    const char* reason = f->reason;
+    g_aether_in_actor_step = 0;
+    g_aether_current_actor_id = -1;
+    aether_try_pop();
+
+    atomic_store_explicit(&actor->dead, 1, memory_order_release);
+    atomic_store_explicit(&actor->active, 0, memory_order_release);
+
+    // Drain any pending messages so scheduler_wait() sees counters converge.
+    // Without this the dead actor's mailbox keeps mailbox.count > 0 forever,
+    // scheduler threads skip the actor (dead check), and sent > processed
+    // indefinitely — scheduler_wait() would spin or time out.
+    int drained = 0;
+    Message _discard;
+    while (mailbox_receive(&actor->mailbox, &_discard)) {
+        drained++;
+    }
+    if (drained > 0) {
+        if (current_core_id >= 0 && current_core_id < num_cores) {
+            atomic_fetch_add_explicit(
+                &schedulers[current_core_id].messages_processed,
+                (uint64_t)drained, memory_order_relaxed);
+        } else {
+            // Main-thread death: attribute to core 0 so the global sent/processed
+            // accounting balances out.
+            atomic_fetch_add_explicit(
+                &schedulers[0].messages_processed,
+                (uint64_t)drained, memory_order_relaxed);
+        }
+    }
+
+    // Release step_lock so the dead-actor check in future iterations can
+    // proceed without contention. (step_lock is a TAS lock; we clear it.)
+    atomic_flag_clear_explicit(&actor->step_lock, memory_order_release);
+    aether_fire_death_hook(actor->id, reason);
+}
 
 // Layout assertions to catch struct padding/size mismatches between translation units
 #if INTPTR_MAX == INT64_MAX
@@ -242,7 +318,7 @@ static void overflow_flush(int from_core) {
                             while (atomic_load_explicit(&actor->mailbox.count, memory_order_relaxed) > 0 &&
                                    p < 16 &&
                                    atomic_load_explicit(&actor->assigned_core, memory_order_relaxed) == from_core) {
-                                actor->step(actor);
+                                aether_step_safe(actor);
                                 p++;
                             }
                             atomic_flag_clear_explicit(&actor->step_lock, memory_order_release);
@@ -497,7 +573,7 @@ void* AETHER_HOT scheduler_thread(void* arg) {
                     while (atomic_load_explicit(&actor->mailbox.count, memory_order_relaxed) > 0 && drained < 128) {
                         if (unlikely(atomic_load_explicit(&actor->assigned_core, memory_order_relaxed) != sched->core_id))
                             break;
-                        actor->step(actor);
+                        aether_step_safe(actor);
                         drained++;
                         // Preemption: yield if handler batch exceeds threshold
                         if (_drain_start && (aether_now_ns() - _drain_start) >= g_aether_config.preempt_threshold_ns)
@@ -559,7 +635,7 @@ void* AETHER_HOT scheduler_thread(void* arg) {
                     while (atomic_load_explicit(&actor->mailbox.count, memory_order_relaxed) > 0 &&
                            processed < 64 &&
                            atomic_load_explicit(&actor->assigned_core, memory_order_relaxed) == sched->core_id) {
-                        actor->step(actor);
+                        aether_step_safe(actor);
                         processed++;
                         // Yield to outer loop if cross-core messages arrived
                         // (e.g. StopAnimation sent from main while actor sleeps).
@@ -662,7 +738,7 @@ void* AETHER_HOT scheduler_thread(void* arg) {
                     while (atomic_load_explicit(&actor->mailbox.count, memory_order_relaxed) > 0 &&
                            processed < 64 &&
                            atomic_load_explicit(&actor->assigned_core, memory_order_relaxed) == sched->core_id) {
-                        actor->step(actor);
+                        aether_step_safe(actor);
                         processed++;
                         // Yield to outer loop if cross-core messages arrived
                         // (e.g. StopAnimation sent from main while actor sleeps).
@@ -836,6 +912,11 @@ void* AETHER_HOT scheduler_thread(void* arg) {
 }
 
 void scheduler_init(int cores) {
+    // Opt-in SIGSEGV/SIGFPE/SIGBUS → panic handlers. No-op unless
+    // AETHER_CATCH_SIGNALS=1 in the environment. Safe to call multiple times
+    // — sigaction just overwrites.
+    aether_panic_install_signal_handlers();
+
     // Reset join guard so the scheduler can be restarted (e.g. in tests).
     atomic_store_explicit(&g_threads_joined, 0, memory_order_relaxed);
     // Reset thread-started flag for the upcoming scheduler_start() call.
@@ -1376,6 +1457,12 @@ static AETHER_TLS int inline_depth = 0;
 #define MAX_INLINE_DEPTH 2
 
 void scheduler_send_local(ActorBase* actor, Message msg) {
+    // Drop messages to dead actors — they can't process them and we don't
+    // want to grow their mailbox or fire their step().
+    if (unlikely(!actor || atomic_load_explicit(&actor->dead, memory_order_acquire))) {
+        return;
+    }
+
     // NOTE: Inline mode optimization is handled by the existing WORK INLINING
     // code below (lines 590+), which is safe because it checks for scheduler
     // thread context (current_core_id >= 0 && actor->assigned_core == current_core_id).
@@ -1433,7 +1520,7 @@ void scheduler_send_local(ActorBase* actor, Message msg) {
         atomic_load_explicit(&actor->mailbox.count, memory_order_relaxed) == 1 &&
         !atomic_flag_test_and_set_explicit(&actor->step_lock, memory_order_acquire)) {
         inline_depth++;
-        actor->step(actor);
+        aether_step_safe(actor);
         schedulers[current_core_id].messages_processed++;
         if (atomic_load_explicit(&actor->mailbox.count, memory_order_relaxed) == 0) {
             atomic_store_explicit(&actor->active, 0, memory_order_relaxed);
@@ -1449,11 +1536,15 @@ void scheduler_send_local(ActorBase* actor, Message msg) {
 }
 
 void scheduler_send_remote(ActorBase* actor, Message msg, int from_core) {
+    // Drop messages to dead actors (see scheduler_send_local).
+    if (unlikely(!actor || atomic_load_explicit(&actor->dead, memory_order_acquire))) {
+        return;
+    }
     // INLINE MODE: For single-actor programs, process synchronously on the main thread.
     // scheduler_send_batch_add has the same check; keep them in sync.
     if (unlikely(aether_main_thread_mode_active())) {
         mailbox_send(&actor->mailbox, msg);
-        actor->step(actor);
+        aether_step_safe(actor);
         AETHER_STAT_INC(inline_sends);
         return;
     }
@@ -1587,7 +1678,7 @@ void scheduler_send_batch_add(ActorBase* actor, Message msg) {
     // Main Thread Mode = synchronous processing, zero queue overhead
     if (aether_main_thread_mode_active()) {
         mailbox_send(&actor->mailbox, msg);
-        actor->step(actor);
+        aether_step_safe(actor);
         AETHER_STAT_INC(inline_sends);
         return;
     }
@@ -1721,6 +1812,7 @@ ActorBase* scheduler_spawn_pooled(int preferred_core, void (*step)(void*), size_
     atomic_flag_clear_explicit(&actor->step_lock, memory_order_relaxed);
     actor->timeout_ns = 0;
     actor->last_activity_ns = 0;
+    atomic_init(&actor->dead, 0);
 
     // Track actor count for inline mode auto-detection
     // Get previous count and main_actor BEFORE aether_on_actor_spawn modifies them
@@ -1918,7 +2010,7 @@ int aether_scheduler_poll(int max_per_actor) {
             int processed = 0;
             if (!atomic_flag_test_and_set_explicit(&actor->step_lock, memory_order_acquire)) {
                 while (atomic_load_explicit(&actor->mailbox.count, memory_order_relaxed) > 0 && processed < limit) {
-                    actor->step(actor);
+                    aether_step_safe(actor);
                     processed++;
                     total++;
                 }

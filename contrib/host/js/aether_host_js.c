@@ -9,22 +9,32 @@
 #include "../../../runtime/aether_sandbox.h"
 #include "../../../runtime/aether_shared_map.h"
 
-extern void* _aether_ctx_stack[];
-extern int _aether_ctx_depth;
-
 #ifdef AETHER_HAS_JS
 #include <duktape.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
 
 static duk_context* ctx = NULL;
+
+// Bridge-owned permission stack. Self-contained — see comment in
+// contrib/host/tcl/aether_host_tcl.c for rationale.
+static void* js_perms_stack[64];
+static int   js_perms_depth = 0;
 
 // Permission checker — shared with Python/Lua host modules
 extern int list_size(void*);
 extern void* list_get(void*, int);
 
 static int pattern_match(const char* pat, const char* resource) {
+    // Normalize IPv4-mapped IPv6 addresses so a grant for "10.0.0.1"
+    // matches a TCP resource reported as "::ffff:10.0.0.1" (and
+    // vice versa). Safe for non-TCP categories because "::ffff:"
+    // doesn't appear in filesystem paths, env var names, or exec
+    // command strings.
+    if (pat && strncmp(pat, "::ffff:", 7) == 0) pat += 7;
+    if (resource && strncmp(resource, "::ffff:", 7) == 0) resource += 7;
     int plen = strlen(pat);
     int rlen = strlen(resource);
     if (plen == 1 && pat[0] == '*') return 1;
@@ -53,9 +63,9 @@ static int perms_allow(void* perms, const char* category, const char* resource) 
 }
 
 static int check_sandbox(const char* category, const char* resource) {
-    if (_aether_ctx_depth <= 0) return 1;
-    for (int level = 0; level < _aether_ctx_depth; level++) {
-        if (!perms_allow(_aether_ctx_stack[level], category, resource)) return 0;
+    if (js_perms_depth <= 0) return 1;
+    for (int level = 0; level < js_perms_depth; level++) {
+        if (!perms_allow(js_perms_stack[level], category, resource)) return 0;
     }
     return 1;
 }
@@ -127,6 +137,47 @@ static duk_ret_t js_file_exists(duk_context* c) {
     return 1;
 }
 
+// writeFile(path, content) — returns boolean success, checked by sandbox
+// Creates or truncates. Returns false if the grant is denied or the
+// write fails. The grant category is "fs_write" — separate from
+// "fs_read", so scripts must be explicitly granted write permission.
+static duk_ret_t js_write_file(duk_context* c) {
+    const char* path = duk_require_string(c, 0);
+    duk_size_t len = 0;
+    const char* content = duk_require_lstring(c, 1, &len);
+    if (!check_sandbox("fs_write", path)) {
+        duk_push_boolean(c, 0);
+        return 1;
+    }
+    FILE* f = fopen(path, "w");
+    if (!f) { duk_push_boolean(c, 0); return 1; }
+    size_t written = fwrite(content, 1, len, f);
+    fclose(f);
+    duk_push_boolean(c, written == len);
+    return 1;
+}
+
+// exec(cmd) — runs the shell command, returns the exit code.
+// Sandbox-checked against the "exec" category with the command
+// string as resource. Uses libc's system() which goes through
+// /bin/sh -c; the child inherits any LD_PRELOAD so spawned tools
+// are also sandbox-checked. Returns -1 if denied.
+static duk_ret_t js_exec(duk_context* c) {
+    const char* cmd = duk_require_string(c, 0);
+    if (!check_sandbox("exec", cmd)) {
+        duk_push_int(c, -1);
+        return 1;
+    }
+    int rc = system(cmd);
+    // Unwrap WEXITSTATUS so the JS side sees the shell's exit code,
+    // not the raw status word.
+#ifdef WEXITSTATUS
+    if (rc >= 0) rc = WEXITSTATUS(rc);
+#endif
+    duk_push_int(c, rc);
+    return 1;
+}
+
 static void register_bindings(duk_context* c) {
     duk_push_c_function(c, js_print, DUK_VARARGS);
     duk_put_global_string(c, "print");
@@ -139,6 +190,12 @@ static void register_bindings(duk_context* c) {
 
     duk_push_c_function(c, js_file_exists, 1);
     duk_put_global_string(c, "fileExists");
+
+    duk_push_c_function(c, js_write_file, 2);
+    duk_put_global_string(c, "writeFile");
+
+    duk_push_c_function(c, js_exec, 1);
+    duk_put_global_string(c, "exec");
 }
 
 int js_init(void) {
@@ -172,7 +229,8 @@ int js_run_sandboxed(void* perms, const char* code) {
     if (!code) return -1;
     js_init();
 
-    _aether_ctx_stack[_aether_ctx_depth++] = perms;
+    if (js_perms_depth >= 64) return -1;
+    js_perms_stack[js_perms_depth++] = perms;
     aether_sandbox_check_fn prev = _aether_sandbox_checker;
     _aether_sandbox_checker = NULL;  // JS uses direct check_sandbox, not libc interception
 
@@ -186,7 +244,7 @@ int js_run_sandboxed(void* perms, const char* code) {
     }
 
     _aether_sandbox_checker = prev;
-    _aether_ctx_depth--;
+    js_perms_depth--;
 
     return result;
 }
@@ -225,7 +283,8 @@ int js_run_sandboxed_with_map(void* perms, const char* code, uint64_t map_token)
     aether_shared_map_freeze_inputs_by_token(map_token);
     js_current_map_token = map_token;
 
-    _aether_ctx_stack[_aether_ctx_depth++] = perms;
+    if (js_perms_depth >= 64) return -1;
+    js_perms_stack[js_perms_depth++] = perms;
     aether_sandbox_check_fn prev = _aether_sandbox_checker;
     _aether_sandbox_checker = NULL;
 
@@ -239,7 +298,7 @@ int js_run_sandboxed_with_map(void* perms, const char* code, uint64_t map_token)
     }
 
     _aether_sandbox_checker = prev;
-    _aether_ctx_depth--;
+    js_perms_depth--;
     js_current_map_token = 0;
 
     return result;
@@ -248,7 +307,7 @@ int js_run_sandboxed_with_map(void* perms, const char* code, uint64_t map_token)
 #else
 #include <stdio.h>
 int js_init(void) {
-    fprintf(stderr, "error: std.host.js not available (compile with AETHER_HAS_JS)\n");
+    fprintf(stderr, "error: contrib.host.js not available (compile with AETHER_HAS_JS)\n");
     return -1;
 }
 void js_finalize(void) {}

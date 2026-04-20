@@ -337,6 +337,9 @@ Token* read_identifier() {
     else if (strcmp(buffer, "hide") == 0) token = create_token(TOKEN_HIDE, buffer, current_line, current_column);
     else if (strcmp(buffer, "seal") == 0) token = create_token(TOKEN_SEAL, buffer, current_line, current_column);
     else if (strcmp(buffer, "except") == 0) token = create_token(TOKEN_EXCEPT, buffer, current_line, current_column);
+    else if (strcmp(buffer, "try") == 0) token = create_token(TOKEN_TRY, buffer, current_line, current_column);
+    else if (strcmp(buffer, "catch") == 0) token = create_token(TOKEN_CATCH, buffer, current_line, current_column);
+    else if (strcmp(buffer, "panic") == 0) token = create_token(TOKEN_PANIC, buffer, current_line, current_column);
     else if (strcmp(buffer, "ptr") == 0) token = create_token(TOKEN_PTR, buffer, current_line, current_column);
     else if (strcmp(buffer, "int") == 0) token = create_token(TOKEN_INT, buffer, current_line, current_column);
     else if (strcmp(buffer, "long") == 0) token = create_token(TOKEN_INT64, buffer, current_line, current_column);
@@ -716,6 +719,9 @@ const char* token_type_to_string(AeTokenType type) {
         case TOKEN_IN: return "IN";
         case TOKEN_DOTDOT: return "DOTDOT";
         case TOKEN_CONST: return "CONST";
+        case TOKEN_TRY: return "TRY";
+        case TOKEN_CATCH: return "CATCH";
+        case TOKEN_PANIC: return "PANIC";
         case TOKEN_LEFT_PAREN: return "LEFT_PAREN";
         case TOKEN_RIGHT_PAREN: return "RIGHT_PAREN";
         case TOKEN_LEFT_BRACE: return "LEFT_BRACE";

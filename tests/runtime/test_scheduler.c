@@ -40,6 +40,9 @@ typedef struct {
     SPSCQueue* spsc_queue;
     _Atomic(ActorReplySlot*) reply_slot;
     atomic_flag step_lock;
+    uint64_t timeout_ns;
+    uint64_t last_activity_ns;
+    atomic_int dead;
     // Test-specific fields below
     atomic_int count;
     atomic_int last_value;
@@ -59,6 +62,9 @@ typedef struct {
     SPSCQueue* spsc_queue;
     _Atomic(ActorReplySlot*) reply_slot;
     atomic_flag step_lock;
+    uint64_t timeout_ns;
+    uint64_t last_activity_ns;
+    atomic_int dead;
     // Test-specific fields below
     atomic_int received[1000];
     atomic_int count;

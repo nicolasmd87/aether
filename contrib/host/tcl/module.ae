@@ -1,0 +1,20 @@
+// contrib.host.tcl — Embedded Tcl Language Host Module
+//
+// Runs Tcl code inside an Aether sandbox. Tcl's io/env/socket calls
+// are intercepted via the LD_PRELOAD libc interception layer — the
+// sandbox doesn't need to know anything specific about Tcl because
+// every privileged op goes through libc first.
+//
+// Usage:
+//   import contrib.host.tcl
+//
+//   worker = sandbox("worker") {
+//       grant_env("HOME")
+//       grant_fs_read("/etc/*")
+//   }
+//   tcl.run_sandboxed(worker, "puts $::env(HOME)")
+
+extern tcl_run_sandboxed(perms: ptr, code: string) -> int
+extern tcl_run(code: string) -> int
+extern tcl_init() -> int
+extern tcl_finalize()

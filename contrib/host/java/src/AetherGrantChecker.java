@@ -32,6 +32,13 @@ public class AetherGrantChecker {
     }
 
     private boolean patternMatch(String pat, String resource) {
+        // Normalize IPv4-mapped IPv6 addresses so a grant for "10.0.0.1"
+        // matches a TCP resource reported as "::ffff:10.0.0.1" (and
+        // vice versa). Safe for non-TCP categories because "::ffff:"
+        // doesn't appear in filesystem paths, env var names, or exec
+        // command strings.
+        if (pat.startsWith("::ffff:")) pat = pat.substring(7);
+        if (resource.startsWith("::ffff:")) resource = resource.substring(7);
         // Wildcard
         if ("*".equals(pat)) return true;
         // Prefix: /etc/*

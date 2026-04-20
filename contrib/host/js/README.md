@@ -1,4 +1,4 @@
-# std.host.js — Embedded JavaScript (Duktape)
+# contrib.host.js — Embedded JavaScript (Duktape)
 
 ## Prerequisites
 
@@ -22,7 +22,7 @@ link_flags = "-lduktape"
 ## Usage
 
 ```aether
-import std.host.js
+import contrib.host.js
 js.run_sandboxed(perms, "print('hello')")
 ```
 
