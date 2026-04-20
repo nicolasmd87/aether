@@ -422,7 +422,12 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
         print_line(gen, "void* _msg_data = msg.payload_ptr;");
         print_line(gen, "int _msg_id = msg.type;");
         print_line(gen, "");
-        print_line(gen, "#if AETHER_GCC_COMPAT");
+        // Emscripten/wasm32 doesn't support label-address tables (GCC's
+        // "labels as values") because they require relocations in code
+        // sections, which wasm disallows ("relocations for function or
+        // section offsets are only supported in metadata sections").
+        // Route wasm through the MSVC switch-case fallback the same way.
+        print_line(gen, "#if AETHER_GCC_COMPAT && !defined(__EMSCRIPTEN__)");
         print_line(gen, "// COMPUTED GOTO DISPATCH - 15-30%% faster than switch");
         print_line(gen, "static void* dispatch_table[256] = {");
         indent(gen);

@@ -83,11 +83,13 @@ void aether_panic(const char* reason) {
 // faults during development and testing, not as a production replacement
 // for memory safety.
 //
-// Windows has no sigaction / SA_SIGINFO / SIGBUS — Win32 uses SEH for native
-// faults, a different recovery model entirely. We stub the installer out on
-// Windows so the rest of the panic path (panic()/try/catch via setjmp) still
-// works; only the "convert SIGSEGV into a panic" feature is POSIX-only.
-#ifndef _WIN32
+// Windows has no sigaction / SA_SIGINFO / SIGBUS; Win32 uses SEH for native
+// faults, a different recovery model entirely. Emscripten's wasm target
+// doesn't expose POSIX signal delivery at all. On both, the installer is a
+// no-op stub so the rest of the panic path (panic()/try/catch via setjmp)
+// still works; only the "convert SIGSEGV into a panic" feature is
+// POSIX-only.
+#if !defined(_WIN32) && !defined(__EMSCRIPTEN__)
 
 static void aether_sig_handler(int sig, siginfo_t* info, void* ucontext) {
     (void)info;
@@ -140,15 +142,16 @@ void aether_panic_install_signal_handlers(void) {
     sigaction(SIGBUS,  &sa, NULL);
 }
 
-#else  // _WIN32 — Win32 uses SEH for native faults, not POSIX signals.
+#else  // !(!_WIN32 && !__EMSCRIPTEN__): Windows uses SEH; wasm has no POSIX signals.
 
 void aether_panic_install_signal_handlers(void) {
-    // Intentional no-op. On Windows the SIGSEGV→panic conversion path
-    // would require SEH/__try, which is a separate design. Callers that
-    // use plain panic() / try / catch still work unchanged.
+    // Intentional no-op. On Windows the SIGSEGV-to-panic conversion path
+    // would require SEH/__try, which is a separate design. On Emscripten
+    // wasm there is no POSIX signal delivery at all. Callers that use
+    // plain panic() / try / catch still work unchanged on both targets.
 }
 
-#endif  // _WIN32
+#endif  // !_WIN32 && !__EMSCRIPTEN__
 
 // ---------------------------------------------------------------------------
 // Death hook

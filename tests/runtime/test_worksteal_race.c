@@ -32,6 +32,9 @@ typedef struct {
     SPSCQueue* spsc_queue;
     _Atomic(ActorReplySlot*) reply_slot;
     atomic_flag step_lock;
+    uint64_t timeout_ns;
+    uint64_t last_activity_ns;
+    atomic_int dead;
     atomic_int count;
 } WStealActor;
 

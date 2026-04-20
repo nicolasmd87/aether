@@ -33,13 +33,17 @@
 extern "C" {
 #endif
 
-// Windows lacks POSIX sigjmp_buf / sigsetjmp / siglongjmp. Fall back to
-// the unsafe-for-signal-handlers variants, which is fine because Windows
-// doesn't deliver signals to arbitrary threads like POSIX does — the
-// signal-mask semantics the `sig*` family preserves aren't meaningful on
-// Win32. Callers that used sigsetjmp(buf, 1) should use AETHER_SIGSETJMP
-// so the second argument is dropped on Windows.
-#ifdef _WIN32
+// Windows lacks POSIX sigjmp_buf / sigsetjmp / siglongjmp. Emscripten
+// supports plain setjmp/longjmp through -enable-emscripten-sjlj but not
+// the signal-mask variants, and trying to compile them triggers a
+// backend "relocations for function or section offsets are only
+// supported in metadata sections" error under wasm32. Both targets fall
+// back to the unsafe-for-signal-handlers variants, which is fine on
+// those platforms since they don't deliver signals to arbitrary
+// threads the way POSIX does. Callers that used sigsetjmp(buf, 1)
+// should use AETHER_SIGSETJMP so the second argument is dropped on
+// the platforms that don't expose it.
+#if defined(_WIN32) || defined(__EMSCRIPTEN__)
   typedef jmp_buf aether_sigjmp_buf;
   #define AETHER_SIGSETJMP(buf, savemask) setjmp(buf)
   #define AETHER_SIGLONGJMP(buf, val)     longjmp((buf), (val))
