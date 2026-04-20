@@ -61,7 +61,7 @@ void aether_panic(const char* reason) {
     AetherJmpFrame* f = aether_current_frame();
     if (f) {
         f->reason = reason;
-        siglongjmp(f->buf, 1);
+        AETHER_SIGLONGJMP(f->buf, 1);
         // unreachable
     }
 
@@ -82,6 +82,12 @@ void aether_panic(const char* reason) {
 // inconsistent. This path exists so the process survives *some* native
 // faults during development and testing, not as a production replacement
 // for memory safety.
+//
+// Windows has no sigaction / SA_SIGINFO / SIGBUS — Win32 uses SEH for native
+// faults, a different recovery model entirely. We stub the installer out on
+// Windows so the rest of the panic path (panic()/try/catch via setjmp) still
+// works; only the "convert SIGSEGV into a panic" feature is POSIX-only.
+#ifndef _WIN32
 
 static void aether_sig_handler(int sig, siginfo_t* info, void* ucontext) {
     (void)info;
@@ -111,7 +117,7 @@ static void aether_sig_handler(int sig, siginfo_t* info, void* ucontext) {
         default:      reason = "signal: unknown";                         break;
     }
     f->reason = reason;
-    siglongjmp(f->buf, 1);
+    AETHER_SIGLONGJMP(f->buf, 1);
 }
 
 void aether_panic_install_signal_handlers(void) {
@@ -133,6 +139,16 @@ void aether_panic_install_signal_handlers(void) {
     sigaction(SIGFPE,  &sa, NULL);
     sigaction(SIGBUS,  &sa, NULL);
 }
+
+#else  // _WIN32 — Win32 uses SEH for native faults, not POSIX signals.
+
+void aether_panic_install_signal_handlers(void) {
+    // Intentional no-op. On Windows the SIGSEGV→panic conversion path
+    // would require SEH/__try, which is a separate design. Callers that
+    // use plain panic() / try / catch still work unchanged.
+}
+
+#endif  // _WIN32
 
 // ---------------------------------------------------------------------------
 // Death hook

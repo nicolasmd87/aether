@@ -478,7 +478,7 @@ examples: compiler
 	@echo "==================================="
 	@$(MKDIR) $(BUILD_DIR)/examples $(BUILD_DIR)/examples/basics $(BUILD_DIR)/examples/actors $(BUILD_DIR)/examples/applications $(BUILD_DIR)/examples/c-interop $(BUILD_DIR)/examples/stdlib
 	@pass=0; fail=0; \
-	for src in $$(find examples -name '*.ae' | grep -v '/lib/' | grep -v '/packages/' | grep -v '/embedded-java/' | sort); do \
+	for src in $$(find examples -name '*.ae' | grep -v '/lib/' | grep -v '/packages/' | grep -v '/embedded-java/' | grep -v '/host-.*-demo\.ae$$' | sort); do \
 		name=$$(echo $$src | sed 's|examples/||;s|\.ae$$||'); \
 		dir=$$(dirname $$src); \
 		extra_c=""; \

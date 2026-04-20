@@ -1139,20 +1139,20 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "#endif");
     /* clock_ns helper — always available (used by timeout checks + clock_ns() builtin) */
     print_line(gen, "#ifdef _WIN32");
-    print_line(gen, "static int64_t _aether_clock_ns(void) {");
+    print_line(gen, "static inline int64_t _aether_clock_ns(void) {");
     print_line(gen, "    LARGE_INTEGER freq, now;");
     print_line(gen, "    QueryPerformanceFrequency(&freq);");
     print_line(gen, "    QueryPerformanceCounter(&now);");
     print_line(gen, "    return (int64_t)((double)now.QuadPart / freq.QuadPart * 1000000000.0);");
     print_line(gen, "}");
     print_line(gen, "#elif defined(__EMSCRIPTEN__)");
-    print_line(gen, "static int64_t _aether_clock_ns(void) {");
+    print_line(gen, "static inline int64_t _aether_clock_ns(void) {");
     print_line(gen, "    return (int64_t)(emscripten_get_now() * 1000000.0);");
     print_line(gen, "}");
     print_line(gen, "#elif defined(__STDC_HOSTED__) && (__STDC_HOSTED__ == 0)");
-    print_line(gen, "static int64_t _aether_clock_ns(void) { return 0; }");
+    print_line(gen, "static inline int64_t _aether_clock_ns(void) { return 0; }");
     print_line(gen, "#else");
-    print_line(gen, "static int64_t _aether_clock_ns(void) {");
+    print_line(gen, "static inline int64_t _aether_clock_ns(void) {");
     print_line(gen, "    struct timespec _ts;");
     print_line(gen, "    clock_gettime(CLOCK_MONOTONIC, &_ts);");
     print_line(gen, "    return (int64_t)_ts.tv_sec * 1000000000LL + _ts.tv_nsec;");

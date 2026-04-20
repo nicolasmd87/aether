@@ -114,7 +114,7 @@ static inline void aether_step_safe(ActorBase* actor) {
     if (atomic_load_explicit(&actor->dead, memory_order_acquire)) return;
 
     AetherJmpFrame* f = aether_try_push();
-    if (sigsetjmp(f->buf, 1) == 0) {
+    if (AETHER_SIGSETJMP(f->buf, 1) == 0) {
         g_aether_in_actor_step = 1;
         g_aether_current_actor_id = actor->id;
         actor->step(actor);

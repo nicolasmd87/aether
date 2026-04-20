@@ -1944,11 +1944,16 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     fprintf(gen->output, ")");
                 }
                 else if (strcmp(func_name, "clock_ns") == 0 && expr->child_count == 0) {
-                    fprintf(gen->output, "\n#if AETHER_GCC_COMPAT\n");
-                    fprintf(gen->output, "({ struct timespec _ts; clock_gettime(CLOCK_MONOTONIC, &_ts); (int64_t)_ts.tv_sec * 1000000000LL + _ts.tv_nsec; })");
-                    fprintf(gen->output, "\n#else\n");
+                    // Always call the helper. The previous `#if AETHER_GCC_COMPAT`
+                    // split inlined a statement-expression on GCC/Clang; that
+                    // emitted preprocessor directives in the middle of an
+                    // expression, which is fragile (any surrounding context that
+                    // doesn't put the `#` at column 0 — e.g. macro expansion or
+                    // a stale include order — collapses to an empty RHS and a
+                    // spurious `undeclared identifier` on the lhs). The helper
+                    // has the same per-platform `clock_gettime` / Windows /
+                    // freestanding variants; modern compilers inline it anyway.
                     fprintf(gen->output, "_aether_clock_ns()");
-                    fprintf(gen->output, "\n#endif\n");
                 }
                 else if (strcmp(func_name, "print_char") == 0 && expr->child_count >= 1) {
                     fprintf(gen->output, "putchar(");

@@ -147,6 +147,7 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
     print_line(gen, "atomic_flag step_lock;   // Prevents concurrent step() during work-steal handoff");
     print_line(gen, "uint64_t timeout_ns;     // Receive timeout (0 = none)");
     print_line(gen, "uint64_t last_activity_ns; // Idle start timestamp (0 = not idle)");
+    print_line(gen, "atomic_int dead;         // Set when step() unwound via panic/signal");
     print_line(gen, "");
 
     // State fields (user-defined)
@@ -592,6 +593,7 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
     print_line(gen, "}");
     print_line(gen, "atomic_init(&actor->active, 0);  // inactive until first message send");
     print_line(gen, "atomic_init(&actor->migrate_to, -1);");
+    print_line(gen, "atomic_init(&actor->dead, 0);");
     print_line(gen, "actor->auto_process = 0;");
     print_line(gen, "");
     

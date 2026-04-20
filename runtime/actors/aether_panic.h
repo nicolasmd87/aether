@@ -33,13 +33,29 @@
 extern "C" {
 #endif
 
+// Windows lacks POSIX sigjmp_buf / sigsetjmp / siglongjmp. Fall back to
+// the unsafe-for-signal-handlers variants, which is fine because Windows
+// doesn't deliver signals to arbitrary threads like POSIX does — the
+// signal-mask semantics the `sig*` family preserves aren't meaningful on
+// Win32. Callers that used sigsetjmp(buf, 1) should use AETHER_SIGSETJMP
+// so the second argument is dropped on Windows.
+#ifdef _WIN32
+  typedef jmp_buf aether_sigjmp_buf;
+  #define AETHER_SIGSETJMP(buf, savemask) setjmp(buf)
+  #define AETHER_SIGLONGJMP(buf, val)     longjmp((buf), (val))
+#else
+  typedef sigjmp_buf aether_sigjmp_buf;
+  #define AETHER_SIGSETJMP(buf, savemask) sigsetjmp((buf), (savemask))
+  #define AETHER_SIGLONGJMP(buf, val)     siglongjmp((buf), (val))
+#endif
+
 // Maximum nesting depth of try/catch (and scheduler step barriers) per
 // thread. 32 covers any realistic handler; the limit lets the stack live
 // in TLS without dynamic allocation.
 #define AETHER_PANIC_MAX_DEPTH 32
 
 typedef struct AetherJmpFrame {
-    sigjmp_buf buf;
+    aether_sigjmp_buf buf;
     const char* reason;   // written by aether_panic() just before siglongjmp
 } AetherJmpFrame;
 

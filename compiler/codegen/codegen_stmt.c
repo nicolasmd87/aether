@@ -1842,7 +1842,7 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             print_line(gen, "{");
             indent(gen);
             print_line(gen, "AetherJmpFrame* _aether_try_%d = aether_try_push();", uid);
-            print_line(gen, "if (sigsetjmp(_aether_try_%d->buf, 1) == 0) {", uid);
+            print_line(gen, "if (AETHER_SIGSETJMP(_aether_try_%d->buf, 1) == 0) {", uid);
             indent(gen);
             // Body runs inside the if; it already emits its own { } via AST_BLOCK.
             generate_statement(gen, body);
