@@ -1,0 +1,7 @@
+[build]
+cflags = "-DAE_CFLAGS_TEST_MARKER=1"
+
+[[bin]]
+name = "probe"
+path = "probe.ae"
+extra_sources = ["shim.c"]
