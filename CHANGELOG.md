@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`name(params) -> ReturnType { body }` on user functions now typechecks correctly** (`compiler/parser/parser.c`). The parser treated `-> Foo {` after a function signature as the start of an Erlang-style arrow body (`-> expr` or `-> { stmts }`), so `g(a: int, b: int) -> int { return a + b }` tried to parse `int { return a + b }` as a single-expression arrow body, choked on the type keyword, and cascaded into parse errors; the typechecker then reported `E0200: expects 1 argument(s), got 2` because the parser had already lost parameter state. Disambiguation at the `->`: if the next token is a type keyword (int/int64/float/bool/string/message/ptr/actor_ref) or an identifier followed by `{` that is NOT a struct-literal `field: value` head, parse it as a return-type annotation and enter the traditional `{ ... }` block body. Otherwise fall through to the existing Erlang-style arrow-body paths. Mirrors the `extern f(...) -> ReturnType` convention so user functions don't have to switch to the `name(params): Type` form. Regression test: `tests/syntax/test_typed_return_annotation.ae` (2/3/5-param functions with `-> int`, 1-param with `-> int`, non-int return with `-> string`).
+
+- **Erlang-style catch-all clauses now bind pattern variables and chain with `else`** (`compiler/codegen/codegen_func.c`). Multi-clause functions ending in a variable-pattern clause — `fib(0) -> 0; fib(1) -> 1; fib(n) -> fib(n-1) + fib(n-2)` — compiled to C that referenced `n` without a declaration and without an `else` separating the variable-pattern body from the prior literal-match bodies. GCC rejected with `'n' undeclared` and, even if `n` had been bound, earlier clauses would have fallen through. Fix in `generate_clause_condition`'s catch-all path: wrap the body in `} else { ... }` when prior clauses had conditions, and emit `int n = _arg0;` bindings for each `AST_PATTERN_VARIABLE` in the param list (the binding code the conditional path already had). Regression test: `tests/syntax/test_erlang_variable_pattern.ae` (fib with literal+literal+variable, add with all-variable, classify with literal+literal+variable returning string).
+
 ## [0.74.0]
 
 ### Changed

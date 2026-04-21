@@ -2519,9 +2519,62 @@ ASTNode* parse_function_definition(Parser* parser) {
     }
 
     // Check for Erlang-style arrow body: -> expr OR -> { stmts; expr }
+    // OR typed return annotation before a traditional block body:
+    //   `name(params) -> ReturnType { ... }` — mirrors the `extern`
+    //   signature convention (`extern f(...) -> int`).
     if (match_token(parser, TOKEN_ARROW)) {
         Token* peek = peek_token(parser);
-        if (peek && peek->type == TOKEN_LEFT_BRACE) {
+        // Disambiguate `-> ReturnType { body }` from `-> expr`:
+        //   If peek is a type keyword (int, string, ptr, etc.) OR an
+        //   identifier followed by `{` that isn't the start of a
+        //   struct literal (i.e. not `Name { field: value }`), treat
+        //   the token(s) between `->` and `{` as a return type and
+        //   fall through to the traditional block-body path below.
+        int is_typed_return = 0;
+        if (peek) {
+            switch (peek->type) {
+                case TOKEN_INT:
+                case TOKEN_INT64:
+                case TOKEN_FLOAT:
+                case TOKEN_BOOL:
+                case TOKEN_STRING:
+                case TOKEN_MESSAGE:
+                case TOKEN_PTR:
+                case TOKEN_ACTOR_REF:
+                    is_typed_return = 1;
+                    break;
+                case TOKEN_IDENTIFIER: {
+                    // `-> Name { ... }` — only a typed return if what
+                    // follows `{` is NOT a struct-literal `field:` head.
+                    Token* after_name = peek_ahead(parser, 2);
+                    if (after_name && after_name->type == TOKEN_LEFT_BRACE) {
+                        Token* after_brace = peek_ahead(parser, 3);
+                        Token* after_field = peek_ahead(parser, 4);
+                        int looks_like_struct_literal =
+                            after_brace &&
+                            after_brace->type == TOKEN_IDENTIFIER &&
+                            after_field && after_field->type == TOKEN_COLON;
+                        if (!looks_like_struct_literal) is_typed_return = 1;
+                    }
+                    break;
+                }
+                default:
+                    break;
+            }
+        }
+        if (is_typed_return) {
+            // Parse the return type annotation.
+            Type* parsed_type = parse_type(parser);
+            if (parsed_type) {
+                free_type(func->node_type);
+                func->node_type = parsed_type;
+            }
+            // Now expect the traditional block body `{ ... }`.
+            ASTNode* body = parse_block(parser);
+            if (body) {
+                add_child(func, body);
+            }
+        } else if (peek && peek->type == TOKEN_LEFT_BRACE) {
             // Multi-statement arrow body: -> { stmt1; stmt2; expr }
             // Parse as a block, but treat the last expression as implicit return
             ASTNode* body = parse_block(parser);
