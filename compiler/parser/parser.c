@@ -16,6 +16,7 @@ Parser* create_parser(Token** tokens, int token_count) {
     parser->current_token = 0;
     parser->suppress_errors = 0;  // By default, show errors
     parser->parsing_builder = 0;
+    parser->in_condition = 0;
     return parser;
 }
 
@@ -894,8 +895,16 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
                     if (trailing) {
                         add_child(func_call, trailing);
                     }
-                } else if (next_tok && next_tok->type == TOKEN_LEFT_BRACE) {
+                } else if (next_tok && next_tok->type == TOKEN_LEFT_BRACE &&
+                           !parser->in_condition) {
                     // Trailing block without params: func(args) { body }
+                    //
+                    // Suppressed when we're parsing an if/while/for condition:
+                    // the `{` there is the start of the statement's body, not
+                    // a trailing closure attached to the rightmost call. Eating
+                    // it here would swallow the real body and produce silently
+                    // wrong code (e.g. an infinite while loop because the
+                    // increment statement becomes the if-body).
                     ASTNode* trailing = create_ast_node(AST_CLOSURE, "trailing",
                                                          next_tok->line, next_tok->column);
                     trailing->node_type = create_type(TYPE_FUNCTION);
@@ -1322,7 +1331,10 @@ ASTNode* parse_python_style_declaration(Parser* parser) {
 
 ASTNode* parse_if_statement(Parser* parser) {
     advance_token(parser); // if
+    int saved_in_condition = parser->in_condition;
+    parser->in_condition = 1;
     ASTNode* condition = parse_expression(parser);
+    parser->in_condition = saved_in_condition;
     if (!condition) return NULL;
     
     ASTNode* then_branch = parse_statement(parser);
@@ -1356,7 +1368,13 @@ ASTNode* parse_for_loop(Parser* parser) {
         ASTNode* start_expr = parse_expression(parser);
         if (!start_expr) return NULL;
         if (!expect_token(parser, TOKEN_DOTDOT)) return NULL;
+        // end_expr is terminated by `{` (the loop body) — the same
+        // trailing-block ambiguity if/while have. See parse_if_statement
+        // for the rationale.
+        int saved_in_condition = parser->in_condition;
+        parser->in_condition = 1;
         ASTNode* end_expr = parse_expression(parser);
+        parser->in_condition = saved_in_condition;
         if (!end_expr) return NULL;
 
         ASTNode* body = parse_statement(parser);
@@ -1453,7 +1471,10 @@ ASTNode* parse_for_loop(Parser* parser) {
 
 ASTNode* parse_while_loop(Parser* parser) {
     advance_token(parser); // while
+    int saved_in_condition = parser->in_condition;
+    parser->in_condition = 1;
     ASTNode* condition = parse_expression(parser);
+    parser->in_condition = saved_in_condition;
     if (!condition) return NULL;
     
     ASTNode* body = parse_statement(parser);
@@ -1569,10 +1590,16 @@ ASTNode* parse_case_statement(Parser* parser) {
 //   }
 ASTNode* parse_match_statement(Parser* parser) {
     advance_token(parser); // consume 'match'
-    
-    // Parse the expression to match on (parens optional)
+
+    // Parse the expression to match on (parens optional). When there are
+    // no parens, the `{` that follows introduces the match arms — the same
+    // trailing-block ambiguity if/while have. Guarding the condition flag
+    // keeps `match f(x) { ... }` from eating the arms as a closure on f.
     int has_paren = match_token(parser, TOKEN_LEFT_PAREN);
+    int saved_in_condition = parser->in_condition;
+    if (!has_paren) parser->in_condition = 1;
     ASTNode* expression = parse_expression(parser);
+    parser->in_condition = saved_in_condition;
     if (!expression) return NULL;
     if (has_paren && !expect_token(parser, TOKEN_RIGHT_PAREN)) return NULL;
 
