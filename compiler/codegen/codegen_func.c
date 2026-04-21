@@ -632,14 +632,59 @@ static int generate_clause_condition(CodeGenerator* gen, ASTNode* func, int is_f
     }
 
     if (!has_condition) {
-        // This is a catch-all clause (e.g., factorial(n) with no guard)
-        // Generate body directly
+        // Catch-all clause (e.g., `fib(n) -> fib(n-1) + fib(n-2)` with no
+        // guard). Two things must happen that the previous version missed:
+        //   1. When there are preceding conditional clauses, this clause
+        //      must be wrapped in `else { ... }` so the prior conditions
+        //      don't fall through into it. Without the else, `fib(0)` and
+        //      `fib(1)` matched their literals AND also executed the
+        //      recursive n-branch body.
+        //   2. Pattern-variable parameters must be bound: `int n = _arg0;`
+        //      before the body runs. Previously the binding happened only
+        //      on the conditional path, leaving `n` undeclared in the
+        //      catch-all body — GCC rejected the generated C.
+        if (!is_first) {
+            print_indent(gen);
+            fprintf(gen->output, "} else {\n");
+            indent(gen);
+        }
+
+        // Bind pattern variables to their corresponding _argN positions.
+        int param_idx_bind = 0;
+        for (int i = 0; i < func->child_count; i++) {
+            ASTNode* child = func->children[i];
+            if (child->type == AST_GUARD_CLAUSE || child->type == AST_BLOCK) continue;
+            if (child->type == AST_PATTERN_VARIABLE && child->value) {
+                print_indent(gen);
+                generate_type(gen, child->node_type);
+                fprintf(gen->output, " %s = _arg%d;\n", child->value, param_idx_bind);
+                print_line(gen, "(void)%s;", child->value);
+            }
+            if (child->type == AST_PATTERN_LITERAL ||
+                child->type == AST_PATTERN_VARIABLE ||
+                child->type == AST_PATTERN_STRUCT ||
+                child->type == AST_VARIABLE_DECLARATION) {
+                param_idx_bind++;
+            }
+        }
+
+        // Emit the body. Leave the `else { ... }` block open: the outer
+        // generate_combined_function emits exactly one chain-closing `}`
+        // at the end when any prior clause had conditions, which will
+        // close our else block cleanly.
         for (int i = 0; i < func->child_count; i++) {
             ASTNode* child = func->children[i];
             if (child->type == AST_BLOCK) {
                 generate_statement(gen, child);
                 break;
             }
+        }
+
+        if (!is_first) {
+            // Indent-level bookkeeping: we called indent(gen) when opening
+            // the else, so unindent now so the closing `}` that the outer
+            // function emits sits at the right column.
+            unindent(gen);
         }
         return 0;
     }
