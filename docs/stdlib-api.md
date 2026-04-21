@@ -573,9 +573,10 @@ Functions:
   in most flows.
 
 Performance note: PR #140 demonstrated the raw reactor pattern
-delivering a 5x throughput improvement (45K → 264K req/s) on the HTTP
-benchmark versus a blocking keep-alive worker. `await_io` is the
-Aether-language surface over that same machinery.
+delivering substantially higher HTTP throughput than a blocking
+keep-alive worker. `await_io` is the Aether-language surface over
+that same machinery — rerun the HTTP benchmark on your target host
+to get a current figure for your environment.
 
 ---
 

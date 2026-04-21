@@ -139,16 +139,16 @@ max_threads = select(linux: 16, windows: 8, macos: 12)
 has_io_uring = select(linux: 1, other: 0)
 ```
 
-### Known limitation
+### Printing string results
 
-String values from `select()` work in variable declarations (`const char*`)
-but `println()` may use the wrong format specifier due to a type inference
-gap. Use string interpolation as a workaround:
+String values from `select()` store correctly as `const char*`, but type
+inference doesn't yet propagate through the call site into a direct
+`println(os)`. Use string interpolation to bind the type unambiguously:
 
 ```aether
 os = select(linux: "Linux", windows: "Windows", macos: "macOS")
-// println(os)            // may print garbage (type inference gap)
-println("os: ${os}")      // works correctly
+println("os: ${os}")      // preferred form
 ```
 
-This will be resolved when type inference propagates through `select()`.
+Tracked under "Type inference propagation through `select()`" in
+[`docs/next-steps.md`](next-steps.md).

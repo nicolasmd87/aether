@@ -160,10 +160,10 @@ int main() {
     printf("- Queue operations saved: %d%%\n", 
            (int)((1.0f - (float)stats.flush_count / actor.messages_processed) * 100));
     
-    printf("\nOptimization benefits:\n");
-    printf("- SIMD: 1.5x faster computation\n");
-    printf("- Coalescing: 16x fewer queue operations\n");
-    printf("- Zero-copy: No memcpy overhead\n");
+    printf("\nOptimizations active in this run:\n");
+    printf("- SIMD: vectorised compute over the message batch\n");
+    printf("- Coalescing: fewer cross-core enqueues per burst\n");
+    printf("- Zero-copy: no memcpy for large payloads\n");
     
     return 0;
 }

@@ -261,13 +261,13 @@ void cpu_print_info() {
     printf("  AVX:     %s\n", info->avx_supported ? "YES" : "NO");
     printf("  AVX2:    %s", info->avx2_supported ? "YES" : "NO");
     if (info->avx2_supported) {
-        printf(" -> 3x speedup for actor processing");
+        printf(" -> 256-bit SIMD batch processing available");
     }
     printf("\n");
-    
+
     printf("  AVX-512: %s", info->avx512f_supported ? "YES" : "NO");
     if (info->avx512f_supported) {
-        printf(" -> 6x speedup potential");
+        printf(" -> 512-bit SIMD batch processing available");
     }
     printf("\n");
     
@@ -286,10 +286,10 @@ void cpu_print_info() {
     printf("\nRecommendation:\n");
     if (info->avx2_supported) {
         printf("  Enable SIMD with: aether_runtime_init(cores, AETHER_FLAG_ENABLE_SIMD);\n");
-        printf("  Expected throughput: ~2.3B msg/sec on 8 cores\n");
+        printf("  Run benchmarks/cross-language to measure throughput on this host.\n");
     } else {
-        printf("  SIMD not available, using scalar code\n");
-        printf("  Expected throughput: ~291M msg/sec on 8 cores\n");
+        printf("  SIMD not available, using scalar code.\n");
+        printf("  Run benchmarks/cross-language to measure throughput on this host.\n");
     }
 }
 

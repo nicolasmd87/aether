@@ -18,7 +18,8 @@
  * - No cache line bouncing
  * - Direct memory access with compiler barriers
  * 
- * Expected: 2-3x improvement for same-core messaging
+ * Target: same-core messaging (one producer, one consumer) — avoids
+ * the atomic RMW overhead of the general MPMC queue.
  */
 
 // 64 slots: sufficient for same-core auto_process actor threads while keeping

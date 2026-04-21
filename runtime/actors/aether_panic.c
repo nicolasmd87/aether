@@ -133,10 +133,12 @@ void aether_panic_install_signal_handlers(void) {
     sa.sa_flags = SA_SIGINFO | SA_NODEFER;
     sigemptyset(&sa.sa_mask);
 
-    // SA_NODEFER is needed because we siglongjmp out of the handler — the
-    // normal mask-restore at handler return never happens. sigsetjmp(buf, 1)
-    // on the scheduler side saves and restores the signal mask explicitly,
-    // so nested signals during recovery behave correctly.
+    // SA_NODEFER is needed because we longjmp out of the handler. The
+    // kernel's automatic "add this signal to the mask on handler entry"
+    // behaviour is disabled, so the mask never changes at signal entry
+    // and there is nothing for the scheduler-side jmp to save/restore.
+    // That is why AETHER_SIGSETJMP expands to the fast _setjmp on POSIX
+    // (no signal-mask syscall) with no loss of correctness here.
 
     sigaction(SIGSEGV, &sa, NULL);
     sigaction(SIGFPE,  &sa, NULL);

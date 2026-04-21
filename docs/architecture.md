@@ -365,12 +365,12 @@ See [runtime-optimizations.md](runtime-optimizations.md) for implementation deta
 **Design:** Static module resolution with circular import detection
 
 **Resolution Process:**
-1. Parse import statement: `import std.collections.HashMap`
-2. Search paths: `std/collections/HashMap.ae`, `./collections/HashMap.ae`
-3. Load and parse module if not already loaded
-4. Build dependency graph
-5. Detect circular imports using DFS with visited tracking
-6. Generate C includes for resolved modules
+1. Parse import statement, e.g. `import std.collections`.
+2. Search paths: `std/collections/module.ae` first, then `./collections/module.ae` relative to the importer, then `contrib/<name>/module.ae` for contrib modules.
+3. Load and parse the module if it isn't already loaded.
+4. Build the dependency graph and detect circular imports via DFS with visited tracking.
+5. Merge the module's exported functions and constants into the program AST with namespace-prefixed names (`module.func` → `module_func` internally).
+6. Emit C declarations/definitions for the merged symbols at codegen.
 
 **Key Files:**
 - `compiler/aether_module.c` - Module resolution

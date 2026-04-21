@@ -189,8 +189,10 @@ int aether_perl_run_sandboxed_with_map(void* perms, const char* code, uint64_t m
     perl_perms_depth--;
 
     // Note: outputs written via aether_map_put stay in Perl's
-    // %_aether_output hash. Reading them back into C would require
-    // XS or SvPV extraction. Known limitation for Perl host module.
+    // %_aether_output hash. Surfacing them back to the C-side shared
+    // map requires XS (`AetherMap.xs`) or direct SvPV extraction —
+    // tracked in docs/next-steps.md under "Shared-map native bindings
+    // for Perl and Ruby".
 
     return result;
 }

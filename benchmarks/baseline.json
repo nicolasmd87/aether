@@ -61,8 +61,8 @@
     }
   },
   "optimizations": {
-    "actor_pool": "1.81x speedup for actor alloc/dealloc cycles",
-    "lockfree_mailbox": "1.80x speedup vs mutex mailbox (multi-threaded)",
+    "actor_pool": "Reuses retired actor structs to avoid malloc/free churn for actor alloc/dealloc cycles",
+    "lockfree_mailbox": "Atomic ring buffer replacing mutex-guarded mailbox — wins scale with producer-side contention",
     "adaptive_batching": "Dynamic batch size 4-64 based on throughput",
     "simd_processing": "AVX2/NEON vectorized batch processing",
     "message_dedup": "64-entry fingerprint window for duplicate detection",
@@ -72,13 +72,13 @@
     "auto_detect": "Runtime CPU feature detection"
   },
   "notes": [
-    "Actor Pool: 1.81x faster than malloc for actor lifecycle",
+    "Actor Pool avoids the malloc/free path for actor lifecycle churn",
     "Single-threaded benchmarks favor simpler implementations",
-    "Lock-free shows benefit under multi-core contention (1.8x)",
+    "Lock-free mailbox shows its benefit under multi-producer contention, not single-producer",
     "Adaptive batching shines with variable workloads",
-    "SIMD: 16.5B ops/sec for vectorizable operations",
-    "Dedup overhead (~5x) trades for semantic correctness",
-    "Run benchmark-optimizations target for latest numbers"
+    "SIMD helps vectorizable batch operations; non-SIMD paths fall back to scalar",
+    "Dedup trades some per-message overhead for semantic correctness",
+    "Run benchmark-optimizations target for latest numbers on your host"
   ]
 }
 

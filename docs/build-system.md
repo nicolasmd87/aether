@@ -64,10 +64,10 @@ Both add C files to the build — they are additive when both are present.
 
 `ae` caches compiled binaries in `~/.aether/cache/` using an FNV64 hash of source content, compiler mtime, runtime library mtime, and build flags.
 
-**Typical timings:**
-- Cache hit: ~8 ms (exec cached binary directly)
-- Cache miss: ~300 ms gcc + ~25 ms aetherc
-- First macOS run: 1–3 s extra (OS Gatekeeper check, one-time per binary)
+**Cost breakdown of a run:**
+- Cache hit: fork + exec of the cached binary, nothing else.
+- Cache miss: full aetherc front-end + gcc compile + link. Dominant cost is gcc; aetherc is a small fraction.
+- First macOS run: an extra one-time pause while the OS performs its Gatekeeper check on the newly compiled binary. Subsequent runs of the same cached binary are hit-path.
 
 ```bash
 ae cache          # Show cache location and entry count

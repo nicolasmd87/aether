@@ -729,7 +729,9 @@ bench-prefetch:
 	@echo "Running benchmark..."
 	@./build/bench_prefetch$(EXE_EXT)
 
-# Profile-Guided Optimization (PGO) - 10-20% improvement
+# Profile-Guided Optimization (PGO) - train the compiler's inliner and
+# branch-placement heuristics using a recorded workload. Run-time
+# improvement is workload-dependent; measure before and after.
 pgo-generate:
 	@echo "==================================="
 	@echo "PGO Step 1: Building with instrumentation..."
@@ -834,7 +836,7 @@ help:
 	@echo "Build Targets:"
 	@echo "  make compiler       - Build compiler (incremental)"
 	@echo "  make compiler-fast  - Build compiler (monolithic, faster for clean)"
-	@echo "  make -j8            - Parallel build with 8 jobs (2-4x faster)"
+	@echo "  make -j8            - Parallel build with 8 jobs (faster on multi-core hosts)"
 	@echo "  make release        - Optimized release build (-O3 -flto)"
 	@echo "  make stdlib         - Build precompiled stdlib archive"
 	@echo ""

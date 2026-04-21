@@ -577,11 +577,11 @@ Versions are stored in `~/.aether/versions/`. The active version is symlinked to
 - Run `make test` for unit tests, `make test-ae` for integration tests
 - Check for port conflicts if network tests fail (port 8080)
 
-### Common Pitfalls
+### Quick tips when you hit trouble
 
-1. Forgetting to rebuild after changes: run `make clean && make`
-2. On Windows, running `ae` from a directory without write permission (GCC download needs `~\.aether\`)
-3. Using `state` as a variable name inside an actor body (it's reserved there — use it freely elsewhere)
+1. Rebuild from scratch if anything looks stale: `make clean && make`.
+2. On Windows, launch `ae` from a directory where your user can write (the first run downloads GCC into `~\.aether\`).
+3. Inside an actor body, `state` is a reserved keyword — pick a different local-variable name; outside actor bodies it has no special meaning.
 
 ### WebAssembly and Embedded Targets
 

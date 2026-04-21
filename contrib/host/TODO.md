@@ -12,7 +12,7 @@
 
 ## Python
 - [x] Dedicated `examples/host-python-demo.ae` written against the current stdlib + sandbox API (the `lazy-evaluation` recovery path no longer exists, confirmed via pickaxe search across all refs).
-- [x] `os.environ` is cached at CPython startup — sandbox `getenv` interception only works via `ctypes.CDLL(None).getenv`, not `os.environ.get()`. Covered in `docs/containment-sandbox.md` → host module matrix (Env cache issue row) and the "Shared-interpreter caveats" section below it. The `examples/host-python-demo.ae` demonstrates the `ctypes` workaround inline.
+- [x] `os.environ` is cached at CPython startup — sandbox `getenv` interception only works via `ctypes.CDLL(None).getenv`, not `os.environ.get()`. Covered in `docs/containment-sandbox.md` → host module matrix (Env cache issue row) and the "Shared-interpreter behavior" section below it. The `examples/host-python-demo.ae` demonstrates the `ctypes` workaround inline.
 
 ## Lua
 - [x] Tested and working well. Cleanest host module.
@@ -22,12 +22,12 @@
 
 ## Perl
 - [x] Function names prefixed `aether_perl_` to avoid conflict with Perl's own `perl_run`/`perl_init`. Documented in `contrib/host/perl/README.md` Notes section.
-- [x] `%ENV` scrubbed at sandbox entry. Shared interpreter means unsandboxed `run()` after sandboxed `run_sandboxed()` sees scrubbed ENV. Covered in `docs/containment-sandbox.md` → "Shared-interpreter caveats" section.
+- [x] `%ENV` scrubbed at sandbox entry. Shared interpreter means unsandboxed `run()` after sandboxed `run_sandboxed()` sees scrubbed ENV. Covered in `docs/containment-sandbox.md` → "Shared-interpreter behavior" section.
 - [x] Stub-mode typo fixed: `perl_init()` → `aether_perl_init()` (the stub was calling the real libperl symbol which isn't linked when AETHER_HAS_PERL isn't defined).
 
 ## Ruby
-- [x] Same `ENV` scrub issue as Perl. Covered in `docs/containment-sandbox.md` → "Shared-interpreter caveats".
-- [x] `Fiddle.dlopen("libc.so.6")` succeeds but calls are still intercepted — not a real escape but looks alarming in tests. Covered in `docs/containment-sandbox.md` → "Shared-interpreter caveats".
+- [x] Same `ENV` scrub issue as Perl. Covered in `docs/containment-sandbox.md` → "Shared-interpreter behavior".
+- [x] `Fiddle.dlopen("libc.so.6")` succeeds but calls are still intercepted — not a real escape but looks alarming in tests. Covered in `docs/containment-sandbox.md` → "Shared-interpreter behavior".
 
 ## Java
 - [x] Separate process via JVM — uses Panama FFI for shared memory, not in-process embedding. Documented in the README.
@@ -38,4 +38,4 @@
 - [x] Added as the eighth host. Separate subprocess under LD_PRELOAD sandbox interception (same pattern as `contrib/host/aether`). Two modes: `go.run_script_sandboxed(perms, path)` shells out to `go run`, `go.run_sandboxed(perms, binary)` runs a pre-built binary under tight grants. End-to-end demo: `examples/host-go-demo.ae`.
 
 ## Tcl
-- [x] Added as the seventh host, mirroring the lua template. `::env` caveat (shared interpreter, same as Perl/Ruby) covered in `docs/containment-sandbox.md` → "Shared-interpreter caveats". End-to-end verified: `examples/host-tcl-demo.ae` compiles, links, and runs on macOS with system Tcl 8.5.
+- [x] Added as the seventh host, mirroring the lua template. `::env` caveat (shared interpreter, same as Perl/Ruby) covered in `docs/containment-sandbox.md` → "Shared-interpreter behavior". End-to-end verified: `examples/host-tcl-demo.ae` compiles, links, and runs on macOS with system Tcl 8.5.

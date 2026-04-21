@@ -152,7 +152,7 @@ make ae
 ae init <name>           # Create a new project
 ae run [file.ae]         # Compile and run (file or project)
 ae build [file.ae]       # Compile to executable
-ae check [file.ae]       # Type-check without compiling (~30x faster)
+ae check [file.ae]       # Type-check without compiling (skips codegen + link)
 ae test [file|dir]       # Discover and run tests
 ae examples [dir]        # Build all example programs
 ae add <host/user/repo>  # Add a dependency (any git host)

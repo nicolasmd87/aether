@@ -3,13 +3,17 @@ CC = gcc
 CFLAGS = -O3 -march=native -I../../../compiler -I../../../runtime -I../../../runtime/actors -I../../../runtime/scheduler -I../../../runtime/config -I../../../runtime/utils -I../../../std -I../../../std/string -I../../../std/io -I../../../std/math -I../../../std/net -I../../../std/collections -I../../../std/json
 LDFLAGS = -pthread -lm
 RUNTIME_SRCS = ../../../runtime/scheduler/multicore_scheduler.c \
+               ../../../runtime/scheduler/aether_io_poller_epoll.c \
+               ../../../runtime/scheduler/aether_io_poller_kqueue.c \
+               ../../../runtime/scheduler/aether_io_poller_poll.c \
                ../../../runtime/aether_numa.c \
                ../../../runtime/aether_runtime.c \
                ../../../runtime/config/aether_optimization_config.c \
                ../../../runtime/utils/aether_cpu_detect.c \
                ../../../runtime/actors/aether_send_buffer.c \
                ../../../runtime/actors/aether_send_message.c \
-               ../../../runtime/actors/aether_actor_thread.c
+               ../../../runtime/actors/aether_actor_thread.c \
+               ../../../runtime/actors/aether_panic.c
 
 .PHONY: all clean ping_pong counting thread_ring fork_join skynet
 

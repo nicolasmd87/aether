@@ -113,12 +113,12 @@ main() {
 
 ## Future
 
-Features not yet implemented:
+Work planned on top of the current module system:
 
-- `import math.geometry as geo` — import aliases (parsed but not yet functional)
-- Exporting structs and actors from modules
-- Re-exports (module A re-exporting module B's symbols)
-- Transitive dependency resolution
+- `import math.geometry as geo` — import aliases (parser accepts them; wiring through the typechecker and symbol table is next).
+- Exporting structs and actors from modules.
+- Re-exports (module A re-exporting module B's symbols).
+- Transitive dependency resolution.
 
 ---
 
@@ -302,17 +302,11 @@ After module orchestration, the compiler clones each module's function and const
 - Mixing pure modules with stdlib imports
 - Parameter/local variable shadowing of module constants
 
-**Not yet supported:**
-- Actors from modules (dispatch tables assume main program scope)
+**On the module-system roadmap (language-level):**
+- Actors from modules (dispatch tables currently assume main-program scope)
 - Message definitions from modules
 - Re-exports (module A re-exporting module B's functions)
 - Module-level mutable state
-
-### Current Limitations
-
-- No transitive dependency resolution (flat deps only)
-- No lock file integrity checking
-- No package publishing command (`ae publish`)
 
 ### Roadmap
 

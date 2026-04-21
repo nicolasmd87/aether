@@ -29,7 +29,7 @@ typedef struct {
     intptr_t payload_int;  // Integer/pointer payload (pointer-width for actor refs)
     void* payload_ptr;  // Pointer payload (small messages or zero-copy pointer)
 
-    // Zero-copy support for large messages (4.8x improvement for >256 bytes)
+    // Zero-copy support for large messages (payloads above ~256 bytes avoid the inline copy)
     struct {
         void* data;     // Owned data pointer
         int size;       // Data size

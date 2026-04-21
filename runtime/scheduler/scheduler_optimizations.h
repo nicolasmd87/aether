@@ -1,6 +1,7 @@
 // Scheduler Performance Optimizations Integration
-// Combines: Direct Send, Adaptive Batching, Message Deduplication, SIMD
-// Expected: 2-3x improvement over baseline scheduler
+// Combines: Direct Send, Adaptive Batching, Message Deduplication, SIMD.
+// Each layer is independently toggleable; together they form the
+// tier-1 hot-path scheduler.
 
 #ifndef SCHEDULER_OPTIMIZATIONS_H
 #define SCHEDULER_OPTIMIZATIONS_H

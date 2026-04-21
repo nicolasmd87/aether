@@ -90,10 +90,14 @@ Each benchmark is run **5 times** (configurable via `BENCH_RUNS`). The **median*
 | Range | Min–Max throughput across all runs |
 | Efficiency | Throughput per MB of memory (M msg/s/MB) |
 
-**CV% interpretation:**
-- **< 5%** (green): Stable results, high confidence
-- **5–15%** (orange): Moderate variance, interpret with care
-- **> 15%** (red): High variance, likely thermal throttling or OS scheduling noise
+**CV% interpretation.** The thresholds below are general statistical
+stability bands for coefficient of variation, not Aether-specific
+targets. They tell you how much to trust a single run's headline
+figure, regardless of which language is being measured:
+
+- **< 5%** (green): run-to-run variance is small; reported medians are trustworthy.
+- **5–15%** (orange): moderate variance; read medians alongside Min–Max range.
+- **> 15%** (red): high variance; investigate thermal throttling, OS scheduling, or shared-host noise before citing numbers.
 
 ### Measurement
 

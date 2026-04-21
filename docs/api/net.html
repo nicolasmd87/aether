@@ -62,6 +62,9 @@
     <li><a href="#http_response_headers">http_response_headers</a></li>
     <li><a href="#http_response_error">http_response_error</a></li>
     <li><a href="#http_response_ok">http_response_ok</a></li>
+    <li><a href="#http_response_status_code">http_response_status_code</a></li>
+    <li><a href="#http_response_body_str">http_response_body_str</a></li>
+    <li><a href="#http_response_headers_str">http_response_headers_str</a></li>
     <li><a href="#tcp_send_raw">tcp_send_raw</a></li>
     <li><a href="#tcp_receive_raw">tcp_receive_raw</a></li>
     <li><a href="#tcp_close">tcp_close</a></li>
@@ -285,6 +288,19 @@
       <h3 class="function-name">http_response_ok</h3>
       <pre class="usage"><code>http_response_ok(response)</code></pre>
       <p class="doc">Convenience: returns 1 if the request succeeded (no transport error AND HTTP status is in the 2xx range), 0 otherwise. Use this for the common &quot;did it work?&quot; check instead of chaining error/status calls.</p>
+    </div>
+    <div class="function" id="http_response_status_code" data-name="http_response_status_code">
+      <h3 class="function-name">http_response_status_code</h3>
+      <pre class="usage"><code>http_response_status_code(response)</code></pre>
+      <p class="doc">Legacy accessor aliases kept for callers that used the older `_code` / `_str` names. Prefer the short names above.</p>
+    </div>
+    <div class="function" id="http_response_body_str" data-name="http_response_body_str">
+      <h3 class="function-name">http_response_body_str</h3>
+      <pre class="usage"><code>http_response_body_str(response)</code></pre>
+    </div>
+    <div class="function" id="http_response_headers_str" data-name="http_response_headers_str">
+      <h3 class="function-name">http_response_headers_str</h3>
+      <pre class="usage"><code>http_response_headers_str(response)</code></pre>
     </div>
     <div class="function" id="tcp_send_raw" data-name="tcp_send_raw">
       <h3 class="function-name">tcp_send_raw</h3>

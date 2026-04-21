@@ -1,20 +1,24 @@
-# Closure Environment Lifetime Bugs
+# Closures and Environment Lifetimes
 
-The closure/DSL feature shipped with four independent bugs in capture
-handling and env lifetime, plus a chained typechecker hole that surfaced
-once the first four were fixed. All five landed together in a single PR
-because testing any one in isolation was blocked by the others.
+This document covers how closure environments are allocated, captured,
+and freed, and the patterns that currently need workarounds. Earlier
+rounds of the closure/DSL feature shipped with four capture-handling and
+env-lifetime issues plus a chained typechecker hole that surfaced once
+those four were resolved. All five landed together in a single PR
+because testing any one in isolation was blocked by the others; they
+are fixed on main and documented below as the underlying mechanism.
 
 Three more closure-related bugs surfaced during the aether_ui toolkit
 work: emission-ordering for cross-referenced closures, nested-lambda
 return-type bubble-up, and captures across trailing blocks. All three
 are fixed on main.
 
-Five limitations are tracked — three around dynamic `call()` dispatch
+Five patterns are tracked — three around dynamic `call()` dispatch
 (L1, L2, L3), one correctness hazard in closures inside actor handlers
-(L4), and one memory leak on closure-var reassignment (L5). L4 is now
-rejected at compile time with a clear error; the rest are documented
-in the "Known limitations" section below.
+(L4), and one memory-handling contract on closure-var reassignment
+(L5). L4 is now rejected at compile time with a clear error; the rest
+are documented with workarounds in the "Closure patterns and
+workarounds" section below.
 
 Regression tests live at `tests/syntax/test_closure_*.ae` and
 `tests/integration/closure_*/`.
@@ -157,12 +161,14 @@ Nearly all changes are in the codegen layer. The typechecker is unchanged.
 | Small additions to `CodeGenerator` state | `compiler/codegen/codegen.h` |
 | New helpers on the public header | `compiler/codegen/codegen_internal.h` |
 
-## Known limitations
+## Closure patterns and workarounds
 
-L1/L2/L3 are ergonomic gaps with workarounds; L5 is a correctness
-hazard worth flagging. L4 was previously in this list — it's now a
-compile-time error instead of a silent wrong answer (see L4 below).
-All remaining limits wait on larger language work.
+L1–L3 are ergonomic patterns with known workarounds you can apply today.
+L4 is a compile-time rejection — previously silent wrong answers, now
+surfaced at compile time with a clear error. L5 is a memory-handling
+contract around reassignment. Each has a near-term workaround; the
+"proper fix" notes describe the larger language work each leans on. See
+[`docs/next-steps.md`](next-steps.md) for scheduling.
 
 ### L1. `call(x)` where `x` comes from a list
 

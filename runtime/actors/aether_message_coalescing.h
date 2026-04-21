@@ -1,6 +1,7 @@
 // Message Coalescing System
-// Combines multiple small messages into batches to reduce queue overhead
-// Provides up to 16x throughput improvement by reducing atomic operations
+// Combines multiple small messages into batches to reduce queue overhead.
+// Amortises the per-enqueue atomic operations across a batch — target
+// workloads are small-message, high-rate producer-consumer paths.
 
 #ifndef AETHER_MESSAGE_COALESCING_H
 #define AETHER_MESSAGE_COALESCING_H

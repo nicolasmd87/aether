@@ -105,24 +105,17 @@ void aether_runtime_print_config() {
     }
     printf("\n\n");
     
-    printf("Expected Performance:\n");
+    printf("Tier:\n");
     if (config->use_lockfree_mailbox && config->use_simd && config->use_mwait) {
-        printf("  Throughput: ~2.3B msg/sec on 8 cores\n");
-        printf("  Latency:    Sub-microsecond\n");
-        printf("  Status:     MAXIMUM\n");
+        printf("  MAXIMUM  — lock-free mailbox + SIMD + MWAIT idle\n");
     } else if (config->use_lockfree_mailbox && config->use_simd) {
-        printf("  Throughput: ~2.1B msg/sec on 8 cores\n");
-        printf("  Latency:    ~1 microsecond\n");
-        printf("  Status:     HIGH\n");
+        printf("  HIGH     — lock-free mailbox + SIMD\n");
     } else if (config->use_lockfree_mailbox) {
-        printf("  Throughput: ~350M msg/sec on 8 cores\n");
-        printf("  Latency:    ~1 microsecond\n");
-        printf("  Status:     MODERATE\n");
+        printf("  MODERATE — lock-free mailbox only\n");
     } else {
-        printf("  Throughput: ~125M msg/sec on 8 cores\n");
-        printf("  Latency:    ~10 microseconds\n");
-        printf("  Status:     BASELINE\n");
+        printf("  BASELINE — locks-based mailbox, no SIMD, no MWAIT\n");
     }
+    printf("  (Run benchmarks/cross-language to measure on this host.)\n");
     
     printf("\n========================================\n\n");
 }
