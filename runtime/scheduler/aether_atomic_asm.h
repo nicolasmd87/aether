@@ -1,5 +1,7 @@
 // Inline Assembly Atomic Operations - x86_64 Optimized
-// Expected: 3-8% improvement for critical atomics
+// Hand-written x86_64 assembly for the critical atomic primitives,
+// avoiding compiler-emitted LOCK-prefix sequences where the tighter
+// form is measurable on the hot path.
 
 #ifndef AETHER_ATOMIC_ASM_H
 #define AETHER_ATOMIC_ASM_H

@@ -19,25 +19,25 @@ gcc -O2 -march=native -DAETHER_PROFILE your_app.c \
 Output includes:
 - Per-core cycle counts for all operations
 - Average cycles per operation
-- Throughput estimates (at 3 GHz)
+- Throughput estimates derived from cycle counts and the host's clock speed
 - CSV export for trend analysis
 
 ## Example Output
 
-Sample output (actual values depend on hardware):
+The sample below shows the structure of a run. Real numbers depend on CPU, clock speed, build flags, and workload; always run the profiled build on your own target hardware to get meaningful figures.
 
 ```
 --- Core 0 ---
-  Mailbox Send:         1000000 ops,    19.28 cycles/op
-  Mailbox Receive:      1000000 ops,    20.03 cycles/op
-  Batch Send:             50000 msgs,    18.50 cycles/msg
-  SPSC Enqueue:          200000 ops,    12.34 cycles/op
-  Actor Step:            100000 ops,   125.67 cycles/op
+  Mailbox Send:         <N> ops,    <avg> cycles/op
+  Mailbox Receive:      <N> ops,    <avg> cycles/op
+  Batch Send:           <N> msgs,   <avg> cycles/msg
+  SPSC Enqueue:         <N> ops,    <avg> cycles/op
+  Actor Step:           <N> ops,    <avg> cycles/op
 
 === Performance Summary ===
-Total Messages:   1000000
-Avg Cycles/Msg:   19.28
-Throughput:       155.60 M msg/sec (at 3 GHz)
+Total Messages:   <N>
+Avg Cycles/Msg:   <avg>
+Throughput:       <N> M msg/sec  (= clock_GHz × 1000 / Avg_Cycles/Msg)
 ```
 
 ## What Gets Measured
@@ -96,9 +96,9 @@ Use profiled builds in CI to detect performance regressions:
 
 ```csv
 core,operation,count,total_cycles,avg_cycles
-0,mailbox_send,1000000,19280000,19.28
-0,mailbox_receive,1000000,20030000,20.03
-0,batch_send,50000,925000,18.50
+0,mailbox_send,<N>,<total>,<avg>
+0,mailbox_receive,<N>,<total>,<avg>
+0,batch_send,<N>,<total>,<avg>
 ```
 
 Use for:
@@ -168,13 +168,11 @@ diff before.txt after.txt
 
 ### 2. Find Bottlenecks
 
-Look for operations with highest cycle counts or lowest throughput:
+Look for operations with the highest cycle counts and compare them across runs:
 
-```
-Actor Step: 125.67 cycles/op  ← SLOW! Investigate actor logic
-SPSC Queue: 12.34 cycles/op   ← FAST! Lock-free working
-Mailbox:    19.28 cycles/op   ← GOOD baseline
-```
+- `Actor Step` dominating the report is the load signal — investigate handler code.
+- `SPSC Queue` cycles indicate same-core fast-path health; a sudden rise hints at queue-full or cache-line contention.
+- `Mailbox` cycles are the cross-core baseline; use it as the reference for relative changes.
 
 ### 3. Monitor Production
 
@@ -185,9 +183,14 @@ Enable in staging environment to catch regressions before production:
 export AETHER_PROFILE=1
 ./run_staging_tests.sh
 
-# Check for regressions
-if [ $(awk '/Avg Cycles/{print $NF}' profile.txt) -gt 25 ]; then
-    echo "Performance regression detected!"
+# Check for regressions against a saved baseline. Pick TOLERANCE to
+# match your run-to-run noise floor; CV% in the benchmark suite is a
+# good starting point.
+TOLERANCE=${TOLERANCE:-1.10}
+BASELINE=$(awk '/Avg Cycles/{print $NF}' baseline.txt)
+CURRENT=$(awk '/Avg Cycles/{print $NF}' profile.txt)
+if awk "BEGIN { exit !($CURRENT > $BASELINE * $TOLERANCE) }"; then
+    echo "Performance regression detected: current exceeds baseline × TOLERANCE"
     exit 1
 fi
 ```
@@ -198,8 +201,8 @@ fi
 
 Uses `__rdtsc()` intrinsic for cycle-accurate measurements:
 - Resolution: 1 CPU cycle
-- Overhead: ~20-30 cycles per measurement
-- Accuracy: ±2% on modern CPUs
+- Overhead: small, fixed per measurement — consult the Intel/AMD manual for your target
+- Accuracy: good for relative comparison on the same host; absolute cycle-to-wall-time conversion depends on TSC frequency
 
 ### Atomic Statistics
 
@@ -211,9 +214,9 @@ Stats use relaxed atomics for minimal overhead:
 ### Overhead Analysis
 
 With profiling enabled:
-- ~25 cycles per operation (2x overhead at 20 cycles/op)
-- Acceptable for development/CI
-- **Zero overhead in production** (macros compile out)
+- `__rdtsc()` instrumentation adds a small fixed overhead per measured operation. The exact cost is target-dependent; expect the instrumented path to run measurably slower than the bare one, but not so much that relative comparisons stop being meaningful.
+- Acceptable for development/CI.
+- **Zero overhead in production** (macros compile out).
 
 ## Examples
 

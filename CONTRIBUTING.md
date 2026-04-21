@@ -144,7 +144,7 @@ ASSERT_NOT_NULL(ptr)            // Assert pointer is not NULL
 ### Running Tests
 
 ```bash
-# Type-check without compiling (~30x faster, good for iteration)
+# Type-check without compiling (skips codegen + link — much faster on iteration)
 ae check file.ae
 
 # All tests
@@ -351,7 +351,11 @@ Brief description of changes
 3. Address feedback
 4. Merge when approved
 
-## Common Pitfalls
+## Code review heuristics
+
+The patterns below come up often in review. Each example contrasts a
+weak form (BAD), an acceptable form (GOOD), and where applicable a
+stronger form (BETTER). Use them as a checklist before sending a PR.
 
 ### Memory Management
 

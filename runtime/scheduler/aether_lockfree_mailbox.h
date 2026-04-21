@@ -1,6 +1,7 @@
 // Lock-Free SPSC Queue - Single-Producer Single-Consumer
-// Optimized for actor mailboxes (one writer, one reader)
-// Uses atomic operations instead of mutexes for 1.5-2x speedup
+// Optimized for actor mailboxes (one writer, one reader).
+// Uses atomic operations instead of mutexes — avoids the mutex acquire/
+// release cost when there is no true contention.
 
 #ifndef AETHER_LOCKFREE_MAILBOX_H
 #define AETHER_LOCKFREE_MAILBOX_H

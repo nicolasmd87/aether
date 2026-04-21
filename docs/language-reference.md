@@ -1016,8 +1016,8 @@ println("Hello, ${name}! You are ${age} years old.")
 Interpolated strings produce a `ptr` (heap-allocated C string) when used as values:
 
 ```aether
-msg = "Hello, ${name}!"     // msg is a ptr (char*), not an int
-tcp_send(conn, msg)          // can be passed to any function expecting ptr
+msg = "Hello, ${name}!"         // msg is a ptr (char*), not an int
+tcp_send_raw(conn, msg)          // can be passed to any function expecting ptr
 ```
 
 When used directly inside `print`/`println`, the compiler optimizes to a `printf` call (no allocation).
@@ -1075,7 +1075,7 @@ check(x: int) -> {
 }
 ```
 
-Use `ae check file.ae` to see warnings without compiling (~30x faster than `ae build`).
+Use `ae check file.ae` to see warnings without compiling. It skips codegen and linking, so iteration is much faster than `ae build`.
 
 ---
 

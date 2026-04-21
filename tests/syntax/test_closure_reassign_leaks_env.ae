@@ -1,7 +1,8 @@
-// Known limitation: when a closure variable is reassigned, the env of
-// the previous closure is leaked. The auto-defer-free is only emitted
-// on the FIRST assignment (to avoid double-free at scope exit, since
-// reassignment overwrites the .env pointer in the variable).
+// Memory-handling contract pinned by this test: when a closure
+// variable is reassigned, the env of the previous closure is NOT
+// freed at the reassignment point. The auto-defer-free is emitted
+// only on the FIRST assignment (to avoid double-free at scope exit,
+// since reassignment overwrites the .env pointer in the variable).
 //
 // Without escape analysis we can't know if the old env was still
 // reachable through some other path (stored in a list via box_closure,

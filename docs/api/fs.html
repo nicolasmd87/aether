@@ -25,6 +25,11 @@
     <li><a href="#dir_exists">dir_exists</a></li>
     <li><a href="#dir_create_raw">dir_create_raw</a></li>
     <li><a href="#dir_delete_raw">dir_delete_raw</a></li>
+    <li><a href="#fs_mkdir_p_raw">fs_mkdir_p_raw</a></li>
+    <li><a href="#fs_symlink_raw">fs_symlink_raw</a></li>
+    <li><a href="#fs_readlink_raw">fs_readlink_raw</a></li>
+    <li><a href="#fs_is_symlink">fs_is_symlink</a></li>
+    <li><a href="#fs_unlink_raw">fs_unlink_raw</a></li>
     <li><a href="#path_join">path_join</a></li>
     <li><a href="#path_dirname">path_dirname</a></li>
     <li><a href="#path_basename">path_basename</a></li>
@@ -94,6 +99,28 @@
     <div class="function" id="dir_delete_raw" data-name="dir_delete_raw">
       <h3 class="function-name">dir_delete_raw</h3>
       <pre class="usage"><code>dir_delete_raw(path)</code></pre>
+    </div>
+    <div class="function" id="fs_mkdir_p_raw" data-name="fs_mkdir_p_raw">
+      <h3 class="function-name">fs_mkdir_p_raw</h3>
+      <pre class="usage"><code>fs_mkdir_p_raw(path)</code></pre>
+      <p class="doc">`mkdir -p` semantics: create `path` and any missing parent directories. Treats already-existing directories as success. Returns 1 on success, 0 on failure. Raw extern — use the `mkdir_p` Go-style wrapper in std/fs/module.ae from most code.</p>
+    </div>
+    <div class="function" id="fs_symlink_raw" data-name="fs_symlink_raw">
+      <h3 class="function-name">fs_symlink_raw</h3>
+      <pre class="usage"><code>fs_symlink_raw(target, link_path)</code></pre>
+      <p class="doc">Symbolic-link operations. The *_raw functions are the low-level externs; idiomatic callers use the Go-style `symlink` / `readlink` / `unlink` wrappers in std/fs/module.ae which return `(value, err)`.  fs_symlink_raw: create a symlink at `link_path` pointing to `target`. Returns 1 on success, 0 on failure (e.g. link already exists). `target` is recorded verbatim — NOT resolved at create time, so a relative target stays relative.  fs_readlink_raw: read a symlink. Returns a heap-allocated string containing the link target, or NULL if `path` is not a symlink (or cannot be read). Caller frees.  fs_is_symlink: returns 1 if `path` is itself a symlink (does not follow), 0 otherwise. Pure boolean query — no wrapper needed, matches file_exists / dir_exists shape.  fs_unlink_raw: remove a file or symlink. Will NOT remove a directory — use dir_delete_raw for that. Returns 1 on success, 0 on failure.</p>
+    </div>
+    <div class="function" id="fs_readlink_raw" data-name="fs_readlink_raw">
+      <h3 class="function-name">fs_readlink_raw</h3>
+      <pre class="usage"><code>fs_readlink_raw(path)</code></pre>
+    </div>
+    <div class="function" id="fs_is_symlink" data-name="fs_is_symlink">
+      <h3 class="function-name">fs_is_symlink</h3>
+      <pre class="usage"><code>fs_is_symlink(path)</code></pre>
+    </div>
+    <div class="function" id="fs_unlink_raw" data-name="fs_unlink_raw">
+      <h3 class="function-name">fs_unlink_raw</h3>
+      <pre class="usage"><code>fs_unlink_raw(path)</code></pre>
     </div>
     <div class="function" id="path_join" data-name="path_join">
       <h3 class="function-name">path_join</h3>

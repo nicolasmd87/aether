@@ -516,8 +516,12 @@ long syscall(long number, ...) {
         errno = EPERM;
         return -1;
     }
-    // Not sandboxed — call through (but we can't forward varargs generically)
-    // This is a limitation: raw syscall() is fully blocked when sandboxed.
+    // Not sandboxed — we can't forward varargs generically from here
+    // either. Policy: raw syscall() always returns -1/ENOSYS through
+    // this interception point. Every syscall must go through a libc
+    // wrapper (open, connect, execve, getenv, ...) that this preload
+    // library can see. Bypassing libc with syscall(SYS_xxx) is out of
+    // scope for cooperative containment.
     errno = ENOSYS;
     return -1;
 }

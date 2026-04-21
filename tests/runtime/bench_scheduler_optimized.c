@@ -47,7 +47,7 @@ void bench_actor_step(BenchActor* self) {
     int batch_count = 0;
     
     while (mailbox_receive(&self->mailbox, &msg)) {
-        self->count_local++;  // Plain increment - 5.74x faster than atomic!
+        self->count_local++;  // Plain increment — avoids the atomic-RMW cost on the hot path
         batch_count++;
         
         // Publish every 64 messages for cross-thread visibility

@@ -33,31 +33,40 @@
 extern "C" {
 #endif
 
-// sigjmp_buf / sigsetjmp / siglongjmp are POSIX, not C. Several of our
-// targets don't expose them:
+// The step-level panic barrier runs on every actor step, so it has to
+// be cheap. Plain register-save setjmp/longjmp is a handful of
+// instructions on modern CPUs. The signal-mask-preserving variants —
+// sigsetjmp(buf, 1) and macOS's default setjmp() — call
+// sigprocmask under the hood, which is a syscall plus context switch,
+// orders of magnitude more expensive per call. On a message-heavy
+// benchmark that invokes the barrier on every actor step, paying the
+// signal-mask variant per step is a large regression end-to-end. Run
+// benchmarks/cross-language/aether/ping_pong after any change in this
+// area to verify.
 //
-//   - Windows: lacks them entirely; Win32 signals don't have the
-//     arbitrary-thread delivery semantics the signal-mask variants
-//     protect against.
-//   - Emscripten wasm32: supports plain setjmp/longjmp via
-//     -enable-emscripten-sjlj but not sigsetjmp; compiling it triggers
-//     a backend "relocations for function or section offsets are only
-//     supported in metadata sections" error.
-//   - Freestanding / bare-metal (e.g. arm-none-eabi newlib-nano under
-//     -ffreestanding): only the minimal C setjmp interface exists;
-//     sigjmp_buf is not declared at all.
+// So:
+//   - POSIX (Linux, macOS, BSDs): use _setjmp/_longjmp explicitly.
+//     Both are in POSIX.1-2001 XSI, and they skip the signal-mask
+//     save unconditionally. This is the fast path.
+//   - Windows / Emscripten / freestanding: plain setjmp/longjmp.
+//     Win32 has no POSIX signal semantics so setjmp is already fast;
+//     wasm and bare-metal have no sigjmp_buf at all.
 //
-// All three fall back to the signal-mask-unaware variants. Callers use
-// AETHER_SIGSETJMP / AETHER_SIGLONGJMP so the signal-mask argument is
-// dropped on targets that don't accept it.
+// What we lose: signal-mask preservation during the opt-in
+// AETHER_CATCH_SIGNALS=1 SIGSEGV-recovery path. That path is already
+// documented as "best-effort, not production-safe" (a SIGSEGV mid-
+// enqueue can leave queue state inconsistent), and user-code
+// panic() / try / catch doesn't need signal-mask semantics at all.
+//
+// The aether_sigjmp_buf typedef stays so call sites read uniformly;
+// on every target it's now jmp_buf under the hood.
+typedef jmp_buf aether_sigjmp_buf;
 #if defined(_WIN32) || defined(__EMSCRIPTEN__) || (defined(__STDC_HOSTED__) && __STDC_HOSTED__ == 0)
-  typedef jmp_buf aether_sigjmp_buf;
   #define AETHER_SIGSETJMP(buf, savemask) setjmp(buf)
   #define AETHER_SIGLONGJMP(buf, val)     longjmp((buf), (val))
 #else
-  typedef sigjmp_buf aether_sigjmp_buf;
-  #define AETHER_SIGSETJMP(buf, savemask) sigsetjmp((buf), (savemask))
-  #define AETHER_SIGLONGJMP(buf, val)     siglongjmp((buf), (val))
+  #define AETHER_SIGSETJMP(buf, savemask) _setjmp(buf)
+  #define AETHER_SIGLONGJMP(buf, val)     _longjmp((buf), (val))
 #endif
 
 // Maximum nesting depth of try/catch (and scheduler step barriers) per

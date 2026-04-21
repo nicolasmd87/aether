@@ -447,7 +447,7 @@ Raw extern: `json_parse_raw`.
 
 ### HTTP (`std.http`)
 
-> **Note:** Use `import std.http` for the `http.*` prefix shown below. You can also `import std.net` which includes both HTTP and TCP functions, but the namespace prefix becomes `net` (e.g., `net.http_get(url)`).
+> **Note:** Use `import std.http` for the `http.*` prefix shown below. You can also `import std.net` which includes both HTTP and TCP functions, but the namespace prefix becomes `net` — e.g. the raw client extern is reached as `net.http_get_raw(url)`, and the Go-style wrapper as `net.get(url)`.
 
 ```aether
 import std.http
@@ -625,10 +625,11 @@ arm.
   (epoll reports EPOLLHUP; kqueue silently drops the one-shot).
 
 **Performance:** PR #140 (C-level benchmark) demonstrated the raw
-reactor pattern delivering a 5x throughput improvement on the HTTP
-benchmark (45K → 264K req/s) versus a blocking keep-alive worker.
-`await_io` is the Aether-language surface over the same runtime
-machinery.
+reactor pattern delivering substantially higher HTTP throughput than
+the blocking keep-alive worker it replaced. `await_io` is the
+Aether-language surface over the same runtime machinery — rerun the
+HTTP benchmark on your own target host before relying on historical
+numbers.
 
 ---
 

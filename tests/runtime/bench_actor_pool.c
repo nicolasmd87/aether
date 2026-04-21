@@ -1,7 +1,7 @@
 /**
  * Actor Pool Performance Benchmark
- * Compares pool allocation vs malloc/free performance
- * Expected: 6.9x faster for batched operations
+ * Compares pool allocation vs malloc/free for batched actor lifecycles.
+ * Run it on your target to see the actual ratio for your workload.
  */
 
 #include "actor_pool.h"

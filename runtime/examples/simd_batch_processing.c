@@ -1,5 +1,6 @@
 // Example: SIMD Batch Message Processing
-// Demonstrates 3-20x speedup with AVX2 vectorization
+// Demonstrates AVX2-vectorised batch processing over a message buffer,
+// with an automatic scalar fallback on CPUs without AVX2.
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -78,10 +79,10 @@ int main() {
     
     printf("===========================================\n");
     printf("Key Takeaways:\n");
-    printf("- SIMD processes 8 values simultaneously\n");
-    printf("- 3-20x faster than scalar code\n");
-    printf("- Automatic fallback on old CPUs\n");
-    printf("- Perfect for batch operations\n");
+    printf("- SIMD processes 8 values simultaneously (AVX2 256-bit lanes)\n");
+    printf("- Scalar fallback runs automatically when AVX2 is unavailable\n");
+    printf("- Well-suited to compute-heavy batch operations over uniform data\n");
+    printf("- Run your own workload through this example to measure locally\n");
     printf("===========================================\n");
     
     free(messages);

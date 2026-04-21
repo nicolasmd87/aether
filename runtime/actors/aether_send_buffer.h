@@ -14,9 +14,10 @@ struct ActorBase;
  * before flushing to mailboxes in batches.
  * 
  * Performance impact:
- * - Before: 1000 messages = 1000 atomic operations
- * - After: 1000 messages = ~4 atomic operations (256-message batches)
- * - Expected: 2-3x throughput improvement
+ * - Before: N messages → N atomic operations on the target queue.
+ * - After:  N messages → roughly N/256 atomic operations (one per flushed batch).
+ * - Batching amortises the cross-core enqueue cost; the win scales with
+ *   message density.
  */
 
 #define SEND_BUFFER_SIZE 256

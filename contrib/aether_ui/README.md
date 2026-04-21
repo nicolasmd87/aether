@@ -170,5 +170,4 @@ capabilities the test harness is denied, not the other way around.
 
 ## Status
 
-All groups (1-7) plus AetherUIDriver implemented. See `aether_ui_conversion_plan.md`
-for discoveries.
+All groups (1-7) plus AetherUIDriver are implemented.

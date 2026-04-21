@@ -14,8 +14,9 @@ extern AETHER_TLS int current_core_id;
 // ==============================================================================
 // TIER 1 OPTIMIZATION: Thread-Local Message Payload Pool
 // ==============================================================================
-// Instead of malloc/free for every message (20M operations for 10M ping-pong),
-// use thread-local pool of small buffers. Expected: 3-6x throughput improvement.
+// Instead of malloc/free for every message payload (one alloc + one free per
+// send/receive cycle on the hot path), draw from a per-thread pool of small
+// buffers. Eliminates the allocator as a bottleneck for small-message traffic.
 
 #define MSG_PAYLOAD_POOL_SIZE 256      // 256 buffers per thread
 #define MSG_PAYLOAD_MAX_SIZE 256       // Max pooled message size (Ping/Pong ~16 bytes)

@@ -296,7 +296,7 @@ static void _closure_fn_N(_closure_env_N* _env, void* perms) {
 }
 ```
 
-### Nestable restriction
+### Nesting rules
 
 Sandboxes can nest, and each level can only narrow permissions:
 
@@ -383,12 +383,13 @@ beyond what the outer sandbox grants.
 | `"echo *"` | Prefix match | `echo hello`, `echo goodbye` |
 | `"exact.host"` | Exact only | Only `exact.host` |
 
-## Limitations
+## Scope boundaries
+
+The sandbox mediates stdlib I/O only. These are the places its enforcement line sits, and where it deliberately stops.
 
 ### Extern calls bypass the sandbox
 
-This is the primary gap. Aether's `extern` keyword lets code call raw C
-functions directly. If contained code declares:
+Aether's `extern` keyword lets code call raw C functions directly. If contained code declares:
 
 ```aether
 extern fopen(path: string, mode: string) -> ptr
@@ -405,7 +406,7 @@ don't put `extern` declarations in contained code. It's the same trust
 model as Docker — you trust the container runtime (Aether's stdlib),
 but the contained code must use the provided APIs.
 
-### Proposed fix: compiler-enforced extern restriction
+### Proposed fix: compiler-enforced extern check
 
 The compiler should reject `extern` function calls inside closures
 passed to `run_sandboxed`. Implementation:
@@ -434,17 +435,17 @@ time) + SecurityManager checks (runtime). Java removed the runtime layer
 (SecurityManager) but kept the compile/link layer (module system). Aether
 should have both.
 
-### Other limitations
+### Other boundaries
 
-- **No `deny` grants** — the model is deny-by-default, grant what's
-  needed. No way to grant broadly then carve exceptions. This is
-  intentional for the initial release.
+- **No `deny` grants.** The model is deny-by-default, grant what's
+  needed. There is no way to grant broadly then carve exceptions.
+  This is intentional for the initial release.
 
-- **No per-connection port filtering** — `grant_tcp("host")` allows
+- **No per-connection port filtering.** `grant_tcp("host")` allows
   any port on that host. Port-level grants would require extending
   the pattern format.
 
-- **Application-level only** — see "Cross-process containment" below
+- **Application-level only.** See "Cross-process containment" below
   for extending enforcement to child processes.
 
 ## Denial logging
@@ -587,7 +588,7 @@ cat sandbox-config.ae
 For these vectors, combine with OS-level sandboxing (seccomp-bpf,
 Linux namespaces, OpenBSD pledge/unveil) for defence in depth.
 
-### Known unintercepted libc functions and syscalls
+### Interception surface — what LD_PRELOAD sees and what it doesn't
 
 **Lesson from Google App Engine (2013):** An intern broke out of
 App Engine's Java sandbox by exploiting a gap between what the
@@ -599,7 +600,10 @@ the difference.
 For Aether, the equivalent gap is: **we intercept specific libc
 functions, but the kernel offers many alternative paths to the same
 operations.** A determined attacker who knows Linux internals can
-use paths we don't intercept.
+use paths we don't intercept. The tables below enumerate the surface
+so you can reason about it explicitly rather than assume coverage.
+See `docs/next-steps.md` → *Sandbox interception expansion* for the
+in-flight work to widen the LD_PRELOAD surface.
 
 #### Filesystem — not intercepted
 
@@ -658,8 +662,8 @@ this list is the attack surface. Each item is a potential bypass.
 The mitigation is kernel enforcement:
 
 ```
-Aether sandbox    → blocks 99% of normal code paths
-+ seccomp-bpf     → blocks the syscall-level bypasses above
+Aether sandbox    → intercepts the libc surface normal code uses
++ seccomp-bpf     → closes the raw-syscall bypasses above
 = defence in depth
 ```
 
@@ -1049,7 +1053,7 @@ and returns a response.
 | Filesystem | None | Granted per-path |
 | Network | `fetch()` only | `tcp_connect()` checked per-host |
 | Isolation | V8 isolate (separate heap) | Closure (separate scope) |
-| Startup | ~0ms (V8 snapshots) | ~0ms (compiled native) |
+| Startup | Immediate (V8 snapshots) | Immediate (compiled native) |
 
 **Inspiration:** the idea that isolation doesn't require heavyweight
 VMs or containers. A V8 isolate is just a memory boundary. An Aether
@@ -1175,23 +1179,23 @@ code can only call functions we explicitly provide.
 | **Nested sandbox** | Yes | Yes | Yes | Yes | Yes | Yes |
 | **Guest knows it's sandboxed** | No | No | No | No | No | No |
 
-### Shared-interpreter caveats
+### Shared-interpreter behavior
 
 Perl, Ruby, and Tcl keep a single long-lived interpreter across calls.
-`run_sandboxed` scrubs the environment on entry but does **not** restore
-the original state on exit — a subsequent unsandboxed `run()` in the same
-process sees the scrubbed environment. Two safe usage patterns: (a) use
-one mode per process, restart the host between them; or (b) snapshot the
-environment from the guest language before entering the sandbox and
-reassign it on exit. Python does not have this issue because its cached
-`os.environ` is a separate copy from libc's environ. Lua and JS don't
-cache.
+`run_sandboxed` scrubs the environment on entry and leaves the scrubbed
+state in place on exit — a subsequent unsandboxed `run()` in the same
+process sees the scrubbed environment. Two stable usage patterns:
+(a) one mode per process, restart the host between modes; or
+(b) have the host snapshot the environment from the guest language
+before entering the sandbox and reassign it on exit. Python is unaffected
+because its cached `os.environ` is a separate copy from libc's environ.
+Lua and JS don't cache the environment at all.
 
-Ruby has one cosmetic surprise: `Fiddle.dlopen("libc.so.6")` inside a
-sandbox succeeds (returns a handle), but any libc function invoked
-through it still goes through the Aether preload layer and respects
-grants. Not a real sandbox escape — just visually alarming when logs or
-tests expect the `dlopen` itself to fail.
+Ruby behavior to be aware of: `Fiddle.dlopen("libc.so.6")` inside a
+sandbox succeeds and returns a handle, but any libc function invoked
+through that handle still goes through the Aether preload layer and
+respects grants. The `dlopen` succeeding isn't a sandbox escape — it's
+the expected result, since interception is on the call, not the load.
 
 ### Usage pattern
 
@@ -1338,7 +1342,8 @@ different.
 
 ### Nested maps
 
-Not supported. Use dot-delimited keys for structure:
+The shared map is flat by design. Use dot-delimited keys when you
+need hierarchy:
 
 ```
 db.host = localhost
@@ -1346,9 +1351,9 @@ db.port = 5432
 db.credentials.user = admin
 ```
 
-The hosted code splits on dots if it wants hierarchy. The map
-stays flat. Flat maps are simple, auditable, and have no
-deserialization attack surface.
+The hosted code splits on dots if it wants to reconstruct a tree.
+The map stays a single-level key-value store — simple, auditable,
+and with no deserialization attack surface.
 
 ### Future: string:bytes mode
 

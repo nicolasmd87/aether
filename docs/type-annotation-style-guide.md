@@ -274,9 +274,9 @@ process_file(string filename): int {
 }
 ```
 
-## Type Inference Limitations
+## When explicit types are required
 
-Sometimes explicit types are **required**:
+Some cases don't give the inferencer enough to work with; annotate explicitly:
 
 ```aether
 // This fails - type can't be inferred

@@ -138,13 +138,16 @@ void aether_config_free(AetherValue* root);
 - `_get_string` / `_get_map` / `_get_list` / `_list_get_string` return `NULL`.
 - `_list_size(NULL)` returns `0`; `_has(NULL, k)` returns `0`.
 
-### Type safety caveat
+### Type contract
 
 Aether maps and lists are **untyped** internally — values are stored as
 opaque `void*` with no runtime tag. The accessors reinterpret the stored
-value as the requested type without checking. If an Aether script stored
-an `int` at `"port"` and the host asks for a string, the host gets
-garbage. Document your script's output shape like any other FFI contract.
+value as the requested type; they do not verify it. That makes the
+script-to-host interface a straight FFI contract: document what the
+script writes at each key, and the host must read it back with the
+matching accessor. If the script stored an `int` at `"port"` and the
+host asks for a string, the host gets garbage — treat this exactly the
+way you would treat any other cross-language value exchange.
 
 ## Capability-empty default
 

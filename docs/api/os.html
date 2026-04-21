@@ -18,6 +18,10 @@
     <li><a href="#os_system">os_system</a></li>
     <li><a href="#os_exec_raw">os_exec_raw</a></li>
     <li><a href="#os_getenv">os_getenv</a></li>
+    <li><a href="#os_execv">os_execv</a></li>
+    <li><a href="#os_which">os_which</a></li>
+    <li><a href="#os_run">os_run</a></li>
+    <li><a href="#os_run_capture_raw">os_run_capture_raw</a></li>
   </ul>
   <hr>
   <h2>Modules</h2>
@@ -53,6 +57,26 @@
       <h3 class="function-name">os_getenv</h3>
       <pre class="usage"><code>os_getenv(name)</code></pre>
       <p class="doc">Get environment variable, returns string or NULL if not set</p>
+    </div>
+    <div class="function" id="os_execv" data-name="os_execv">
+      <h3 class="function-name">os_execv</h3>
+      <pre class="usage"><code>os_execv(prog, argv_list)</code></pre>
+      <p class="doc">Replace the current process image with `prog`, passing each element of `argv_list` as an argv entry. `argv_list` is an Aether `list&lt;ptr&gt;` whose entries must be C strings; element 0 is argv[0] for the new program and need not match `prog`. Does NOT return on success — on failure returns -1 and leaves the current process running. `prog` is looked up on PATH if it does not contain a slash (POSIX `execvp`). Not available on Windows (returns -1).</p>
+    </div>
+    <div class="function" id="os_which" data-name="os_which">
+      <h3 class="function-name">os_which</h3>
+      <pre class="usage"><code>os_which(name)</code></pre>
+      <p class="doc">Search PATH for an executable named `name`. Returns the absolute path to the first executable hit, or NULL if not found. If `name` already contains '/', it's returned as-is when it's executable (matches POSIX `command -v` semantics for absolute/relative paths). Caller owns the returned string.</p>
+    </div>
+    <div class="function" id="os_run" data-name="os_run">
+      <h3 class="function-name">os_run</h3>
+      <pre class="usage"><code>os_run(prog, argv, env)</code></pre>
+      <p class="doc">Run a child process directly via fork+execvp+waitpid (POSIX) or CreateProcessW (Windows — TODO). NO SHELL is interpreted: argv items are passed verbatim, so paths-with-spaces, $vars, |, ;, *, etc. in arguments are not metachars. Returns the child's exit code, or -1 on failure to spawn (program not found, etc.).  prog    — program to execute. Resolved via PATH if it has no '/'. argv    — Aether list (ArrayList*) of strings; argv[0] should be the program name itself. May be NULL (treated as empty list). env     — Aether list (ArrayList*) of &quot;KEY=VALUE&quot; strings, or NULL to inherit the parent's environment.</p>
+    </div>
+    <div class="function" id="os_run_capture_raw" data-name="os_run_capture_raw">
+      <h3 class="function-name">os_run_capture_raw</h3>
+      <pre class="usage"><code>os_run_capture_raw(prog, argv, env)</code></pre>
+      <p class="doc">Same as os_run but captures the child's stdout into a heap-allocated string the caller must free. Returns NULL on spawn failure. The child's exit code is discarded — if you need it, use os_run instead (or a future os_run_capture_with_status() if demand arises).</p>
     </div>
   </div>
 </main>

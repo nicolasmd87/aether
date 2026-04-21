@@ -65,7 +65,7 @@ typedef struct {
     int active;         // 1 if slot is in use
 } AetherIoEntry;
 
-// Optimized spinlock with PAUSE instruction (3x faster than standard spinlock)
+// Optimized spinlock with PAUSE instruction (cuts wake-up wasted cycles in a busy-spin)
 typedef struct {
     atomic_flag lock;
     char padding[63];  // Cache line alignment to prevent false sharing
@@ -133,7 +133,7 @@ typedef struct {
     _Atomic uint64_t messages_processed; // Messages processed ON this core
     char counter_padding[48];    // Cache line padding to prevent false sharing
 
-    // Message coalescing buffer for 15x throughput improvement
+    // Message coalescing buffer — amortises enqueue atomics across bursts
     struct {
         void* actors[COALESCE_THRESHOLD];
         Message messages[COALESCE_THRESHOLD];
@@ -141,7 +141,7 @@ typedef struct {
     } coalesce_buffer;
 
     // Integrated optimizations (pointers to avoid bloating struct)
-    ActorPool* actor_pool;            // Actor pooling (1.81x speedup)
+    ActorPool* actor_pool;            // Actor pooling (reuse retired actor structs)
     AdaptiveBatchState batch_state;   // Adaptive batching (small, embedded)
 
     // Per-core I/O event loop (platform-agnostic: epoll/kqueue/poll)

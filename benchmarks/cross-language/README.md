@@ -55,7 +55,7 @@ All 11 languages implement all 5 patterns (55 total benchmarks, zero skips).
 | **Latency** (ns/msg) | Nanoseconds per message |
 | **Memory** (MB) | Peak resident set size (RSS) |
 | **Relative** (%) | Percentage of fastest language |
-| **CV%** | Coefficient of variation — run-to-run stability (< 5% green, 5–15% orange, > 15% red) |
+| **CV%** | Coefficient of variation (σ/μ × 100) — run-to-run stability. Standard statistical bands drive colour coding: low / moderate / high variance, independent of which language is being measured. |
 | **Range** | Min–Max throughput across runs |
 | **Efficiency** | Throughput per MB of memory |
 

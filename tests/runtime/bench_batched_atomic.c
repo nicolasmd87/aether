@@ -121,9 +121,9 @@ int main() {
     }
     
     printf("=== Results ===\n");
-    printf("✓ Batched atomic approach eliminates 63/64 atomic operations\n");
+    printf("✓ Batched atomic approach eliminates 63/64 atomic operations per 64 messages\n");
     printf("✓ Maintains cross-thread visibility (publishes every 64 messages)\n");
-    printf("✓ Expected improvement: ~10x faster in hot path\n");
+    printf("✓ Hot-path ratio improvement is workload-dependent — rerun on your target to measure\n");
     printf("\nThis optimization is LIVE in actor_state_machine.h!\n");
     
     return 0;

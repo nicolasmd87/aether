@@ -1,6 +1,6 @@
-// Message Batching API - Bulk send for 1.78× speedup
-// Based on Experiment 06: 397M msg/sec vs 223M (single)
-// Reduces function call overhead by processing messages in batches
+// Message Batching API - Bulk send path
+// Processes messages in batches to reduce per-message function-call
+// and atomic overhead on the producer side.
 
 #ifndef AETHER_BATCH_H
 #define AETHER_BATCH_H

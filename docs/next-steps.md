@@ -117,7 +117,7 @@ before external users hit them.
 
 ### Package Registry — Transitive Dependencies
 
-`ae add` supports versioned packages (`ae add github.com/user/repo@v1.0.0`) and the module resolver finds installed packages. Next: transitive dependency resolution, lock file integrity, and `ae update`.
+`ae add` supports versioned packages (`ae add github.com/user/repo@v1.0.0`) and the module resolver finds installed packages. Next: transitive dependency resolution, lock file integrity checking, `ae update`, and a publishing command (`ae publish`).
 
 ### `or` Keyword for Error Defaults
 
@@ -138,7 +138,7 @@ Phase 1 is complete: `ae build --target wasm` compiles Aether to WebAssembly via
 
 ### Async I/O Integration
 
-All I/O in Aether is currently blocking. `http.get()`, `file.read()`, `tcp_connect()`, and `sleep()` all block the OS thread. Since the scheduler places actors on the spawner's core by default (locality-aware placement), actors spawned from `main()` all land on core 0 — one OS thread. A blocking I/O call in one actor prevents ALL actors on that core from running.
+All I/O in Aether is currently blocking. `http.get()`, `file.read()`, `tcp.connect()`, and `sleep()` all block the OS thread. Since the scheduler places actors on the spawner's core by default (locality-aware placement), actors spawned from `main()` all land on core 0 — one OS thread. A blocking I/O call in one actor prevents ALL actors on that core from running.
 
 **User impact:** An actor doing 5 HTTP requests will block all sibling actors for the entire duration. There is no way for the scheduler to preempt a handler that's blocked in a system call.
 
@@ -150,7 +150,7 @@ All I/O in Aether is currently blocking. `http.get()`, `file.read()`, `tcp_conne
 
 **Next: actor-integrated HTTP ([PR #71](https://github.com/nicolasmd87/aether/pull/71))**
 
-Ariel's PR proposes dispatching incoming HTTP connections as file descriptors directly to pre-spawned worker actors via mailbox delivery, replacing the thread pool with actor-based dispatch. This achieved +82-103% throughput improvement in benchmarks. The PR needs:
+Ariel's PR proposes dispatching incoming HTTP connections as file descriptors directly to pre-spawned worker actors via mailbox delivery, replacing the thread pool with actor-based dispatch. Bench-measured throughput improvement vs. the thread-pool baseline was substantial; rerun benchmarks against current main before relying on historical figures. The PR needs:
 - Rebase from v0.23.0 to current (v0.41.0+)
 - Use the new platform poller abstraction instead of Linux-only epoll
 - Integration with scheduler timeout support (added since the PR was opened)
@@ -217,8 +217,9 @@ native functions calling `aether_shared_map_get_by_token` /
 ### `string:bytes` mode for shared map
 
 The shared map stores strings. Passing binary data (images, protobufs,
-raw MIDI) currently forces the caller to base64-encode, which is a 33%
-size overhead and an encode/decode cost at both ends.
+raw MIDI) currently forces the caller to base64-encode. Base64 expands
+bytes by a 4:3 ratio as a matter of the encoding's arithmetic, and
+adds an encode/decode step on each side of the boundary.
 
 **Fix shape**: a sibling API `aether_shared_map_put_bytes(token, key,
 buf, len)` + `aether_shared_map_get_bytes(token, key, &len) -> buf`
@@ -226,6 +227,53 @@ that doesn't null-terminate or encode. The C-side map already stores
 length-prefixed values; the change is API-only on the C side. Each
 bridge then needs a new binding (`aether_map_put_bytes` / `_get_bytes`)
 in the language that surfaces it as bytes/blob rather than string.
+
+## Sandbox
+
+### Interception surface expansion
+
+The LD_PRELOAD layer in `runtime/libaether_sandbox_preload.c`
+intercepts a curated set of libc entry points. Kernel-level
+alternatives to the same operations currently bypass it — see
+[`docs/containment-sandbox.md`](containment-sandbox.md) →
+*Interception surface* for the catalogued list (openat2,
+open_by_handle_at, sendfile, copy_file_range, io_uring, readlink,
+getdents64, bind/accept, UDP socket paths, execveat, clone, prctl,
+memfd_create, etc.). Expanding coverage is a per-syscall exercise
+combined, where needed, with seccomp-bpf for the syscalls with no
+libc wrapper to hook. Defence-in-depth story: Aether covers
+cooperative containment for normal-code paths; seccomp-bpf closes
+adversarial kernel-level bypasses.
+
+## Type system
+
+### Type inference propagation through `select()`
+
+`select(linux: ..., windows: ..., macos: ...)` stores string results
+correctly at the call site, but the inferred type doesn't propagate
+into `println()` directly — see
+[`docs/named-args-and-select.md`](named-args-and-select.md) → *Printing
+string results*. Workaround today: wrap in string interpolation. Fix:
+thread the selected-branch type through `select()` in the typechecker
+so `println(os_string)` picks `%s` automatically.
+
+### Polymorphism, higher-rank types, type classes
+
+Aether inference is currently monomorphic — functions resolve to a
+single concrete type per call site. Features waiting on a larger
+language design pass:
+
+- **Generic functions.** A `min(a, b)` that works for any ordered type
+  without duplicating per-type definitions.
+- **Higher-rank types.** Functions that accept polymorphic functions as
+  arguments (e.g. a mapping combinator that takes `fn[T, U]` without
+  fixing `T`/`U`).
+- **Type classes / constraints.** Haskell-style `Ord`, `Eq`,
+  `Show` — or Rust-style traits — to constrain generic parameters to
+  operations they support.
+
+Each of these is a language-level change; they're listed here so the
+surface area is visible, not because any one is scheduled.
 
 ## Tooling
 

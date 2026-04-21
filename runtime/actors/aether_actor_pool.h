@@ -1,5 +1,6 @@
-// CRAZY OPTIMIZATION #1: Actor Pooling (Reuse instead of spawn)
-// Expected: 30-50% improvement for high-churn workloads
+// Actor Pooling: reuse retired actor structs instead of freeing +
+// re-allocating them. Target: high-churn workloads where actors are
+// spawned and shut down frequently.
 
 #ifndef AETHER_ACTOR_POOL_H
 #define AETHER_ACTOR_POOL_H

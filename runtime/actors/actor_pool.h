@@ -1,7 +1,7 @@
 /**
  * Type-Specific Actor Pools
- * Pre-allocated actor arrays with O(1) allocation/deallocation
- * Expected: 6.9x faster than malloc/free for batched operations
+ * Pre-allocated actor arrays with O(1) allocation/deallocation.
+ * Avoids the malloc/free path for batched actor lifecycles.
  */
 
 #ifndef AETHER_ACTOR_POOL_H

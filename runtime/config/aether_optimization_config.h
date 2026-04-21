@@ -7,21 +7,23 @@
 //   - AETHER_HAS_THREADS, AETHER_HAS_ATOMICS, AETHER_HAS_FILESYSTEM, etc.
 //   - Auto-detected from target platform, overridable via -DAETHER_NO_*
 //
-// Tier 1 - ALWAYS ON (built-in, proven wins):
-//   - Actor Pooling (1.81x speedup)
+// Tier 1 - ALWAYS ON (built-in, load-bearing):
+//   - Actor Pooling (reuses actor structs across spawn/shutdown)
 //   - Direct Send (same-core bypass)
 //   - Adaptive Batching (4-64 dynamic)
-//   - Message Coalescing (15x throughput)
-//   - TLS Message Pools (eliminates mutex contention)
+//   - Message Coalescing (amortises atomics across bursts)
+//   - TLS Message Pools (eliminates mutex contention on the payload allocator)
 //
 // Tier 2 - AUTO-DETECT (hardware-dependent):
 //   - SIMD Batch Processing (requires AVX2/NEON)
 //   - MWAIT Idle (requires x86 MONITOR/MWAIT)
 //   - CPU Core Pinning (OS-dependent)
 //
-// Tier 3 - OPT-IN (user must enable via flag, have trade-offs):
-//   - Lock-free Mailbox (3.8x SLOWER single-thread, 1.8x faster under heavy contention)
-//   - Message Deduplication (adds overhead, changes semantics - filters duplicates)
+// Tier 3 - OPT-IN (user must enable via flag, trade-offs worth measuring):
+//   - Lock-free Mailbox (slower single-threaded vs the locked variant;
+//     the win only shows under multi-producer contention — measure on
+//     your workload before enabling).
+//   - Message Deduplication (adds overhead, changes semantics — filters duplicates).
 
 #ifndef AETHER_OPTIMIZATION_CONFIG_H
 #define AETHER_OPTIMIZATION_CONFIG_H
@@ -345,7 +347,7 @@ typedef enum {
     AETHER_OPT_NONE             = 0,
     
     // Tier 3 opt-in flags (have trade-offs)
-    AETHER_OPT_LOCKFREE_MAILBOX = (1 << 0),  // 3.8x SLOWER single-thread, 1.8x faster multi-thread contention
+    AETHER_OPT_LOCKFREE_MAILBOX = (1 << 0),  // Slower single-threaded; faster under multi-producer contention. Measure your workload before enabling.
     AETHER_OPT_MESSAGE_DEDUP    = (1 << 1),  // Filters duplicate messages (semantic change + overhead)
     AETHER_OPT_VERBOSE          = (1 << 3),  // Print optimization info at startup
     

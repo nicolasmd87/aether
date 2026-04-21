@@ -18,7 +18,7 @@ main() {
     println("=======================================================")
     println("")
 
-    server = tcp_listen(port)
+    server = tcp_listen_raw(port)
     if server == 0 {
         println("Failed to create server socket")
         return
@@ -29,13 +29,13 @@ main() {
     println("Press Ctrl+C to stop")
     println("")
 
-    base_dir = string_trim(os_exec("pwd"))
+    base_dir = string_trim(os_exec_raw("pwd"))
 
     // Accept loop
     while 1 == 1 {
-        client = tcp_accept(server)
+        client = tcp_accept_raw(server)
         if client != 0 {
-            request = tcp_receive(client, 4096)
+            request = tcp_receive_raw(client, 4096)
 
             if request != 0 {
                 if string_length(request) > 0 {
@@ -48,7 +48,7 @@ main() {
 
                     // Route: / or /index.html
                     if string_equals(path, "/") == 1 {
-                        content = io_read_file(string_concat(base_dir, "/index.html"))
+                        content = io_read_file_raw(string_concat(base_dir, "/index.html"))
                         if content != 0 {
                             if string_length(content) > 0 {
                                 status = 200
@@ -59,7 +59,7 @@ main() {
                     }
 
                     if string_equals(path, "/index.html") == 1 {
-                        content = io_read_file(string_concat(base_dir, "/index.html"))
+                        content = io_read_file_raw(string_concat(base_dir, "/index.html"))
                         if content != 0 {
                             if string_length(content) > 0 {
                                 status = 200
@@ -74,7 +74,7 @@ main() {
                         if string_ends_with(path, ".json") == 1 {
                             filename = string_substring(path, 1, string_length(path))
                             filepath = string_concat(base_dir, string_concat("/", filename))
-                            content = io_read_file(filepath)
+                            content = io_read_file_raw(filepath)
                             status = 200
                             ctype = "application/json"
                             if content != 0 {
@@ -98,7 +98,7 @@ main() {
 
                     // Build and send HTTP response
                     response = build_http_response(status, ctype, body)
-                    tcp_send(client, response)
+                    tcp_send_raw(client, response)
                 }
             }
 

@@ -75,6 +75,11 @@ main() {
 }
 ```
 
+Struct fields infer their types from the initialisation site. A struct
+declared with bare field names (no `: type`) and never initialised keeps
+the fields at the parser's fallback type. Always initialise via a struct
+literal at least once, or annotate the field explicitly.
+
 ### Array Elements
 
 ```aether
@@ -181,15 +186,15 @@ x = "hello"   // ERROR: Can't assign string to int
 The `null` keyword is typed as `ptr`:
 
 ```aether
-conn = null              // inferred: ptr
-conn = tcp_connect(...)  // still ptr — type is consistent
+conn = null                  // inferred: ptr
+conn = tcp_connect_raw(...)  // still ptr — type is consistent
 ```
 
 Integer `0` is compatible with `ptr` for null-initialization patterns:
 
 ```aether
-server = 0               // initially int
-server = tcp_listen(80)  // tcp_listen returns ptr — type widens to ptr
+server = 0                   // initially int
+server = tcp_listen_raw(80)  // tcp_listen_raw returns ptr — type widens to ptr
 ```
 
 ### Constants
@@ -233,15 +238,6 @@ Type inference happens at **compile-time only**:
 - Same generated C code as explicit types
 - Full type safety maintained
 - No performance difference
-
-## Limitations
-
-Current limitations:
-
-1. **No higher-rank types** - Functions must have monomorphic types
-2. **No type classes** - No Haskell-style constraints
-3. **Limited polymorphism** - No generic functions yet
-4. **Struct fields** - Must initialize to infer type
 
 ## Best Practices
 

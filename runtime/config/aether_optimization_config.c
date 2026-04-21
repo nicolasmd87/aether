@@ -193,10 +193,10 @@ void aether_print_config(void) {
            atomic_load(&g_aether_config.inline_mode_active) ? "active" : "inactive");
 
     printf("TIER 1 - ALWAYS ON:\n");
-    printf("  [ON] Actor Pooling        - 1.81x faster allocation\n");
+    printf("  [ON] Actor Pooling        - Reuses actor structs, avoids malloc churn\n");
     printf("  [ON] Direct Send          - Same-core bypass\n");
     printf("  [ON] Adaptive Batching    - Dynamic 4-64 batch size\n");
-    printf("  [ON] Message Coalescing   - 15x throughput boost\n");
+    printf("  [ON] Message Coalescing   - Amortises atomics across bursts\n");
     printf("  [ON] TLS Message Pools    - Eliminates mutex contention\n\n");
 
     printf("TIER 2 - AUTO-DETECTED:\n");

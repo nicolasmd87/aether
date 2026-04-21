@@ -133,12 +133,12 @@ int32_t aether_config_list_get_bool(AetherValue* list, int32_t index, int32_t de
  * without a type tag. In practice, most `ae config` scripts build a
  * single-owner tree and the whole thing is released on free.
  *
- * Known limitation: nested maps/lists inside the root aren't recursively
- * freed; only the root's own storage is. This matches how the Aether
- * runtime itself handles these structures — collection cleanup is
- * typically per-container rather than deep-recursive. Callers that care
- * about deep cleanup should walk the tree themselves or structure their
- * scripts to return a flat map.
+ * Ownership rule: nested maps/lists inside the root are not freed by
+ * this function; only the root's own storage is. This matches how the
+ * Aether runtime itself handles these structures — collection cleanup
+ * is per-container, not deep-recursive. Callers that need deep cleanup
+ * walk the tree themselves, or structure their scripts to return a
+ * flat map.
  * ----------------------------------------------------------------- */
 
 void aether_config_free(AetherValue* root) {

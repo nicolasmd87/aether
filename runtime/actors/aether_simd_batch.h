@@ -1,6 +1,7 @@
 // SIMD Message Batching
-// Process multiple messages simultaneously using AVX2 (x86) or NEON (ARM)
-// Provides 1.5x throughput improvement for compute-heavy message handlers
+// Process multiple messages simultaneously using AVX2 (x86) or NEON (ARM).
+// Target: compute-heavy message handlers where the per-message scalar
+// loop has vectorisable arithmetic or comparison.
 
 #ifndef AETHER_SIMD_BATCH_H
 #define AETHER_SIMD_BATCH_H
