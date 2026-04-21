@@ -1,0 +1,43 @@
+// Regression: a function signature with an explicit `-> ReturnType`
+// must typecheck calls correctly. Previously the parser saw `-> int {`
+// and committed to Erlang-style arrow-body parsing (`-> { body }`),
+// treating `int { return a + b }` as a struct literal and eating one
+// of the declared parameters. Calls then failed with an off-by-one
+// arity error: `g(a, b) -> int` reported as "expects 1 argument(s)".
+
+add2(a: int, b: int) -> int { return a + b }
+add3(a: int, b: int, c: int) -> int { return a + b + c }
+add5(a: int, b: int, c: int, d: int, e: int) -> int {
+    return a + b + c + d + e
+}
+
+// Typed return on a one-arg function (arity edge case) — must still
+// parse the `int` as the return type, not as the body.
+identity(x: int) -> int { return x }
+
+// Non-int return type
+describe(n: int) -> string {
+    if n == 0 { return "zero" }
+    return "nonzero"
+}
+
+main() {
+    r2 = add2(1, 2)
+    if r2 != 3 { println("FAIL: add2"); exit(1) }
+    println("PASS: add2(1,2) = 3")
+
+    r3 = add3(1, 2, 3)
+    if r3 != 6 { println("FAIL: add3"); exit(1) }
+    println("PASS: add3(1,2,3) = 6")
+
+    r5 = add5(1, 2, 3, 4, 5)
+    if r5 != 15 { println("FAIL: add5"); exit(1) }
+    println("PASS: add5(...) = 15")
+
+    if identity(42) != 42 { println("FAIL: identity"); exit(1) }
+    println("PASS: identity(42) = 42")
+
+    d = describe(0)
+    if d != "zero" { println("FAIL: describe"); exit(1) }
+    println("PASS: describe(0) = zero")
+}
