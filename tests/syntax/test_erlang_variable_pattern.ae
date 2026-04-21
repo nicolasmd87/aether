@@ -1,0 +1,35 @@
+// Regression: Erlang-style pattern-match functions where one clause
+// uses a variable pattern (e.g. `fib(n)`) must bind that variable to
+// the corresponding argument in the generated C body. Previously the
+// codegen emitted literal `n` references without a declaration and
+// without a final `else` separating the variable-pattern clause from
+// the prior literal-match clauses — GCC rejected the generated C with
+// "'n' undeclared".
+
+fib(0) -> 0
+fib(1) -> 1
+fib(n) -> fib(n - 1) + fib(n - 2)
+
+// Two variable-pattern args, no literal clauses — must still bind.
+add(a, b) -> a + b
+
+// Variable pattern after several literal matches — guard the fallthrough.
+classify(0) -> "zero"
+classify(1) -> "one"
+classify(n) -> "many"
+
+main() {
+    if fib(0) != 0 { println("FAIL: fib(0)"); exit(1) }
+    if fib(1) != 1 { println("FAIL: fib(1)"); exit(1) }
+    if fib(5) != 5 { println("FAIL: fib(5)"); exit(1) }
+    if fib(10) != 55 { println("FAIL: fib(10)"); exit(1) }
+    println("PASS: fib(0..10)")
+
+    if add(3, 4) != 7 { println("FAIL: add"); exit(1) }
+    println("PASS: add(3,4) = 7")
+
+    if classify(0) != "zero" { println("FAIL: classify(0)"); exit(1) }
+    if classify(1) != "one"  { println("FAIL: classify(1)"); exit(1) }
+    if classify(7) != "many" { println("FAIL: classify(7)"); exit(1) }
+    println("PASS: classify 0/1/many")
+}
