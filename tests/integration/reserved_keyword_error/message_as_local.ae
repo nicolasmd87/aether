@@ -1,0 +1,6 @@
+// A reserved keyword (`message`) used as a local variable name — must
+// fail to compile, but with a helpful error that names the keyword.
+main() {
+    message = "hello"
+    println(message)
+}

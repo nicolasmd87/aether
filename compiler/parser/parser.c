@@ -47,14 +47,39 @@ Token* advance_token(Parser* parser) {
     return parser->tokens[parser->current_token++];
 }
 
+// True when `token`'s source text looks like a reserved keyword (all
+// alphanumeric/underscore, starts with a letter). Used to generate a
+// friendlier error than "Expected IDENTIFIER, got MESSAGE_KEYWORD"
+// when a user picks a name that collides with the grammar. Skips
+// TOKEN_IDENTIFIER itself and anything whose value is punctuation.
+static int token_is_reserved_keyword(Token* token) {
+    if (!token || !token->value || token->type == TOKEN_IDENTIFIER) return 0;
+    const char* s = token->value;
+    if (!((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') || *s == '_')) return 0;
+    for (const char* p = s + 1; *p; p++) {
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+              (*p >= '0' && *p <= '9') || *p == '_')) return 0;
+    }
+    return 1;
+}
+
 Token* expect_token(Parser* parser, AeTokenType expected) {
     Token* token = peek_token(parser);
     if (!token || token->type != expected) {
         char error_msg[256];
-        snprintf(error_msg, sizeof(error_msg), 
-                "Expected %s, got %s", 
+        if (expected == TOKEN_IDENTIFIER && token_is_reserved_keyword(token)) {
+            // User picked a reserved keyword as an identifier name —
+            // point at the keyword and suggest a rename so they don't
+            // have to guess which grammar slot was wanted.
+            snprintf(error_msg, sizeof(error_msg),
+                "'%s' is a reserved keyword and cannot be used as an identifier; rename it (e.g. '%s_' or 'msg')",
+                token->value, token->value);
+        } else {
+            snprintf(error_msg, sizeof(error_msg),
+                "Expected %s, got %s",
                 token_type_to_string(expected),
                 token ? token_type_to_string(token->type) : "EOF");
+        }
         parser_error(parser, error_msg);
         return NULL;
     }
@@ -2178,12 +2203,25 @@ ASTNode* parse_block(Parser* parser) {
             add_child(block, stmt);
         } else {
             // Prevent infinite loops on unexpected tokens inside blocks.
-            parser_error(parser, "Expected statement in block");
+            // If the block-head token is a reserved keyword being used as
+            // if it were an identifier (e.g. `message = "hello"`), point
+            // at it directly instead of the generic "expected statement"
+            // that leaves users guessing.
+            Token* stmt_head = peek_token(parser);
+            if (stmt_head && token_is_reserved_keyword(stmt_head)) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                    "'%s' is a reserved keyword and cannot be used as an identifier; rename it (e.g. '%s_' or 'msg')",
+                    stmt_head->value, stmt_head->value);
+                parser_error(parser, msg);
+            } else {
+                parser_error(parser, "Expected statement in block");
+            }
             if (parser->current_token == start_token) {
                 advance_token(parser);
             }
         }
-        
+
         if (is_at_end(parser)) break;
     }
     
