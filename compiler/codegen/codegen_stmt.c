@@ -2208,7 +2208,15 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             fprintf(gen->output, "/* ERROR: Generic spawn_actor() not supported - use type-specific spawn functions */\n");
             break;
             
-        case AST_BLOCK:
+        case AST_BLOCK: {
+            // Save declared_var_count before the block. Variables declared
+            // inside the block live in its C `{ ... }` scope and must not
+            // leak to sibling statements that follow — otherwise a sibling
+            // bare-block writing the same name is codegen'd as a
+            // reassignment (no type on LHS) even though C scope already
+            // closed the earlier declaration. This mirrors what the
+            // AST_IF_STATEMENT path does at the `if`/`else` branch boundaries.
+            int saved_var_count = gen->declared_var_count;
             print_line(gen, "{");
             indent(gen);
             enter_scope(gen);  // Track defer scope
@@ -2218,7 +2226,9 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             exit_scope(gen);  // Emit defers and pop scope
             unindent(gen);
             print_line(gen, "}");
+            gen->declared_var_count = saved_var_count;
             break;
+        }
         
         case AST_REPLY_STATEMENT:
             if (stmt->child_count > 0) {
