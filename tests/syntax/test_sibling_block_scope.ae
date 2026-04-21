@@ -1,0 +1,25 @@
+// Regression: two sibling `{ }` blocks each declaring the same local
+// name must each own its declaration. Previously the codegen tracked
+// "declared" names globally across siblings (it does save/restore
+// across if/else — same problem class, just missed for bare blocks),
+// so the first block emitted `const char* src = ...;` and the second
+// emitted `src = ...;` without a declaration — failing with gcc's
+// "'src' undeclared" because C block scope already closed the first
+// `src` when the first `}` fired.
+
+main() {
+    // Two sibling bare blocks each with their own `src`.
+    { src = "a"; println(src) }
+    { src = "b"; println(src) }
+
+    // Same shape with an int, and three siblings deep.
+    { n = 1; println(n) }
+    { n = 2; println(n) }
+    { n = 3; println(n) }
+
+    // Block after sibling should see no leaked `src` either.
+    // Declaring `src` at function scope now is a fresh local —
+    // must not collide with the block-local ones above.
+    src = "outer"
+    println(src)
+}

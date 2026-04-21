@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **Sibling bare `{ }` blocks sharing a local name now compile cleanly** (`compiler/codegen/codegen_stmt.c`). Two blocks each declaring `src` compiled to C where the first block emitted `const char* src = ...;` but the second emitted a bare `src = ...;` reassignment — C scope had already dropped the first `src` at the first `}`, so gcc errored with `'src' undeclared`. Codegen's `declared_var_count` wasn't saved/restored across the bare AST_BLOCK path even though the if/else path already did this correctly. Fix: mirror the if/else save/restore pattern for AST_BLOCK. Regression test: `tests/syntax/test_sibling_block_scope.ae`.
+
 ## [0.76.0]
 
 ### Fixed
