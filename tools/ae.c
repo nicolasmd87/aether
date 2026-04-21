@@ -1058,8 +1058,12 @@ static void build_gcc_cmd(char* cmd, size_t size,
     const char* link_flags = get_link_flags();
     const char* extra = extra_files ? extra_files : "";
 
-    // User cflags from aether.toml applied only for release builds (ae build)
-    const char* user_cflags = optimize ? get_cflags() : "";
+    // User cflags from aether.toml apply to every build path — `ae build`,
+    // `ae run`, and any internal invocation. Previously they were gated
+    // behind `optimize` (only the release path picked them up), which
+    // meant `-D<feature>` flags and warning-suppression that extern C
+    // shims relied on silently broke `ae run`.
+    const char* user_cflags = get_cflags();
 
 #ifdef _WIN32
     // Ensure GCC is available (auto-downloads WinLibs on first run if needed).

@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **Two function calls on either side of `!=`/`==` inside an `if`/`while`/`for`/`match` condition no longer miscompile** (`compiler/parser/parser.c`, `compiler/parser/parser.h`). The parser greedily consumed the `{` that starts an if/while body as a trailing-closure argument attached to the rightmost call in the condition. An innocuous pattern like `while i < n { if f(a) != f(b) { return 0 }; i = i + 1 }` compiled to C where `return 0` was silently dropped, `i = i + 1` moved inside the `if`, and the loop became infinite — no compile error. New `parser->in_condition` flag is raised while parsing an if/while condition, a paren-less `match` subject, and a range-based for's end-expression; inside it, `func(args) { ... }` is parsed without the trailing block. Explicit trailing-block forms (`callback { }`, `|params| { }`) still work because they can't plausibly be mistaken for a statement body. Regression test: `tests/syntax/test_call_on_both_sides_of_comparison.ae`.
+
+- **Reserved-keyword identifier errors now name the keyword and suggest a rename** (`compiler/parser/parser.c`). `extern f(code: int, message: string)` produced `Expected IDENTIFIER, got MESSAGE_KEYWORD`, and `message = "hello"` produced `Expected statement in block` — both forcing the user to consult the lexer to figure out which name collided. New `token_is_reserved_keyword()` helper detects an alphanumeric token whose lexer type isn't `TOKEN_IDENTIFIER`; `expect_token` (identifier sites) and `parse_block` (statement-head site) now emit `'message' is a reserved keyword and cannot be used as an identifier; rename it (e.g. 'message_' or 'msg')`. Regression test: `tests/integration/reserved_keyword_error/` (extern parameter name and local variable name, both with `message`).
+
+- **`aether.toml` `[build] cflags` now apply to `ae run` too** (`tools/ae.c`). `user_cflags` was gated behind `optimize`, so `ae build` picked up the release build's cflags but `ae run` silently dropped them. That broke any project whose extern C shims relied on a `-D<feature>` flag or a `-Wno-<warning>` suppression — the `ae build` succeeded and `ae run` failed on the same source. Removed the gate; `get_cflags()` applies on every path. Regression test: `tests/integration/ae_run_cflags/` uses a shim.c with a `#error` that fires unless the TOML's `-DAE_CFLAGS_TEST_MARKER=1` reaches the compile.
+
 ## [0.75.0]
 
 ### Fixed

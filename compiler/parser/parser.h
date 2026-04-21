@@ -11,6 +11,10 @@ typedef struct {
     int current_token;
     int suppress_errors;  // Flag to suppress error messages (for testing)
     int parsing_builder;  // Flag: inside builder function definition (enables 'with' clause)
+    int in_condition;     // Flag: inside if/while/for condition — suppresses
+                          // trailing-block parsing on function calls so the
+                          // `{` belongs to the if/while body, not a trailing
+                          // closure on the last call in the condition.
 } Parser;
 
 // Parser functions
