@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`--emit=lib --with=fs,net,os` — capability opt-in for host-owned library builds** (`compiler/aetherc.c`, `tools/ae.c`). The v1 capability-empty default posture is unchanged: `--emit=lib` still rejects `import std.fs` / `std.net` / `std.http` / `std.tcp` / `std.os` by default. Projects that ARE the host — compiling `.ae` + handwritten C into one binary, rather than embedding Aether as an untrusted user script — opt into specific categories with `--with=fs` / `--with=net` / `--with=os`; multiple can be comma-separated (`--with=fs,os`). Unknown capability names are a hard error rather than a silent no-op. The categories mirror the existing banned-import groupings (three buckets), chosen coarsely enough that opting in is an auditable event in a project's build invocation. Rationale captured in `docs/emit-lib.md`'s new "Opting in" subsection: safe for systems code where `.ae` files are first-party and version-controlled like `.c` files; NOT safe for plugin/DSL scenarios where the library could execute untrusted Aether. Regression test: `tests/integration/emit_lib_with_capability/` (13 cases: opt-in accepts the matching category, still rejects others; multi-capability works; unknown capability rejected; no-op without `--emit=lib`). The existing `tests/integration/emit_lib_banned/` test still passes unchanged.
+
+- **`string.from_long(value: long) -> string`** (`std/string/aether_string.c`, `std/string/aether_string.h`, `std/string/module.ae`). Sibling of `string.from_int` that preserves the full 64-bit range. Callers formatting byte counts, file sizes, revision numbers, or other values that can exceed INT_MAX reach for this instead of truncating through `string.from_int`. Two lines of runtime code (uses `long long` + `%lld` internally to cover Aether's `long` on every platform, including MSVC where C `long` is 32-bit). Regression test: `tests/regression/test_string_from_long.ae`.
+
 ## [0.79.0]
 
 ### Added
