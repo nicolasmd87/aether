@@ -6,6 +6,7 @@
 #include <ctype.h>
 #include <errno.h>
 #include <limits.h>
+#include <stdint.h>  // SIZE_MAX (not in <limits.h> on MinGW)
 
 // Helper: get data pointer and length from either AetherString* or plain char*
 static inline const char* str_data(const void* s) {

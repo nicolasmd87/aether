@@ -1012,11 +1012,15 @@ static void get_extra_sources_for_bin(const char* ae_file, char* out, size_t out
             const char* aef = ae_file;
             if (aef[0] == '.' && aef[1] == '/') aef += 2;
             if (eq[0] == '.' && eq[1] == '/') eq += 2;
-            // Match if equal or ae_file ends with the path value
+            // Match if aef == eq, or aef ends with "/<eq>" (handles
+            // absolute and cwd-relative invocations of the same file).
+            // The strict `alen > vlen` is required: with `alen == vlen`
+            // and strings unequal, `aef[alen - vlen - 1]` underflows to
+            // `aef[-1]` (size_t arithmetic wraps), which is an OOB read.
             size_t vlen = strlen(eq);
             size_t alen = strlen(aef);
             if (strcmp(aef, eq) == 0 ||
-                (alen >= vlen && aef[alen - vlen - 1] == '/' &&
+                (alen > vlen && aef[alen - vlen - 1] == '/' &&
                  strcmp(aef + alen - vlen, eq) == 0)) {
                 matched = 1;
             }

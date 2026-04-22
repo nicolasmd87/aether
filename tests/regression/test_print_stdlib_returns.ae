@@ -9,7 +9,10 @@ import std.io
 main() {
     println("=== Print Stdlib Returns ===")
 
-    test_path = "/tmp/_aether_regression_print.txt"
+    // Relative paths: cwd is writable on every CI row we target,
+    // whereas /tmp only works on POSIX. Cleanup at the end of main()
+    // removes both files before we exit.
+    test_path = "_aether_regression_print.txt"
 
     // Setup: write a known file via the convenience wrapper.
     we = file.write(test_path, "test-content")
@@ -37,13 +40,18 @@ main() {
     // Test 5: io.read_file + interpolation
     println("T5: ${io_content}")
 
-    // Test 6: io.getenv + print (bare extern, still returns string)
-    home = io.getenv("HOME")
-    print("T6: ")
-    println(home)
+    // Test 6: io.getenv + print (bare extern, still returns string).
+    // PATH is the one env var guaranteed to be set on every CI row we
+    // target — HOME is POSIX-only, USERPROFILE is Windows-only.
+    path_env = io.getenv("PATH")
+    print("T6: PATH-present=")
+    if path_env != "" { println("yes") } else { println("no") }
 
-    // Test 7: io.getenv + interpolation
-    println("T7: ${home}")
+    // Test 7: io.getenv + interpolation (just prove the string survives
+    // interpolation; don't dump the whole PATH into the log).
+    path_present = "no"
+    if path_env != "" { path_present = "yes" }
+    println("T7: ${path_present}")
 
     // Test 8: mixed types in interpolation
     x = 42
@@ -56,7 +64,7 @@ main() {
     println("T9: exists=${exists} size=${size}")
 
     // Test 10: write + read roundtrip with different content
-    test_path2 = "/tmp/_aether_regression_print2.txt"
+    test_path2 = "_aether_regression_print2.txt"
     _ = file.write(test_path2, "ABCDEF")
     rt, _ = file.read(test_path2)
     println("T10: ${rt}")
