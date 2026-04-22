@@ -1441,10 +1441,11 @@ static void heap_free_tree(JsonValue* v) {
     if (v->arena) {
         // Shouldn't reach here — heap tree means no arena. Defensive
         // cleanup: destroy the arena, and only free the struct itself
-        // if it was heap-allocated (otherwise it's arena-owned memory
-        // that's already gone with arena_destroy).
+        // if it was heap-allocated. Snapshot the flag before
+        // arena_destroy so we don't read freed bytes.
+        int heap_struct = (v->flags & JV_FLAG_HEAP_STRUCT) != 0;
         arena_destroy(v->arena);
-        if (v->flags & JV_FLAG_HEAP_STRUCT) free(v);
+        if (heap_struct) free(v);
         return;
     }
     switch (v->type) {
@@ -1594,13 +1595,16 @@ JsonValue* json_create_object(void) {
 void json_free(JsonValue* v) {
     if (!v) return;
     if (v->arena) {
-        arena_destroy(v->arena);
-        // The arena is gone, but the JsonValue struct itself may have
-        // been malloc'd (heap_new) and then retrofitted with an arena
-        // via ensure_container_arena. The JV_FLAG_HEAP_STRUCT flag is
-        // the only reliable signal for that case — parsed roots have
-        // flag == 0 because their struct bytes live in the arena.
-        if (v->flags & JV_FLAG_HEAP_STRUCT) free(v);
+        // Snapshot the "is heap struct" bit BEFORE arena_destroy, because
+        // for parsed roots `v` itself lives inside the arena — reading
+        // `v->flags` after the arena is freed would be use-after-free.
+        // JV_FLAG_HEAP_STRUCT is only set when the struct was malloc'd
+        // via heap_new (creation API), then later retrofitted with an
+        // arena via ensure_container_arena. Parsed roots have flag == 0.
+        int heap_struct = (v->flags & JV_FLAG_HEAP_STRUCT) != 0;
+        Arena* a = v->arena;
+        arena_destroy(a);
+        if (heap_struct) free(v);
         return;
     }
     // Heap path — no arena ever attached.
