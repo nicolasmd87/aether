@@ -1302,6 +1302,39 @@ int json_object_has(JsonValue* obj, const char* key) {
     return json_object_get_raw(obj, key) != NULL;
 }
 
+// Object-key iteration. Empty objects have blk == NULL (obj_reserve
+// allocates the block lazily on the first set), so the NULL guard is
+// load-bearing, not defensive.
+
+int json_object_size_raw(JsonValue* obj) {
+    if (!obj || obj->type != JSON_OBJECT) return -1;
+    return (int)obj->data.obj.count;
+}
+
+const char* json_object_key_at(JsonValue* obj, int i) {
+    if (!obj || obj->type != JSON_OBJECT) return NULL;
+    if (i < 0 || (uint32_t)i >= obj->data.obj.count) return NULL;
+    const JsonObjBlock* blk = obj->data.obj.blk;
+    if (!blk) return NULL;
+    return blk->keys[i];
+}
+
+int json_object_key_len_at(JsonValue* obj, int i) {
+    if (!obj || obj->type != JSON_OBJECT) return -1;
+    if (i < 0 || (uint32_t)i >= obj->data.obj.count) return -1;
+    const JsonObjBlock* blk = obj->data.obj.blk;
+    if (!blk) return -1;
+    return (int)blk->key_lens[i];
+}
+
+JsonValue* json_object_value_at(JsonValue* obj, int i) {
+    if (!obj || obj->type != JSON_OBJECT) return NULL;
+    if (i < 0 || (uint32_t)i >= obj->data.obj.count) return NULL;
+    JsonObjBlock* blk = obj->data.obj.blk;
+    if (!blk) return NULL;
+    return blk->values[i];
+}
+
 JsonValue* json_array_get_raw(JsonValue* arr, int index) {
     if (!arr || arr->type != JSON_ARRAY) return NULL;
     if (index < 0 || (uint32_t)index >= arr->data.arr.count) return NULL;
