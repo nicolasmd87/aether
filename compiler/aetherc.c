@@ -56,6 +56,16 @@ static const char* emit_header_path = NULL;
 static bool emit_exe = true;
 static bool emit_lib = false;
 
+// --with=<capability>[,<capability>...] — capability opt-ins for
+// --emit=lib. Default is capability-empty (every capability-gated
+// stdlib import is rejected); a project that IS the host — linking
+// the emitted .c into its own binary rather than embedding it as a
+// user script — opts into the subset it needs with a comma-separated
+// list. Flag is a no-op without --emit=lib.
+static bool with_fs = false;
+static bool with_net = false;
+static bool with_os = false;
+
 // --emit-namespace-manifest: walk a manifest.ae's AST, extract the
 // namespace/input/event/bindings calls, and write a JSON description
 // to stdout. Used by `ae build --namespace <dir>` to learn about the
@@ -575,28 +585,48 @@ int compile_source(const char* input_path, const char* output_path) {
     // An embedded Aether script that opens sockets or writes files is
     // a capability escalation — fail the build and point the user to the
     // documented pattern (host does I/O, script returns data).
+    //
+    // Projects that ARE the host (compile .ae + handwritten C into one
+    // binary) opt into specific capabilities with --with=fs / --with=net
+    // / --with=os. The gate stays default-deny; --with is the explicit
+    // acknowledgement that the host owns and audits the surface it's
+    // enabling. Keeping the capability categories coarse (three buckets)
+    // matches the three banned-import groupings below.
     if (emit_lib) {
-        static const char* banned[] = {
-            "std.net", "std.http", "std.tcp", "std.fs", "std.os", NULL
+        // Each entry is (module_name, granted_flag, capability_name).
+        // When granted_flag is non-zero, that module is allowed; otherwise
+        // it's rejected with a message that names the --with flag needed.
+        struct { const char* module; bool granted; const char* cap; } gated[] = {
+            { "std.fs",   with_fs,  "fs"  },
+            { "std.net",  with_net, "net" },
+            { "std.http", with_net, "net" },
+            { "std.tcp",  with_net, "net" },
+            { "std.os",   with_os,  "os"  },
         };
+        int num_gated = (int)(sizeof(gated) / sizeof(gated[0]));
         for (int i = 0; i < program->child_count; i++) {
             ASTNode* child = program->children[i];
             if (!child || child->type != AST_IMPORT_STATEMENT || !child->value) continue;
-            for (int b = 0; banned[b]; b++) {
-                if (strcmp(child->value, banned[b]) == 0) {
-                    fprintf(stderr,
-                        "Error: --emit=lib rejects 'import %s' — the library ABI is\n"
-                        "       capability-empty by default. The host process owns\n"
-                        "       network/filesystem/process access; the script should\n"
-                        "       only compute and return data.\n",
-                        banned[b]);
-                    module_registry_shutdown();
-                    free_ast_node(program);
-                    for (int k = 0; k < token_count; k++) free_token(tokens[k]);
-                    free_parser(parser);
-                    free(source);
-                    return 0;
-                }
+            for (int g = 0; g < num_gated; g++) {
+                if (strcmp(child->value, gated[g].module) != 0) continue;
+                if (gated[g].granted) break;  // opted in; allow.
+                fprintf(stderr,
+                    "Error: --emit=lib rejects 'import %s' without --with=%s.\n"
+                    "\n"
+                    "       The library ABI is capability-empty by default so an\n"
+                    "       embedded Aether script can't escalate beyond what its\n"
+                    "       host grants. Pass --with=%s if the binary linking this\n"
+                    "       library is itself the capability owner (i.e. you're\n"
+                    "       writing systems code that compiles .ae and handwritten\n"
+                    "       C into one executable). Multiple capabilities can be\n"
+                    "       comma-separated: --with=%s,os\n",
+                    gated[g].module, gated[g].cap, gated[g].cap, gated[g].cap);
+                module_registry_shutdown();
+                free_ast_node(program);
+                for (int k = 0; k < token_count; k++) free_token(tokens[k]);
+                free_parser(parser);
+                free(source);
+                return 0;
             }
         }
     }
@@ -862,6 +892,33 @@ int main(int argc, char *argv[]) {
             } else {
                 fprintf(stderr, "Error: --emit must be one of: exe, lib, both (got '%s')\n", val);
                 return 1;
+            }
+            arg_offset++;
+        } else if (strncmp(argv[arg_offset], "--with=", 7) == 0) {
+            // Comma-separated capability opt-ins for --emit=lib. Unknown
+            // tokens are a hard error rather than silently ignored — a
+            // typo in a capability name should fail the build, not leave
+            // the user wondering why their import still gets rejected.
+            const char* list = argv[arg_offset] + 7;
+            const char* p = list;
+            while (*p) {
+                const char* start = p;
+                while (*p && *p != ',') p++;
+                size_t len = (size_t)(p - start);
+                if (len == 2 && strncmp(start, "fs", 2) == 0) {
+                    with_fs = true;
+                } else if (len == 3 && strncmp(start, "net", 3) == 0) {
+                    with_net = true;
+                } else if (len == 2 && strncmp(start, "os", 2) == 0) {
+                    with_os = true;
+                } else {
+                    fprintf(stderr,
+                        "Error: --with= got unknown capability '%.*s'. "
+                        "Known: fs, net, os.\n",
+                        (int)len, start);
+                    return 1;
+                }
+                if (*p == ',') p++;
             }
             arg_offset++;
         } else if (strcmp(argv[arg_offset], "--emit-namespace-manifest") == 0) {
