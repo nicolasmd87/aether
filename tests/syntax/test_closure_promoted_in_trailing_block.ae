@@ -46,7 +46,7 @@ main() {
     }
 
     // Map was configured correctly (unrelated sanity check).
-    v_a = map_get(result, "a")
+    v_a, _ = map.get(result, "a")
     if v_a == null { println("FAIL: map not configured"); exit(1) }
 
     println("ok")

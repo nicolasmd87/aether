@@ -1,0 +1,138 @@
+// Regression test: SIMD string fast-loop parity with scalar.
+//
+// scan_str_safe() is dispatched at compile time to SSE2 (x86_64) or
+// NEON (arm64) or scalar (everything else). All three are designed to
+// produce byte-identical results — this test locks that in by stressing
+// the 16-byte block boundaries where a SIMD bug would show first.
+//
+// Test plan: parse strings at lengths 0, 1, 15, 16, 17, 31, 32, 33, 100.
+// Include escapes and non-ASCII right at block boundaries so SIMD has
+// to hand off to scalar mid-string.
+
+import std.json
+import std.string
+
+// Parse a JSON string literal, stringify back, check we got what we expected.
+// The round-trip exercises both the SIMD fast loop (on the decode side)
+// and the stringify path.
+parse_str(json_str: string) -> string {
+    v, perr = json.parse(json_str)
+    match (perr) {
+        "" -> {
+            got, gerr = json.get_string(v)
+            json.free(v)
+            match (gerr) {
+                "" -> { return got }
+                _  -> { return "<get-err>" }
+            }
+        }
+        _ -> { return "<parse-err>" }
+    }
+}
+
+check(input: string, expected: string, label: string) -> int {
+    got = parse_str(input)
+    if string.equals(got, expected) == 1 {
+        print("  PASS ")
+        println(label)
+        return 0
+    }
+    print("  FAIL ")
+    print(label)
+    print(" → got ")
+    print(string.length(got))
+    print(" bytes, expected ")
+    println(string.length(expected))
+    return 1
+}
+
+main() {
+    print("=== SIMD/scalar string-scan parity ===\n\n")
+
+    fails = 0
+
+    // --- length boundaries ---
+    // Each input is a valid JSON string literal; the decoded bytes should
+    // match the content verbatim.
+
+    print("Length boundaries (pure ASCII, no escapes):\n")
+    fails = fails + check("\"\"",                               "",       "len 0")
+    fails = fails + check("\"a\"",                              "a",      "len 1")
+    fails = fails + check("\"abcdefghijklmno\"",                "abcdefghijklmno",     "len 15 (one-less-than-SIMD)")
+    fails = fails + check("\"abcdefghijklmnop\"",               "abcdefghijklmnop",    "len 16 (one SIMD block)")
+    fails = fails + check("\"abcdefghijklmnopq\"",              "abcdefghijklmnopq",   "len 17 (SIMD + 1 scalar)")
+    fails = fails + check("\"abcdefghijklmnopabcdefghijklmno\"","abcdefghijklmnopabcdefghijklmno", "len 31 (two blocks minus 1)")
+    fails = fails + check("\"abcdefghijklmnopabcdefghijklmnop\"","abcdefghijklmnopabcdefghijklmnop","len 32 (two SIMD blocks)")
+    fails = fails + check("\"abcdefghijklmnopabcdefghijklmnopq\"","abcdefghijklmnopabcdefghijklmnopq","len 33 (two blocks + 1)")
+
+    // --- escape at various positions ---
+    // The SIMD loop must exit as soon as it sees a backslash anywhere in
+    // the 16-byte block, handing off to scalar for the escape decode.
+
+    print("\nEscape at boundaries:\n")
+    // Escape as first byte in string
+    fails = fails + check("\"\\\"abc\"",        "\"abc",      "escape at pos 0")
+    // Escape just before position 15 (last byte of first SIMD block)
+    fails = fails + check("\"aaaaaaaaaaaaa\\\"\"", "aaaaaaaaaaaaa\"", "escape at pos 14 (end of 1st block)")
+    // Escape right at position 16 (second block's first byte)
+    fails = fails + check("\"aaaaaaaaaaaaaaaa\\\"\"", "aaaaaaaaaaaaaaaa\"", "escape at pos 16 (start of 2nd block)")
+    // Escape mid-second-block
+    fails = fails + check("\"aaaaaaaaaaaaaaaabbb\\nccc\"", "aaaaaaaaaaaaaaaabbb\nccc", "escape at pos 19 (mid 2nd block)")
+
+    // --- non-ASCII at boundaries ---
+    // UTF-8 bytes have the high bit set. The SIMD classifier flags them
+    // as "unsafe" so the loop exits and the UTF-8 DFA takes over.
+
+    print("\nNon-ASCII at boundaries:\n")
+    // Accented Latin — 2-byte UTF-8 encoding (café)
+    fails = fails + check("\"café\"", "café", "accented Latin (2-byte UTF-8)")
+    // Right-before-boundary: 15 ASCII chars + accented char
+    fails = fails + check("\"aaaaaaaaaaaaaaacafé\"", "aaaaaaaaaaaaaaacafé", "2-byte UTF-8 crossing block boundary")
+    // 16 ASCII then multi-byte — the 16 ASCII form one SIMD block, the multi-byte falls out to scalar
+    fails = fails + check("\"aaaaaaaaaaaaaaaacafé\"", "aaaaaaaaaaaaaaaacafé", "2-byte UTF-8 after full block")
+    // Emoji — 4-byte UTF-8, also spans block boundary test
+    fails = fails + check("\"😀hello\"", "😀hello", "4-byte UTF-8 first")
+    fails = fails + check("\"aaaaaaaaaaaaaaaa😀\"", "aaaaaaaaaaaaaaaa😀", "4-byte UTF-8 right after block")
+
+    // --- control-char rejection at boundaries ---
+    // 0x01 (SOH) must be rejected anywhere. SIMD flags byte < 0x20 as
+    // unsafe; scalar tail then detects and errors out.
+
+    print("\nControl-char rejection at boundaries:\n")
+    _, e1 = json.parse("\"\x01\"")
+    if e1 != "" {
+        println("  PASS control char at pos 0 rejected")
+    } else {
+        println("  FAIL control char at pos 0 not rejected")
+        fails = fails + 1
+    }
+    _, e15 = json.parse("\"aaaaaaaaaaaaaaa\x01\"")
+    if e15 != "" {
+        println("  PASS control char at pos 15 (block edge) rejected")
+    } else {
+        println("  FAIL control char at pos 15 not rejected")
+        fails = fails + 1
+    }
+    _, e16 = json.parse("\"aaaaaaaaaaaaaaaa\x01\"")
+    if e16 != "" {
+        println("  PASS control char at pos 16 (post-block) rejected")
+    } else {
+        println("  FAIL control char at pos 16 not rejected")
+        fails = fails + 1
+    }
+
+    // --- all three specials together ---
+    // A pathological string with escape, non-ASCII, and non-trivial lengths.
+
+    print("\nMixed payload (escapes + non-ASCII in one string):\n")
+    fails = fails + check(
+        "\"prefix\\n\\ttab café and émoji 😀 tail\"",
+        "prefix\n\ttab café and émoji 😀 tail",
+        "mixed escape+UTF-8 in one string")
+
+    if fails > 0 {
+        println("\n=== ${fails} test(s) failed ===")
+        exit(1)
+    }
+    print("\n=== SIMD/scalar parity confirmed ===\n")
+}

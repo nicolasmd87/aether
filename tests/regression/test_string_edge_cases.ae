@@ -1,0 +1,189 @@
+// Regression test: std.string edge cases introduced while hardening
+// the parser and growth paths.
+//
+// Covers:
+//   - string.split with an empty input, a delimiter longer than the
+//     input, and the single-character fast path.
+//   - string.concat with empty inputs on either side (new fast paths).
+//   - string.substring with negative or beyond-bound indices.
+//   - string_to_* wrappers on ill-formed input (Go-style error path).
+
+import std.string
+
+main() {
+    print("=== std.string edge cases ===\n\n")
+
+    // ---- split edge cases ----
+
+    print("Test 1: split on empty input\n")
+    parts = string.split("", ",")
+    n = string.array_size(parts)
+    if n == 1 {
+        first = string.array_get(parts, 0)
+        if string.length(first) == 0 {
+            print("  PASS: empty input → one empty piece\n")
+        } else {
+            print("  FAIL: piece not empty\n"); exit(1)
+        }
+    } else {
+        print("  FAIL: expected 1 piece, got "); print(n); print("\n")
+        exit(1)
+    }
+    string.array_free(parts)
+
+    print("\nTest 2: split when delimiter longer than input\n")
+    parts2 = string.split("ab", "abcdef")
+    if string.array_size(parts2) == 1 {
+        first = string.array_get(parts2, 0)
+        if string.equals(first, "ab") == 1 {
+            print("  PASS: whole input returned as a single piece\n")
+        } else {
+            print("  FAIL: lost bytes\n"); exit(1)
+        }
+    } else {
+        print("  FAIL: should be 1 piece\n"); exit(1)
+    }
+    string.array_free(parts2)
+
+    print("\nTest 3: split on single-char delimiter, typical case\n")
+    parts3 = string.split("a,b,c", ",")
+    if string.array_size(parts3) == 3 {
+        a = string.array_get(parts3, 0)
+        b = string.array_get(parts3, 1)
+        c = string.array_get(parts3, 2)
+        if string.equals(a, "a") == 1 {
+            if string.equals(b, "b") == 1 {
+                if string.equals(c, "c") == 1 {
+                    print("  PASS: split correctly into [a, b, c]\n")
+                } else { print("  FAIL: c\n"); exit(1) }
+            } else { print("  FAIL: b\n"); exit(1) }
+        } else { print("  FAIL: a\n"); exit(1) }
+    } else {
+        print("  FAIL: wrong count\n"); exit(1)
+    }
+    string.array_free(parts3)
+
+    print("\nTest 4: split with trailing delimiter yields empty tail piece\n")
+    parts4 = string.split("a,b,", ",")
+    if string.array_size(parts4) == 3 {
+        tail = string.array_get(parts4, 2)
+        if string.length(tail) == 0 {
+            print("  PASS: trailing delimiter → empty tail\n")
+        } else {
+            print("  FAIL: tail not empty\n"); exit(1)
+        }
+    } else {
+        print("  FAIL: wrong count (should be 3 for 'a','b','')\n"); exit(1)
+    }
+    string.array_free(parts4)
+
+    print("\nTest 5: split with leading delimiter yields empty head piece\n")
+    parts5 = string.split(",a,b", ",")
+    if string.array_size(parts5) == 3 {
+        head = string.array_get(parts5, 0)
+        if string.length(head) == 0 {
+            print("  PASS: leading delimiter → empty head\n")
+        } else {
+            print("  FAIL: head not empty\n"); exit(1)
+        }
+    } else {
+        print("  FAIL: wrong count\n"); exit(1)
+    }
+    string.array_free(parts5)
+
+    print("\nTest 6: split on multi-byte delimiter\n")
+    parts6 = string.split("a::b::c", "::")
+    if string.array_size(parts6) == 3 {
+        print("  PASS: multi-byte delimiter works\n")
+    } else {
+        print("  FAIL\n"); exit(1)
+    }
+    string.array_free(parts6)
+
+    // ---- concat edge cases ----
+
+    print("\nTest 7: concat with empty left side\n")
+    r = string.concat("", "hello")
+    if string.equals(r, "hello") == 1 {
+        print("  PASS: empty left + 'hello' = 'hello'\n")
+    } else {
+        print("  FAIL\n"); exit(1)
+    }
+
+    print("\nTest 8: concat with empty right side\n")
+    r2 = string.concat("hello", "")
+    if string.equals(r2, "hello") == 1 {
+        print("  PASS: 'hello' + empty right = 'hello'\n")
+    } else {
+        print("  FAIL\n"); exit(1)
+    }
+
+    print("\nTest 9: concat of two empty strings\n")
+    r3 = string.concat("", "")
+    if string.length(r3) == 0 {
+        print("  PASS: empty+empty = empty\n")
+    } else {
+        print("  FAIL\n"); exit(1)
+    }
+
+    // ---- substring edge cases ----
+
+    print("\nTest 10: substring with start >= end returns empty\n")
+    s10 = string.substring("hello", 3, 3)
+    if string.length(s10) == 0 {
+        print("  PASS: start==end → empty\n")
+    } else {
+        print("  FAIL\n"); exit(1)
+    }
+
+    print("\nTest 11: substring with end past length clamps\n")
+    s11 = string.substring("hi", 0, 999)
+    if string.equals(s11, "hi") == 1 {
+        print("  PASS: end-clamped\n")
+    } else {
+        print("  FAIL\n"); exit(1)
+    }
+
+    print("\nTest 12: substring with negative start clamps to 0\n")
+    s12 = string.substring("hello", 0 - 5, 3)
+    if string.equals(s12, "hel") == 1 {
+        print("  PASS: start-clamped to 0\n")
+    } else {
+        print("  FAIL\n"); exit(1)
+    }
+
+    // ---- to_int / to_float wrappers on bad input ----
+
+    print("\nTest 13: to_int on non-numeric errors\n")
+    _, e13 = string.to_int("not a number")
+    if e13 != "" {
+        print("  PASS: errored as expected\n")
+    } else {
+        print("  FAIL: should have errored\n"); exit(1)
+    }
+
+    print("\nTest 14: to_int on empty string errors\n")
+    _, e14 = string.to_int("")
+    if e14 != "" {
+        print("  PASS: empty errored\n")
+    } else {
+        print("  FAIL\n"); exit(1)
+    }
+
+    print("\nTest 15: to_double on scientific notation\n")
+    v, e15 = string.to_double("1.5e3")
+    if e15 != "" {
+        print("  FAIL: should accept 1.5e3\n"); exit(1)
+    }
+    if v > 1499.0 {
+        if v < 1501.0 {
+            print("  PASS: 1.5e3 ≈ 1500\n")
+        } else {
+            print("  FAIL: out of range\n"); exit(1)
+        }
+    } else {
+        print("  FAIL: out of range\n"); exit(1)
+    }
+
+    print("\n=== All string edge case tests passed ===\n")
+}

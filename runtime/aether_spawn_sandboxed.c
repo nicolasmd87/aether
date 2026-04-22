@@ -16,7 +16,7 @@
 
 // From libaether.a — list operations
 extern int list_size(void*);
-extern void* list_get(void*, int);
+extern void* list_get_raw(void*, int);
 
 // Find libaether_sandbox.so next to the running binary
 static int find_preload_path(char* buf, int bufsize) {
@@ -60,8 +60,8 @@ static int serialize_grants(void* grant_list) {
     char buf[8192];
     int pos = 0;
     for (int i = 0; i < n && pos < 8000; i += 2) {
-        const char* cat = (const char*)list_get(grant_list, i);
-        const char* pat = (const char*)list_get(grant_list, i + 1);
+        const char* cat = (const char*)list_get_raw(grant_list, i);
+        const char* pat = (const char*)list_get_raw(grant_list, i + 1);
         if (!cat || !pat) continue;
         pos += snprintf(buf + pos, sizeof(buf) - pos, "%s:%s\n", cat, pat);
     }

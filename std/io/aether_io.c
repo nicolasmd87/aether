@@ -135,6 +135,7 @@ FileInfo* io_file_info_raw(const char* path) {
     if (stat(path, &st) != 0) return NULL;
 
     FileInfo* info = (FileInfo*)malloc(sizeof(FileInfo));
+    if (!info) return NULL;
     info->size = st.st_size;
     info->is_directory = S_ISDIR(st.st_mode) ? 1 : 0;
     info->modified_time = (long)st.st_mtime;

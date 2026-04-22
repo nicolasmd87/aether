@@ -55,13 +55,15 @@ _suite_new(name: string) {
 // before() callback { ... }
 // Registers a setup closure to run before each it() in this describe block.
 before(_ctx: ptr, setup: fn) {
-    list.add(map_get(_ctx, "befores"), box_closure(setup))
+    bl, _ = map.get(_ctx, "befores")
+    list.add(bl, box_closure(setup))
 }
 
 // after() callback { ... }
 // Registers a teardown closure to run after each it() in this describe block.
 after(_ctx: ptr, teardown: fn) {
-    list.add(map_get(_ctx, "afters"), box_closure(teardown))
+    al, _ = map.get(_ctx, "afters")
+    list.add(al, box_closure(teardown))
 }
 
 // before_each() callback { ... }
@@ -80,10 +82,11 @@ after_each(_ctx: ptr, teardown: fn) {
 // Runs the test immediately with before/after hooks from the current suite.
 it(_ctx: ptr, description: string, test_fn: fn) {
     // Run all before hooks
-    befores = map_get(_ctx, "befores")
+    befores, _ = map.get(_ctx, "befores")
     n_before = list.size(befores)
     for (i = 0; i < n_before; i++) {
-        hook = unbox_closure(list.get(befores, i))
+        bh, _ = list.get(befores, i)
+        hook = unbox_closure(bh)
         call(hook)
     }
 
@@ -109,10 +112,11 @@ it(_ctx: ptr, description: string, test_fn: fn) {
     ref_free(_current_failure)
 
     // Run all after hooks
-    afters = map_get(_ctx, "afters")
+    afters, _ = map.get(_ctx, "afters")
     n_after = list.size(afters)
     for (i = 0; i < n_after; i++) {
-        hook = unbox_closure(list.get(afters, i))
+        ah, _ = list.get(afters, i)
+        hook = unbox_closure(ah)
         call(hook)
     }
 }

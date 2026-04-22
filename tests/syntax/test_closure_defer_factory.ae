@@ -15,7 +15,7 @@ builder compile(src: string) {
     rel = ""
     if _builder != null {
         if map_has(_builder, "release") == 1 {
-            rel = map_get(_builder, "release")
+            rel, _ = map.get(_builder, "release")
         }
     }
     println("compile: ${src} release=${rel}")
@@ -35,7 +35,7 @@ builder run_command(name: string) with list_new {
     println("run: ${name} flags=${count}")
     i = 0
     for (i = 0; i < count; i++) {
-        f = list.get(_builder, i)
+        f, _ = list.get(_builder, i)
         println("  flag: ${f}")
     }
 }
@@ -65,8 +65,8 @@ builder execute_query(db: string) with query_builder_new {
     table = ""
     where_clause = ""
     if _builder != null {
-        if map_has(_builder, "table") == 1 { table = map_get(_builder, "table") }
-        if map_has(_builder, "where") == 1 { where_clause = map_get(_builder, "where") }
+        if map_has(_builder, "table") == 1 { table, _ = map.get(_builder, "table") }
+        if map_has(_builder, "where") == 1 { where_clause, _ = map.get(_builder, "where") }
     }
     println("query: db=${db} table=${table} where=${where_clause}")
 }

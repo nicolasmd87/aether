@@ -14,8 +14,10 @@ main() {
     list.add(actions, box_closure(mul_two))
 
     // unbox and call
-    fn0 = unbox_closure(list.get(actions, 0))
-    fn1 = unbox_closure(list.get(actions, 1))
+    b0, _ = list.get(actions, 0)
+    b1, _ = list.get(actions, 1)
+    fn0 = unbox_closure(b0)
+    fn1 = unbox_closure(b1)
     println(call(fn0, 10))
     println(call(fn1, 10))
 

@@ -1,0 +1,214 @@
+// Regression test: collections hashmap / list edge cases after the
+// growth-amortisation + cached-hash refactor.
+//
+// Covers:
+//   - Large number of keys (exercises resize path multiple times).
+//   - Overwriting an existing key preserves size.
+//   - Retrieval after many inserts is still correct (cached hash
+//     doesn't corrupt lookups).
+//   - Remove then reinsert.
+//   - Null key / null map handling.
+
+import std.map
+import std.list
+import std.string
+
+main() {
+    print("=== collections hashmap / list edge cases ===\n\n")
+
+    // ---- hashmap large-n ----
+
+    print("Test 1: insert many keys (triggers multiple resizes)\n")
+    m = map.new()
+    i = 0
+    while i < 500 {
+        k = string.concat("key_", string.from_int(i))
+        v = string.concat("val_", string.from_int(i))
+        _ = map.put(m, k, v)
+        i = i + 1
+    }
+    if map.size(m) == 500 {
+        print("  PASS: 500 keys stored\n")
+    } else {
+        print("  FAIL: size = ")
+        print(map.size(m))
+        print("\n")
+        exit(1)
+    }
+
+    print("\nTest 2: retrieve every key (cached-hash integrity)\n")
+    failures = 0
+    i = 0
+    while i < 500 {
+        k = string.concat("key_", string.from_int(i))
+        expected = string.concat("val_", string.from_int(i))
+        got, _ = map.get(m, k)
+        if string.equals(got, expected) == 1 {
+            // ok
+        } else {
+            failures = failures + 1
+        }
+        i = i + 1
+    }
+    if failures == 0 {
+        print("  PASS: every key retrieved correctly\n")
+    } else {
+        print("  FAIL: ")
+        print(failures)
+        print(" keys had wrong values\n")
+        exit(1)
+    }
+
+    print("\nTest 3: overwriting key preserves size\n")
+    // NOTE: `after` as an identifier currently triggers an Aether codegen
+    // quirk that drops the assignment — use `sz_after` instead.
+    sz_before = map.size(m)
+    _ = map.put(m, "key_42", "new value")
+    sz_after = map.size(m)
+    if sz_before != sz_after {
+        print("  FAIL: size changed on overwrite\n")
+        exit(1)
+    }
+    got3, _ = map.get(m, "key_42")
+    if string.equals(got3, "new value") == 0 {
+        print("  FAIL: wrong value after overwrite\n")
+        exit(1)
+    }
+    print("  PASS: overwrite preserved size + updated value\n")
+
+    print("\nTest 4: remove then reinsert\n")
+    map.remove(m, "key_100")
+    if map.has(m, "key_100") != 0 {
+        print("  FAIL: remove didn't\n")
+        exit(1)
+    }
+    _ = map.put(m, "key_100", "reinserted")
+    got4, _ = map.get(m, "key_100")
+    if string.equals(got4, "reinserted") == 0 {
+        print("  FAIL: reinserted value missing\n")
+        exit(1)
+    }
+    print("  PASS: remove+reinsert\n")
+
+    print("\nTest 5: get on null map returns error\n")
+    _, e5 = map.get(null, "anything")
+    if e5 != "" {
+        print("  PASS: null map errored\n")
+    } else {
+        print("  FAIL\n"); exit(1)
+    }
+
+    print("\nTest 6: has() on missing key returns 0\n")
+    if map.has(m, "definitely_not_there_xyz") == 0 {
+        print("  PASS\n")
+    } else {
+        print("  FAIL\n"); exit(1)
+    }
+
+    map.free(m)
+
+    // ---- list large-n ----
+
+    print("\nTest 7: list.add many elements (exercises doubling growth)\n")
+    l = list.new()
+    i = 0
+    while i < 1000 {
+        _ = list.add(l, i)
+        i = i + 1
+    }
+    if list.size(l) == 1000 {
+        print("  PASS: 1000 items added\n")
+    } else {
+        print("  FAIL\n"); exit(1)
+    }
+
+    print("\nTest 8: retrieve by index across the growth boundary\n")
+    v500, _ = list.get(l, 500)
+    v999, _ = list.get(l, 999)
+    if v500 != 500 {
+        print("  FAIL v500\n"); exit(1)
+    }
+    if v999 != 999 {
+        print("  FAIL v999\n"); exit(1)
+    }
+    print("  PASS: indices at growth boundaries still correct\n")
+
+    print("\nTest 9: get() out of bounds returns (null, empty err)\n")
+    vo, eo = list.get(l, 99999)
+    if vo != null {
+        print("  FAIL: value not null\n"); exit(1)
+    }
+    if eo != "" {
+        println("  FAIL: err unexpected: ${eo}"); exit(1)
+    }
+    print("  PASS: (null, '') for OOB\n")
+
+    list.free(l)
+
+    // ---- hashmap collision storm ----
+
+    // djb2 is a weak hash on short lowercase strings. This test doesn't try
+    // to force actual collisions (we'd need to reverse-engineer the hash);
+    // instead it inserts many keys that DIFFER only in length/position, which
+    // exercises the hash + length-prefilter + memcmp chain heavily.
+    // If the cached-hash refactor silently broke equality, inserts past the
+    // rehash point would overwrite each other or vanish.
+    print("\nTest 10: collision-storm with length-varying keys\n")
+    m3 = map.new()
+    storm_n = 256
+    seed = "k"
+    k_i = 0
+    while k_i < storm_n {
+        // Each key is the seed repeated (k_i + 1) times → keys of length 1..256.
+        // They share structural prefix with their neighbours (differ only in
+        // length), which the memcmp prefilter + hash must distinguish cleanly.
+        k_key = seed
+        rep = 0
+        while rep < k_i {
+            k_key = string.concat(k_key, seed)
+            rep = rep + 1
+        }
+        k_val = string.concat("v_", string.from_int(k_i))
+        _ = map.put(m3, k_key, k_val)
+        k_i = k_i + 1
+    }
+    if map.size(m3) != storm_n {
+        print("  FAIL: size = ")
+        print(map.size(m3))
+        print(" expected ")
+        print(storm_n)
+        print("\n")
+        exit(1)
+    }
+    // Retrieve every key in the reverse order to dodge any accidental
+    // "last-insert-wins-without-dedup" silent overwrite.
+    k_i = storm_n - 1
+    while k_i >= 0 {
+        probe = seed
+        rep2 = 0
+        while rep2 < k_i {
+            probe = string.concat(probe, seed)
+            rep2 = rep2 + 1
+        }
+        got_val, gerr = map.get(m3, probe)
+        if gerr != "" {
+            print("  FAIL at len ")
+            print(k_i + 1)
+            print(": ")
+            println(gerr)
+            exit(1)
+        }
+        expected_val = string.concat("v_", string.from_int(k_i))
+        if string.equals(got_val, expected_val) == 0 {
+            print("  FAIL at len ")
+            print(k_i + 1)
+            print(": got unexpected value\n")
+            exit(1)
+        }
+        k_i = k_i - 1
+    }
+    println("  PASS: 256 length-varying keys survived rehash boundary")
+    map.free(m3)
+
+    print("\n=== collections edge cases passed ===\n")
+}

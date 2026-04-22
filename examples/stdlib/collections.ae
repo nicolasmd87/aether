@@ -32,17 +32,17 @@ main() {
     print("\n")
 
     // Get items back and print their lengths
-    item0 = list.get(mylist, 0)
+    item0, _ = list.get(mylist, 0)
     print("  Item[0] length: ")
     print(string.length(item0))
     print(" (hello)\n")
 
-    item1 = list.get(mylist, 1)
+    item1, _ = list.get(mylist, 1)
     print("  Item[1] length: ")
     print(string.length(item1))
     print(" (world)\n")
 
-    item2 = list.get(mylist, 2)
+    item2, _ = list.get(mylist, 2)
     print("  Item[2] length: ")
     print(string.length(item2))
     print(" (aether)\n")
@@ -86,7 +86,7 @@ main() {
     print("\n")
 
     // Get value and print its length
-    val = map.get(mymap, "language")
+    val, _ = map.get(mymap, "language")
     print("  Value for 'language' length: ")
     print(string.length(val))
     print("\n")

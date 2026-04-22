@@ -1,26 +1,53 @@
 // std.map - HashMap Operations (alias for std.collections)
 //
-// Raw externs end in `_raw`. The Aether-native `map.put` wrapper below
-// uses Go-style `(error)` return that reports resize/OOM failures.
+// API shape:
+//   - Raw externs end in `_raw` and return ptr/int in the old C-style
+//     convention. They are the escape hatch for advanced callers.
+//   - Aether-native wrappers (below) use Go-style `(value, err)` / `err`
+//     returns.
 
 extern map_new() -> ptr
 extern map_put_raw(map: ptr, key: string, value: ptr) -> int
-extern map_get(map: ptr, key: string) -> ptr
+extern map_get_raw(map: ptr, key: string) -> ptr
 extern map_has(map: ptr, key: string) -> int
 extern map_remove(map: ptr, key: string)
 extern map_size(map: ptr) -> int
 extern map_clear(map: ptr)
 extern map_free(map: ptr)
-extern map_keys(map: ptr) -> ptr
+extern map_keys_raw(map: ptr) -> ptr
 extern map_keys_free(keys: ptr)
 
 // Insert or update a key-value pair. Returns "" on success, error on
-// failure (null map/key or OOM). Previously this was a silent void
-// return that hid allocation failures.
+// failure (null map/key or OOM).
 put(map: ptr, key: string, value: ptr) -> {
     ok = map_put_raw(map, key, value)
     if ok == 0 {
         return "map.put failed"
     }
     return ""
+}
+
+// Look up a key.
+// - (value, "")          : key present
+// - (null, "")           : key absent (not an error — use map.has)
+// - (null, "null map")   : `map` is null
+get(map: ptr, key: string) -> {
+    if map == null {
+        return null, "null map"
+    }
+    v = map_get_raw(map, key)
+    return v, ""
+}
+
+// Snapshot a map's keys. Returns (MapKeys ptr, "") on success, (null,
+// error) on allocation failure. Caller must free with map.keys_free.
+keys(map: ptr) -> {
+    if map == null {
+        return null, "null map"
+    }
+    k = map_keys_raw(map)
+    if k == null {
+        return null, "allocation failed"
+    }
+    return k, ""
 }

@@ -17,9 +17,9 @@ main() {
     }
     test_file = "${tmp}/_aether_test_file_io_char.txt"
 
-    // Test 1: Write and read back
-    io.write_file(test_file, "hello aether")
-    content = io.read_file(test_file)
+    // Test 1: Write and read back (Go-style wrappers return (value, err))
+    _ = io.write_file(test_file, "hello aether")
+    content, _ = io.read_file(test_file)
     if content == "hello aether" {
         println("Test 1 PASS: read matches write")
     } else {
@@ -28,8 +28,8 @@ main() {
     }
 
     // Test 2: Append and read
-    io.append_file(test_file, " rocks")
-    content2 = io.read_file(test_file)
+    _ = io.append_file(test_file, " rocks")
+    content2, _ = io.read_file(test_file)
     if content2 == "hello aether rocks" {
         println("Test 2 PASS: append works")
     } else {
@@ -37,7 +37,7 @@ main() {
         exit(1)
     }
 
-    // Test 3: File exists check
+    // Test 3: File exists check uses fs.file_exists which stays raw (boolean query).
     if io.file_exists(test_file) == 1 {
         println("Test 3 PASS: file exists")
     } else {
@@ -46,19 +46,18 @@ main() {
     }
 
     // Test 4: Write with special characters (escapes)
-    io.write_file(test_file, "line1\nline2\ttab")
-    content3 = io.read_file(test_file)
-    // The string should contain the actual newline and tab
+    _ = io.write_file(test_file, "line1\nline2\ttab")
+    _, _ = io.read_file(test_file)
     println("Test 4 PASS: special chars written")
 
     // Test 5: String interpolation on returned content
-    io.write_file(test_file, "world")
-    who = io.read_file(test_file)
+    _ = io.write_file(test_file, "world")
+    who, _ = io.read_file(test_file)
     greeting = "hello ${who}!"
     println("Test 5: ${greeting}")
 
     // Cleanup
-    io.delete_file(test_file)
+    _ = io.delete_file(test_file)
     if io.file_exists(test_file) == 0 {
         println("Test 6 PASS: cleanup done")
     } else {

@@ -1,4 +1,4 @@
-// Test: std.json.parse Go-style tuple wrapper.
+// Test: std.json Go-style tuple wrappers.
 
 import std.json
 
@@ -14,24 +14,43 @@ main() {
         exit(1)
     }
 
-    name = json.object_get(v, "name")
-    if json.get_string(name) != "Aether" {
+    name, ge1 = json.object_get(v, "name")
+    if ge1 != "" {
+        println("FAIL: object_get name: ${ge1}")
+        exit(1)
+    }
+    s, ge2 = json.get_string(name)
+    if ge2 != "" {
+        println("FAIL: get_string name: ${ge2}")
+        exit(1)
+    }
+    if s != "Aether" {
         println("FAIL: name field")
         exit(1)
     }
-    if json.get_int(json.object_get(v, "n")) != 42 {
+    n_val, ge3 = json.object_get(v, "n")
+    if ge3 != "" {
+        println("FAIL: object_get n: ${ge3}")
+        exit(1)
+    }
+    if json.get_int(n_val) != 42 {
         println("FAIL: n field")
         exit(1)
     }
     json.free(v)
 
-    // Invalid JSON: the parser returns NULL on garbage input that can't
-    // produce any value. Our wrapper converts that into an error string.
-    // Input like `{not valid at all` is a partial object that the parser
-    // still accepts up to `{`, so we need input that fails at the top.
+    // Invalid JSON: parser now returns a position-qualified error rather
+    // than a bare NULL.
     _, err2 = json.parse("")
     if err2 == "" {
         println("FAIL: empty json should error")
+        exit(1)
+    }
+
+    // RFC strictness — partial object is now rejected.
+    _, err3 = json.parse("{not valid}")
+    if err3 == "" {
+        println("FAIL: malformed object should error")
         exit(1)
     }
 

@@ -1,5 +1,9 @@
-// Regression test: JSON parser edge cases
-// Covers: escape handling, empty inputs, type checking, nested structures
+// Regression test: JSON parser edge cases (escape handling, type checking,
+// nested structures, tuple-wrapper error paths).
+//
+// Uses the Go-style wrappers from std.json: every fallible call returns
+// (value, err) or just err. The typed getters (get_bool/get_number/get_int)
+// remain infallible-with-sentinel.
 
 import std.json
 import std.string
@@ -7,10 +11,11 @@ import std.string
 main() {
     print("=== JSON Edge Case Tests ===\n\n")
 
-    // Test 1: escaped characters in strings
+    // Test 1: escaped newline
     print("Test 1: JSON escaped characters\n")
-    j1 = json.parse("{\"msg\":\"hello\\nworld\"}")
-    s1 = json.get_string(json.object_get(j1, "msg"))
+    j1, _ = json.parse("{\"msg\":\"hello\\nworld\"}")
+    m1, _ = json.object_get(j1, "msg")
+    s1, _ = json.get_string(m1)
     if string.length(s1) == 11 {
         print("  PASS: escaped newline parsed (length 11)\n")
     } else {
@@ -23,8 +28,9 @@ main() {
 
     // Test 2: escaped tab
     print("\nTest 2: JSON escaped tab\n")
-    j2 = json.parse("{\"t\":\"a\\tb\"}")
-    s2 = json.get_string(json.object_get(j2, "t"))
+    j2, _ = json.parse("{\"t\":\"a\\tb\"}")
+    m2, _ = json.object_get(j2, "t")
+    s2, _ = json.get_string(m2)
     if string.length(s2) == 3 {
         print("  PASS: escaped tab parsed (length 3)\n")
     } else {
@@ -35,8 +41,9 @@ main() {
 
     // Test 3: escaped quote in string
     print("\nTest 3: JSON escaped quote\n")
-    j3 = json.parse("{\"q\":\"he said \\\"hi\\\"\"}")
-    s3 = json.get_string(json.object_get(j3, "q"))
+    j3, _ = json.parse("{\"q\":\"he said \\\"hi\\\"\"}")
+    m3, _ = json.object_get(j3, "q")
+    s3, _ = json.get_string(m3)
     if string.length(s3) == 12 {
         print("  PASS: escaped quotes parsed\n")
     } else {
@@ -49,8 +56,9 @@ main() {
 
     // Test 4: escaped backslash
     print("\nTest 4: JSON escaped backslash\n")
-    j4 = json.parse("{\"p\":\"C:\\\\Users\"}")
-    s4 = json.get_string(json.object_get(j4, "p"))
+    j4, _ = json.parse("{\"p\":\"C:\\\\Users\"}")
+    m4, _ = json.object_get(j4, "p")
+    s4, _ = json.get_string(m4)
     if s4 == "C:\\Users" {
         print("  PASS: escaped backslash parsed\n")
     } else {
@@ -59,10 +67,11 @@ main() {
     }
     json.free(j4)
 
-    // Test 5: escaped forward slash (valid JSON)
+    // Test 5: escaped forward slash
     print("\nTest 5: JSON escaped forward slash\n")
-    j5 = json.parse("{\"url\":\"http:\\/\\/example.com\"}")
-    s5 = json.get_string(json.object_get(j5, "url"))
+    j5, _ = json.parse("{\"url\":\"http:\\/\\/example.com\"}")
+    m5, _ = json.object_get(j5, "url")
+    s5, _ = json.get_string(m5)
     if s5 == "http://example.com" {
         print("  PASS: escaped slash parsed\n")
     } else {
@@ -73,11 +82,11 @@ main() {
 
     // Test 6: boolean values
     print("\nTest 6: JSON booleans\n")
-    j6 = json.parse("{\"a\":true,\"b\":false}")
-    a6 = json.get_bool(json.object_get(j6, "a"))
-    b6 = json.get_bool(json.object_get(j6, "b"))
-    if a6 == 1 {
-        if b6 == 0 {
+    j6, _ = json.parse("{\"a\":true,\"b\":false}")
+    a_val, _ = json.object_get(j6, "a")
+    b_val, _ = json.object_get(j6, "b")
+    if json.get_bool(a_val) == 1 {
+        if json.get_bool(b_val) == 0 {
             print("  PASS: true=1, false=0\n")
         } else {
             print("  FAIL: false != 0\n")
@@ -89,23 +98,20 @@ main() {
     }
     json.free(j6)
 
-    // Test 7: negative numbers
+    // Test 7: negative number
     print("\nTest 7: JSON negative number\n")
-    j7 = json.parse("-42")
-    n7 = json.get_int(j7)
-    if n7 == 0 - 42 {
+    j7, _ = json.parse("-42")
+    if json.get_int(j7) == 0 - 42 {
         print("  PASS: -42 parsed\n")
     } else {
-        print("  FAIL: got ")
-        print(n7)
-        print("\n")
+        print("  FAIL\n")
         exit(1)
     }
     json.free(j7)
 
     // Test 8: float number
     print("\nTest 8: JSON float\n")
-    j8 = json.parse("3.14")
+    j8, _ = json.parse("3.14")
     if json.type(j8) == 2 {
         print("  PASS: 3.14 is number type\n")
     } else {
@@ -114,14 +120,14 @@ main() {
     }
     json.free(j8)
 
-    // Test 9: array of mixed types
+    // Test 9: mixed-type array
     print("\nTest 9: mixed-type array\n")
-    j9 = json.parse("[1,\"two\",true,null]")
+    j9, _ = json.parse("[1,\"two\",true,null]")
     if json.array_size(j9) == 4 {
-        e0 = json.array_get(j9, 0)
-        e1 = json.array_get(j9, 1)
-        e2 = json.array_get(j9, 2)
-        e3 = json.array_get(j9, 3)
+        e0, _ = json.array_get(j9, 0)
+        e1, _ = json.array_get(j9, 1)
+        e2, _ = json.array_get(j9, 2)
+        e3, _ = json.array_get(j9, 3)
         if json.type(e0) == 2 {
             if json.type(e1) == 3 {
                 if json.type(e2) == 1 {
@@ -149,9 +155,9 @@ main() {
     }
     json.free(j9)
 
-    // Test 10: json.get_bool on non-bool returns 0
+    // Test 10: json.get_bool on non-bool returns sentinel 0
     print("\nTest 10: get_bool on string returns 0\n")
-    j10 = json.parse("\"text\"")
+    j10, _ = json.parse("\"text\"")
     if json.get_bool(j10) == 0 {
         print("  PASS: get_bool on string = 0\n")
     } else {
@@ -160,9 +166,9 @@ main() {
     }
     json.free(j10)
 
-    // Test 11: json.get_int on non-number returns 0
+    // Test 11: json.get_int on non-number returns sentinel 0
     print("\nTest 11: get_int on string returns 0\n")
-    j11 = json.parse("\"text\"")
+    j11, _ = json.parse("\"text\"")
     if json.get_int(j11) == 0 {
         print("  PASS: get_int on string = 0\n")
     } else {
@@ -173,14 +179,14 @@ main() {
 
     // Test 12: stringify round-trip
     print("\nTest 12: stringify round-trip\n")
-    j12 = json.parse("{\"x\":1,\"y\":\"hello\"}")
-    s12 = json.stringify(j12)
-    // Parse again
-    j12b = json.parse(s12)
-    x12 = json.get_int(json.object_get(j12b, "x"))
-    y12 = json.get_string(json.object_get(j12b, "y"))
-    if x12 == 1 {
-        if y12 == "hello" {
+    j12, _ = json.parse("{\"x\":1,\"y\":\"hello\"}")
+    s12, _ = json.stringify(j12)
+    j12b, _ = json.parse(s12)
+    xv, _ = json.object_get(j12b, "x")
+    yv, _ = json.object_get(j12b, "y")
+    ys, _ = json.get_string(yv)
+    if json.get_int(xv) == 1 {
+        if ys == "hello" {
             print("  PASS: round-trip preserves values\n")
         } else {
             print("  FAIL: y != hello\n")
@@ -193,15 +199,15 @@ main() {
     json.free(j12)
     json.free(j12b)
 
-    // Test 13: deeply nested (but within limit)
+    // Test 13: 4-level nested array
     print("\nTest 13: moderately nested JSON\n")
-    j13 = json.parse("[[[[1]]]]")
+    j13, _ = json.parse("[[[[1]]]]")
     if json.type(j13) == 4 {
-        inner = json.array_get(j13, 0)
-        inner2 = json.array_get(inner, 0)
-        inner3 = json.array_get(inner2, 0)
-        val = json.get_int(json.array_get(inner3, 0))
-        if val == 1 {
+        lvl1, _ = json.array_get(j13, 0)
+        lvl2, _ = json.array_get(lvl1, 0)
+        lvl3, _ = json.array_get(lvl2, 0)
+        leaf, _ = json.array_get(lvl3, 0)
+        if json.get_int(leaf) == 1 {
             print("  PASS: 4-level nested array\n")
         } else {
             print("  FAIL: inner value\n")
@@ -213,10 +219,11 @@ main() {
     }
     json.free(j13)
 
-    // Test 14: empty string value in JSON
+    // Test 14: empty string value
     print("\nTest 14: empty string in JSON\n")
-    j14 = json.parse("{\"empty\":\"\"}")
-    s14 = json.get_string(json.object_get(j14, "empty"))
+    j14, _ = json.parse("{\"empty\":\"\"}")
+    ev, _ = json.object_get(j14, "empty")
+    s14, _ = json.get_string(ev)
     if s14 == "" {
         print("  PASS: empty string value\n")
     } else {
@@ -225,12 +232,17 @@ main() {
     }
     json.free(j14)
 
-    // Test 15: json.array_get out of bounds
+    // Test 15: array_get out of bounds now returns (null, "")
     print("\nTest 15: array_get out of bounds\n")
-    j15 = json.parse("[1,2]")
-    oob = json.array_get(j15, 99)
-    if oob == 0 {
-        print("  PASS: out of bounds returns NULL\n")
+    j15, _ = json.parse("[1,2]")
+    oob, oob_err = json.array_get(j15, 99)
+    if oob == null {
+        if oob_err == "" {
+            print("  PASS: out of bounds returns (null, empty error)\n")
+        } else {
+            println("  FAIL: expected empty err, got: ${oob_err}")
+            exit(1)
+        }
     } else {
         print("  FAIL\n")
         exit(1)
@@ -239,27 +251,63 @@ main() {
 
     // Test 16: create and stringify empty object
     print("\nTest 16: create + stringify empty object\n")
-    obj = json.create_object()
-    s16 = json.stringify(obj)
+    obj16 = json.create_object()
+    s16, _ = json.stringify(obj16)
     if s16 == "{}" {
         print("  PASS: empty object stringifies to {}\n")
     } else {
         print("  FAIL\n")
         exit(1)
     }
-    json.free(obj)
+    json.free(obj16)
 
     // Test 17: create and stringify empty array
     print("\nTest 17: create + stringify empty array\n")
-    arr = json.create_array()
-    s17 = json.stringify(arr)
+    arr17 = json.create_array()
+    s17, _ = json.stringify(arr17)
     if s17 == "[]" {
         print("  PASS: empty array stringifies to []\n")
     } else {
         print("  FAIL\n")
         exit(1)
     }
-    json.free(arr)
+    json.free(arr17)
+
+    // Test 18: \b and \f escapes (new in stdlib-consistency pass)
+    print("\nTest 18: \\b and \\f escapes\n")
+    j18, _ = json.parse("\"\\b\\f\"")
+    s18, _ = json.get_string(j18)
+    if string.length(s18) == 2 {
+        print("  PASS: \\b\\f decoded (2 bytes)\n")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+    json.free(j18)
+
+    // Test 19: wrong-type access via wrapper reports error
+    print("\nTest 19: object_get on non-object returns error\n")
+    j19, _ = json.parse("[1,2,3]")
+    _, og_err = json.object_get(j19, "key")
+    if og_err == "" {
+        print("  FAIL: expected error\n")
+        exit(1)
+    } else {
+        print("  PASS: object_get on array errored\n")
+    }
+    json.free(j19)
+
+    // Test 20: object_set on non-object returns error
+    print("\nTest 20: object_set on non-object returns error\n")
+    j20, _ = json.parse("[1,2,3]")
+    os_err = json.object_set(j20, "k", json.create_null())
+    if os_err == "" {
+        print("  FAIL: expected error\n")
+        exit(1)
+    } else {
+        print("  PASS: object_set on array errored\n")
+    }
+    json.free(j20)
 
     print("\n=== All JSON Edge Case Tests Passed ===\n")
 }

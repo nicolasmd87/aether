@@ -22,8 +22,8 @@ main() {
     print("\nTest 2: put entries\n")
     v1 = string.new("hello")
     v2 = string.new("world")
-    map.put(m, "key1", v1)
-    map.put(m, "key2", v2)
+    _ = map.put(m, "key1", v1)
+    _ = map.put(m, "key2", v2)
     if map.size(m) == 2 {
         print("  PASS: size = 2 after 2 puts\n")
     } else {
@@ -50,7 +50,7 @@ main() {
 
     // Test 4: get() retrieves correct value
     print("\nTest 4: get() retrieves value\n")
-    got = map.get(m, "key1")
+    got, _ = map.get(m, "key1")
     len = string.length(got)
     if len == 5 {
         print("  PASS: length of value for 'key1' = 5 (hello)\n")

@@ -18,8 +18,8 @@ TEST_CATEGORY(list_add_and_get, TEST_CATEGORY_COLLECTIONS) {
     list_add_raw(list, &val2);
 
     ASSERT_EQ(2, list_size(list));
-    ASSERT_EQ(&val1, list_get(list, 0));
-    ASSERT_EQ(&val2, list_get(list, 1));
+    ASSERT_EQ(&val1, list_get_raw(list, 0));
+    ASSERT_EQ(&val2, list_get_raw(list, 1));
 
     list_free(list);
 }
@@ -34,11 +34,11 @@ TEST_CATEGORY(list_set_and_remove, TEST_CATEGORY_COLLECTIONS) {
 
     int val4 = 99;
     list_set(list, 1, &val4);
-    ASSERT_EQ(&val4, list_get(list, 1));
+    ASSERT_EQ(&val4, list_get_raw(list, 1));
 
     list_remove(list, 0);
     ASSERT_EQ(2, list_size(list));
-    ASSERT_EQ(&val4, list_get(list, 0));
+    ASSERT_EQ(&val4, list_get_raw(list, 0));
 
     list_free(list);
 }
@@ -60,8 +60,8 @@ TEST_CATEGORY(map_put_and_get, TEST_CATEGORY_COLLECTIONS) {
     map_put_raw(map, "age", &val2);
 
     ASSERT_EQ(2, map_size(map));
-    ASSERT_EQ(&val1, map_get(map, "name"));
-    ASSERT_EQ(&val2, map_get(map, "age"));
+    ASSERT_EQ(&val1, map_get_raw(map, "name"));
+    ASSERT_EQ(&val2, map_get_raw(map, "age"));
 
     map_free(map);
 }
@@ -88,7 +88,7 @@ TEST_CATEGORY(map_keys, TEST_CATEGORY_COLLECTIONS) {
     map_put_raw(map, "a", &val);
     map_put_raw(map, "b", &val);
 
-    MapKeys* keys = map_keys(map);
+    MapKeys* keys = map_keys_raw(map);
     ASSERT_NOT_NULL(keys);
     ASSERT_EQ(2, keys->count);
 

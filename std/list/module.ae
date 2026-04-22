@@ -1,25 +1,37 @@
 // std.list - ArrayList Operations (alias for std.collections)
 //
-// Raw externs end in `_raw`. The Aether-native `list.add` wrapper
-// below uses Go-style `(error)` return that reports resize failures
-// that were silently ignored by the previous void-returning API.
+// API shape:
+//   - Raw externs end in `_raw` and return ptr/int in the old C-style
+//     convention. They are the escape hatch for advanced callers.
+//   - Aether-native wrappers (below) use Go-style `(value, err)` / `err`
+//     returns.
 
 extern list_new() -> ptr
 extern list_add_raw(list: ptr, item: ptr) -> int
-extern list_get(list: ptr, index: int) -> ptr
+extern list_get_raw(list: ptr, index: int) -> ptr
 extern list_set(list: ptr, index: int, item: ptr)
 extern list_size(list: ptr) -> int
 extern list_remove(list: ptr, index: int)
 extern list_clear(list: ptr)
 extern list_free(list: ptr)
 
-// Append an item to a list. Returns "" on success, error string on
-// failure (null list or resize OOM). Previously this was a silent void
-// return that hid allocation failures.
+// Append an item to a list. Returns "" on success, error on failure.
 add(list: ptr, item: ptr) -> {
     ok = list_add_raw(list, item)
     if ok == 0 {
         return "list.add failed"
     }
     return ""
+}
+
+// Index into a list.
+// - (item, "")           : index in range
+// - (null, "")           : index out of range (not an error)
+// - (null, "null list")  : `list` is null
+get(list: ptr, index: int) -> {
+    if list == null {
+        return null, "null list"
+    }
+    item = list_get_raw(list, index)
+    return item, ""
 }

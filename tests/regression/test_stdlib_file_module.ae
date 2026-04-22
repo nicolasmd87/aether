@@ -1,6 +1,6 @@
-// Regression test for GitHub issue #61
-// stdlib module resolution fails on Windows (HOME not set)
-// Also tests: std.file module functions (exact user code from issue #61 report).
+// Regression test for GitHub issue #61 (stdlib module resolution) and
+// the std.file Go-style wrappers. Updated after the stdlib consistency
+// pass that migrated file.* to `(value, err)` / `err` return shapes.
 
 import std.string
 import std.math
@@ -38,21 +38,24 @@ main() {
     }
     println("PASS: math.sqrt works")
 
-    f = file.open("_test_issue61_tmp.txt", "w")
-    if f == 0 {
-        println("FAIL: file.open returned null")
+    // file.write(path, content) is the new convenience form.
+    we = file.write("_test_issue61_tmp.txt", "hello")
+    if we != "" {
+        println("FAIL: file.write: ${we}")
         exit(1)
     }
-    file.write(f, "hello", 5)
-    file.close(f)
 
     if file.exists("_test_issue61_tmp.txt") == 0 {
         println("FAIL: file.exists returned 0 after write")
         exit(1)
     }
-    println("PASS: file.open/write/close/exists work")
+    println("PASS: file.write + file.exists work")
 
-    sz = file.size("_test_issue61_tmp.txt")
+    sz, se = file.size("_test_issue61_tmp.txt")
+    if se != "" {
+        println("FAIL: file.size: ${se}")
+        exit(1)
+    }
     if sz != 5 {
         print("FAIL: file.size expected 5, got ")
         println(sz)
@@ -60,21 +63,24 @@ main() {
     }
     println("PASS: file.size works")
 
-    // Test file.read_all returns printable content (issue #47 follow-up)
-    f = file.open("_test_issue61_tmp.txt", "w")
-    file.write(f, "Hello!", 6)
-    file.close(f)
-
-    f = file.open("_test_issue61_tmp.txt", "r")
-    content = file.read_all(f)
-    file.close(f)
-    if content == 0 {
-        println("FAIL: file.read_all returned null")
+    // file.read(path) reads whole file in one shot.
+    _ = file.write("_test_issue61_tmp.txt", "Hello!")
+    content, re = file.read("_test_issue61_tmp.txt")
+    if re != "" {
+        println("FAIL: file.read: ${re}")
         exit(1)
     }
-    println("PASS: file.read_all works")
+    if content == 0 {
+        println("FAIL: file.read returned null")
+        exit(1)
+    }
+    println("PASS: file.read works")
 
-    file.delete("_test_issue61_tmp.txt")
+    de = file.delete("_test_issue61_tmp.txt")
+    if de != "" {
+        println("FAIL: file.delete: ${de}")
+        exit(1)
+    }
     if file.exists("_test_issue61_tmp.txt") != 0 {
         println("FAIL: file still exists after delete")
         exit(1)

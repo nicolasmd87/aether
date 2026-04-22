@@ -93,8 +93,27 @@ else
     endif
 endif
 
-CFLAGS = -O2 -Icompiler -Iruntime -Iruntime/actors -Iruntime/scheduler -Iruntime/utils -Iruntime/memory -Iruntime/config -Istd -Istd/string -Istd/io -Istd/math -Istd/net -Istd/collections -Istd/json -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -MMD -MP -DAETHER_VERSION=\"$(VERSION)\" -DAETHER_HAS_SANDBOX $(EXTRA_CFLAGS)
-LDFLAGS = -lm
+# Optional OpenSSL detection (enables HTTPS client). Probes pkg-config;
+# falls back silently if OpenSSL isn't installed — the HTTP client still
+# works for `http://` URLs and returns a clean error for `https://`.
+# Override with OPENSSL=0 to force-disable.
+OPENSSL ?= auto
+ifeq ($(OPENSSL),auto)
+  OPENSSL_CFLAGS := $(shell pkg-config --cflags openssl 2>/dev/null)
+  OPENSSL_LDFLAGS := $(shell pkg-config --libs openssl 2>/dev/null)
+else ifeq ($(OPENSSL),1)
+  OPENSSL_CFLAGS := $(shell pkg-config --cflags openssl 2>/dev/null)
+  OPENSSL_LDFLAGS := $(shell pkg-config --libs openssl 2>/dev/null)
+else
+  OPENSSL_CFLAGS :=
+  OPENSSL_LDFLAGS :=
+endif
+ifneq ($(OPENSSL_LDFLAGS),)
+  OPENSSL_CFLAGS += -DAETHER_HAS_OPENSSL
+endif
+
+CFLAGS = -O2 -Icompiler -Iruntime -Iruntime/actors -Iruntime/scheduler -Iruntime/utils -Iruntime/memory -Iruntime/config -Istd -Istd/string -Istd/io -Istd/math -Istd/net -Istd/collections -Istd/json -Wall -Wextra -Wno-unused-parameter -Wno-unused-function -MMD -MP -DAETHER_VERSION=\"$(VERSION)\" -DAETHER_HAS_SANDBOX $(OPENSSL_CFLAGS) $(EXTRA_CFLAGS)
+LDFLAGS = -lm $(OPENSSL_LDFLAGS)
 ifneq ($(PLATFORM),wasm)
 ifneq ($(PLATFORM),embedded)
 ifeq ($(findstring AETHER_NO_THREADING,$(EXTRA_CFLAGS)),)
@@ -308,7 +327,7 @@ test-ae: compiler ae stdlib
 	printf 'fi\n'                                                                                   >> "$$script"; \
 	chmod +x "$$script"; \
 	root=$$(pwd); \
-	find tests/syntax tests/compiler tests/integration -path '*/lib/*' -prune -o -path '*/custom_lib_dir/*' -prune -o -path 'tests/integration/namespace_*' -prune -o -path 'tests/integration/closure_actor_state_reject/*' -prune -o -path 'tests/integration/reserved_keyword_error/*' -prune -o -path 'tests/integration/ae_run_cflags/*' -prune -o -name '*.ae' -print 2>/dev/null | sort | \
+	find tests/syntax tests/compiler tests/integration tests/regression -path '*/lib/*' -prune -o -path '*/custom_lib_dir/*' -prune -o -path 'tests/integration/namespace_*' -prune -o -path 'tests/integration/closure_actor_state_reject/*' -prune -o -path 'tests/integration/reserved_keyword_error/*' -prune -o -path 'tests/integration/ae_run_cflags/*' -prune -o -path 'tests/integration/bin_path_match/*' -prune -o -name '*.ae' -print 2>/dev/null | sort | \
 	xargs -P $(NPROC) -I{} "$$script" "{}" "$$tmpdir" "$$root"; \
 	for sh_test in $$(find tests/integration -name 'test_*.sh' 2>/dev/null | sort); do \
 		name=$$(echo "$$sh_test" | sed 's|tests/||;s|/|_|g;s|\.sh$$||'); \
@@ -441,6 +460,136 @@ test-all: test test-ae
 # Benchmark presets: full (10M), medium (1M), low (100K), stress (100M)
 BENCHMARK_PRESET ?= low
 
+# ---- JSON parser benchmark (standalone; no actor runtime needed) ----
+#
+# bench-json         — runs the current std/json parser against corpus/
+# bench-json-compare — same + yyjson reference (auto-fetches yyjson to
+#                      benchmarks/json/vendor/ on first use; vendor/ is
+#                      gitignored so it never hits the repo)
+# bench-json-gen     — (re)generates corpus fixtures including the 10 MB
+#                      large.json. Idempotent and deterministic.
+#
+# The three targets are self-contained: they don't depend on `compiler`
+# or `ae` because the bench runner links directly against the JSON source
+# files it needs.
+
+BENCH_JSON_CFLAGS := -O2 -Wall -Wextra \
+  -Istd/json \
+  -DAETHER_VERSION=\"bench\"
+# The rewritten parser has zero stdlib-internal dependencies — no
+# aether_collections, no aether_string. Keep the bench link small so
+# changes to other stdlib files don't churn this build.
+BENCH_JSON_SRCS := benchmarks/json/run_json_bench.c \
+                   std/json/aether_json.c
+
+.PHONY: bench-json bench-json-compare bench-json-gen bench-json-fetch-yyjson
+
+$(BUILD_DIR)/gen_corpus: benchmarks/json/gen_corpus.c | $(BUILD_DIR)
+	@$(CC) -O2 -Wall -Wextra $< -o $@
+
+bench-json-gen: $(BUILD_DIR)/gen_corpus
+	@mkdir -p benchmarks/json/corpus
+	@$(BUILD_DIR)/gen_corpus api-response benchmarks/json/corpus/api-response.json
+	@$(BUILD_DIR)/gen_corpus strings       benchmarks/json/corpus/strings-heavy.json
+	@$(BUILD_DIR)/gen_corpus numbers       benchmarks/json/corpus/numbers-heavy.json
+	@$(BUILD_DIR)/gen_corpus deep          benchmarks/json/corpus/deep.json
+	@$(BUILD_DIR)/gen_corpus large         benchmarks/json/corpus/large.json
+	@echo "✓ Corpus generated in benchmarks/json/corpus/"
+
+$(BUILD_DIR)/run_json_bench: $(BENCH_JSON_SRCS) | $(BUILD_DIR)
+	@echo "Compiling json bench runner..."
+	@$(CC) $(BENCH_JSON_CFLAGS) $(BENCH_JSON_SRCS) -o $@ -lm
+
+bench-json: $(BUILD_DIR)/run_json_bench
+	@if [ ! -f benchmarks/json/corpus/large.json ]; then \
+	  echo "Note: large.json missing — run 'make bench-json-gen' to create the full corpus."; \
+	fi
+	@$(BUILD_DIR)/run_json_bench
+
+# Fetch yyjson (MIT) to benchmarks/json/vendor/ for apples-to-apples comparison.
+# vendor/ is gitignored — yyjson is NOT vendored into the repo, it's a
+# build-time fetch for this target only.
+bench-json-fetch-yyjson:
+	@mkdir -p benchmarks/json/vendor
+	@if [ ! -f benchmarks/json/vendor/yyjson.c ]; then \
+	  echo "Fetching yyjson for reference benchmark (not committed)..."; \
+	  curl -sL -o benchmarks/json/vendor/yyjson.c https://raw.githubusercontent.com/ibireme/yyjson/master/src/yyjson.c || \
+	    { echo "ERROR: could not fetch yyjson.c — network?"; exit 1; }; \
+	  curl -sL -o benchmarks/json/vendor/yyjson.h https://raw.githubusercontent.com/ibireme/yyjson/master/src/yyjson.h || \
+	    { echo "ERROR: could not fetch yyjson.h — network?"; exit 1; }; \
+	fi
+
+$(BUILD_DIR)/run_yyjson_bench: benchmarks/json/run_yyjson_bench.c benchmarks/json/vendor/yyjson.c | $(BUILD_DIR) bench-json-fetch-yyjson
+	@echo "Compiling yyjson reference bench..."
+	@$(CC) -O2 -Wall -Wextra -Ibenchmarks/json/vendor \
+	  benchmarks/json/run_yyjson_bench.c \
+	  benchmarks/json/vendor/yyjson.c \
+	  -o $@
+
+bench-json-compare: $(BUILD_DIR)/run_json_bench $(BUILD_DIR)/run_yyjson_bench
+	@echo "=== current std.json parser ==="
+	@$(BUILD_DIR)/run_json_bench
+	@echo ""
+	@echo "=== yyjson (reference, not vendored) ==="
+	@$(BUILD_DIR)/run_yyjson_bench
+
+# ---- JSON parser hardening targets ----
+#
+# test-json-asan  — parse every corpus fixture under AddressSanitizer
+#                   + UndefinedBehaviorSanitizer. Portable across GCC
+#                   ≥4.8 and every Clang (Linux + macOS).
+# test-json-valgrind — same under Valgrind on Linux (macOS skips if no
+#                      valgrind installed).
+# test-json-conformance — (Phase 4a) run JSONTestSuite if committed.
+
+.PHONY: test-json-asan test-json-valgrind test-json-conformance
+
+# Parser-focused ASan build: links only the parser + bench harness
+# (same code paths as production), ignoring the broader stdlib so we
+# don't pull in ASan-unfriendly subsystems.
+$(BUILD_DIR)/run_json_bench_asan: $(BENCH_JSON_SRCS) | $(BUILD_DIR)
+	@echo "Compiling json bench runner with ASan+UBSan..."
+	@$(CC) -O1 -g -fsanitize=address,undefined -fno-omit-frame-pointer \
+	  $(BENCH_JSON_CFLAGS) $(BENCH_JSON_SRCS) -o $@ -lm
+
+test-json-asan: $(BUILD_DIR)/run_json_bench_asan
+	@echo "==================================="
+	@echo "  JSON parser: ASan + UBSan check"
+	@echo "==================================="
+	@if [ ! -f benchmarks/json/corpus/large.json ]; then \
+	  $(MAKE) -s bench-json-gen >/dev/null; \
+	fi
+	@JSON_BENCH_WARMUP=2 JSON_BENCH_ITERS=10 $(BUILD_DIR)/run_json_bench_asan
+	@echo "✓ JSON ASan+UBSan clean"
+
+test-json-valgrind: $(BUILD_DIR)/run_json_bench
+	@command -v valgrind >/dev/null 2>&1 || { \
+	  echo "valgrind not installed — skipping (macOS and Windows usually don't have it)"; \
+	  exit 0; \
+	}
+	@echo "==================================="
+	@echo "  JSON parser: Valgrind leak + error check"
+	@echo "==================================="
+	@if [ ! -f benchmarks/json/corpus/large.json ]; then \
+	  $(MAKE) -s bench-json-gen >/dev/null; \
+	fi
+	@JSON_BENCH_WARMUP=1 JSON_BENCH_ITERS=2 \
+	  valgrind --error-exitcode=1 --leak-check=full --errors-for-leak-kinds=definite \
+	  $(BUILD_DIR)/run_json_bench
+	@echo "✓ JSON Valgrind clean"
+
+test-json-conformance: $(BUILD_DIR)/run_json_conformance
+	@if [ ! -d tests/conformance/json/cases ]; then \
+	  echo "tests/conformance/json/cases/ not present."; \
+	  exit 1; \
+	fi
+	@$(BUILD_DIR)/run_json_conformance tests/conformance/json/cases
+
+$(BUILD_DIR)/run_json_conformance: tests/conformance/json/run_conformance.c std/json/aether_json.c | $(BUILD_DIR)
+	@$(CC) -O2 -Wall -Wextra -Istd/json \
+	  tests/conformance/json/run_conformance.c std/json/aether_json.c \
+	  -o $@ -lm
+
 benchmark: compiler ae stdlib
 	@echo "============================================"
 	@echo "  Running Cross-Language Benchmark Suite"
@@ -537,7 +686,7 @@ ae: compiler
 	@echo "==================================="
 	@echo "Building ae command-line tool ($(DETECTED_OS)) v$(VERSION)"
 	@echo "==================================="
-	$(CC) -O2 -DAETHER_VERSION=\"$(VERSION)\" -Itools tools/ae.c tools/apkg/toml_parser.c -o build/ae$(EXE_EXT) $(LDFLAGS)
+	$(CC) -O2 -DAETHER_VERSION=\"$(VERSION)\" -DAETHER_OPENSSL_LIBS='"$(OPENSSL_LDFLAGS)"' -Itools tools/ae.c tools/apkg/toml_parser.c -o build/ae$(EXE_EXT) $(LDFLAGS)
 	@echo "✓ Built successfully: build/ae$(EXE_EXT)"
 	@echo ""
 	@echo "Usage:"

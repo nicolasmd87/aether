@@ -199,9 +199,10 @@ HttpRequest* http_parse_request(const char* raw_request) {
     
     int method_len = space - request_line;
     req->method = (char*)malloc(method_len + 1);
-    strncpy(req->method, request_line, method_len);
+    if (!req->method) { free(req); return NULL; }
+    memcpy(req->method, request_line, method_len);
     req->method[method_len] = '\0';
-    
+
     // Extract path and query string
     char* path_start = space + 1;
     char* path_end = strchr(path_start, ' ');
@@ -210,24 +211,29 @@ HttpRequest* http_parse_request(const char* raw_request) {
         free(req);
         return NULL;
     }
-    
+
     char* query = strchr(path_start, '?');
     if (query && query < path_end) {
         // Has query string
         int path_len = query - path_start;
         req->path = (char*)malloc(path_len + 1);
-        strncpy(req->path, path_start, path_len);
+        if (!req->path) { free(req->method); free(req); return NULL; }
+        memcpy(req->path, path_start, path_len);
         req->path[path_len] = '\0';
-        
+
         int query_len = path_end - query - 1;
         req->query_string = (char*)malloc(query_len + 1);
-        strncpy(req->query_string, query + 1, query_len);
+        if (!req->query_string) {
+            free(req->path); free(req->method); free(req); return NULL;
+        }
+        memcpy(req->query_string, query + 1, query_len);
         req->query_string[query_len] = '\0';
     } else {
         // No query string
         int path_len = path_end - path_start;
         req->path = (char*)malloc(path_len + 1);
-        strncpy(req->path, path_start, path_len);
+        if (!req->path) { free(req->method); free(req); return NULL; }
+        memcpy(req->path, path_start, path_len);
         req->path[path_len] = '\0';
         req->query_string = NULL;
     }

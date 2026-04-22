@@ -1,0 +1,13 @@
+// Exercises [[bin]].extra_sources resolution. The adjacent shim.c
+// only compiles when aether.toml's extra_sources entry was actually
+// applied; otherwise the link step fails to find ae_bin_probe_value.
+extern ae_bin_probe_value() -> int
+
+main() {
+    v = ae_bin_probe_value()
+    if v != 1 {
+        println("FAIL: probe value wrong")
+        exit(1)
+    }
+    println("OK")
+}

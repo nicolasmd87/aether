@@ -14,7 +14,7 @@ builder process(label: string) {
     mode = "default"
     if _builder != null {
         if map_has(_builder, "mode") == 1 {
-            mode = map_get(_builder, "mode")
+            mode, _ = map.get(_builder, "mode")
         }
     }
     println("process: ${label} mode=${mode}")

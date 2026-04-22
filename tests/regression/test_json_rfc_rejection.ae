@@ -1,0 +1,83 @@
+// Regression test: JSON parser rejects RFC 8259 violations that the old
+// parser silently accepted.
+
+import std.json
+
+expect_reject(input: string, label: string) -> int {
+    _, err = json.parse(input)
+    if err == "" {
+        println("  FAIL: ${label} was accepted")
+        return 0
+    }
+    println("  PASS: ${label} rejected: ${err}")
+    return 1
+}
+
+main() {
+    print("=== JSON RFC Strictness Tests ===\n\n")
+
+    fails = 0
+
+    // 1. Leading zeros forbidden
+    print("Leading zeros:\n")
+    if expect_reject("01", "leading zero integer") == 0 { fails = fails + 1 }
+    if expect_reject("-01", "leading zero after sign") == 0 { fails = fails + 1 }
+    if expect_reject("00", "double zero") == 0 { fails = fails + 1 }
+    // Zero alone is fine
+    v, e = json.parse("0")
+    if e != "" {
+        println("  FAIL: '0' should parse, got: ${e}")
+        fails = fails + 1
+    } else {
+        print("  PASS: '0' still valid\n")
+        json.free(v)
+    }
+
+    // 2. Trailing content after valid top-level value
+    print("\nTrailing content:\n")
+    if expect_reject("{}xyz", "text after object") == 0 { fails = fails + 1 }
+    if expect_reject("[]garbage", "text after array") == 0 { fails = fails + 1 }
+    if expect_reject("42,100", "comma after number") == 0 { fails = fails + 1 }
+    if expect_reject("truefalse", "run-on literals") == 0 { fails = fails + 1 }
+
+    // 3. Malformed objects
+    print("\nMalformed objects:\n")
+    if expect_reject("{a:1}", "unquoted key") == 0 { fails = fails + 1 }
+    if expect_reject("{\"a\":1,}", "trailing comma in object") == 0 { fails = fails + 1 }
+    if expect_reject("{\"a\":}", "missing value") == 0 { fails = fails + 1 }
+    if expect_reject("{\"a\"1}", "missing colon") == 0 { fails = fails + 1 }
+    if expect_reject("{,}", "leading comma") == 0 { fails = fails + 1 }
+    if expect_reject("{", "unterminated object") == 0 { fails = fails + 1 }
+
+    // 4. Malformed arrays
+    print("\nMalformed arrays:\n")
+    if expect_reject("[1,2,]", "trailing comma in array") == 0 { fails = fails + 1 }
+    if expect_reject("[,1]", "leading comma") == 0 { fails = fails + 1 }
+    if expect_reject("[1,,2]", "double comma") == 0 { fails = fails + 1 }
+    if expect_reject("[", "unterminated array") == 0 { fails = fails + 1 }
+
+    // 5. Malformed numbers
+    print("\nMalformed numbers:\n")
+    if expect_reject("1.", "trailing decimal") == 0 { fails = fails + 1 }
+    if expect_reject(".5", "no integer part") == 0 { fails = fails + 1 }
+    if expect_reject("1e", "empty exponent") == 0 { fails = fails + 1 }
+    if expect_reject("1e+", "sign without exponent digits") == 0 { fails = fails + 1 }
+    if expect_reject("-", "lone minus") == 0 { fails = fails + 1 }
+
+    // 6. Malformed strings
+    print("\nMalformed strings:\n")
+    if expect_reject("\"unterminated", "unterminated string") == 0 { fails = fails + 1 }
+    if expect_reject("\"bad \\x escape\"", "unknown escape sequence") == 0 { fails = fails + 1 }
+    if expect_reject("\"\\", "truncated escape") == 0 { fails = fails + 1 }
+
+    // 7. Empty input
+    print("\nEmpty / whitespace:\n")
+    if expect_reject("", "empty input") == 0 { fails = fails + 1 }
+    if expect_reject("   ", "whitespace only") == 0 { fails = fails + 1 }
+
+    if fails > 0 {
+        println("\n=== ${fails} test(s) failed ===")
+        exit(1)
+    }
+    print("\n=== All RFC Rejection Tests Passed ===\n")
+}

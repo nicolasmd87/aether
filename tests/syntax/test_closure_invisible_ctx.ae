@@ -68,9 +68,9 @@ main() {
 
     // Verify the tree structure
     println("root children: ${list.size(root)}")
-    p1 = list.get(root, 0)
+    p1, _ = list.get(root, 0)
     println("panel1 children: ${list.size(p1)}")
-    p2 = list.get(root, 1)
+    p2, _ = list.get(root, 1)
     println("panel2 children: ${list.size(p2)}")
 
     list.free(root)

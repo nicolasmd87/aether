@@ -2,7 +2,19 @@
 
 Complete reference for Aether's standard library modules.
 
-> **Note:** The standard library is under active development. Functions currently use `int` returns (1 = success, 0 = failure). Migration to Go-style result types (`val, err = func()`) is planned. See the [error handling example](../examples/basics/error-handling.ae) for the recommended pattern in user code.
+> **Note:** The standard library follows the canonical module pattern in [stdlib-module-pattern.md](stdlib-module-pattern.md) — fallible operations expose a `_raw` extern plus a Go-style `(value, err)` Aether wrapper; pure/infallible operations stay raw without a suffix. See the [error handling example](../examples/basics/error-handling.ae) for how the pattern is used from user code, and [std/fs/module.ae](../std/fs/module.ae) for the reference implementation.
+
+## Platform support
+
+| Target | Filesystem | Networking | Threading | Notes |
+|---|---|---|---|---|
+| Linux / macOS / BSD | full POSIX | full | full | Reference target. |
+| Windows (MSYS2 / mingw-w64) | partial | full | full | Process exec uses POSIX fallbacks; `os.run` is POSIX-only until the `CreateProcessW` backend lands. Some fs operations (`symlink`, `readlink`) are stubs returning clean errors via the Go-style wrappers. |
+| WASI (wasi-sdk) | per preopened paths | none | single-threaded | wasi-libc provides POSIX-compatible `fopen`/`fread`/`stat`/etc., so the normal fs code path compiles. Paths must be under a WASI preopen. |
+| Emscripten (browser WASM) | off by default | off | cooperative | Builds pass `-DAETHER_NO_FILESYSTEM -DAETHER_NO_NETWORKING`. File ops return `(null, "cannot open file")` via the Go-style wrappers — no silent failures. To enable, compile with `-sFORCE_FILESYSTEM=1` and drop the define; untested in CI. |
+| Bare embedded | off | off | cooperative | Same as Emscripten — stubs route all failures through the Go-style error tuples. |
+
+When a target lacks a capability, the stub implementations in each stdlib module return `NULL` / `0` so the Go-style wrapper produces a descriptive error string rather than crashing. A call like `file.read("/etc/hosts")` on a no-fs target returns `("", "cannot open file")`, which the caller handles the same way as any other I/O error.
 
 ## Using the Standard Library
 
@@ -367,7 +379,36 @@ main() {
 
 ## JSON (`std.json`)
 
-JSON parsing, creation, and serialization.
+JSON parsing, creation, and serialization. RFC 8259 conformant (318/318
+JSONTestSuite cases — all mandatory `y_*` and `n_*` pass).
+
+**Implementation.** Arena-allocated parser: every parsed value,
+string, and container backing array comes from a single per-document
+bump-pointer arena that `json.free` releases in one step.
+Character-class lookup tables drive the hot-path dispatch (whitespace,
+digit, structural, string-safe). UTF-8 validation uses Hoehrmann's
+public-domain DFA. Numbers follow a three-path design: pure integers
+go through an int64 accumulator; fractional/exponential values within
+double's exact range (≤15 significant digits, |exponent| ≤ 22) take a
+`POW10` fast-double path with one multiply and one cast; anything past
+those bounds falls back to `strtod` for correct IEEE-754 rounding.
+Strings are decoded in two phases — a pre-scan locates the closing
+quote so the decode buffer is sized exactly once — and the inner
+fast-loop over safe printable-ASCII bytes dispatches to SSE2 on
+`__SSE2__`, NEON on `__ARM_NEON && __aarch64__`, or a scalar LUT
+fallback compiled in for WASM / embedded / anywhere else. The SIMD
+kernels are gated at compile time, not run-time detected, so there's
+no branch cost on the happy path and the scalar fallback is always
+linked. Compiles clean under `-Wall -Wextra -Werror -pedantic` on
+every target in the CI matrix. Design rationale in
+[json-parser-design.md](json-parser-design.md); measured throughput
+in [benchmarks/json/baseline.md](../benchmarks/json/baseline.md).
+
+**Security.** ASan+UBSan clean on the full bench corpus including a
+10 MB synthesized document. JSONTestSuite conformance: every
+`y_*` case accepted, every `n_*` case rejected, `i_*` outcomes
+recorded. Fixed nesting depth limit of 256 prevents stack-overflow
+DoS. First-error-wins diagnostics include `<reason> at <line>:<col>`.
 
 ```aether
 import std.json

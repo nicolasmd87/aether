@@ -22,14 +22,16 @@ route_entry(method: int, pp: string, handler: fn) {
 }
 
 end_point(_ctx: ptr, method: int, pattern: string, handler: fn) {
-    list.add(map_get(_ctx, "routes"), route_entry(method, pattern, handler))
+    routes, _ = map.get(_ctx, "routes")
+    list.add(routes, route_entry(method, pattern, handler))
 }
 
 tw_path(_ctx: ptr, bp: string) {
-    prefix = map_get(_ctx, "prefix")
+    prefix, _ = map.get(_ctx, "prefix")
     sub = map_new()
     map_put(sub, "prefix", "${prefix}${bp}")
-    map_put(sub, "routes", map_get(_ctx, "routes"))
+    routes, _ = map.get(_ctx, "routes")
+    map_put(sub, "routes", routes)
     return sub
 }
 
@@ -53,14 +55,20 @@ response_write_status(res: ptr, body: string, status: int) {
 }
 
 request_get_query_param(req: ptr, name: string) {
-    if map_has(req, name) == 1 { return map_get(req, name) }
+    if map_has(req, name) == 1 {
+        v, _ = map.get(req, name)
+        return v
+    }
     return ""
 }
 
 // ---- Domain (same as example_inventory.ae) ----
 
 inventory_lookup(inv: ptr, sku: string) {
-    if map_has(inv, sku) == 1 { return map_get(inv, sku) }
+    if map_has(inv, sku) == 1 {
+        v, _ = map.get(inv, sku)
+        return v
+    }
     return ""
 }
 
@@ -82,7 +90,7 @@ do_cart_list(res: ptr, cart: ptr, inventory: ptr) {
         out = "["
         for (i = 0; i < n; i++) {
             if i > 0 { out = "${out}," }
-            item = list.get(cart, i)
+            item, _ = list.get(cart, i)
             out = "${out}\"${item}\""
         }
         response_json(res, "${out}]")
@@ -175,7 +183,8 @@ main() {
             }
         }
     }
-    _chk(list.size(map_get(server, "routes")) == 5, "count")
+    srv_routes, _ = map.get(server, "routes")
+    _chk(list.size(srv_routes) == 5, "count")
     println("PASS")
 
     // --- Handler: inventory list (seal except) ---
@@ -184,8 +193,10 @@ main() {
     inv = _new_inventory()
     res = map_new()
     do_inv_list(res, inv)
-    _chk(map_get(res, "status") == 200, "status")
-    _chk(string.contains(map_get(res, "body"), "has_widget"), "body")
+    st1, _ = map.get(res, "status")
+    _chk(st1 == 200, "status")
+    bd1, _ = map.get(res, "body")
+    _chk(string.contains(bd1, "has_widget"), "body")
     println("PASS")
 
     // --- Handler: inventory lookup (seal except) ---
@@ -196,8 +207,10 @@ main() {
     map_put(req, "sku", "WIDGET-1")
     res = map_new()
     do_inv_lookup(req, res, inv)
-    _chk(map_get(res, "status") == 200, "status")
-    _chk(string.contains(map_get(res, "body"), "Widget Alpha"), "body")
+    st2, _ = map.get(res, "status")
+    _chk(st2 == 200, "status")
+    bd2, _ = map.get(res, "body")
+    _chk(string.contains(bd2, "Widget Alpha"), "body")
     println("PASS")
 
     print("inv lookup unknown SKU 404: ")
@@ -206,7 +219,8 @@ main() {
     map_put(req, "sku", "NOPE")
     res = map_new()
     do_inv_lookup(req, res, inv)
-    _chk(map_get(res, "status") == 404, "status")
+    st3, _ = map.get(res, "status")
+    _chk(st3 == 404, "status")
     println("PASS")
 
     // --- Handler: cart add (hides inventory) ---
@@ -218,9 +232,11 @@ main() {
     map_put(req, "sku", "WIDGET-1")
     res = map_new()
     do_cart_add(req, res, cart, inv)
-    _chk(map_get(res, "status") == 200, "status")
+    st4, _ = map.get(res, "status")
+    _chk(st4 == 200, "status")
     _chk(list.size(cart) == 1, "cart size")
-    _chk(str_eq(list.get(cart, 0), "WIDGET-1"), "item")
+    item0, _ = list.get(cart, 0)
+    _chk(str_eq(item0, "WIDGET-1"), "item")
     println("PASS")
 
     // --- Handler: cart list (hides inventory) ---
@@ -229,7 +245,8 @@ main() {
     cart = list.new()
     res = map_new()
     do_cart_list(res, cart, _new_inventory())
-    _chk(str_eq(map_get(res, "body"), "[]"), "empty")
+    bd3, _ = map.get(res, "body")
+    _chk(str_eq(bd3, "[]"), "empty")
     println("PASS")
 
     print("cart list with items: ")
@@ -238,7 +255,7 @@ main() {
     list.add(cart, "GADGET-1")
     res = map_new()
     do_cart_list(res, cart, _new_inventory())
-    body = map_get(res, "body")
+    body, _ = map.get(res, "body")
     _chk(string.contains(body, "WIDGET-1"), "WIDGET-1")
     _chk(string.contains(body, "GADGET-1"), "GADGET-1")
     println("PASS")
@@ -253,7 +270,8 @@ main() {
     req = map_new()
     do_cart_remove(req, res, cart, _new_inventory())
     _chk(list.size(cart) == 1, "size after remove")
-    _chk(str_eq(list.get(cart, 0), "GADGET-1"), "remaining item")
+    item1, _ = list.get(cart, 0)
+    _chk(str_eq(item1, "GADGET-1"), "remaining item")
     println("PASS")
 
     // --- Full round-trip: add → list → remove → list ---
@@ -276,8 +294,10 @@ main() {
     // List
     res = map_new()
     do_cart_list(res, cart, inv)
-    _chk(string.contains(map_get(res, "body"), "WIDGET-1"), "has W1")
-    _chk(string.contains(map_get(res, "body"), "GADGET-1"), "has G1")
+    bd4, _ = map.get(res, "body")
+    _chk(string.contains(bd4, "WIDGET-1"), "has W1")
+    bd5, _ = map.get(res, "body")
+    _chk(string.contains(bd5, "GADGET-1"), "has G1")
 
     // Remove first
     req = map_new()
@@ -288,7 +308,8 @@ main() {
     // List again
     res = map_new()
     do_cart_list(res, cart, inv)
-    _chk(string.contains(map_get(res, "body"), "GADGET-1"), "G1 remains")
+    bd6, _ = map.get(res, "body")
+    _chk(string.contains(bd6, "GADGET-1"), "G1 remains")
     println("PASS")
 
     print("\n=== All Tests Passed ===\n")

@@ -24,7 +24,7 @@ static int   lua_perms_depth = 0;
 
 // Permission checker — same as Python host module
 extern int list_size(void*);
-extern void* list_get(void*, int);
+extern void* list_get_raw(void*, int);
 
 static int pattern_match(const char* pat, const char* resource) {
     // Normalize IPv4-mapped IPv6 addresses so a grant for "10.0.0.1"
@@ -52,8 +52,8 @@ static int perms_allow(void* ctx, const char* category, const char* resource) {
     int n = list_size(ctx);
     if (n == 0) return 0;
     for (int i = 0; i < n; i += 2) {
-        const char* cat = (const char*)list_get(ctx, i);
-        const char* pat = (const char*)list_get(ctx, i + 1);
+        const char* cat = (const char*)list_get_raw(ctx, i);
+        const char* pat = (const char*)list_get_raw(ctx, i + 1);
         if (!cat || !pat) continue;
         if (cat[0] == '*' && pat[0] == '*') return 1;
         if (strcmp(cat, category) == 0 && pattern_match(pat, resource)) return 1;

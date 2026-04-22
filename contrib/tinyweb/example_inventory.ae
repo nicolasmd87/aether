@@ -27,14 +27,16 @@ route_entry(method: int, pp: string, handler: fn) {
 }
 
 end_point(_ctx: ptr, method: int, pattern: string, handler: fn) {
-    list.add(map_get(_ctx, "routes"), route_entry(method, pattern, handler))
+    routes, _ = map.get(_ctx, "routes")
+    list.add(routes, route_entry(method, pattern, handler))
 }
 
 tw_path(_ctx: ptr, bp: string) {
-    prefix = map_get(_ctx, "prefix")
+    prefix, _ = map.get(_ctx, "prefix")
     sub = map_new()
     map_put(sub, "prefix", "${prefix}${bp}")
-    map_put(sub, "routes", map_get(_ctx, "routes"))
+    routes, _ = map.get(_ctx, "routes")
+    map_put(sub, "routes", routes)
     return sub
 }
 
@@ -58,14 +60,20 @@ response_write_status(res: ptr, body: string, status: int) {
 }
 
 request_get_query_param(req: ptr, name: string) {
-    if map_has(req, name) == 1 { return map_get(req, name) }
+    if map_has(req, name) == 1 {
+        v, _ = map.get(req, name)
+        return v
+    }
     return ""
 }
 
 // ---- Domain ----
 
 inventory_lookup(inv: ptr, sku: string) {
-    if map_has(inv, sku) == 1 { return map_get(inv, sku) }
+    if map_has(inv, sku) == 1 {
+        v, _ = map.get(inv, sku)
+        return v
+    }
     return ""
 }
 
@@ -96,7 +104,7 @@ do_cart_list(res: ptr, cart: ptr, inventory: ptr) {
         out = "["
         for (i = 0; i < n; i++) {
             if i > 0 { out = "${out}," }
-            item = list.get(cart, i)
+            item, _ = list.get(cart, i)
             out = "${out}\"${item}\""
         }
         response_json(res, "${out}]")
@@ -182,7 +190,8 @@ main() {
         }
     }
 
-    println("Routes registered: ${list.size(map_get(server, \"routes\"))}")
+    server_routes, _ = map.get(server, "routes")
+    println("Routes registered: ${list.size(server_routes)}")
     println("  GET  /api/inventory/list")
     println("  GET  /api/inventory/lookup?sku=WIDGET-1")
     println("  POST /api/cart/add?sku=WIDGET-1")

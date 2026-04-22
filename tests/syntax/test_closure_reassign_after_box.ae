@@ -30,7 +30,7 @@ main() {
     if r2 != 500 { println("FAIL: op v2"); exit(1) }
 
     // Call through the boxed v1 — must still work.
-    boxed = list.get(held, 0)
+    boxed, _ = list.get(held, 0)
     v1 = unbox_closure(boxed)
     r1 = call(v1, 5)
     if r1 != 105 { println("FAIL: boxed v1 via dynamic dispatch"); exit(1) }

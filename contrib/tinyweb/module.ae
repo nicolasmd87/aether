@@ -143,7 +143,8 @@ ctx_set_attribute(ctx: ptr, key: string, value: string) {
 // Get an attribute from the request context
 ctx_get_attribute(ctx: ptr, key: string) {
     if map_has(ctx, key) == 1 {
-        return map_get(ctx, key)
+        v, _ = map.get(ctx, key)
+        return v
     }
     return ""
 }
@@ -241,16 +242,16 @@ static_entry(base_path: string, directory: string) {
 // end_point(method, pattern) |req, res, ctx| { ... }
 // When inside a path() block, _ctx is the path-group map
 end_point(_ctx: ptr, method: int, pattern: string, handler: fn) {
-    routes = map_get(_ctx, "routes")
-    prefix = map_get(_ctx, "prefix")
+    routes, _ = map.get(_ctx, "routes")
+    prefix, _ = map.get(_ctx, "prefix")
     full_path = "${prefix}${pattern}"
     list.add(routes, route_entry(method, full_path, handler))
 }
 
 // filter(method, pattern) |req, res, ctx| { ... }
 filter(_ctx: ptr, method: int, pattern: string, handler: fn) {
-    filters = map_get(_ctx, "filters")
-    prefix = map_get(_ctx, "prefix")
+    filters, _ = map.get(_ctx, "filters")
+    prefix, _ = map.get(_ctx, "prefix")
     full_path = "${prefix}${pattern}"
     list.add(filters, filter_entry(method, full_path, handler))
 }
@@ -259,24 +260,24 @@ filter(_ctx: ptr, method: int, pattern: string, handler: fn) {
 filter_all(_ctx: ptr, pattern: string, handler: fn) {
     // Inlined: calling filter() directly would trip the DSL _ctx auto-injector
     // (it treats filter as a 3-arg builder, so filter(_ctx, ...) looks like 4 args).
-    filters = map_get(_ctx, "filters")
-    prefix = map_get(_ctx, "prefix")
+    filters, _ = map.get(_ctx, "filters")
+    prefix, _ = map.get(_ctx, "prefix")
     full_path = "${prefix}${pattern}"
     list.add(filters, filter_entry(ALL, full_path, handler))
 }
 
 // web_socket(path) |message, sender, ctx| { ... }
 web_socket(_ctx: ptr, ws_path: string, handler: fn) {
-    ws_handlers = map_get(_ctx, "ws_handlers")
-    prefix = map_get(_ctx, "prefix")
+    ws_handlers, _ = map.get(_ctx, "ws_handlers")
+    prefix, _ = map.get(_ctx, "prefix")
     full_path = "${prefix}${ws_path}"
     list.add(ws_handlers, ws_entry(full_path, handler))
 }
 
 // serve_static("/static", "/path/to/files")
 serve_static(_ctx: ptr, base_path: string, directory: string) {
-    statics = map_get(_ctx, "statics")
-    prefix = map_get(_ctx, "prefix")
+    statics, _ = map.get(_ctx, "statics")
+    prefix, _ = map.get(_ctx, "prefix")
     full_base = "${prefix}${base_path}"
     list.add(statics, static_entry(full_base, directory))
 }
@@ -284,14 +285,19 @@ serve_static(_ctx: ptr, base_path: string, directory: string) {
 // path(base_path) { ... nested end_points / filters / web_sockets ... }
 // Creates a sub-context with the prefix appended
 path(_ctx: ptr, base_path: string) {
-    prefix = map_get(_ctx, "prefix")
+    prefix, _ = map.get(_ctx, "prefix")
     sub = map_new()
     map_put(sub, "prefix", "${prefix}${base_path}")
-    map_put(sub, "routes", map_get(_ctx, "routes"))
-    map_put(sub, "filters", map_get(_ctx, "filters"))
-    map_put(sub, "ws_handlers", map_get(_ctx, "ws_handlers"))
-    map_put(sub, "sse_handlers", map_get(_ctx, "sse_handlers"))
-    map_put(sub, "statics", map_get(_ctx, "statics"))
+    p_routes, _ = map.get(_ctx, "routes")
+    map_put(sub, "routes", p_routes)
+    p_filters, _ = map.get(_ctx, "filters")
+    map_put(sub, "filters", p_filters)
+    p_ws, _ = map.get(_ctx, "ws_handlers")
+    map_put(sub, "ws_handlers", p_ws)
+    p_sse, _ = map.get(_ctx, "sse_handlers")
+    map_put(sub, "sse_handlers", p_sse)
+    p_stat, _ = map.get(_ctx, "statics")
+    map_put(sub, "statics", p_stat)
     return sub
 }
 
@@ -403,7 +409,7 @@ on_ws_error(srv: ptr, handler: fn) {
 
 // Internal: invoke an error handler if registered, otherwise default behavior
 _invoke_error_handler(srv: ptr, key: string, arg1: string, arg2: string) {
-    boxed = map_get(srv, key)
+    boxed, _ = map.get(srv, key)
     if boxed != 0 {
         handler = unbox_closure(boxed)
         call(handler, arg1, arg2)
@@ -444,25 +450,26 @@ stats_add_filter(stats: ptr, filter_path: string, result: string, duration_ms: i
     map_put(fs, "path", filter_path)
     map_put(fs, "result", result)
     map_put(fs, "duration", duration_ms)
-    list.add(map_get(stats, "filters"), fs)
+    filters, _ = map.get(stats, "filters")
+    list.add(filters, fs)
 }
 
 // Accessors for stats records
-stats_get_path(stats: ptr) { return map_get(stats, "path") }
-stats_get_endpoint(stats: ptr) { return map_get(stats, "endpoint") }
-stats_get_status(stats: ptr) { return map_get(stats, "status") }
-stats_get_duration(stats: ptr) { return map_get(stats, "duration") }
-stats_get_endpoint_duration(stats: ptr) { return map_get(stats, "endpoint_duration") }
-stats_get_filters(stats: ptr) { return map_get(stats, "filters") }
+stats_get_path(stats: ptr) { v, _ = map.get(stats, "path"); return v }
+stats_get_endpoint(stats: ptr) { v, _ = map.get(stats, "endpoint"); return v }
+stats_get_status(stats: ptr) { v, _ = map.get(stats, "status"); return v }
+stats_get_duration(stats: ptr) { v, _ = map.get(stats, "duration"); return v }
+stats_get_endpoint_duration(stats: ptr) { v, _ = map.get(stats, "endpoint_duration"); return v }
+stats_get_filters(stats: ptr) { v, _ = map.get(stats, "filters"); return v }
 
 // Accessors for filter stat entries
-filter_stat_path(fs: ptr) { return map_get(fs, "path") }
-filter_stat_result(fs: ptr) { return map_get(fs, "result") }
-filter_stat_duration(fs: ptr) { return map_get(fs, "duration") }
+filter_stat_path(fs: ptr) { v, _ = map.get(fs, "path"); return v }
+filter_stat_result(fs: ptr) { v, _ = map.get(fs, "result"); return v }
+filter_stat_duration(fs: ptr) { v, _ = map.get(fs, "duration"); return v }
 
 // Internal: record stats if callback registered
 _record_stats(srv: ptr, stats: ptr) {
-    boxed = map_get(srv, "on_stats")
+    boxed, _ = map.get(srv, "on_stats")
     if boxed != 0 {
         handler = unbox_closure(boxed)
         call(handler, stats)
@@ -611,10 +618,11 @@ ws_handle_client(client: ptr, ws_handlers: ptr) {
     handler = 0
     n_ws = list.size(ws_handlers)
     for (i = 0; i < n_ws; i++) {
-        entry = list.get(ws_handlers, i)
-        entry_path = map_get(entry, "path")
+        entry, _ = list.get(ws_handlers, i)
+        entry_path, _ = map.get(entry, "path")
         if (ws_path == entry_path) {
-            handler = unbox_closure(map_get(entry, "handler"))
+            hboxed, _ = map.get(entry, "handler")
+            handler = unbox_closure(hboxed)
         }
     }
 
@@ -675,8 +683,8 @@ sse_entry(path_pattern: string, handler: fn) {
 // DSL function: sse_endpoint("/events") |stream| { ... }
 // The handler receives an SSE stream object and uses sse_send() to push events.
 sse_endpoint(_ctx: ptr, sse_path: string, handler: fn) {
-    sse_handlers = map_get(_ctx, "sse_handlers")
-    prefix = map_get(_ctx, "prefix")
+    sse_handlers, _ = map.get(_ctx, "sse_handlers")
+    prefix, _ = map.get(_ctx, "prefix")
     full_path = "${prefix}${sse_path}"
     list.add(sse_handlers, sse_entry(full_path, handler))
 }
@@ -725,10 +733,11 @@ sse_handle_client(client: ptr, sse_handlers: ptr) {
     handler = 0
     n_sse = list.size(sse_handlers)
     for (i = 0; i < n_sse; i++) {
-        entry = list.get(sse_handlers, i)
-        entry_path = map_get(entry, "path")
+        entry, _ = list.get(sse_handlers, i)
+        entry_path, _ = map.get(entry, "path")
         if (req_path == entry_path) {
-            handler = unbox_closure(map_get(entry, "handler"))
+            hboxed, _ = map.get(entry, "handler")
+            handler = unbox_closure(hboxed)
         }
     }
 
@@ -797,8 +806,8 @@ chunked_end(sock: ptr) {
 // ---------------------------------------------------------------------------
 
 tw_start(srv: ptr) {
-    port = map_get(srv, "port")
-    host = map_get(srv, "host")
+    port, _ = map.get(srv, "port")
+    host, _ = map.get(srv, "host")
     raw = http.server_create(port)
     map_put(srv, "raw_server", raw)
     result = http.server_bind(raw, host, port)
@@ -810,13 +819,13 @@ tw_start(srv: ptr) {
     // Register all routes with the C server
     // Uses http.server_add_route for all methods (GET, POST, PUT, DELETE,
     // PATCH, HEAD, OPTIONS, and the extended WebDAV/REST methods)
-    routes = map_get(srv, "routes")
+    routes, _ = map.get(srv, "routes")
     n = list.size(routes)
     for (i = 0; i < n; i++) {
-        entry = list.get(routes, i)
-        method = map_get(entry, "method")
-        patt = map_get(entry, "path")
-        boxed_handler = map_get(entry, "handler")
+        entry, _ = list.get(routes, i)
+        method, _ = map.get(entry, "method")
+        patt, _ = map.get(entry, "path")
+        boxed_handler, _ = map.get(entry, "handler")
 
         method_str = method_to_string(method)
         http.server_add_route(raw, method_str, patt, unbox_closure(boxed_handler), 0)
@@ -825,12 +834,12 @@ tw_start(srv: ptr) {
     // Register static file serving routes
     // Register a wildcard GET that delegates to the C static file handler
     // We use the C http.serve_static which handles MIME types, traversal protection, etc.
-    statics = map_get(srv, "statics")
+    statics, _ = map.get(srv, "statics")
     n_static = list.size(statics)
     for (i = 0; i < n_static; i++) {
-        entry = list.get(statics, i)
-        base = map_get(entry, "base_path")
-        dir = map_get(entry, "directory")
+        entry, _ = list.get(statics, i)
+        base, _ = map.get(entry, "base_path")
+        dir, _ = map.get(entry, "directory")
         // Register a wildcard GET that delegates to the C static file handler
         // The C function handles: MIME detection, directory traversal protection,
         // index.html fallback, and 404 for missing files
@@ -838,8 +847,8 @@ tw_start(srv: ptr) {
     }
 
     // Start WebSocket server on separate port if configured
-    ws_port = map_get(srv, "ws_port")
-    ws_handlers = map_get(srv, "ws_handlers")
+    ws_port, _ = map.get(srv, "ws_port")
+    ws_handlers, _ = map.get(srv, "ws_handlers")
     if ws_port > 0 && list.size(ws_handlers) > 0 {
         ws_tcp = tcp.listen(ws_port)
         if ws_tcp != 0 {
@@ -851,8 +860,8 @@ tw_start(srv: ptr) {
     }
 
     // Start SSE server on separate port if configured
-    sse_port = map_get(srv, "sse_port")
-    sse_handlers = map_get(srv, "sse_handlers")
+    sse_port, _ = map.get(srv, "sse_port")
+    sse_handlers, _ = map.get(srv, "sse_handlers")
     if sse_port > 0 && list.size(sse_handlers) > 0 {
         sse_tcp = tcp.listen(sse_port)
         if sse_tcp != 0 {
@@ -872,8 +881,8 @@ tw_start(srv: ptr) {
 
 // Start only the WebSocket accept loop (call from a separate actor/thread)
 server_start_ws(srv: ptr) {
-    ws_tcp = map_get(srv, "ws_tcp_server")
-    ws_handlers = map_get(srv, "ws_handlers")
+    ws_tcp, _ = map.get(srv, "ws_tcp_server")
+    ws_handlers, _ = map.get(srv, "ws_handlers")
     if ws_tcp != 0 {
         ws_accept_loop(ws_tcp, ws_handlers)
     }
@@ -881,26 +890,26 @@ server_start_ws(srv: ptr) {
 
 // Start only the SSE accept loop (call from a separate actor/thread)
 server_start_sse(srv: ptr) {
-    sse_tcp = map_get(srv, "sse_tcp_server")
-    sse_handlers = map_get(srv, "sse_handlers")
+    sse_tcp, _ = map.get(srv, "sse_tcp_server")
+    sse_handlers, _ = map.get(srv, "sse_handlers")
     if sse_tcp != 0 {
         sse_accept_loop(sse_tcp, sse_handlers)
     }
 }
 
 tw_stop(srv: ptr) {
-    raw = map_get(srv, "raw_server")
+    raw, _ = map.get(srv, "raw_server")
     if raw != 0 {
         http.server_stop(raw)
         http.server_free(raw)
     }
     // Stop WebSocket server
-    ws_tcp = map_get(srv, "ws_tcp_server")
+    ws_tcp, _ = map.get(srv, "ws_tcp_server")
     if ws_tcp != 0 {
         tcp.server_close(ws_tcp)
     }
     // Stop SSE server
-    sse_tcp = map_get(srv, "sse_tcp_server")
+    sse_tcp, _ = map.get(srv, "sse_tcp_server")
     if sse_tcp != 0 {
         tcp.server_close(sse_tcp)
     }

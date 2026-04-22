@@ -15,8 +15,8 @@ builder outer_task(label: string) {
     inner_mode = ""
     outer_mode = ""
     if _builder != null {
-        if map_has(_builder, "outer") == 1 { outer_mode = map_get(_builder, "outer") }
-        if map_has(_builder, "inner") == 1 { inner_mode = map_get(_builder, "inner") }
+        if map_has(_builder, "outer") == 1 { outer_mode, _ = map.get(_builder, "outer") }
+        if map_has(_builder, "inner") == 1 { inner_mode, _ = map.get(_builder, "inner") }
     }
     println("outer: ${label} outer=${outer_mode} inner=${inner_mode}")
 }
@@ -24,7 +24,7 @@ builder outer_task(label: string) {
 builder inner_task(label: string) {
     mode = ""
     if _builder != null {
-        if map_has(_builder, "mode") == 1 { mode = map_get(_builder, "mode") }
+        if map_has(_builder, "mode") == 1 { mode, _ = map.get(_builder, "mode") }
     }
     println("  inner: ${label} mode=${mode}")
 }
@@ -40,7 +40,7 @@ builder check_config(label: string): int {
         println("check: ${label} missing required")
         return -1
     }
-    val = map_get(_builder, "required")
+    val, _ = map.get(_builder, "required")
     println("check: ${label} required=${val}")
     return 1
 }
@@ -50,7 +50,8 @@ builder check_config(label: string): int {
 builder validate(name: string): string {
     if _builder == null { return "none" }
     if map_has(_builder, "mode") == 0 { return "default" }
-    return map_get(_builder, "mode")
+    m, _ = map.get(_builder, "mode")
+    return m
 }
 
 main() {

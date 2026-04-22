@@ -1,5 +1,7 @@
 // Test std.list operations
-// Covers: new, add, get, set, remove, size, clear, free
+// Covers: new, add, get, set, remove, size, clear, free.
+// Uses the Go-style wrappers: list.add returns err, list.get returns
+// (value, err).
 
 import std.list
 
@@ -19,10 +21,9 @@ main() {
 
     // Test 2: add elements
     print("\nTest 2: add elements\n")
-    // Store integers as void* (cast via intptr_t internally)
-    list.add(l, 10)
-    list.add(l, 20)
-    list.add(l, 30)
+    _ = list.add(l, 10)
+    _ = list.add(l, 20)
+    _ = list.add(l, 30)
     if list.size(l) == 3 {
         print("  PASS: size = 3 after 3 adds\n")
     } else {
@@ -32,11 +33,11 @@ main() {
         exit(1)
     }
 
-    // Test 3: get elements
+    // Test 3: get elements (Go-style tuple)
     print("\nTest 3: get elements\n")
-    v0 = list.get(l, 0)
-    v1 = list.get(l, 1)
-    v2 = list.get(l, 2)
+    v0, _ = list.get(l, 0)
+    v1, _ = list.get(l, 1)
+    v2, _ = list.get(l, 2)
     if v0 == 10 {
         print("  PASS: get(0) = 10\n")
     } else {
@@ -65,9 +66,8 @@ main() {
         print("  FAIL\n")
         exit(1)
     }
-    // After removing index 1 (was 20), remaining: [10, 30]
-    v0b = list.get(l, 0)
-    v1b = list.get(l, 1)
+    v0b, _ = list.get(l, 0)
+    v1b, _ = list.get(l, 1)
     if v0b == 10 {
         print("  PASS: get(0) = 10 after remove\n")
     } else {
@@ -93,14 +93,15 @@ main() {
 
     // Test 6: add after clear
     print("\nTest 6: add after clear\n")
-    list.add(l, 99)
+    _ = list.add(l, 99)
     if list.size(l) == 1 {
         print("  PASS: size = 1 after re-add\n")
     } else {
         print("  FAIL\n")
         exit(1)
     }
-    if list.get(l, 0) == 99 {
+    v99, _ = list.get(l, 0)
+    if v99 == 99 {
         print("  PASS: get(0) = 99\n")
     } else {
         print("  FAIL\n")

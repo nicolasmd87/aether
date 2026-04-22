@@ -104,11 +104,11 @@ main() {
 
     // === FILE SIZE ===
     print("\nTest 8: file.size on non-existent file\n")
-    sz = file.size("${tmp}/nonexistent_aether_test_file_xyz")
-    if sz == 0 {
-        print("  PASS: file.size returns 0 for missing file\n")
+    sz, serr = file.size("${tmp}/nonexistent_aether_test_file_xyz")
+    if serr != "" {
+        print("  PASS: file.size returns error for missing file\n")
     } else {
-        print("  FAIL\n")
+        println("  FAIL: expected error, got size=${sz}")
         exit(1)
     }
 
@@ -124,17 +124,22 @@ main() {
 
     // === JSON EDGE CASES ===
     print("\nTest 10: json.parse empty string\n")
-    empty_json = json.parse("")
-    if empty_json == 0 {
-        print("  PASS: json.parse('') returns NULL\n")
+    empty_json, eerr = json.parse("")
+    if empty_json == null {
+        if eerr != "" {
+            print("  PASS: json.parse('') returns (null, error)\n")
+        } else {
+            print("  FAIL: expected error message\n")
+            exit(1)
+        }
     } else {
         json.free(empty_json)
-        print("  FAIL: should return NULL\n")
+        print("  FAIL: should return null\n")
         exit(1)
     }
 
     print("\nTest 11: json.parse simple values\n")
-    jn = json.parse("42")
+    jn, _ = json.parse("42")
     if json.type(jn) == 2 {
         print("  PASS: json.parse('42') is number\n")
     } else {
@@ -144,7 +149,7 @@ main() {
     json.free(jn)
 
     print("\nTest 12: json.parse null\n")
-    jnull = json.parse("null")
+    jnull, _ = json.parse("null")
     if json.is_null(jnull) == 1 {
         print("  PASS: json.parse('null') is null\n")
     } else {
@@ -154,13 +159,12 @@ main() {
     json.free(jnull)
 
     print("\nTest 13: json.parse nested object\n")
-    nested = json.parse("{\"a\":{\"b\":{\"c\":1}}}")
+    nested, _ = json.parse("{\"a\":{\"b\":{\"c\":1}}}")
     if json.type(nested) == 5 {
-        a = json.object_get(nested, "a")
-        b = json.object_get(a, "b")
-        c = json.object_get(b, "c")
-        val = json.get_int(c)
-        if val == 1 {
+        a, _ = json.object_get(nested, "a")
+        b, _ = json.object_get(a, "b")
+        c, _ = json.object_get(b, "c")
+        if json.get_int(c) == 1 {
             print("  PASS: nested object access works\n")
         } else {
             print("  FAIL: wrong value\n")
@@ -173,10 +177,15 @@ main() {
     json.free(nested)
 
     print("\nTest 14: json.object_get missing key\n")
-    obj = json.parse("{\"x\":1}")
-    missing = json.object_get(obj, "y")
-    if missing == 0 {
-        print("  PASS: missing key returns NULL\n")
+    obj, _ = json.parse("{\"x\":1}")
+    missing, merr = json.object_get(obj, "y")
+    if missing == null {
+        if merr == "" {
+            print("  PASS: missing key returns (null, empty error)\n")
+        } else {
+            println("  FAIL: unexpected error for absent key: ${merr}")
+            exit(1)
+        }
     } else {
         print("  FAIL\n")
         exit(1)
@@ -184,12 +193,12 @@ main() {
     json.free(obj)
 
     print("\nTest 15: json.get_string on non-string\n")
-    num = json.parse("99")
-    s = json.get_string(num)
-    if s == 0 {
-        print("  PASS: get_string on number returns NULL\n")
+    num, _ = json.parse("99")
+    s, gsterr = json.get_string(num)
+    if gsterr != "" {
+        print("  PASS: get_string on number returned error\n")
     } else {
-        print("  FAIL\n")
+        println("  FAIL: expected error, got s='${s}'")
         exit(1)
     }
     json.free(num)
@@ -249,24 +258,21 @@ main() {
     // === FILE WRITE / READ ROUND-TRIP ===
     print("\nTest 21: file write + read round-trip\n")
     test_path = "${tmp}/aether_edge_test.txt"
-    f = file.open(test_path, "w")
-    file.write(f, "edge case test", 14)
-    file.close(f)
-
-    f2 = file.open(test_path, "r")
-    content = file.read_all(f2)
-    file.close(f2)
+    we21 = file.write(test_path, "edge case test")
+    if we21 != "" { println("  FAIL: write: ${we21}"); exit(1) }
+    content, re21 = file.read(test_path)
+    if re21 != "" { println("  FAIL: read: ${re21}"); exit(1) }
     if content == "edge case test" {
         print("  PASS: write + read round-trip\n")
     } else {
         print("  FAIL\n")
         exit(1)
     }
-    file.delete(test_path)
+    _ = file.delete(test_path)
 
     // === JSON ARRAY ===
     print("\nTest 22: json empty array\n")
-    earr = json.parse("[]")
+    earr, _ = json.parse("[]")
     if json.array_size(earr) == 0 {
         print("  PASS: empty array size = 0\n")
     } else {
@@ -276,7 +282,7 @@ main() {
     json.free(earr)
 
     print("\nTest 23: json empty object\n")
-    eobj = json.parse("{}")
+    eobj, _ = json.parse("{}")
     if json.type(eobj) == 5 {
         print("  PASS: empty object is type 5\n")
     } else {

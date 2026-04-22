@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Changed
+
+- **`std.json` parser: clean-room rewrite + fast-double + SIMD string scan** (`std/json/aether_json.c`, `std/json/aether_json.h`). Three layered improvements over the previous byte-by-byte parser.
+
+  *Generation 2 — arena rewrite.* One bump-pointer arena per document, `JsonValue` tree with flat `JsonValue**` children and parallel `char**`/`uint32_t*`/`JsonValue**` for objects, 256-entry character-class lookup table for hot-path dispatch, Bjoern Hoehrmann's public-domain UTF-8 DFA, integer fast path that skips `strtod` for pure digits, two-phase string parser that pre-scans the closing quote for exact buffer sizing.
+
+  *Generation 3 — fast-double + SIMD.* Numbers with ≤15 significant digits and |exponent| ≤ 22 take a `POW10` fast-double path: accumulate the int + frac mantissa, apply one multiply/divide by the pow10 lookup, cast to double. Falls back to `strtod` for edge cases needing IEEE-754-correct rounding (16+ digits, huge exponents, denormals). The string fast-loop calls a compile-time-dispatched `scan_str_safe()`: SSE2 on `__SSE2__`, NEON on `__ARM_NEON && __aarch64__`, scalar LUT fallback always compiled in for WASM / embedded / non-x86-non-arm. All three produce byte-identical results — SIMD is purely additive acceleration.
+
+  API preserved exactly. New length-taking variant `json_parse_raw_n(data, len)` for non-null-terminated input. Benchmark harness (`benchmarks/json/`) committed with corpus generator and optional reference-implementation comparison mode (`make bench-json` / `make bench-json-compare`). Methodology in `benchmarks/json/baseline.md`; absolute throughput figures are intentionally not committed — run the harness on the machine you care about. Design rationale, structural-headroom discussion, and "when to change what" table in `docs/json-parser-design.md`.
+
+- **`JsonValue` shrunk 48 → 32 bytes; object backing consolidated behind one `JsonObjBlock*`** (`std/json/aether_json.c`). The `obj` union variant used to carry three parallel array pointers (`keys`, `key_lens`, `values`) plus count/capacity inline — 32 bytes, dominating the union. Replaced with `{ JsonObjBlock* blk; uint32_t count; uint32_t capacity; }` — 16 bytes, same width as `arr` and `str`. The block itself holds the three arrays on the arena and is allocated lazily on first reserve. Net effect: `sizeof(JsonValue)` drops from 48 to 32, so two values share a 64-byte cache line on every mainstream target. Hot accessors (`json_object_get_raw`, stringify, deep-copy, heap-free) updated to reach through `blk->`; empty-object fast-outs added where count is zero. No API change. Verified against JSONTestSuite conformance (318/318), ASan+UBSan on the full bench corpus, MinGW cross-compile, cooperative scheduler.
+
+- **`JSON_CONTAINER_INITIAL_CAP` bumped 4 → 8** (`std/json/aether_json.c`). Initial capacity for both arrays and objects. Realistic JSON objects cluster in the 5–15-key range; starting at 4 meant two doubling cycles for the common case, and the wasted arena pointers for genuinely tiny objects round off into the chunk allocator anyway. Applied to `arr_reserve` and `obj_reserve` via the shared constant so the two paths can't drift.
+
+- **Stdlib safety hardening.** Fixed null-deref-after-malloc in `string_new_with_length`, `string_concat`, `string_split`, `list_new`, `map_new`, `io_file_info_raw`, `path_join`, `path_dirname`, `dir_list_raw`, and the HTTP server request parser (`std/net/aether_http_server.c`'s method/path/query allocations each with a cleanup-of-already-allocated-peers path on failure). Fixed `size_t` underflow in `string_split` when the delimiter is longer than the input (previously looped past end-of-buffer). Added proper partial-cleanup helper for OOM during split so failure doesn't leak the pieces allocated so far. `string_concat` gained `size_t`-overflow guard before adding 1 for the null terminator.
+
+- **Stdlib performance: amortised growth + cache-friendly hashmap.** `std/net/aether_http.c` response-body accumulator switched from realloc-per-recv (O(N²) on large responses) to capacity-doubling starting at 16 KB. `std/fs/aether_fs.c` directory listing (both Windows `FindFirstFileA` and POSIX `readdir` branches) same change — capacity-doubling starting at 16 entries. `std/os/aether_os.c` exec-capture buffers bumped from 256B/1 KB to 4 KB, with defensive `while` growth instead of single-doubling `if`. `std/collections/aether_collections.c` hashmap: `HashMapEntry` now caches the DJB2 hash and key length so resizes don't rewalk the key, and `key_equals` prefilters on length before `memcmp`; load-factor check is pure integer arithmetic (`size * 4 > capacity * 3`) instead of per-insert floating-point division. `string_concat` has empty-input fast paths that skip the full concat when one side is 0 bytes.
+
+### Added
+
+- **JSONTestSuite conformance corpus** (`tests/conformance/json/`). Imported the canonical 318-file RFC 8259 test corpus (MIT licensed, attribution in `tests/conformance/json/LICENSE`). `make test-json-conformance` gates CI on 95/95 `y_*` must-accept + 188/188 `n_*` must-reject; records `i_*` implementation-defined outcomes without gating.
+
+- **JSON hardening targets** (`Makefile`). `make test-json-asan` builds the parser under `-fsanitize=address,undefined` and parses every corpus fixture — clean on all 6 (including 10 MB `large.json`). `make test-json-valgrind` runs under Valgrind on platforms where it's installed, skipping otherwise. Both targets are parser-focused so they don't drag in the whole stdlib.
+
+- **`json_parse_raw_n(const char* data, size_t len)`** (`std/json/aether_json.h`). Length-taking parse variant. Accepts inputs without a trailing null byte — required for memory-mapped files, sub-slices, and fuzz harnesses.
+
+- **Targeted regression tests for new code paths.** `tests/regression/test_json_number_precision.ae` covers every boundary in the fast-double parser (int64-max, 15/16/17 significant digits, `1e22` / `1e23` exponent split, near-max/denormal doubles, strict RFC rejection still holds on fast-path numbers). `tests/regression/test_json_simd_string.ae` stresses SIMD/scalar parity: lengths 0/1/15/16/17/31/32/33/100 bracket the 16-byte block boundaries, escapes at positions 0/14/16/19 force SIMD-to-scalar handoff mid-string, non-ASCII UTF-8 (2-byte café, 4-byte emoji) at boundaries exercises DFA fallback. `tests/regression/test_collections_hashmap_edge.ae` extended with a 256-key length-varying collision storm that verifies the cached-hash + length-prefilter chain doesn't silently overwrite or lose entries through rehash boundaries.
+
+- **`std/json/aether_json.c` supporting tests.** Five regression files committed: `test_json_edge_cases.ae` (escape chars, empty strings, deeply-nested-but-legal), `test_json_unicode.ae` (BMP + surrogate pairs), `test_json_rfc_rejection.ae` (every `n_*` from the RFC), `test_json_position_errors.ae` (line:col accuracy across multi-line inputs), `test_json_error_tuples.ae` (Go-style wrapper error shapes).
+
+- **Pattern-matching in examples.** `examples/stdlib/json-demo.ae` rewritten with `match` expressions on `json.type()` for variant dispatch (null/bool/number/string/array/object) — one arm per JsonType, no if-else chains. The `render(v)` function composes cleanly when called recursively on array elements.
+
+- **`docs/json-parser-design.md`** — new design-rationale doc covering arena memory model, character classification LUT, UTF-8 DFA, SIMD string fast-loop (with its SSE2/NEON/scalar dispatch), number-parser three-path structure, container representation, `JsonValue` sizing (the 32-byte two-per-cache-line layout), error reporting, depth limit, thread safety, and the structural-headroom section (tape representation as deferred work with a concrete dual-representation design, full-SIMD parsing as a follow-on of tape).
+
 ## [0.77.0]
 
 ### Fixed

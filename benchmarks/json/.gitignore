@@ -1,0 +1,6 @@
+# Generated at benchmark time — too big to commit.
+corpus/large.json
+
+# Local comparison reference. Not committed; the benchmark fetches it on demand
+# into this directory when you run `make bench-json-compare`.
+vendor/yyjson/
