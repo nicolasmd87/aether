@@ -1,0 +1,144 @@
+// Regression: std.http request/response accessors work on
+// externally-constructed HttpRequest / HttpServerResponse pointers —
+// not just on objects the runtime's own dispatch loop allocated.
+//
+// The svn-aether port (~scm/subversion/subversion) is the motivating
+// case: a C dispatch layer parses the wire format, builds the
+// request, invokes an Aether handler, and serializes the response
+// the Aether handler populated. Every step crosses the FFI boundary
+// as a bare `ptr`.
+//
+// This test pins:
+//   1. Request-side accessors (http_get_header, http_get_query_param,
+//      http_request_method, http_request_path) work on a request
+//      allocated and populated by C code.
+//   2. Response-side setters (http_response_set_status,
+//      http_response_json, http_response_set_header) work on a
+//      response that is just `calloc(sizeof(HttpServerResponse))`
+//      with every field zeroed. The setters lazy-allocate the
+//      header arrays so the handler can fill the response without
+//      going through http_response_create().
+
+import std.http
+import std.string
+
+extern probe_make_request() -> ptr
+extern probe_make_bare_response() -> ptr
+extern probe_res_status(p: ptr) -> int
+extern probe_res_body(p: ptr) -> string
+extern probe_res_header_count(p: ptr) -> int
+extern probe_free_request(p: ptr)
+extern probe_free_response(p: ptr)
+
+main() {
+    print("=== http external-ptr interop ===\n\n")
+
+    // ---- Request-side ----------------------------------------------
+
+    req = probe_make_request()
+
+    print("Test 1: http_get_header on C-constructed request\n")
+    val = http_get_header(req, "X-Test")
+    if val == null {
+        print("  FAIL: null\n")
+        exit(1)
+    }
+    if string.equals(val, "hi") != 1 {
+        print("  FAIL: wrong value\n")
+        exit(1)
+    }
+    print("  PASS: X-Test = hi\n")
+
+    print("\nTest 2: http_get_header on a missing key returns null\n")
+    missing = http_get_header(req, "X-Does-Not-Exist")
+    if missing != null {
+        print("  FAIL: expected null\n")
+        exit(1)
+    }
+    print("  PASS: missing header returns null\n")
+
+    print("\nTest 3: http_request_method\n")
+    m = http_request_method(req)
+    if string.equals(m, "GET") != 1 {
+        print("  FAIL\n")
+        exit(1)
+    }
+    print("  PASS: GET\n")
+
+    print("\nTest 4: http_request_path\n")
+    p = http_request_path(req)
+    if string.equals(p, "/api/foo") != 1 {
+        print("  FAIL\n")
+        exit(1)
+    }
+    print("  PASS: /api/foo\n")
+
+    print("\nTest 5: http_get_query_param\n")
+    q = http_get_query_param(req, "x")
+    if q == null {
+        print("  FAIL: null\n")
+        exit(1)
+    }
+    if string.equals(q, "1") != 1 {
+        print("  FAIL: wrong\n")
+        exit(1)
+    }
+    print("  PASS: x=1\n")
+
+    // ---- Request-side null-safety ---------------------------------
+
+    print("\nTest 6: http_get_header on null request returns null\n")
+    null_val = http_get_header(null, "X-Test")
+    if null_val != null {
+        print("  FAIL: expected null\n")
+        exit(1)
+    }
+    print("  PASS\n")
+
+    // ---- Response-side: lazy-allocation ---------------------------
+    //
+    // This is the main fix. A calloc'd HttpServerResponse has
+    // header_keys/values = NULL. Before the fix, set_status was
+    // OK (it only touches status_code + status_text), but the
+    // FIRST set_header (which http_response_json does implicitly
+    // for Content-Type) would strdup into a NULL array and crash.
+
+    print("\nTest 7: http_response_set_status on bare response\n")
+    res = probe_make_bare_response()
+    http_response_set_status(res, 201)
+    if probe_res_status(res) != 201 {
+        print("  FAIL: status didn't stick\n")
+        exit(1)
+    }
+    print("  PASS: status = 201\n")
+
+    print("\nTest 8: http_response_json on bare response (lazy-allocates headers)\n")
+    http_response_json(res, "{\"ok\":true}")
+    body = probe_res_body(res)
+    if string.equals(body, "{\"ok\":true}") != 1 {
+        println("  FAIL: body '${body}'")
+        exit(1)
+    }
+    if probe_res_header_count(res) < 2 {
+        // set_body + set_header("Content-Type") + set_header("Content-Length")
+        // means at least 2 headers after json().
+        print("  FAIL: expected at least 2 headers\n")
+        exit(1)
+    }
+    print("  PASS: body + Content-Type + Content-Length all landed\n")
+
+    print("\nTest 9: http_response_set_header on bare response\n")
+    res2 = probe_make_bare_response()
+    http_response_set_header(res2, "X-Custom", "custom-value")
+    if probe_res_header_count(res2) != 1 {
+        print("  FAIL: expected 1 header\n")
+        exit(1)
+    }
+    print("  PASS: single header landed on bare response\n")
+
+    probe_free_response(res)
+    probe_free_response(res2)
+    probe_free_request(req)
+
+    print("\n=== All external-ptr interop tests passed ===\n")
+}

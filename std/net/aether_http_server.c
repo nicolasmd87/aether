@@ -297,7 +297,9 @@ HttpRequest* http_parse_request(const char* raw_request) {
 }
 
 const char* http_get_header(HttpRequest* req, const char* key) {
+    if (!req || !key || !req->header_keys || !req->header_values) return NULL;
     for (int i = 0; i < req->header_count; i++) {
+        if (!req->header_keys[i]) continue;
         if (strcasecmp(req->header_keys[i], key) == 0) {
             return req->header_values[i];
         }
@@ -306,6 +308,7 @@ const char* http_get_header(HttpRequest* req, const char* key) {
 }
 
 const char* http_get_query_param(HttpRequest* req, const char* key) {
+    if (!req || !key) return NULL;
     if (!req->query_string) return NULL;
     
     // Parse query params on demand
@@ -385,12 +388,27 @@ HttpServerResponse* http_response_create() {
 }
 
 void http_response_set_status(HttpServerResponse* res, int code) {
+    if (!res) return;
     res->status_code = code;
     free(res->status_text);
     res->status_text = strdup(http_status_text(code));
 }
 
 void http_response_set_header(HttpServerResponse* res, const char* key, const char* value) {
+    if (!res || !key || !value) return;
+
+    // Lazy-allocate the header arrays. http_response_create() sets them
+    // up eagerly, but external callers constructing the response struct
+    // themselves (e.g. a C dispatch layer that wants to hand a response
+    // into Aether handlers) only zero the struct. Without this, the
+    // strdup-into-NULL below was a crash on the first header write.
+    if (!res->header_keys || !res->header_values) {
+        res->header_keys = (char**)calloc(50, sizeof(char*));
+        res->header_values = (char**)calloc(50, sizeof(char*));
+        res->header_count = 0;
+        if (!res->header_keys || !res->header_values) return;
+    }
+
     // Check if header exists, update it
     for (int i = 0; i < res->header_count; i++) {
         if (strcasecmp(res->header_keys[i], key) == 0) {
@@ -399,7 +417,7 @@ void http_response_set_header(HttpServerResponse* res, const char* key, const ch
             return;
         }
     }
-    
+
     // Add new header (max 50)
     if (res->header_count >= 50) return;
     res->header_keys[res->header_count] = strdup(key);
@@ -408,6 +426,7 @@ void http_response_set_header(HttpServerResponse* res, const char* key, const ch
 }
 
 void http_response_set_body(HttpServerResponse* res, const char* body) {
+    if (!res || !body) return;
     free(res->body);
     res->body = strdup(body);
     res->body_length = strlen(body);
@@ -1278,20 +1297,25 @@ void http_server_set_actor_handler(HttpServer* server, void (*step_fn)(void*),
 }
 
 // Request accessors (for Aether .ae code via opaque ptr)
+// Request field accessors. Each guards against NULL at both the struct
+// and the field level so a partially-populated HttpRequest (e.g. one
+// built by a C dispatch shim that didn't touch every field) doesn't
+// crash downstream string ops. Empty string is the "absent" sentinel
+// — consistent with Aether's Go-style string conventions.
 const char* http_request_method(HttpRequest* req) {
-    return req ? req->method : "";
+    return (req && req->method) ? req->method : "";
 }
 
 const char* http_request_path(HttpRequest* req) {
-    return req ? req->path : "";
+    return (req && req->path) ? req->path : "";
 }
 
 const char* http_request_body(HttpRequest* req) {
-    return req ? req->body : "";
+    return (req && req->body) ? req->body : "";
 }
 
 const char* http_request_query(HttpRequest* req) {
-    return req ? req->query_string : "";
+    return (req && req->query_string) ? req->query_string : "";
 }
 
 #endif // AETHER_HAS_NETWORKING
