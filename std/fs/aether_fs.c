@@ -66,11 +66,18 @@ DirList* fs_glob_multi_raw(void* l) { (void)l; return NULL; }
 #ifdef _WIN32
     #include <direct.h>
     #include <io.h>            // _unlink (for fs_unlink_raw on Windows)
+    #include <process.h>       // _getpid (for fs_write_atomic_raw tmp path)
     #include <windows.h>
     #define mkdir(path, mode) _mkdir(path)
     #define rmdir _rmdir
     #define stat _stat
     #define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
+    // Windows stat result has no S_ISREG / S_ISLNK macros; emulate the
+    // former from the mode bits. S_ISLNK stays undefined here because
+    // the lstat branch in fs_stat_raw is guarded by #ifndef _WIN32.
+    #ifndef S_ISREG
+        #define S_ISREG(m) (((m) & S_IFMT) == S_IFREG)
+    #endif
 #else
     #include <dirent.h>
     #include <unistd.h>
