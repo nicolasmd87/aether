@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`std.intarr` — fixed-size packed int buffer** (`std/collections/aether_intarr.c`, `std/collections/aether_collections.h`, `std/intarr/module.ae`). Closes the "int arrays via FFI" gap: `std.list` stores `void*`-boxed items, so packing ints through it costs an allocation per entry and an extra pointer chase per read. For DP tables (blame LCS, edit-distance, string alignment), flat int-keyed lookup buffers, and other hot int-indexed patterns, `std.intarr` provides a heap-allocated `int[size]` with direct index ops, bulk fill, and no amortised growth. Three access tiers: `intarr.get(arr, i)` / `intarr.set(arr, i, v)` are Go-style wrappers with bounds-checked `(value, err)` returns; `intarr_get_raw` / `intarr_set_raw` are safe-on-OOB externs (return 0 / no-op); `intarr_get_unchecked` / `intarr_set_unchecked` skip the bounds check for validated-index inner loops. Multi-dimensional access is caller-computed (`row * N + col` on a flat buffer). Regression test: `tests/regression/test_intarr.ae` (10 cases — alloc + size, zero-init, round-trip, new_filled, fill reset, wrapper error shapes, 5×4 DP-table pattern, negative-size rejection, zero-size legality). Module aliased as `std.intarr` following the `std.list` / `std.map` pattern.
+
 ## [0.82.0]
 
 ### Fixed
