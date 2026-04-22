@@ -1,0 +1,55 @@
+// Regression: string.from_long(long) — sibling of string.from_int
+// that preserves the full 64-bit range. Callers formatting byte
+// counts, file sizes, revision numbers, or other values that can
+// exceed INT_MAX reach for this instead of truncating through
+// string.from_int.
+//
+// Note on the assertion style: string.from_long returns an
+// AetherString under the covers (surfaced as `ptr`), so equality
+// against a literal goes through string.equals — same pattern the
+// rest of the suite uses for string.from_int.
+
+import std.string
+
+check(label: string, got: ptr, want: string) {
+    if string.equals(got, want) != 1 {
+        println("  FAIL: ${label} expected '${want}'")
+        exit(1)
+    }
+    println("  PASS: ${label}")
+}
+
+main() {
+    print("=== string.from_long ===\n\n")
+
+    print("Test 1: small positive\n")
+    check("from_long(42)", string.from_long(42), "42")
+
+    print("\nTest 2: zero\n")
+    check("from_long(0)", string.from_long(0), "0")
+
+    print("\nTest 3: negative\n")
+    check("from_long(-123)", string.from_long(-123), "-123")
+
+    // Test 4: value past INT_MAX.
+    // string.from_int can only represent values up to 2^31-1 =
+    // 2147483647. A 12-digit value exercises the 64-bit path and
+    // would silently truncate under from_int. `long` prefix pins
+    // the variable's type so the literal isn't downcast on the way.
+    print("\nTest 4: value past INT_MAX\n")
+    long big = 123456789012
+    check("from_long(123456789012)", string.from_long(big), "123456789012")
+
+    print("\nTest 5: large negative (past INT_MIN)\n")
+    long neg_big = -123456789012
+    check("from_long(-123456789012)", string.from_long(neg_big), "-123456789012")
+
+    // Test 6: max 64-bit values — confirm the extern signature is
+    // wide enough that the sign bit isn't clipped.
+    print("\nTest 6: 9_999_999_999_999_999 (close to int64 max)\n")
+    long near_max = 9999999999999999
+    check("from_long(9999999999999999)", string.from_long(near_max),
+          "9999999999999999")
+
+    print("\n=== All string.from_long tests passed ===\n")
+}

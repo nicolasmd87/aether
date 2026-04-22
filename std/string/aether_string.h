@@ -66,6 +66,9 @@ void string_array_free(AetherStringArray* arr);
 // Conversion
 const char* string_to_cstr(const void* str);
 AetherString* string_from_int(int value);
+// 64-bit sibling of string_from_int. Uses `long long` so it covers
+// Aether's `long` type across platforms where `long` is 32-bit (MSVC).
+AetherString* string_from_long(long long value);
 AetherString* string_from_float(float value);
 
 // Parsing (string -> number) — raw form with out-parameter.
