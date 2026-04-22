@@ -375,6 +375,37 @@ main() {
 - `path.extension(path)` - Get file extension including dot
 - `path.is_absolute(path)` - Check if absolute path (returns 1/0)
 
+### Full-fat filesystem (`std.fs`)
+
+`std.file` / `std.dir` / `std.path` cover most calls; `std.fs` re-exports
+them and adds the accessors that need a bit more plumbing — durable
+writes, atomic rename, one-shot stat, binary-safe read.
+
+```aether
+import std.fs
+
+main() {
+    // Durable write: staging + fsync + rename.
+    err = fs.write_atomic("config.json", body, string.length(body))
+
+    // Rename composes with write_atomic for stage-then-publish.
+    err = fs.rename("config.json.new", "config.json")
+
+    // One stat, four fields.
+    kind, size, mtime, err = fs.file_stat("config.json")
+    //   kind: 1=file, 2=dir, 3=symlink, 4=other
+
+    // Binary-safe read with explicit length.
+    data, n, err = fs.read_binary("payload.bin")
+}
+```
+
+**Functions (beyond those re-exported from `std.file`/`std.dir`/`std.path`):**
+- `fs.write_atomic(path, data, length)` → `string` - Stage to `<path>.tmp.<pid>.<n>`, fsync, rename over destination. Binary-safe via explicit length.
+- `fs.rename(from, to)` → `string` - POSIX `rename(2)` wrapper. Atomic when source and target are on the same filesystem.
+- `fs.file_stat(path)` → `(kind, size, mtime, err)` - One `lstat(2)`; symlinks report kind 3, target is not followed.
+- `fs.read_binary(path)` → `(content, length, err)` - Length-aware read preserving embedded NULs.
+
 ---
 
 ## JSON (`std.json`)

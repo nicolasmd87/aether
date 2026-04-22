@@ -55,6 +55,67 @@ char* fs_readlink_raw(const char* path);
 int   fs_is_symlink(const char* path);
 int   fs_unlink_raw(const char* path);
 
+// Durable write to `path`: writes to `<path>.tmp.<pid>`, fsyncs, then
+// renames over the destination. Survives a crash in the middle of a
+// write without leaving a half-finished file at `path`. Takes a
+// length so the input is binary-safe (embedded NULs OK). Returns 1
+// on success, 0 on any failure (tmp open/write/fsync/rename). On
+// failure the tmp file is removed so the caller doesn't leak.
+int fs_write_atomic_raw(const char* path, const char* data, int length);
+
+// Rename `from` to `to` — thin wrapper around POSIX rename(2). On
+// POSIX rename(2) is atomic when source and target are on the same
+// filesystem; callers composing with fs_write_atomic_raw should
+// pick a tmp path on the same fs as the target. Returns 1 on
+// success, 0 on failure.
+int fs_rename_raw(const char* from, const char* to);
+
+// Single-stat accessor. Writes the entry kind into *out_kind:
+//   1 = file, 2 = directory, 3 = symlink, 4 = other (FIFO, socket,
+//   device, ...). Size written to *out_size, mtime to *out_mtime.
+// Uses lstat(2) — symlinks show up as kind 3, not followed.
+// Returns 1 on success, 0 on failure (missing path, stat error).
+// On failure all three out-params are zeroed.
+int fs_stat_raw(const char* path, int* out_kind,
+                int* out_size, int* out_mtime);
+
+// Split-accessor pair for Aether callers that don't want to pass C
+// out-parameters. fs_try_stat caches the most recent stat result in
+// thread-local storage; the fs_get_* accessors read from it. Returns
+// 1 on success, 0 on stat failure — in the failure case the getters
+// all return 0. Typical Aether use:
+//
+//   if fs_try_stat(path) != 0 {
+//       kind  = fs_get_stat_kind()
+//       size  = fs_get_stat_size()
+//       mtime = fs_get_stat_mtime()
+//   }
+int fs_try_stat(const char* path);
+int fs_get_stat_kind(void);
+int fs_get_stat_size(void);
+int fs_get_stat_mtime(void);
+
+// Read the entire file at `path` into a newly malloc'd buffer.
+// Sibling of file_read_all_raw that is length-aware and binary-safe:
+// the returned buffer contains exactly the file's bytes (including
+// embedded NULs) and *out_len carries the byte count. A trailing
+// '\0' is appended past *out_len as a convenience for pure-text
+// callers, but it is NOT included in the length. Returns NULL on
+// any failure (missing path, stat fail, read short). Caller frees.
+char* fs_read_binary_raw(const char* path, int* out_len);
+
+// Aether-friendly split accessor: fs_try_read_binary stashes the
+// read result (buffer + length) in TLS and returns 1 on success /
+// 0 on failure; fs_get_read_binary / fs_get_read_binary_length
+// read from the cache. The cached buffer is freed on the next call
+// to fs_try_read_binary (or when fs_release_read_binary is called
+// explicitly), so callers should copy out before issuing the next
+// read. Matches the shape of fs_try_stat + fs_get_stat_*.
+int   fs_try_read_binary(const char* path);
+const char* fs_get_read_binary(void);
+int   fs_get_read_binary_length(void);
+void  fs_release_read_binary(void);
+
 // Path operations
 char* path_join(const char* path1, const char* path2);
 char* path_dirname(const char* path);

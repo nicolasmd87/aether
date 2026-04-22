@@ -47,6 +47,31 @@ extern fs_readlink_raw(path: string) -> string
 extern fs_is_symlink(path: string) -> int
 extern fs_unlink_raw(path: string) -> int
 
+// Durable write: write-to-tmp + fsync + rename over destination.
+// Binary-safe — takes an explicit length so embedded NULs survive.
+extern fs_write_atomic_raw(path: string, data: string, length: int) -> int
+
+// POSIX rename(2). Callers pairing with write_atomic should keep
+// `from` on the same filesystem as `to` for atomicity.
+extern fs_rename_raw(from: string, to: string) -> int
+
+// Split-accessor stat: call fs_try_stat first, then read the
+// getters. kind encoding: 1=file, 2=dir, 3=symlink, 4=other.
+// Pair is thread-local so back-to-back calls on one thread are safe.
+extern fs_try_stat(path: string) -> int
+extern fs_get_stat_kind() -> int
+extern fs_get_stat_size() -> int
+extern fs_get_stat_mtime() -> int
+
+// Split-accessor binary read: fs_try_read_binary reads the file into
+// a TLS-owned buffer; fs_get_read_binary / fs_get_read_binary_length
+// read that buffer borrowed. fs_release_read_binary frees early
+// (otherwise it's released on the next fs_try_read_binary call).
+extern fs_try_read_binary(path: string) -> int
+extern fs_get_read_binary() -> string
+extern fs_get_read_binary_length() -> int
+extern fs_release_read_binary()
+
 extern dir_list_count(list: ptr) -> int
 extern dir_list_get(list: ptr, index: int) -> string
 extern dir_list_free(list: ptr)
@@ -218,4 +243,75 @@ glob_multi(patterns: ptr) -> {
         return null, "glob failed"
     }
     return list, ""
+}
+
+// Durable write: stage `data` into a sibling tmp file, fsync, then
+// rename(2) over `path`. On crash between write and rename, the
+// destination is either the old contents or the new — never a
+// partial write. Binary-safe: pass the explicit byte length so
+// embedded NULs survive (the Aether string's own length is used at
+// the call site, so callers normally just pass string.length(data)).
+//
+// Returns "" on success, error on failure (tmp create, write, fsync,
+// rename — the tmp is removed if any step fails so the filesystem
+// isn't littered with aborted writes).
+write_atomic(path: string, data: string, length: int) -> {
+    ok = fs_write_atomic_raw(path, data, length)
+    if ok == 0 {
+        return "atomic write failed"
+    }
+    return ""
+}
+
+// Rename `from` to `to` — thin POSIX rename(2) wrapper. Atomic when
+// both sides are on the same filesystem. Returns "" on success,
+// error on failure (e.g. cross-filesystem rename, destination dir
+// not writable, source missing).
+rename(from: string, to: string) -> {
+    ok = fs_rename_raw(from, to)
+    if ok == 0 {
+        return "rename failed"
+    }
+    return ""
+}
+
+// Single-stat accessor. Returns (kind, size, mtime, "") on success,
+// (0, 0, 0, error) on failure. `kind` is one of:
+//   1 = file, 2 = directory, 3 = symlink, 4 = other (FIFO, socket,
+//       device, ...).
+// `mtime` is a Unix timestamp, `size` is in bytes. Uses lstat(2) —
+// symlinks report kind 3, the target is NOT followed.
+//
+// Cheaper than the existing file_exists + fs_is_symlink + size +
+// file_mtime quartet when callers need more than one field.
+file_stat(path: string) -> {
+    ok = fs_try_stat(path)
+    if ok == 0 {
+        return 0, 0, 0, "cannot stat path"
+    }
+    return fs_get_stat_kind(), fs_get_stat_size(), fs_get_stat_mtime(), ""
+}
+
+// Binary-safe file read. Preserves embedded NULs and reports the
+// exact byte length. Returns (content, length, "") on success,
+// ("", 0, error) on failure.
+//
+// The returned string is a length-aware copy; the borrowed buffer
+// inside the runtime is released after the copy completes, so the
+// caller doesn't have to manage lifetime.
+read_binary(path: string) -> {
+    ok = fs_try_read_binary(path)
+    if ok == 0 {
+        return "", 0, "cannot read file"
+    }
+    raw = fs_get_read_binary()
+    n = fs_get_read_binary_length()
+    // Copy out of the TLS buffer before releasing so the returned
+    // string owns its bytes. string_concat("", raw) produces an
+    // Aether string whose data is a NUL-terminated copy; for
+    // payloads with embedded NULs, use the length we return here
+    // rather than string.length() on the result.
+    owned = string_concat(raw, "")
+    fs_release_read_binary()
+    return owned, n, ""
 }

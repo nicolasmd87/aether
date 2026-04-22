@@ -96,6 +96,11 @@ typedef struct {
 
 static Toolchain tc = {0};
 
+// --with=<caps> forwarded verbatim to aetherc. Empty by default; set
+// by cmd_build's arg loop when the user passes `--with=fs` etc. Just
+// a string because the aetherc side owns parsing and validation.
+static char g_with_caps[128] = "";
+
 // --emit=<exe|lib|both> for the current build. Set by cmd_build before
 // build_aetherc_cmd / build_gcc_cmd run; both helpers read these globals
 // to decide what flags to emit.
@@ -109,12 +114,20 @@ static void build_aetherc_cmd(char* cmd, size_t cmd_size, const char* input, con
     else if (g_emit_lib)               emit_flag = " --emit=lib";
     // exe-only is the default; no flag needed.
 
+    // --with= is forwarded verbatim to aetherc, which owns parsing and
+    // the reject messages. Only attached when non-empty so exe builds
+    // don't see a spurious flag.
+    char with_flag[160] = "";
+    if (g_with_caps[0]) {
+        snprintf(with_flag, sizeof(with_flag), " --with=%s", g_with_caps);
+    }
+
     if (tc.lib_dir[0]) {
-        snprintf(cmd, cmd_size, "\"%s\"%s --lib \"%s\" \"%s\" \"%s\"",
-                 tc.compiler, emit_flag, tc.lib_dir, input, output);
+        snprintf(cmd, cmd_size, "\"%s\"%s%s --lib \"%s\" \"%s\" \"%s\"",
+                 tc.compiler, emit_flag, with_flag, tc.lib_dir, input, output);
     } else {
-        snprintf(cmd, cmd_size, "\"%s\"%s \"%s\" \"%s\"",
-                 tc.compiler, emit_flag, input, output);
+        snprintf(cmd, cmd_size, "\"%s\"%s%s \"%s\" \"%s\"",
+                 tc.compiler, emit_flag, with_flag, input, output);
     }
 }
 
@@ -3100,6 +3113,12 @@ static int cmd_build(int argc, char** argv) {
         } else if (strcmp(argv[i], "--lib") == 0 && i + 1 < argc) {
             strncpy(tc.lib_dir, argv[++i], sizeof(tc.lib_dir) - 1);
             tc.lib_dir[sizeof(tc.lib_dir) - 1] = '\0';
+        } else if (strncmp(argv[i], "--with=", 7) == 0) {
+            // Capability opt-ins for --emit=lib. Forwarded verbatim to
+            // aetherc; parsing, validation, and the reject messages all
+            // happen there to keep the single source of truth.
+            strncpy(g_with_caps, argv[i] + 7, sizeof(g_with_caps) - 1);
+            g_with_caps[sizeof(g_with_caps) - 1] = '\0';
         } else if (strncmp(argv[i], "--emit=", 7) == 0) {
             const char* val = argv[i] + 7;
             if (strcmp(val, "exe") == 0) {

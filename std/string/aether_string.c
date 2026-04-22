@@ -363,6 +363,17 @@ AetherString* string_from_int(int value) {
     return string_new(buffer);
 }
 
+// Sibling of string_from_int that preserves the full 64-bit range.
+// `long long` covers Aether's `long` type; callers formatting byte
+// counts, file sizes, revision numbers, or other values that can
+// exceed INT_MAX reach for this instead of truncating through
+// `string_from_int`.
+AetherString* string_from_long(long long value) {
+    char buffer[32];
+    snprintf(buffer, sizeof(buffer), "%lld", value);
+    return string_new(buffer);
+}
+
 AetherString* string_from_float(float value) {
     char buffer[64];
     snprintf(buffer, sizeof(buffer), "%g", value);

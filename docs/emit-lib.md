@@ -166,9 +166,33 @@ provides.
 `std.map`, `std.list`, `std.string`, `std.json`, `std.math`, and the
 other capability-free standard modules are allowed.
 
-A future version may add `--emit=lib --with=net,fs` for opt-in access.
-For now, there's no escape hatch — if you need I/O in the library, the
-design is wrong.
+### Opting in: `--with=<capabilities>`
+
+Projects that **are** the host — code that compiles `.ae` and
+handwritten C into one binary, rather than embedding Aether as an
+untrusted user script — opt into specific capability categories:
+
+```sh
+ae build --emit=lib --with=fs      file.ae   # std.fs
+ae build --emit=lib --with=net     file.ae   # std.net, std.http, std.tcp
+ae build --emit=lib --with=os      file.ae   # std.os
+ae build --emit=lib --with=fs,os   file.ae   # multiple, comma-separated
+```
+
+The gate stays default-deny: a build without `--with=fs` still rejects
+`import std.fs`. Unknown capability names are a hard error (typos
+shouldn't silently leave a gate closed). The categories mirror the
+banned-import groupings above — three buckets, chosen coarsely enough
+that opting in is an auditable event in a project's build invocation.
+
+**When to use this.** Systems code where the `.ae` files are
+first-party and version-controlled the same way as the `.c` files.
+The Aether-side `file_open_raw` is no different from the C side
+calling `fopen` — there's no privilege boundary to police.
+
+**When NOT to use this.** Anywhere the library could run untrusted
+Aether (user scripts, a plugin loader, a DSL evaluator). Leave the
+default in place; the host mediates I/O on the script's behalf.
 
 ## Using SWIG to generate Java/Python/Ruby/Go bindings
 
@@ -201,7 +225,10 @@ See `tests/integration/emit_lib_swig/` for a worked Python round-trip.
    track the "Shape B" design note in
    [aether-embedded-in-host-applications.md](aether-embedded-in-host-applications.md).
 2. **`--emit=both` for `ae build`** — use two invocations.
-3. **`--with=` opt-in stdlib** — capability-empty is strict for v1.
+3. **Per-function capability grants** — `--with=` flags are coarse
+   (fs / net / os). Fine-grained gates like "allow file_open but not
+   dir_delete" don't match any concrete threat model for the
+   default-deny shape, and every additional flag is API surface.
 4. **Wall-clock timeout / allocation budget** — if the embedded script
    loops forever it hangs the host.
 5. **Deep-recursive `aether_config_free`** — the v1 free only releases

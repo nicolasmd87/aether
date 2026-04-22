@@ -39,6 +39,7 @@ extern string_array_free(arr: ptr)
 // Conversion
 extern string_to_cstr(str: string) -> string
 extern string_from_int(value: int) -> ptr
+extern string_from_long(value: long) -> ptr
 extern string_from_float(value: float) -> ptr
 
 // Parsing — raw externs (escape hatch)
