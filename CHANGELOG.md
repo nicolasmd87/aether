@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`std.http` request/response accessors now tolerate externally-constructed pointers** (`std/net/aether_http_server.c`). Host C code that owns the HTTP dispatch loop (parses the wire format, builds `HttpRequest` / `HttpServerResponse` structs, calls an Aether handler to populate them) previously crashed on the first `http_response_set_header` or `http_response_json` because `http_response_set_header` strdup'd into a NULL `header_keys` array — `http_response_create` allocates those lazily, but a C-allocated response has them zero. Fix: lazy-allocate header_keys/values on first `set_header` when NULL. Plus defensive NULL-guards across the request-side accessors (`http_get_header`, `http_get_query_param`, `http_request_method`/`path`/`body`/`query`) so a partially-populated request from a dispatch shim doesn't NULL-deref on the unset fields. No tagging, no runtime type check — the pointers just work as long as the struct layout matches `std/net/aether_http_server.h`. Regression test: `tests/integration/http_external_ptr/` — 9 cases covering a C-allocated request fed to Aether accessors and a bare calloc'd response mutated by Aether setters then read back in C.
+
 ## [0.80.0]
 
 ### Added
