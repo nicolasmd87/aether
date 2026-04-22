@@ -77,33 +77,43 @@ sse_entry(pp: string, handler: fn) {
 }
 
 end_point(_ctx: ptr, method: int, pattern: string, handler: fn) {
-    list.add(map_get(_ctx, "routes"), route_entry(method, pattern, handler))
+    routes, _ = map.get(_ctx, "routes")
+    list.add(routes, route_entry(method, pattern, handler))
 }
 
 web_filter(_ctx: ptr, method: int, pattern: string, handler: fn) {
-    list.add(map_get(_ctx, "filters"), filter_entry(method, pattern, handler))
+    filters, _ = map.get(_ctx, "filters")
+    list.add(filters, filter_entry(method, pattern, handler))
 }
 
 web_socket(_ctx: ptr, ws_path: string, handler: fn) {
-    list.add(map_get(_ctx, "ws_handlers"), ws_entry(ws_path, handler))
+    ws_h, _ = map.get(_ctx, "ws_handlers")
+    list.add(ws_h, ws_entry(ws_path, handler))
 }
 
 serve_static(_ctx: ptr, bp: string, dir: string) {
-    list.add(map_get(_ctx, "statics"), static_entry(bp, dir))
+    statics, _ = map.get(_ctx, "statics")
+    list.add(statics, static_entry(bp, dir))
 }
 
 sse_endpoint(_ctx: ptr, sp: string, handler: fn) {
-    list.add(map_get(_ctx, "sse_handlers"), sse_entry(sp, handler))
+    sse_h, _ = map.get(_ctx, "sse_handlers")
+    list.add(sse_h, sse_entry(sp, handler))
 }
 
 tw_path(_ctx: ptr, bp: string) {
     sub = map_new()
     map_put(sub, "prefix", bp)
-    map_put(sub, "routes", map_get(_ctx, "routes"))
-    map_put(sub, "filters", map_get(_ctx, "filters"))
-    map_put(sub, "ws_handlers", map_get(_ctx, "ws_handlers"))
-    map_put(sub, "sse_handlers", map_get(_ctx, "sse_handlers"))
-    map_put(sub, "statics", map_get(_ctx, "statics"))
+    p_routes, _ = map.get(_ctx, "routes")
+    map_put(sub, "routes", p_routes)
+    p_filters, _ = map.get(_ctx, "filters")
+    map_put(sub, "filters", p_filters)
+    p_ws, _ = map.get(_ctx, "ws_handlers")
+    map_put(sub, "ws_handlers", p_ws)
+    p_sse, _ = map.get(_ctx, "sse_handlers")
+    map_put(sub, "sse_handlers", p_sse)
+    p_stat, _ = map.get(_ctx, "statics")
+    map_put(sub, "statics", p_stat)
     return sub
 }
 
@@ -134,10 +144,14 @@ main() {
     // Config defaults
     print("Config defaults: ")
     srv = web_server(8080)
-    _chk(map_get(srv, "port") == 8080, "port")
-    _chk(str_eq(map_get(srv, "host"), "127.0.0.1"), "host")
-    _chk(map_get(srv, "socket_timeout_ms") == 30000, "timeout")
-    _chk(map_get(srv, "keep_alive") == 1, "keep_alive")
+    cfg_port, _ = map.get(srv, "port")
+    _chk(cfg_port == 8080, "port")
+    cfg_host, _ = map.get(srv, "host")
+    _chk(str_eq(cfg_host, "127.0.0.1"), "host")
+    cfg_to, _ = map.get(srv, "socket_timeout_ms")
+    _chk(cfg_to == 30000, "timeout")
+    cfg_ka, _ = map.get(srv, "keep_alive")
+    _chk(cfg_ka == 1, "keep_alive")
     println("PASS")
 
     // Method constants
@@ -165,12 +179,14 @@ main() {
     srv = web_server(8080) {
         end_point(GET, "/hello") |req: ptr, res: ptr, rctx: ptr| { }
     }
-    rts = map_get(srv, "routes")
+    rts, _ = map.get(srv, "routes")
     print("(routes="); print(list.size(rts)); print(") ")
     _chk(list.size(rts) == 1, "count")
-    e = list.get(map_get(srv, "routes"), 0)
-    _chk(str_eq(map_get(e, "path"), "/hello"), "path")
-    _chk(map_get(e, "method") == GET, "method")
+    e, _ = list.get(rts, 0)
+    e_path, _ = map.get(e, "path")
+    _chk(str_eq(e_path, "/hello"), "path")
+    e_method, _ = map.get(e, "method")
+    _chk(e_method == GET, "method")
     println("PASS")
 
     // Nested paths
@@ -182,9 +198,11 @@ main() {
             }
         }
     }
-    _chk(list.size(map_get(srv, "routes")) == 1, "count")
-    e = list.get(map_get(srv, "routes"), 0)
-    _chk(str_eq(map_get(e, "path"), "/users"), "path")
+    srv_rts, _ = map.get(srv, "routes")
+    _chk(list.size(srv_rts) == 1, "count")
+    e, _ = list.get(srv_rts, 0)
+    e_path, _ = map.get(e, "path")
+    _chk(str_eq(e_path, "/users"), "path")
     println("PASS")
 
     // Multiple paths
@@ -197,7 +215,8 @@ main() {
             end_point(GET, "/gamma") |req: ptr, res: ptr, rctx: ptr| { }
         }
     }
-    _chk(list.size(map_get(srv, "routes")) == 2, "count")
+    mp_rts, _ = map.get(srv, "routes")
+    _chk(list.size(mp_rts) == 2, "count")
     println("PASS")
 
     // Compose
@@ -208,7 +227,8 @@ main() {
     compose(srv) {
         end_point(GET, "/added") |req: ptr, res: ptr, rctx: ptr| { }
     }
-    _chk(list.size(map_get(srv, "routes")) == 2, "count")
+    comp_rts, _ = map.get(srv, "routes")
+    _chk(list.size(comp_rts) == 2, "count")
     println("PASS")
 
     // Filters
@@ -216,20 +236,24 @@ main() {
     srv = web_server(8080) {
         web_filter(GET, "/.*") |req: ptr, res: ptr, rctx: ptr| { return 1 }
     }
-    _chk(list.size(map_get(srv, "filters")) == 1, "count")
-    fe = list.get(map_get(srv, "filters"), 0)
-    _chk(map_get(fe, "method") == GET, "method")
+    flt_list, _ = map.get(srv, "filters")
+    _chk(list.size(flt_list) == 1, "count")
+    fe, _ = list.get(flt_list, 0)
+    fe_method, _ = map.get(fe, "method")
+    _chk(fe_method == GET, "method")
     println("PASS")
 
     // Attributes
     print("Attributes: ")
     attrs = map_new()
     map_put(attrs, "user", "alice")
-    _chk(str_eq(map_get(attrs, "user"), "alice"), "get")
+    attr_user, _ = map.get(attrs, "user")
+    _chk(str_eq(attr_user, "alice"), "get")
     _chk(map_has(attrs, "nope") == 0, "missing")
     map_put(attrs, "r", "user")
     map_put(attrs, "r", "admin")
-    _chk(str_eq(map_get(attrs, "r"), "admin"), "overwrite")
+    attr_r, _ = map.get(attrs, "r")
+    _chk(str_eq(attr_r, "admin"), "overwrite")
     println("PASS")
 
     // WebSocket
@@ -237,8 +261,11 @@ main() {
     srv = web_server(8080) {
         web_socket("/echo") |msg: string, s: ptr, rctx: ptr| { }
     }
-    _chk(list.size(map_get(srv, "ws_handlers")) == 1, "count")
-    _chk(str_eq(map_get(list.get(map_get(srv, "ws_handlers"), 0), "path"), "/echo"), "path")
+    ws_list, _ = map.get(srv, "ws_handlers")
+    _chk(list.size(ws_list) == 1, "count")
+    ws_first, _ = list.get(ws_list, 0)
+    ws_first_path, _ = map.get(ws_first, "path")
+    _chk(str_eq(ws_first_path, "/echo"), "path")
     println("PASS")
 
     // SSE
@@ -246,7 +273,8 @@ main() {
     srv = web_server(8080) {
         sse_endpoint("/events") |stream: ptr| { }
     }
-    _chk(list.size(map_get(srv, "sse_handlers")) == 1, "count")
+    sse_list, _ = map.get(srv, "sse_handlers")
+    _chk(list.size(sse_list) == 1, "count")
     println("PASS")
 
     // Static files
@@ -254,10 +282,13 @@ main() {
     srv = web_server(8080) {
         serve_static("/static", "/var/www")
     }
-    _chk(list.size(map_get(srv, "statics")) == 1, "count")
-    se = list.get(map_get(srv, "statics"), 0)
-    _chk(str_eq(map_get(se, "base_path"), "/static"), "base")
-    _chk(str_eq(map_get(se, "directory"), "/var/www"), "dir")
+    stat_list, _ = map.get(srv, "statics")
+    _chk(list.size(stat_list) == 1, "count")
+    se, _ = list.get(stat_list, 0)
+    se_base, _ = map.get(se, "base_path")
+    _chk(str_eq(se_base, "/static"), "base")
+    se_dir, _ = map.get(se, "directory")
+    _chk(str_eq(se_dir, "/var/www"), "dir")
     println("PASS")
 
     // Full composition
@@ -272,10 +303,14 @@ main() {
         end_point(PUT, "/update") |req: ptr, res: ptr, rctx: ptr| { }
         end_point(GET, "/test") |req: ptr, res: ptr, rctx: ptr| { }
     }
-    _chk(list.size(map_get(srv, "routes")) == 5, "routes")
-    _chk(list.size(map_get(srv, "filters")) == 1, "filters")
-    _chk(list.size(map_get(srv, "ws_handlers")) == 1, "ws")
-    _chk(list.size(map_get(srv, "statics")) == 1, "statics")
+    all_rts, _ = map.get(srv, "routes")
+    _chk(list.size(all_rts) == 5, "routes")
+    all_flts, _ = map.get(srv, "filters")
+    _chk(list.size(all_flts) == 1, "filters")
+    all_ws, _ = map.get(srv, "ws_handlers")
+    _chk(list.size(all_ws) == 1, "ws")
+    all_stats, _ = map.get(srv, "statics")
+    _chk(list.size(all_stats) == 1, "statics")
     println("PASS")
 
     print("\n=== All TinyWeb Tests Passed ===\n")

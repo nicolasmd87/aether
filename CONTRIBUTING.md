@@ -90,6 +90,19 @@ if (!buffer) {
 // Automatically freed on scope exit
 ```
 
+## Stdlib modules
+
+When adding a new `std/<name>/` module or modifying an existing one,
+follow the canonical stdlib module pattern documented in
+[docs/stdlib-module-pattern.md](docs/stdlib-module-pattern.md).
+
+The short version: fallible C functions get a `_raw` suffix and a
+Go-style `(value, err)` Aether wrapper; pure/infallible functions stay
+raw without a suffix; intentionally void fire-and-forget APIs (like
+`log.write`) and DSL builders (like the `std.host` manifest builders)
+don't get wrappers. See [std/fs/module.ae](std/fs/module.ae) for the
+reference implementation.
+
 ## Adding Tests
 
 ### Test Structure

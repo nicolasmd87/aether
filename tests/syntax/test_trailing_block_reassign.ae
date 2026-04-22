@@ -6,7 +6,8 @@ import std.list
 import std.map
 
 add_item(_ctx: ptr, val: int) {
-    list.add(map_get(_ctx, "items"), val)
+    items, _ = map.get(_ctx, "items")
+    list.add(items, val)
 }
 
 make_container(name: string) {
@@ -22,7 +23,8 @@ main() {
         add_item(1)
         add_item(2)
     }
-    if list.size(map_get(c, "items")) != 2 {
+    items1, _ = map.get(c, "items")
+    if list.size(items1) != 2 {
         println("FAIL: first declaration trailing block")
         exit(1)
     }
@@ -33,7 +35,8 @@ main() {
         add_item(20)
         add_item(30)
     }
-    if list.size(map_get(c, "items")) != 3 {
+    items2, _ = map.get(c, "items")
+    if list.size(items2) != 3 {
         println("FAIL: reassignment trailing block")
         exit(1)
     }
@@ -42,7 +45,8 @@ main() {
     c = make_container("third") {
         add_item(100)
     }
-    if list.size(map_get(c, "items")) != 1 {
+    items3, _ = map.get(c, "items")
+    if list.size(items3) != 1 {
         println("FAIL: third reassignment trailing block")
         exit(1)
     }

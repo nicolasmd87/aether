@@ -6,8 +6,10 @@ import std.list
 
 // A builder func that accepts a callback (fn parameter)
 register(_ctx: ptr, name: string, handler: fn) {
-    list.add(list.get(_ctx, 0), name)
-    list.add(list.get(_ctx, 1), box_closure(handler))
+    names_list, _ = list.get(_ctx, 0)
+    handlers_list, _ = list.get(_ctx, 1)
+    list.add(names_list, name)
+    list.add(handlers_list, box_closure(handler))
 }
 
 make_registry() {
@@ -33,8 +35,9 @@ main() {
     println(ref_get(counter))
 
     // Invoke callbacks — they captured `counter` at registration time
-    handlers = list.get(reg, 1)
-    h0 = unbox_closure(list.get(handlers, 0))
+    handlers, _ = list.get(reg, 1)
+    hb0, _ = list.get(handlers, 0)
+    h0 = unbox_closure(hb0)
     call(h0)
     println(ref_get(counter))
 
@@ -42,11 +45,13 @@ main() {
     call(h0)
     println(ref_get(counter))
 
-    h1 = unbox_closure(list.get(handlers, 1))
+    hb1, _ = list.get(handlers, 1)
+    h1 = unbox_closure(hb1)
     call(h1)
     println(ref_get(counter))
 
-    h2 = unbox_closure(list.get(handlers, 2))
+    hb2, _ = list.get(handlers, 2)
+    h2 = unbox_closure(hb2)
     call(h2)
     println(ref_get(counter))
 

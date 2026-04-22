@@ -27,10 +27,10 @@ builder compile(src: string) {
 
     if _builder != null {
         if map_has(_builder, "release") == 1 {
-            rel = map_get(_builder, "release")
+            rel, _ = map.get(_builder, "release")
         }
         if map_has(_builder, "lint") == 1 {
-            lint_level = map_get(_builder, "lint")
+            lint_level, _ = map.get(_builder, "lint")
         }
         if map_has(_builder, "werror") == 1 {
             werror = 1

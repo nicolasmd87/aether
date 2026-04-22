@@ -33,7 +33,7 @@ main() {
         }
     }
     // Retrieve and invoke the closure to verify c's value was captured.
-    boxed = list.get(actions, 0)
+    boxed, _ = list.get(actions, 0)
     fn = unbox_closure(boxed)
     r = call(fn)
     if r != 42 {

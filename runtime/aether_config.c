@@ -24,13 +24,13 @@
 
 const char* aether_config_get_string(AetherValue* root, const char* key) {
     if (!root || !key) return NULL;
-    return (const char*)map_get((HashMap*)root, key);
+    return (const char*)map_get_raw((HashMap*)root, key);
 }
 
 int32_t aether_config_get_int(AetherValue* root, const char* key, int32_t default_value) {
     if (!root || !key) return default_value;
     if (!map_has((HashMap*)root, key)) return default_value;
-    return (int32_t)(intptr_t)map_get((HashMap*)root, key);
+    return (int32_t)(intptr_t)map_get_raw((HashMap*)root, key);
 }
 
 int64_t aether_config_get_int64(AetherValue* root, const char* key, int64_t default_value) {
@@ -41,7 +41,7 @@ int64_t aether_config_get_int64(AetherValue* root, const char* key, int64_t defa
      * On 32-bit platforms the int64 would have been boxed via malloc — but
      * Aether's target is 64-bit for lib mode, so we assume intptr_t == int64_t.
      */
-    return (int64_t)(intptr_t)map_get((HashMap*)root, key);
+    return (int64_t)(intptr_t)map_get_raw((HashMap*)root, key);
 }
 
 float aether_config_get_float(AetherValue* root, const char* key, float default_value) {
@@ -50,7 +50,7 @@ float aether_config_get_float(AetherValue* root, const char* key, float default_
     /* Aether boxes float values as malloc'd float* when storing in an
      * untyped map. If the .ae code stored raw bits the caller gets
      * undefined behavior — documented in the header. */
-    void* v = map_get((HashMap*)root, key);
+    void* v = map_get_raw((HashMap*)root, key);
     if (!v) return default_value;
     return *(float*)v;
 }
@@ -58,17 +58,17 @@ float aether_config_get_float(AetherValue* root, const char* key, float default_
 int32_t aether_config_get_bool(AetherValue* root, const char* key, int32_t default_value) {
     if (!root || !key) return default_value;
     if (!map_has((HashMap*)root, key)) return default_value;
-    return (int32_t)(intptr_t)map_get((HashMap*)root, key) ? 1 : 0;
+    return (int32_t)(intptr_t)map_get_raw((HashMap*)root, key) ? 1 : 0;
 }
 
 AetherValue* aether_config_get_map(AetherValue* root, const char* key) {
     if (!root || !key) return NULL;
-    return (AetherValue*)map_get((HashMap*)root, key);
+    return (AetherValue*)map_get_raw((HashMap*)root, key);
 }
 
 AetherValue* aether_config_get_list(AetherValue* root, const char* key) {
     if (!root || !key) return NULL;
-    return (AetherValue*)map_get((HashMap*)root, key);
+    return (AetherValue*)map_get_raw((HashMap*)root, key);
 }
 
 int32_t aether_config_has(AetherValue* root, const char* key) {
@@ -88,31 +88,31 @@ int32_t aether_config_list_size(AetherValue* list) {
 AetherValue* aether_config_list_get(AetherValue* list, int32_t index) {
     if (!list) return NULL;
     if (index < 0 || index >= list_size((ArrayList*)list)) return NULL;
-    return (AetherValue*)list_get((ArrayList*)list, index);
+    return (AetherValue*)list_get_raw((ArrayList*)list, index);
 }
 
 const char* aether_config_list_get_string(AetherValue* list, int32_t index) {
     if (!list) return NULL;
     if (index < 0 || index >= list_size((ArrayList*)list)) return NULL;
-    return (const char*)list_get((ArrayList*)list, index);
+    return (const char*)list_get_raw((ArrayList*)list, index);
 }
 
 int32_t aether_config_list_get_int(AetherValue* list, int32_t index, int32_t default_value) {
     if (!list) return default_value;
     if (index < 0 || index >= list_size((ArrayList*)list)) return default_value;
-    return (int32_t)(intptr_t)list_get((ArrayList*)list, index);
+    return (int32_t)(intptr_t)list_get_raw((ArrayList*)list, index);
 }
 
 int64_t aether_config_list_get_int64(AetherValue* list, int32_t index, int64_t default_value) {
     if (!list) return default_value;
     if (index < 0 || index >= list_size((ArrayList*)list)) return default_value;
-    return (int64_t)(intptr_t)list_get((ArrayList*)list, index);
+    return (int64_t)(intptr_t)list_get_raw((ArrayList*)list, index);
 }
 
 float aether_config_list_get_float(AetherValue* list, int32_t index, float default_value) {
     if (!list) return default_value;
     if (index < 0 || index >= list_size((ArrayList*)list)) return default_value;
-    void* v = list_get((ArrayList*)list, index);
+    void* v = list_get_raw((ArrayList*)list, index);
     if (!v) return default_value;
     return *(float*)v;
 }
@@ -120,7 +120,7 @@ float aether_config_list_get_float(AetherValue* list, int32_t index, float defau
 int32_t aether_config_list_get_bool(AetherValue* list, int32_t index, int32_t default_value) {
     if (!list) return default_value;
     if (index < 0 || index >= list_size((ArrayList*)list)) return default_value;
-    return (int32_t)(intptr_t)list_get((ArrayList*)list, index) ? 1 : 0;
+    return (int32_t)(intptr_t)list_get_raw((ArrayList*)list, index) ? 1 : 0;
 }
 
 /* -----------------------------------------------------------------

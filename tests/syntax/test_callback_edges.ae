@@ -53,9 +53,12 @@ main() {
         captured = i  // snapshot
         list.add(fns, box_closure(store_fn() callback |x: int| -> x + captured))
     }
-    f0 = unbox_closure(list.get(fns, 0))
-    f1 = unbox_closure(list.get(fns, 1))
-    f2 = unbox_closure(list.get(fns, 2))
+    fn_box0, _ = list.get(fns, 0)
+    fn_box1, _ = list.get(fns, 1)
+    fn_box2, _ = list.get(fns, 2)
+    f0 = unbox_closure(fn_box0)
+    f1 = unbox_closure(fn_box1)
+    f2 = unbox_closure(fn_box2)
     println(call(f0, 10))
     println(call(f1, 10))
     println(call(f2, 10))
@@ -66,8 +69,10 @@ main() {
         on_event() callback { println("event B") }
     }
     defer list.free(events)
-    ea = unbox_closure(list.get(events, 0))
-    eb = unbox_closure(list.get(events, 1))
+    ev_box0, _ = list.get(events, 0)
+    ev_box1, _ = list.get(events, 1)
+    ea = unbox_closure(ev_box0)
+    eb = unbox_closure(ev_box1)
     call(ea)
     call(eb)
 

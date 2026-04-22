@@ -43,12 +43,15 @@ AetherString* string_new(const char* cstr) {
 
 AetherString* string_new_with_length(const char* data, size_t length) {
     AetherString* str = (AetherString*)malloc(sizeof(AetherString));
+    if (!str) return NULL;
+    char* buf = (char*)malloc(length + 1);
+    if (!buf) { free(str); return NULL; }
     str->magic = AETHER_STRING_MAGIC;
     str->length = length;
     str->capacity = length + 1;
-    str->data = (char*)malloc(str->capacity);
-    memcpy(str->data, data, length);
-    str->data[length] = '\0';
+    str->data = buf;
+    if (data && length) memcpy(buf, data, length);
+    buf[length] = '\0';
     str->ref_count = 1;
     return str;
 }
@@ -81,8 +84,30 @@ char* string_concat(const void* a, const void* b) {
     const char* da = str_data(a);
     const char* db = str_data(b);
 
+    // Fast paths for empty inputs — avoid the full concat work when one
+    // side is empty (common in loops that accumulate with an empty seed,
+    // or when interpolating with optional fragments).
+    if (lb == 0) {
+        char* out = (char*)malloc(la + 1);
+        if (!out) return NULL;
+        if (la) memcpy(out, da, la);
+        out[la] = '\0';
+        return out;
+    }
+    if (la == 0) {
+        char* out = (char*)malloc(lb + 1);
+        if (!out) return NULL;
+        memcpy(out, db, lb);
+        out[lb] = '\0';
+        return out;
+    }
+
+    // Guard against size_t overflow on pathological inputs before
+    // adding 1 for the null terminator.
+    if (la > SIZE_MAX - lb - 1) return NULL;
     size_t new_length = la + lb;
     char* new_data = (char*)malloc(new_length + 1);
+    if (!new_data) return NULL;
 
     memcpy(new_data, da, la);
     memcpy(new_data + la, db, lb);
@@ -218,51 +243,85 @@ char* string_trim(const void* str) {
     return result;
 }
 
+// Helper: free a partially-built array on OOM during split. Used on
+// every early-exit path so no cleanup branch leaks memory.
+static void string_array_partial_free(AetherStringArray* arr, size_t built) {
+    if (!arr) return;
+    if (arr->strings) {
+        for (size_t k = 0; k < built; k++) {
+            if (arr->strings[k]) string_release(arr->strings[k]);
+        }
+        free(arr->strings);
+    }
+    free(arr);
+}
+
 // String array operations
 AetherStringArray* string_split(const void* str, const char* delimiter) {
     if (!str || !delimiter) return NULL;
     size_t slen = str_len(str);
     const char* sdata = str_data(str);
-
     size_t delim_len = strlen(delimiter);
 
     AetherStringArray* arr = (AetherStringArray*)malloc(sizeof(AetherStringArray));
+    if (!arr) return NULL;
     arr->count = 0;
     arr->strings = NULL;
 
+    // Empty delimiter → one entry per byte.
     if (delim_len == 0) {
-        // Split into characters
-        arr->count = slen;
-        arr->strings = (AetherString**)malloc(sizeof(AetherString*) * arr->count);
+        if (slen == 0) return arr;
+        arr->strings = (AetherString**)malloc(sizeof(AetherString*) * slen);
+        if (!arr->strings) { free(arr); return NULL; }
         for (size_t i = 0; i < slen; i++) {
-            arr->strings[i] = string_new_with_length(sdata + i, 1);
+            AetherString* piece = string_new_with_length(sdata + i, 1);
+            if (!piece) { string_array_partial_free(arr, i); return NULL; }
+            arr->strings[i] = piece;
         }
+        arr->count = slen;
         return arr;
     }
 
-    // Count delimiters
+    // Input shorter than the delimiter → one piece, the whole input.
+    if (slen < delim_len) {
+        arr->strings = (AetherString**)malloc(sizeof(AetherString*));
+        if (!arr->strings) { free(arr); return NULL; }
+        arr->strings[0] = string_new_with_length(sdata, slen);
+        if (!arr->strings[0]) { free(arr->strings); free(arr); return NULL; }
+        arr->count = 1;
+        return arr;
+    }
+
+    // Count how many pieces we'll produce. At this point slen >= delim_len
+    // so the loop bound `slen - delim_len` won't underflow.
     size_t count = 1;
-    for (size_t i = 0; i <= slen - delim_len; i++) {
+    size_t upper = slen - delim_len;
+    for (size_t i = 0; i <= upper; i++) {
         if (memcmp(sdata + i, delimiter, delim_len) == 0) {
             count++;
             i += delim_len - 1;
         }
     }
 
-    arr->count = count;
     arr->strings = (AetherString**)malloc(sizeof(AetherString*) * count);
+    if (!arr->strings) { free(arr); return NULL; }
 
     size_t start = 0;
     size_t idx = 0;
-    for (size_t i = 0; i <= slen - delim_len; i++) {
+    for (size_t i = 0; i <= upper; i++) {
         if (memcmp(sdata + i, delimiter, delim_len) == 0) {
-            arr->strings[idx++] = string_new_with_length(sdata + start, i - start);
+            AetherString* piece = string_new_with_length(sdata + start, i - start);
+            if (!piece) { string_array_partial_free(arr, idx); return NULL; }
+            arr->strings[idx++] = piece;
             start = i + delim_len;
             i += delim_len - 1;
         }
     }
-    // Add remaining part
-    arr->strings[idx] = string_new_with_length(sdata + start, slen - start);
+    // Tail piece (may be empty if input ends with the delimiter).
+    AetherString* tail = string_new_with_length(sdata + start, slen - start);
+    if (!tail) { string_array_partial_free(arr, idx); return NULL; }
+    arr->strings[idx] = tail;
+    arr->count = count;
 
     return arr;
 }

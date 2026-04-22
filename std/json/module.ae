@@ -1,39 +1,45 @@
 // std.json - JSON Module
 // Import with: import std.json
+//
+// Parses and serializes JSON per RFC 8259.
+//
+// API shape:
+//   - Raw externs end in `_raw` and return ptr/int in the old C-style
+//     convention. They are the escape hatch for advanced callers.
+//   - Aether-native wrappers (below) use Go-style `(value, err)` tuple
+//     returns and are the idiomatic way to call JSON operations.
+//
+// JSON type constants (returned by json.type):
+//   JSON_NULL = 0, JSON_BOOL = 1, JSON_NUMBER = 2,
+//   JSON_STRING = 3, JSON_ARRAY = 4, JSON_OBJECT = 5
 
-// JSON type constants
-// JSON_NULL = 0, JSON_BOOL = 1, JSON_NUMBER = 2
-// JSON_STRING = 3, JSON_ARRAY = 4, JSON_OBJECT = 5
-
-// Parsing and serialization.
-// `json_parse_raw` is the raw ptr-returning extern (escape hatch for
-// advanced callers). Most code should use the Go-style `json.parse`
-// wrapper below.
+// ---- parsing and serialization (raw externs) ----
 extern json_parse_raw(json_str: string) -> ptr
-extern json_stringify(value: ptr) -> string
+extern json_last_error() -> string
+extern json_stringify_raw(value: ptr) -> string
 extern json_free(value: ptr)
 
-// Type checking
+// ---- type introspection (infallible, no wrapper needed) ----
 extern json_type(value: ptr) -> int
 extern json_is_null(value: ptr) -> int
 
-// Value getters
+// ---- typed getters (infallible — sentinel 0/0.0 on wrong type) ----
 extern json_get_bool(value: ptr) -> int
 extern json_get_number(value: ptr) -> float
 extern json_get_int(value: ptr) -> int
-extern json_get_string(value: ptr) -> string
+extern json_get_string_raw(value: ptr) -> string
 
-// Object operations (keys are raw strings)
-extern json_object_get(obj: ptr, key: string) -> ptr
-extern json_object_set(obj: ptr, key: string, value: ptr)
+// ---- object operations (raw externs) ----
+extern json_object_get_raw(obj: ptr, key: string) -> ptr
+extern json_object_set_raw(obj: ptr, key: string, value: ptr) -> int
 extern json_object_has(obj: ptr, key: string) -> int
 
-// Array operations
-extern json_array_get(arr: ptr, index: int) -> ptr
-extern json_array_add(arr: ptr, value: ptr)
+// ---- array operations (raw externs) ----
+extern json_array_get_raw(arr: ptr, index: int) -> ptr
+extern json_array_add_raw(arr: ptr, value: ptr) -> int
 extern json_array_size(arr: ptr) -> int
 
-// Value creation
+// ---- value creation (infallible — OOM treated as crash) ----
 extern json_create_null() -> ptr
 extern json_create_bool(value: int) -> ptr
 extern json_create_number(value: float) -> ptr
@@ -41,13 +47,93 @@ extern json_create_string(value: string) -> ptr
 extern json_create_array() -> ptr
 extern json_create_object() -> ptr
 
-// Parse a JSON string. Returns (value, "") on success, (null, error)
-// on failure. Caller owns the returned value and must free with
-// json.free.
+// ---- helper used by wrappers for string ownership ----
+extern string_concat(a: string, b: string) -> string
+
+// ---- Go-style wrappers ----
+
+// Parse a JSON string. Returns (value, "") on success, (null, error) on
+// failure. The error is a position-qualified message like
+// "expected ':' at 3:17". Caller owns the returned value and must free
+// with json.free.
 parse(json_str: string) -> {
     value = json_parse_raw(json_str)
     if value == null {
-        return null, "invalid json"
+        err = json_last_error()
+        err_owned = string_concat(err, "")
+        return null, err_owned
     }
     return value, ""
+}
+
+// Serialize a JSON value to a compact string. Returns (string, "") on
+// success, ("", error) on failure. The returned string is a refcounted
+// Aether string — no manual free required.
+stringify(value: ptr) -> {
+    raw = json_stringify_raw(value)
+    if raw == null {
+        return "", "stringify failed"
+    }
+    owned = string_concat(raw, "")
+    return owned, ""
+}
+
+// Read the string payload out of a JSON value. Returns (string, "") on
+// success, ("", error) if `value` is not a JSON_STRING. The returned
+// string is an owned copy — safe to hold past a json.free of the value.
+get_string(value: ptr) -> {
+    raw = json_get_string_raw(value)
+    if raw == null {
+        return "", "not a string"
+    }
+    owned = string_concat(raw, "")
+    return owned, ""
+}
+
+// Look up `key` in a JSON object.
+// - (value, "")             : key present
+// - (null, "")              : key absent (not an error — use json.object_has to disambiguate)
+// - (null, "not an object") : `obj` is not a JSON_OBJECT
+// The returned value is borrowed from `obj` — don't json.free it, and
+// don't use it after `obj` is freed.
+object_get(obj: ptr, key: string) -> {
+    if json_type(obj) != 5 {
+        return null, "not an object"
+    }
+    v = json_object_get_raw(obj, key)
+    return v, ""
+}
+
+// Insert or update a key-value pair on a JSON object. Returns "" on
+// success, error if `obj` is not a JSON_OBJECT. The object takes
+// ownership of `value` — don't json.free it separately.
+object_set(obj: ptr, key: string, value: ptr) -> {
+    ok = json_object_set_raw(obj, key, value)
+    if ok == 0 {
+        return "not an object"
+    }
+    return ""
+}
+
+// Index into a JSON array.
+// - (value, "")             : index in range
+// - (null, "")              : index out of range (not an error)
+// - (null, "not an array")  : `arr` is not a JSON_ARRAY
+// The returned value is borrowed from `arr`.
+array_get(arr: ptr, index: int) -> {
+    if json_type(arr) != 4 {
+        return null, "not an array"
+    }
+    v = json_array_get_raw(arr, index)
+    return v, ""
+}
+
+// Append a value to a JSON array. Returns "" on success, error if `arr`
+// is not a JSON_ARRAY. The array takes ownership of `value`.
+array_add(arr: ptr, value: ptr) -> {
+    ok = json_array_add_raw(arr, value)
+    if ok == 0 {
+        return "not an array"
+    }
+    return ""
 }

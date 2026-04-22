@@ -7,7 +7,7 @@
 import typed
 
 extern string_length(s: string) -> int
-extern map_get(m: ptr, key: string) -> ptr
+extern map_get_raw(m: ptr, key: string) -> ptr
 
 main() {
     // Test 1: module function returning string
@@ -34,7 +34,7 @@ main() {
     // Test 3: module function returning ptr (map)
     println("test 3: module returns ptr")
     pair = typed.make_pair("color", "blue")
-    val = map_get(pair, "color")
+    val = map_get_raw(pair, "color")
     // val is a void* pointing to "blue" — print it
     println(val)
     println("PASS")

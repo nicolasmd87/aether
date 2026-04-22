@@ -1,5 +1,5 @@
-// Regression test: std.os module
-// Covers: system, exec, getenv
+// Regression test: std.os module.
+// Covers: system, exec (Go-style), getenv.
 
 import std.os
 import std.string
@@ -7,10 +7,9 @@ import std.string
 main() {
     print("=== OS Module Tests ===\n")
 
-    // Test 1: os.system returns 0 on success
+    // Test 1: os.system returns 0 on success (still a bare extern — shell exit code).
     print("\nTest 1: os.system success\n")
-    code = os.system("true")
-    if code == 0 {
+    if os.system("true") == 0 {
         print("  PASS: exit code = 0\n")
     } else {
         print("  FAIL\n")
@@ -19,50 +18,47 @@ main() {
 
     // Test 2: os.system returns non-zero on failure
     print("\nTest 2: os.system failure\n")
-    code2 = os.system("false")
-    if code2 != 0 {
+    if os.system("false") != 0 {
         print("  PASS: exit code != 0\n")
     } else {
         print("  FAIL\n")
         exit(1)
     }
 
-    // Test 3: os.exec captures output
+    // Test 3: os.exec captures output (Go-style wrapper).
     print("\nTest 3: os.exec captures output\n")
-    output = os.exec("echo hello")
-    if output != 0 {
-        if string.contains(output, "hello") == 1 {
-            print("  PASS: captured 'hello'\n")
-        } else {
-            print("  FAIL: output doesn't contain 'hello'\n")
-            exit(1)
-        }
+    output, err3 = os.exec("echo hello")
+    if err3 != "" {
+        println("  FAIL: exec error: ${err3}")
+        exit(1)
+    }
+    if string.contains(output, "hello") == 1 {
+        print("  PASS: captured 'hello'\n")
     } else {
-        print("  FAIL: exec returned NULL\n")
+        print("  FAIL: output doesn't contain 'hello'\n")
         exit(1)
     }
 
     // Test 4: os.exec multi-line output
     print("\nTest 4: os.exec multi-line\n")
-    output2 = os.exec("echo line1 && echo line2")
-    if output2 != 0 {
-        if string.contains(output2, "line1") == 1 {
-            if string.contains(output2, "line2") == 1 {
-                print("  PASS: captured both lines\n")
-            } else {
-                print("  FAIL: missing line2\n")
-                exit(1)
-            }
+    output2, err4 = os.exec("echo line1 && echo line2")
+    if err4 != "" {
+        println("  FAIL: exec error: ${err4}")
+        exit(1)
+    }
+    if string.contains(output2, "line1") == 1 {
+        if string.contains(output2, "line2") == 1 {
+            print("  PASS: captured both lines\n")
         } else {
-            print("  FAIL: missing line1\n")
+            print("  FAIL: missing line2\n")
             exit(1)
         }
     } else {
-        print("  FAIL: exec returned NULL\n")
+        print("  FAIL: missing line1\n")
         exit(1)
     }
 
-    // Test 5: os.getenv known variable
+    // Test 5: os.getenv known variable (bare extern — still string)
     print("\nTest 5: os.getenv PATH\n")
     path = os.getenv("PATH")
     if path != 0 {

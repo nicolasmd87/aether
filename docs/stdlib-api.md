@@ -373,46 +373,81 @@ main() {
 import std.json
 
 main() {
+    // Parse — Go-style (value, err) tuple.
+    v, err = json.parse("{\"name\":\"Aether\",\"count\":42}")
+    if err != "" {
+        println("parse failed: ${err}")
+        return
+    }
+
+    // Typed readers are infallible (sentinel 0/0.0 on wrong type).
+    name_val, _ = json.object_get(v, "name")
+    name, _ = json.get_string(name_val)
+    count_val, _ = json.object_get(v, "count")
+    count = json.get_int(count_val)
+    println("${name} / ${count}")
+
+    // Build values — each create_* allocates a standalone value. Passing
+    // it to object_set / array_add transfers ownership to the container.
     obj = json.create_object()
+    _ = json.object_set(obj, "x", json.create_number(1.5))
+    _ = json.object_set(obj, "flag", json.create_bool(1))
+
     arr = json.create_array()
-    num = json.create_number(42.5)
-    bool_val = json.create_bool(1)
-    null_val = json.create_null()
+    _ = json.array_add(arr, json.create_number(10.0))
+    _ = json.array_add(arr, json.create_number(20.0))
 
-    json.array_add(arr, num)
+    out, _ = json.stringify(obj)
+    println(out)
 
-    type = json.type(num)  // Returns JSON_NUMBER (2)
-
-    value = json.get_number(num)
-    is_true = json.get_bool(bool_val)
-
+    json.free(v)
     json.free(obj)
+    json.free(arr)
 }
 ```
 
 ### JSON Functions
 
-- `json.parse(str)` → `(ptr, string)` - Parse JSON, returns `(value, err)` tuple. Caller owns the returned value and must `json.free` it.
-- `json.stringify(value)` → `string` - Convert to JSON string (infallible)
-- `json.free(value)` - Free JSON value
+Fallible calls return Go-style tuples. The typed readers (`get_bool` /
+`get_number` / `get_int`) return sentinels (0, 0.0) on wrong-type input
+so they stay infallible.
 
-Raw extern: `json_parse_raw`.
-- `json.create_object()` - Create empty object
-- `json.create_array()` - Create empty array
-- `json.create_string(str)` - Create string value
-- `json.create_number(num)` - Create number value
-- `json.create_bool(val)` - Create boolean value
-- `json.create_null()` - Create null value
-- `json.type(value)` - Get value type
-- `json.is_null(value)` - Check if null
-- `json.get_number(value)` - Get number
-- `json.get_bool(value)` - Get boolean
-- `json.get_string(value)` - Get string
-- `json.array_add(arr, value)` - Add to array
-- `json.array_size(arr)` - Get array size
-- `json.array_get(arr, index)` - Get array element
-- `json.object_set(obj, key, value)` - Set object property
-- `json.object_get(obj, key)` - Get object property
+- `json.parse(str)` → `(ptr, string)` — parse into a tree. Error is a
+  position-qualified message like `"expected ':' at 3:17"`.
+- `json.stringify(value)` → `(string, string)` — `(output, err)`.
+- `json.free(value)` — release the value. Safe on both parsed roots
+  (frees the arena) and standalone-created values.
+- `json.get_string(value)` → `(string, string)` — `(text, err)`; errors
+  if `value` is not a `JSON_STRING`.
+- `json.object_get(obj, key)` → `(ptr, string)` — `(child, err)`.
+  Absent key returns `(null, "")`, which is distinct from the error
+  case `(null, "not an object")`.
+- `json.object_set(obj, key, value)` → `string` — error string or `""`.
+- `json.array_get(arr, index)` → `(ptr, string)` — same shape;
+  out-of-range returns `(null, "")`.
+- `json.array_add(arr, value)` → `string` — error string or `""`.
+
+Infallible externs (no tuple):
+
+- `json.type(value)` → `int` — returns one of the `JSON_*` constants.
+- `json.is_null(value)` → `int`.
+- `json.get_bool(value)` → `int` — 0 on wrong type.
+- `json.get_number(value)` → `float` — 0.0 on wrong type.
+- `json.get_int(value)` → `int` — truncates the double.
+- `json.object_has(obj, key)` → `int`.
+- `json.array_size(arr)` → `int`.
+- `json.create_null()`, `json.create_bool(v)`, `json.create_number(v)`,
+  `json.create_string(s)`, `json.create_array()`, `json.create_object()`
+  → `ptr` — allocate standalone values.
+- `json.last_error()` → `string` — the last parser error on the current
+  thread; redundant with `json.parse`'s tuple but useful when calling
+  the raw extern directly.
+
+Raw externs (bypass the Go-style wrappers): `json_parse_raw`,
+`json_parse_raw_n` (length-taking, for non-null-terminated input),
+`json_stringify_raw`, `json_get_string_raw`, `json_object_get_raw`,
+`json_object_set_raw`, `json_array_get_raw`, `json_array_add_raw`.
+All documented in [stdlib-module-pattern.md](stdlib-module-pattern.md).
 
 ### JSON Type Constants
 

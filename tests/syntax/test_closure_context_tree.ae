@@ -37,11 +37,11 @@ main() {
     println(list.size(root))
 
     // row1 is first child of root
-    row1 = list.get(root, 0)
+    row1, _ = list.get(root, 0)
     println(list.size(row1))
 
     // row2 is second child of root
-    row2 = list.get(root, 1)
+    row2, _ = list.get(root, 1)
     println(list.size(row2))
 
     list.free(root)

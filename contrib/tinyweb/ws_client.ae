@@ -25,11 +25,11 @@ ws_client_connect(host: string, port: int, ws_path: string, origin: string) {
 // Perform the WebSocket upgrade handshake.
 // Perform the WebSocket upgrade handshake. Returns 0 on success.
 ws_client_handshake(client: ptr) -> int {
-    sock = map_get(client, "sock")
-    host = map_get(client, "host")
-    port = map_get(client, "port")
-    ws_path = map_get(client, "path")
-    origin = map_get(client, "origin")
+    sock, _ = map.get(client, "sock")
+    host, _ = map.get(client, "host")
+    port, _ = map.get(client, "port")
+    ws_path, _ = map.get(client, "path")
+    origin, _ = map.get(client, "origin")
 
     // Build HTTP upgrade request
     // Fixed Sec-WebSocket-Key (accept key is only validated by the client)
@@ -57,7 +57,7 @@ ws_client_handshake(client: ptr) -> int {
 // Send a text message over the WebSocket connection.
 // Send a text message. Client-to-server frames must be masked (RFC 6455).
 ws_client_send(client: ptr, message: string) {
-    sock = map_get(client, "sock")
+    sock, _ = map.get(client, "sock")
     len = string.length(message)
 
     // Frame header: FIN=1, opcode=text(1), MASK=1
@@ -77,7 +77,7 @@ ws_client_send(client: ptr, message: string) {
 // Receive messages in a loop until stop_phrase is seen or connection closes.
 // Receive messages until stop_phrase or disconnect. Returns 1 if stopped, 0 if closed.
 ws_client_receive(client: ptr, stop_phrase: string, handler: fn) -> int {
-    sock = map_get(client, "sock")
+    sock, _ = map.get(client, "sock")
     running = 1
     result = 0
 
@@ -120,7 +120,7 @@ ws_client_receive(client: ptr, stop_phrase: string, handler: fn) -> int {
 // Close the WebSocket connection.
 // Close the connection (sends a masked close frame)
 ws_client_close(client: ptr) {
-    sock = map_get(client, "sock")
+    sock, _ = map.get(client, "sock")
     // Send masked close frame: [0x88, 0x80, mask(4 zeros)]
     tcp.send(sock, string.concat(string.from_int(136), string.from_int(128)))
     tcp.send(sock, string.concat(string.concat(string.from_int(0), string.from_int(0)),

@@ -18,24 +18,27 @@ _suite_new(name: string, fw: ptr) {
 }
 
 before(_ctx: ptr, setup: fn) {
-    list.add(map_get(_ctx, "befores"), box_closure(setup))
+    bl, _ = map.get(_ctx, "befores")
+    list.add(bl, box_closure(setup))
 }
 
 after_each(_ctx: ptr, teardown: fn) {
-    list.add(map_get(_ctx, "afters"), box_closure(teardown))
+    al, _ = map.get(_ctx, "afters")
+    list.add(al, box_closure(teardown))
 }
 
 it(_ctx: ptr, description: string, test_fn: fn) {
-    fw = map_get(_ctx, "fw")
-    passed_ref = map_get(fw, "passed")
-    failed_ref = map_get(fw, "failed")
-    depth_ref = map_get(fw, "depth")
+    fw, _ = map.get(_ctx, "fw")
+    passed_ref, _ = map.get(fw, "passed")
+    failed_ref, _ = map.get(fw, "failed")
+    depth_ref, _ = map.get(fw, "depth")
 
     // Run before hooks
-    befores = map_get(_ctx, "befores")
+    befores, _ = map.get(_ctx, "befores")
     n = list.size(befores)
     for (i = 0; i < n; i++) {
-        call(unbox_closure(list.get(befores, i)))
+        bh, _ = list.get(befores, i)
+        call(unbox_closure(bh))
     }
 
     old_failed = ref_get(failed_ref)
@@ -52,10 +55,11 @@ it(_ctx: ptr, description: string, test_fn: fn) {
     }
 
     // Run after hooks
-    afters = map_get(_ctx, "afters")
+    afters, _ = map.get(_ctx, "afters")
     n2 = list.size(afters)
     for (i = 0; i < n2; i++) {
-        call(unbox_closure(list.get(afters, i)))
+        ah, _ = list.get(afters, i)
+        call(unbox_closure(ah))
     }
 }
 
@@ -63,9 +67,9 @@ describe(_ctx: ptr, description: string) {
     // Get fw from parent context
     fw = _ctx
     if map_has(_ctx, "fw") == 1 {
-        fw = map_get(_ctx, "fw")
+        fw, _ = map.get(_ctx, "fw")
     }
-    depth_ref = map_get(fw, "depth")
+    depth_ref, _ = map.get(fw, "depth")
 
     d = ref_get(depth_ref)
     for (i = 0; i < d; i++) { print("  ") }
@@ -91,8 +95,11 @@ _assert_fail(msg: string) {
 }
 
 run_summary(fw: ptr) {
-    passed = ref_get(map_get(fw, "passed"))
-    failed = ref_get(map_get(fw, "failed"))
+    passed_ref, _ = map.get(fw, "passed")
+    failed_ref, _ = map.get(fw, "failed")
+    depth_ref, _ = map.get(fw, "depth")
+    passed = ref_get(passed_ref)
+    failed = ref_get(failed_ref)
     println("")
     if failed == 0 {
         println("\x1b[32m  ${passed} passing\x1b[0m")
@@ -101,9 +108,9 @@ run_summary(fw: ptr) {
         println("\x1b[31m  ${failed} failing\x1b[0m")
     }
     println("")
-    ref_free(map_get(fw, "passed"))
-    ref_free(map_get(fw, "failed"))
-    ref_free(map_get(fw, "depth"))
+    ref_free(passed_ref)
+    ref_free(failed_ref)
+    ref_free(depth_ref)
     if failed > 0 { exit(1) }
 }
 
@@ -117,7 +124,7 @@ main() {
     map_put(fw, "depth", ref(0))
 
     // Shorthand ref for assertions inside callbacks
-    _fail = map_get(fw, "failed")
+    _fail, _ = map.get(fw, "failed")
 
     // Shared state for before/after hook tests — declared in main() scope
     // so closures can safely capture it

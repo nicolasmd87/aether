@@ -1,0 +1,128 @@
+// Regression test: JSON Unicode handling.
+// Covers \uXXXX decoding, UTF-16 surrogate pairs, UTF-8 round-trip,
+// and validation of raw multi-byte UTF-8 sequences.
+
+import std.json
+import std.string
+
+main() {
+    print("=== JSON Unicode Tests ===\n\n")
+
+    // Test 1: basic \uXXXX for ASCII range (U+0041 = 'A')
+    print("Test 1: \\u0041 decodes to 'A'\n")
+    v1, e1 = json.parse("\"\\u0041\"")
+    if e1 != "" { println("  FAIL: ${e1}"); exit(1) }
+    s1, _ = json.get_string(v1)
+    if s1 == "A" {
+        print("  PASS\n")
+    } else {
+        println("  FAIL: got '${s1}'")
+        exit(1)
+    }
+    json.free(v1)
+
+    // Test 2: 2-byte UTF-8 range (U+00E9 = 'é')
+    print("\nTest 2: \\u00e9 decodes to 'é' (2 bytes in UTF-8)\n")
+    v2, e2 = json.parse("\"\\u00e9\"")
+    if e2 != "" { println("  FAIL: ${e2}"); exit(1) }
+    s2, _ = json.get_string(v2)
+    if string.length(s2) == 2 {
+        print("  PASS: 2 bytes\n")
+    } else {
+        println("  FAIL: length ${string.length(s2)}")
+        exit(1)
+    }
+    json.free(v2)
+
+    // Test 3: 3-byte UTF-8 range (U+2603 = snowman ☃)
+    print("\nTest 3: \\u2603 decodes to 3 UTF-8 bytes\n")
+    v3, e3 = json.parse("\"\\u2603\"")
+    if e3 != "" { println("  FAIL: ${e3}"); exit(1) }
+    s3, _ = json.get_string(v3)
+    if string.length(s3) == 3 {
+        print("  PASS: 3 bytes\n")
+    } else {
+        println("  FAIL: length ${string.length(s3)}")
+        exit(1)
+    }
+    json.free(v3)
+
+    // Test 4: surrogate pair (U+1D11E = G clef 𝄞, 4 bytes in UTF-8)
+    print("\nTest 4: surrogate pair \\uD834\\uDD1E → 4 bytes\n")
+    v4, e4 = json.parse("\"\\uD834\\uDD1E\"")
+    if e4 != "" { println("  FAIL: ${e4}"); exit(1) }
+    s4, _ = json.get_string(v4)
+    if string.length(s4) == 4 {
+        print("  PASS: 4 bytes\n")
+    } else {
+        println("  FAIL: length ${string.length(s4)}")
+        exit(1)
+    }
+    json.free(v4)
+
+    // Test 5: raw UTF-8 passes through unchanged
+    print("\nTest 5: raw UTF-8 bytes round-trip\n")
+    v5, e5 = json.parse("\"café\"")
+    if e5 != "" { println("  FAIL: ${e5}"); exit(1) }
+    s5, _ = json.get_string(v5)
+    if s5 == "café" {
+        print("  PASS\n")
+    } else {
+        println("  FAIL: got '${s5}'")
+        exit(1)
+    }
+    json.free(v5)
+
+    // Test 6: unpaired high surrogate rejected
+    print("\nTest 6: unpaired high surrogate rejected\n")
+    _, e6 = json.parse("\"\\uD834xyz\"")
+    if e6 != "" {
+        println("  PASS: rejected with: ${e6}")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // Test 7: unpaired low surrogate rejected
+    print("\nTest 7: unpaired low surrogate rejected\n")
+    _, e7 = json.parse("\"\\uDD1E\"")
+    if e7 != "" {
+        println("  PASS: rejected with: ${e7}")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // Test 8: invalid hex in \u escape
+    print("\nTest 8: non-hex in \\u rejected\n")
+    _, e8 = json.parse("\"\\uZZZZ\"")
+    if e8 != "" {
+        println("  PASS: rejected with: ${e8}")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // Test 9: truncated \u escape
+    print("\nTest 9: truncated \\u escape rejected\n")
+    _, e9 = json.parse("\"\\u00\"")
+    if e9 != "" {
+        println("  PASS: rejected with: ${e9}")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    // Test 10: raw control character rejected
+    print("\nTest 10: raw control char in string rejected\n")
+    // 0x01 (SOH) is a control char that must be escaped
+    _, e10 = json.parse("\"\x01\"")
+    if e10 != "" {
+        println("  PASS: rejected with: ${e10}")
+    } else {
+        print("  FAIL\n")
+        exit(1)
+    }
+
+    print("\n=== All Unicode Tests Passed ===\n")
+}

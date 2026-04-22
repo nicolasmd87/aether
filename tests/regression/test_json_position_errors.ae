@@ -1,0 +1,59 @@
+// Regression test: JSON parse errors carry correct line:col position info.
+
+import std.json
+import std.string
+
+contains(haystack: string, needle: string) -> int {
+    return string.contains(haystack, needle)
+}
+
+check_contains(err: string, substring: string, label: string) -> int {
+    if contains(err, substring) == 1 {
+        println("  PASS: ${label} contains '${substring}'")
+        return 1
+    }
+    println("  FAIL: ${label}: err '${err}' missing '${substring}'")
+    return 0
+}
+
+main() {
+    print("=== JSON Position Error Tests ===\n\n")
+
+    fails = 0
+
+    // Line 1 errors: col should be where the problem appears
+    print("Single-line errors:\n")
+    _, e1 = json.parse("{")
+    if check_contains(e1, "1:2", "unterminated '{' at col 2") == 0 { fails = fails + 1 }
+
+    _, e2 = json.parse("[1,2,")
+    if check_contains(e2, "1:", "unterminated array has line 1") == 0 { fails = fails + 1 }
+
+    _, e3 = json.parse("{\"a\":")
+    if check_contains(e3, "1:", "missing value has line 1") == 0 { fails = fails + 1 }
+
+    // Multi-line: error on a later line
+    print("\nMulti-line errors:\n")
+    _, e4 = json.parse("{\n  \"a\": 01\n}")
+    if check_contains(e4, "leading zero", "leading zero error message") == 0 { fails = fails + 1 }
+    if check_contains(e4, "2:", "leading zero at line 2") == 0 { fails = fails + 1 }
+
+    _, e5 = json.parse("[\n  1,\n  2,\n]")
+    if check_contains(e5, "4:", "trailing comma at line 4") == 0 { fails = fails + 1 }
+
+    // Trailing content error message mentions "trailing"
+    print("\nTrailing-content error:\n")
+    _, e6 = json.parse("{}xyz")
+    if check_contains(e6, "trailing", "trailing content error") == 0 { fails = fails + 1 }
+
+    // Position info format: <reason> at <line>:<col>
+    print("\nError format:\n")
+    _, e7 = json.parse("nul")
+    if check_contains(e7, " at ", "'at' separator") == 0 { fails = fails + 1 }
+
+    if fails > 0 {
+        println("\n=== ${fails} test(s) failed ===")
+        exit(1)
+    }
+    print("\n=== All Position Error Tests Passed ===\n")
+}

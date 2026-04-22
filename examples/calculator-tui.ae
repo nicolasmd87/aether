@@ -8,8 +8,10 @@ import std.list
 
 // btn: adds label to ctx[0], boxed handler to ctx[1]
 btn(_ctx: ptr, label: string, action: fn) {
-    list.add(list.get(_ctx, 0), label)
-    list.add(list.get(_ctx, 1), box_closure(action))
+    labs, _ = list.get(_ctx, 0)
+    hdls, _ = list.get(_ctx, 1)
+    list.add(labs, label)
+    list.add(hdls, box_closure(action))
 }
 
 grid() {
@@ -20,12 +22,12 @@ grid() {
 }
 
 render(g: ptr, val: int, cursor: int, op: int, prev: int) {
-    labs = list.get(g, 0)
+    labs, _ = list.get(g, 0)
     print("\x1b[H\x1b[2J  \x1b[1;36mCalculator\x1b[0m\n\n")
     println("  \x1b[44;97;1m  ${val}                \x1b[0m\n")
     n = list.size(labs)
     for (i = 0; i < n; i++) {
-        b = list.get(labs, i)
+        b, _ = list.get(labs, i)
         col = i - (i / 4) * 4
         if col == 0 { print("  ") }
         ch = char_at(b)
@@ -134,7 +136,8 @@ main() {
 
         // Space/Enter = invoke button callback
         if key == SPACE || key == ENTER {
-            boxed = list.get(list.get(g, 1), cur)
+            hdls, _ = list.get(g, 1)
+            boxed, _ = list.get(hdls, cur)
             handler = unbox_closure(boxed)
             call(handler)
         }

@@ -34,7 +34,7 @@ static const char* get_ae_path(void) {
 
 // List operations (from libaether.a)
 extern int list_size(void*);
-extern void* list_get(void*, int);
+extern void* list_get_raw(void*, int);
 
 // ---------------------------------------------------------------
 // Helpers
@@ -75,8 +75,8 @@ static char* serialize_grants_to_shm(void* perms) {
   char buf[8192];
   int pos = 0;
   for (int i = 0; i < n && pos < 8000; i += 2) {
-    const char* cat = (const char*)list_get(perms, i);
-    const char* pat = (const char*)list_get(perms, i + 1);
+    const char* cat = (const char*)list_get_raw(perms, i);
+    const char* pat = (const char*)list_get_raw(perms, i + 1);
     if (!cat || !pat) continue;
     pos += snprintf(buf + pos, sizeof(buf) - pos,
                     "%s:%s\n", cat, pat);

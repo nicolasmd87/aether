@@ -1,0 +1,43 @@
+// Regression test: HTTPS client (OpenSSL-backed).
+// Hits a stable public HTTPS endpoint. Skipped when AETHER_SKIP_NETWORK
+// is set (offline CI) or when the build doesn't have OpenSSL support
+// (error mentions "no OpenSSL support").
+
+import std.http
+import std.string
+import std.io
+
+main() {
+    if io.getenv("AETHER_SKIP_NETWORK") != 0 {
+        println("SKIP https: AETHER_SKIP_NETWORK set")
+        return
+    }
+
+    println("Test: https://example.com/ responds with 'Example Domain'")
+    body, err = http.get("https://example.com/")
+    if err != "" {
+        if string.contains(err, "no OpenSSL support") == 1 {
+            println("SKIP https: build has no OpenSSL support (${err})")
+            return
+        }
+        println("FAIL: http.get returned error: ${err}")
+        exit(1)
+    }
+    if string.contains(body, "Example Domain") == 1 {
+        println("PASS: TLS handshake + response body OK")
+    } else {
+        println("FAIL: body did not contain 'Example Domain'")
+        exit(1)
+    }
+
+    println("Test: https:// with bad hostname returns error")
+    _, err2 = http.get("https://definitely-not-a-real-host-xyz-aether-test-12345.example/")
+    if err2 != "" {
+        println("PASS: bogus host errored (${err2})")
+    } else {
+        println("FAIL: bogus host should error")
+        exit(1)
+    }
+
+    println("=== HTTPS client tests passed ===")
+}

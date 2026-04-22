@@ -1,0 +1,173 @@
+// Regression test: fast-double parser precision boundaries.
+//
+// The JSON parser has three number paths:
+//   1. Pure integer → int64 accumulator
+//   2. Fast-double → mantissa * POW10[±exp] when digits ≤ 15 and |exp| ≤ 22
+//   3. Fallback → strtod for correct IEEE-754 rounding on edge cases
+//
+// This file locks in correctness at every boundary so a future change
+// to FAST_INT_SAFE_DIGITS or POW10_FAST_MAX can't silently regress
+// values that used to round correctly.
+//
+// Test shape: parse a JSON number, stringify it back, compare to the
+// expected canonical form. Covers parse + stringify in one round-trip.
+
+import std.json
+import std.string
+
+// Round-trip a JSON number text; return the stringified form or
+// "<err>" if either parse or stringify fails.
+round_trip(n: string) -> string {
+    v, perr = json.parse(n)
+    match (perr) {
+        "" -> {
+            s, serr = json.stringify(v)
+            json.free(v)
+            match (serr) {
+                "" -> { return s }
+                _  -> { return "<stringify-err>" }
+            }
+        }
+        _ -> { return "<parse-err>" }
+    }
+}
+
+check(input: string, expected: string, label: string) -> int {
+    got = round_trip(input)
+    if string.equals(got, expected) == 1 {
+        println("  PASS ${label}: ${input} → ${got}")
+        return 0
+    }
+    println("  FAIL ${label}: ${input} → ${got}, expected ${expected}")
+    return 1
+}
+
+main() {
+    print("=== JSON number precision boundary tests ===\n\n")
+
+    fails = 0
+
+    // --- integer fast path ---
+
+    print("Integer fast path:\n")
+    fails = fails + check("0", "0", "zero")
+    fails = fails + check("1", "1", "one")
+    fails = fails + check("-1", "-1", "neg one")
+    fails = fails + check("42", "42", "small pos")
+    fails = fails + check("-42", "-42", "small neg")
+    fails = fails + check("1000000", "1e+06", "one million (stringify uses %g)")
+
+    // int64 edges — 9223372036854775807 and -9223372036854775808.
+    // These are 19 decimal digits, at the int64 boundary. The fast-int
+    // path accepts them; stringify prints in %g form (6-significant-digit
+    // default), so the round-trip is lossy. That's expected: the parser
+    // preserves the VALUE, stringify's precision is a separate concern.
+    // We don't strictly check the output — just that the parse didn't error.
+    print("\nLarge int boundary:\n")
+    v, perr = json.parse("9223372036854775807")
+    match (perr) {
+        "" -> {
+            println("  PASS int64-max parses without error")
+            json.free(v)
+        }
+        _ -> {
+            println("  FAIL int64-max: ${perr}")
+            fails = fails + 1
+        }
+    }
+
+    // --- fast-double path ---
+
+    print("\nFast-double path (≤15 sig digits, |exp| ≤ 22):\n")
+    fails = fails + check("3.14", "3.14", "pi approximation")
+    fails = fails + check("0.5", "0.5", "exact half")
+    fails = fails + check("-2.5", "-2.5", "neg fraction")
+    // 0.1 is inexact in binary; both parse and stringify are consistent about
+    // the double-precision rounded value, so round-trip still equals "0.1".
+    fails = fails + check("0.1", "0.1", "0.1 (binary-inexact)")
+
+    // --- exponent boundaries ---
+
+    print("\nExponent boundaries:\n")
+    fails = fails + check("1e0", "1", "1e0 → 1")
+    fails = fails + check("1e10", "1e+10", "small positive exp")
+    fails = fails + check("1e22", "1e+22", "fast-path exponent ceiling")
+    fails = fails + check("1e23", "1e+23", "past fast path → fallback strtod")
+    fails = fails + check("1e-10", "1e-10", "small negative exp")
+    fails = fails + check("1e-22", "1e-22", "fast-path negative exponent floor")
+    fails = fails + check("1e-23", "1e-23", "past negative fast path → fallback")
+
+    // --- signed zero / negative zero ---
+
+    print("\nZero forms:\n")
+    fails = fails + check("0", "0", "plain zero")
+    fails = fails + check("-0", "-0", "negative zero preserved")
+    fails = fails + check("0.0", "0", "trailing-fraction zero (normalised)")
+    fails = fails + check("0e0", "0", "zero-with-exp")
+
+    // --- high-precision inputs that force strtod fallback ---
+
+    print("\nPrecision boundaries (forces strtod fallback):\n")
+    // 16 significant digits — past FAST_INT_SAFE_DIGITS, should fall back.
+    // We can't easily check the exact double via Aether, but we can check
+    // that the parse doesn't error.
+    v16, p16 = json.parse("1.234567890123456")
+    match (p16) {
+        "" -> { println("  PASS 16-digit parses via strtod fallback"); json.free(v16) }
+        _  -> { println("  FAIL 16-digit: ${p16}"); fails = fails + 1 }
+    }
+
+    // 17 digits — well into fallback territory
+    v17, p17 = json.parse("12345678901234567")
+    match (p17) {
+        "" -> { println("  PASS 17-digit parses"); json.free(v17) }
+        _  -> { println("  FAIL 17-digit: ${p17}"); fails = fails + 1 }
+    }
+
+    // --- near-max / near-min double magnitudes ---
+
+    print("\nNear-max / near-min doubles:\n")
+    v_big, p_big = json.parse("1.7976931348623157e308")
+    match (p_big) {
+        "" -> { println("  PASS near-max double parses"); json.free(v_big) }
+        _  -> { println("  FAIL near-max: ${p_big}"); fails = fails + 1 }
+    }
+    v_sub, p_sub = json.parse("2.2250738585072014e-308")
+    match (p_sub) {
+        "" -> { println("  PASS near-min-normal double parses"); json.free(v_sub) }
+        _  -> { println("  FAIL near-min-normal: ${p_sub}"); fails = fails + 1 }
+    }
+
+    // --- strict RFC rejections still apply ---
+
+    print("\nRFC rejection still holds on fast-path numbers:\n")
+    _, e01 = json.parse("01")
+    if e01 != "" {
+        println("  PASS leading zero still rejected: ${e01}")
+    } else {
+        println("  FAIL leading zero accepted")
+        fails = fails + 1
+    }
+
+    _, enan = json.parse("NaN")
+    if enan != "" {
+        println("  PASS NaN literal still rejected: ${enan}")
+    } else {
+        println("  FAIL NaN accepted")
+        fails = fails + 1
+    }
+
+    _, einf = json.parse("Infinity")
+    if einf != "" {
+        println("  PASS Infinity literal still rejected: ${einf}")
+    } else {
+        println("  FAIL Infinity accepted")
+        fails = fails + 1
+    }
+
+    if fails > 0 {
+        println("\n=== ${fails} test(s) failed ===")
+        exit(1)
+    }
+    print("\n=== All number precision boundary tests passed ===\n")
+}

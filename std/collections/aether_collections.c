@@ -10,6 +10,7 @@ struct ArrayList {
 
 ArrayList* list_new() {
     ArrayList* list = (ArrayList*)malloc(sizeof(ArrayList));
+    if (!list) return NULL;
     list->items = NULL;
     list->size = 0;
     list->capacity = 0;
@@ -34,7 +35,7 @@ int list_add_raw(ArrayList* list, void* item) {
     return 1;
 }
 
-void* list_get(ArrayList* list, int index) {
+void* list_get_raw(ArrayList* list, int index) {
     if (!list || index < 0 || index >= list->size) return NULL;
     return list->items[index];
 }
@@ -69,12 +70,17 @@ void list_free(ArrayList* list) {
 }
 
 #define HASHMAP_INITIAL_CAPACITY 16
-#define HASHMAP_LOAD_FACTOR 0.75
+// Load factor = 3/4; expressed as an integer comparison below so we
+// don't do FP arithmetic on every put.
+#define HASHMAP_LOAD_NUMERATOR   3
+#define HASHMAP_LOAD_DENOMINATOR 4
 
 typedef struct HashMapEntry {
-    AetherString* key;
-    void* value;
-    struct HashMapEntry* next;
+    AetherString*         key;
+    void*                 value;
+    struct HashMapEntry*  next;
+    unsigned int          hash;    // cached so resize doesn't recompute
+    unsigned int          key_len; // cached so key_equals can prefilter
 } HashMapEntry;
 
 struct HashMap {
@@ -83,24 +89,37 @@ struct HashMap {
     int size;
 };
 
-static unsigned int hash_cstr(const char* key) {
+// djb2. Also returns length via an out-param so callers don't walk the
+// key twice (once to hash, once to strlen).
+static unsigned int hash_cstr_len(const char* key, unsigned int* out_len) {
     unsigned int hash = 5381;
-    for (const char* p = key; *p; p++) {
-        hash = ((hash << 5) + hash) + *p;
+    const char* p = key;
+    while (*p) {
+        hash = ((hash << 5) + hash) + (unsigned char)*p;
+        p++;
     }
+    if (out_len) *out_len = (unsigned int)(p - key);
     return hash;
 }
 
-static int key_equals(AetherString* a, const char* b) {
-    if (!a || !b) return 0;
-    return strcmp(a->data, b) == 0;
+static unsigned int hash_cstr(const char* key) {
+    return hash_cstr_len(key, NULL);
+}
+
+// Fast equality: cheap length compare first, memcmp only on match.
+static int key_equals(const HashMapEntry* e, const char* b, unsigned int b_len) {
+    if (!e || !e->key || !b) return 0;
+    if (e->key_len != b_len) return 0;
+    return memcmp(e->key->data, b, b_len) == 0;
 }
 
 HashMap* map_new() {
     HashMap* map = (HashMap*)malloc(sizeof(HashMap));
+    if (!map) return NULL;
     map->capacity = HASHMAP_INITIAL_CAPACITY;
     map->size = 0;
     map->buckets = (HashMapEntry**)calloc(map->capacity, sizeof(HashMapEntry*));
+    if (!map->buckets) { free(map); return NULL; }
     return map;
 }
 
@@ -114,18 +133,17 @@ static void hashmap_resize(HashMap* map) {
 
     map->capacity = new_capacity;
     map->buckets = new_buckets;
-    map->size = 0;
+    // map->size stays the same — we're moving the same entries into
+    // new buckets, not adding new ones.
 
     for (int i = 0; i < old_capacity; i++) {
         HashMapEntry* entry = old_buckets[i];
         while (entry) {
             HashMapEntry* next = entry->next;
-
-            unsigned int index = hash_cstr(entry->key->data) % map->capacity;
+            // Use cached hash; avoid walking the key string again.
+            unsigned int index = entry->hash % (unsigned int)map->capacity;
             entry->next = map->buckets[index];
             map->buckets[index] = entry;
-            map->size++;
-
             entry = next;
         }
     }
@@ -139,15 +157,21 @@ static void hashmap_resize(HashMap* map) {
 int map_put_raw(HashMap* map, const char* key, void* value) {
     if (!map || !key) return 0;
 
-    if ((float)map->size / map->capacity > HASHMAP_LOAD_FACTOR) {
+    // Integer load-factor check: resize when size/capacity > 3/4.
+    if ((long)map->size * HASHMAP_LOAD_DENOMINATOR >
+        (long)map->capacity * HASHMAP_LOAD_NUMERATOR) {
         hashmap_resize(map);
     }
 
-    unsigned int index = hash_cstr(key) % map->capacity;
+    unsigned int key_len = 0;
+    unsigned int hash = hash_cstr_len(key, &key_len);
+    unsigned int index = hash % (unsigned int)map->capacity;
     HashMapEntry* entry = map->buckets[index];
 
     while (entry) {
-        if (key_equals(entry->key, key)) {
+        // Hash check is a cheap prefilter before key_equals (which
+        // still runs memcmp for false hash collisions).
+        if (entry->hash == hash && key_equals(entry, key, key_len)) {
             entry->value = value;
             return 1;
         }
@@ -157,21 +181,26 @@ int map_put_raw(HashMap* map, const char* key, void* value) {
     HashMapEntry* new_entry = (HashMapEntry*)malloc(sizeof(HashMapEntry));
     if (!new_entry) return 0;
     new_entry->key = string_new(key);
-    new_entry->value = value;
-    new_entry->next = map->buckets[index];
+    if (!new_entry->key) { free(new_entry); return 0; }
+    new_entry->value   = value;
+    new_entry->hash    = hash;
+    new_entry->key_len = key_len;
+    new_entry->next    = map->buckets[index];
     map->buckets[index] = new_entry;
     map->size++;
     return 1;
 }
 
-void* map_get(HashMap* map, const char* key) {
+void* map_get_raw(HashMap* map, const char* key) {
     if (!map || !key) return NULL;
 
-    unsigned int index = hash_cstr(key) % map->capacity;
+    unsigned int key_len = 0;
+    unsigned int hash = hash_cstr_len(key, &key_len);
+    unsigned int index = hash % (unsigned int)map->capacity;
     HashMapEntry* entry = map->buckets[index];
 
     while (entry) {
-        if (key_equals(entry->key, key)) {
+        if (entry->hash == hash && key_equals(entry, key, key_len)) {
             return entry->value;
         }
         entry = entry->next;
@@ -181,18 +210,20 @@ void* map_get(HashMap* map, const char* key) {
 }
 
 int map_has(HashMap* map, const char* key) {
-    return map_get(map, key) != NULL;
+    return map_get_raw(map, key) != NULL;
 }
 
 void map_remove(HashMap* map, const char* key) {
     if (!map || !key) return;
 
-    unsigned int index = hash_cstr(key) % map->capacity;
+    unsigned int key_len = 0;
+    unsigned int hash = hash_cstr_len(key, &key_len);
+    unsigned int index = hash % (unsigned int)map->capacity;
     HashMapEntry* entry = map->buckets[index];
     HashMapEntry* prev = NULL;
 
     while (entry) {
-        if (key_equals(entry->key, key)) {
+        if (entry->hash == hash && key_equals(entry, key, key_len)) {
             if (prev) {
                 prev->next = entry->next;
             } else {
@@ -236,7 +267,7 @@ void map_free(HashMap* map) {
     free(map);
 }
 
-MapKeys* map_keys(HashMap* map) {
+MapKeys* map_keys_raw(HashMap* map) {
     if (!map) return NULL;
 
     MapKeys* keys = (MapKeys*)malloc(sizeof(MapKeys));

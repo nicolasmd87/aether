@@ -1,35 +1,41 @@
 // std.collections - Collections Module
 // Import with: import std.collections
 //
-// Raw externs end in `_raw`. Aether-native wrappers use Go-style
-// `(error)` returns for list.add and map.put so callers can detect
-// resize/OOM failures that were previously silent.
+// API shape:
+//   - Raw externs end in `_raw` and return ptr/int in the old C-style
+//     convention. They are the escape hatch for advanced callers.
+//   - Aether-native wrappers (below) use Go-style `(value, err)` or
+//     `err` returns and are the idiomatic way to call collections
+//     operations that can fail.
 
-// ArrayList operations
+// ---- ArrayList raw externs ----
 extern list_new() -> ptr
 extern list_add_raw(list: ptr, item: ptr) -> int
-extern list_get(list: ptr, index: int) -> ptr
+extern list_get_raw(list: ptr, index: int) -> ptr
 extern list_set(list: ptr, index: int, item: ptr)
 extern list_size(list: ptr) -> int
 extern list_remove(list: ptr, index: int)
 extern list_clear(list: ptr)
 extern list_free(list: ptr)
 
-// HashMap operations
+// ---- HashMap raw externs ----
 extern map_new() -> ptr
 extern map_put_raw(map: ptr, key: string, value: ptr) -> int
-extern map_get(map: ptr, key: string) -> ptr
+extern map_get_raw(map: ptr, key: string) -> ptr
 extern map_has(map: ptr, key: string) -> int
 extern map_remove(map: ptr, key: string)
 extern map_size(map: ptr) -> int
 extern map_clear(map: ptr)
 extern map_free(map: ptr)
 
-// HashMap key iteration
-extern map_keys(map: ptr) -> ptr
+// ---- Key iteration ----
+extern map_keys_raw(map: ptr) -> ptr
 extern map_keys_free(keys: ptr)
 
-// Append an item to a list. Returns "" on success, error on failure.
+// ---- Go-style wrappers ----
+
+// Append an item to a list. Returns "" on success, error on failure
+// (OOM during resize, null list).
 list_add(list: ptr, item: ptr) -> {
     ok = list_add_raw(list, item)
     if ok == 0 {
@@ -38,11 +44,50 @@ list_add(list: ptr, item: ptr) -> {
     return ""
 }
 
-// Insert/update a key-value pair. Returns "" on success, error on failure.
+// Index into a list.
+// - (item, "")            : index in range
+// - (null, "")            : index out of range (not an error)
+// - (null, "null list")   : `list` is null
+list_get(list: ptr, index: int) -> {
+    if list == null {
+        return null, "null list"
+    }
+    item = list_get_raw(list, index)
+    return item, ""
+}
+
+// Insert or update a key-value pair. Returns "" on success, error on
+// failure (OOM during resize, null map, null key).
 map_put(map: ptr, key: string, value: ptr) -> {
     ok = map_put_raw(map, key, value)
     if ok == 0 {
         return "map.put failed"
     }
     return ""
+}
+
+// Look up a key.
+// - (value, "")          : key present
+// - (null, "")           : key absent (not an error — use map.has to disambiguate)
+// - (null, "null map")   : `map` is null
+map_get(map: ptr, key: string) -> {
+    if map == null {
+        return null, "null map"
+    }
+    v = map_get_raw(map, key)
+    return v, ""
+}
+
+// Snapshot a map's keys. Returns (MapKeys ptr, "") on success, (null,
+// error) on allocation failure. Caller must free the returned ptr with
+// map.keys_free.
+map_keys(map: ptr) -> {
+    if map == null {
+        return null, "null map"
+    }
+    keys = map_keys_raw(map)
+    if keys == null {
+        return null, "allocation failed"
+    }
+    return keys, ""
 }

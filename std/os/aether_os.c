@@ -33,19 +33,30 @@ char* os_run_capture_raw(const char* p, void* a, void* e) { (void)p; (void)a; (v
 // here without a dependency cycle; the prototypes match
 // std/collections/aether_collections.h.
 extern int list_size(void* list);
-extern void* list_get(void* list, int index);
+extern void* list_get_raw(void* list, int index);
 
 #ifndef _WIN32
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <errno.h>
+#else
+#include <windows.h>
+#include <wchar.h>
 #endif
 
 // libaether.a list operations — declared extern so this file doesn't have
 // to include the collections header (which would create a build cycle).
 extern int   list_size(void* list);
-extern void* list_get(void* list, int index);
+extern void* list_get_raw(void* list, int index);
+
+#ifdef _WIN32
+// Forward declaration — implementation at the bottom of the file.
+// os_execv needs to call into this before the Windows backend block.
+static int win_launch(const char* prog, void* argv_list, void* env_list,
+                      int capture_stdout,
+                      int* out_exit_code, char** out_capture);
+#endif
 
 int os_system(const char* cmd) {
     if (!cmd) return -1;
@@ -76,12 +87,16 @@ char* os_exec_raw(const char* cmd) {
         return NULL;
     }
 
-    char buffer[256];
+    // fgets reads up to sizeof(buffer)-1 per call, so a single chunk
+    // won't need more than one doubling — but use `while` anyway to
+    // stay safe against future buffer-size changes.
+    char buffer[4096];
     while (fgets(buffer, sizeof(buffer), pipe)) {
         size_t chunk = strlen(buffer);
         if (len + chunk + 1 > capacity) {
-            capacity *= 2;
-            char* new_result = (char*)realloc(result, capacity);
+            size_t new_capacity = capacity;
+            while (new_capacity < len + chunk + 1) new_capacity *= 2;
+            char* new_result = (char*)realloc(result, new_capacity);
             if (!new_result) {
                 free(result);
 #ifdef _WIN32
@@ -92,6 +107,7 @@ char* os_exec_raw(const char* cmd) {
                 return NULL;
             }
             result = new_result;
+            capacity = new_capacity;
         }
         memcpy(result + len, buffer, chunk);
         len += chunk;
@@ -120,11 +136,20 @@ int os_execv(const char* prog, void* argv_list) {
     if (!aether_sandbox_check("exec", prog)) return -1;
 
 #ifdef _WIN32
-    // No fork/exec equivalent on Windows that preserves PID and stdio
-    // the way POSIX execvp does. Callers needing a Windows process
-    // replacement should use os_run (PR #148) and then exit(rc).
-    (void)argv_list;
-    return -1;
+    // Windows has no true exec that replaces the process in place. The
+    // closest semantic: spawn the child synchronously, inherit stdio,
+    // and exit with the child's exit code so the caller sees the same
+    // effective behavior as POSIX execvp (the original process is gone
+    // after this call returns successfully — but technically returns
+    // via exit, not via in-place replacement).
+    int exit_code = 0;
+    if (win_launch(prog, argv_list, NULL, 0, &exit_code, NULL) != 0) {
+        return -1;
+    }
+    fflush(stdout);
+    fflush(stderr);
+    exit(exit_code);
+    return -1;  // unreachable
 #else
     // Build a NULL-terminated char* array from the Aether list. We copy
     // pointers only — the list owns the string storage and keeps it
@@ -148,7 +173,7 @@ int os_execv(const char* prog, void* argv_list) {
         argv[ai++] = (char*)prog;
     } else {
         for (int i = 0; i < n; i++) {
-            void* item = list_get(argv_list, i);
+            void* item = list_get_raw(argv_list, i);
             if (!item) {
                 // Bail early rather than pass NULL into execvp's
                 // variadic-argv contract, which has undefined behaviour
@@ -193,9 +218,106 @@ char* os_which(const char* name) {
     if (!aether_sandbox_check("env", "PATH")) return NULL;
 
 #ifdef _WIN32
-    // Windows uses ';' as PATH separator and PATHEXT to choose extensions.
-    // Stub for now; a follow-up can implement the full Windows lookup.
-    (void)name;
+    // Windows: PATH separator is ';', and executable extensions are
+    // enumerated via PATHEXT (e.g. ".COM;.EXE;.BAT;.CMD"). Absolute or
+    // relative paths with backslashes or drive letters are returned
+    // as-is after existence check.
+    size_t name_len = strlen(name);
+
+    // Name already has a path component? (slash, backslash, or drive letter)
+    int has_path = 0;
+    for (size_t i = 0; i < name_len; i++) {
+        if (name[i] == '\\' || name[i] == '/' || (i == 1 && name[i] == ':')) {
+            has_path = 1;
+            break;
+        }
+    }
+
+    // Has an extension already?
+    const char* dot = strrchr(name, '.');
+    const char* last_sep = NULL;
+    for (size_t i = 0; i < name_len; i++) {
+        if (name[i] == '\\' || name[i] == '/') last_sep = name + i;
+    }
+    int has_ext = dot && (!last_sep || dot > last_sep);
+
+    const char* pathext = getenv("PATHEXT");
+    if (!pathext || !*pathext) pathext = ".COM;.EXE;.BAT;.CMD";
+
+    // Helper: try a candidate path; return strdup of it if the file exists.
+    // Inlined via macro since we use it in both the has-path and PATH-search branches.
+    #define WIN_WHICH_TRY(candidate) do { \
+        DWORD attrs = GetFileAttributesA(candidate); \
+        if (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY)) { \
+            return strdup(candidate); \
+        } \
+    } while (0)
+
+    char buf[MAX_PATH];
+
+    if (has_path) {
+        if (has_ext) {
+            WIN_WHICH_TRY(name);
+            return NULL;
+        }
+        // Try name with each PATHEXT extension.
+        const char* p = pathext;
+        while (*p) {
+            const char* end = strchr(p, ';');
+            size_t ext_len = end ? (size_t)(end - p) : strlen(p);
+            if (name_len + ext_len + 1 < sizeof(buf)) {
+                memcpy(buf, name, name_len);
+                memcpy(buf + name_len, p, ext_len);
+                buf[name_len + ext_len] = '\0';
+                WIN_WHICH_TRY(buf);
+            }
+            if (!end) break;
+            p = end + 1;
+        }
+        return NULL;
+    }
+
+    const char* path = getenv("PATH");
+    if (!path || !*path) return NULL;
+
+    const char* p = path;
+    while (*p) {
+        const char* end = strchr(p, ';');
+        size_t dirlen = end ? (size_t)(end - p) : strlen(p);
+        if (dirlen == 0 || dirlen + 1 + name_len >= sizeof(buf)) {
+            if (!end) break;
+            p = end + 1;
+            continue;
+        }
+        memcpy(buf, p, dirlen);
+        buf[dirlen] = '\\';
+        memcpy(buf + dirlen + 1, name, name_len);
+        buf[dirlen + 1 + name_len] = '\0';
+
+        if (has_ext) {
+            WIN_WHICH_TRY(buf);
+        } else {
+            char ext_buf[MAX_PATH];
+            const char* ep = pathext;
+            while (*ep) {
+                const char* eend = strchr(ep, ';');
+                size_t elen = eend ? (size_t)(eend - ep) : strlen(ep);
+                size_t base_len = dirlen + 1 + name_len;
+                if (base_len + elen + 1 < sizeof(ext_buf)) {
+                    memcpy(ext_buf, buf, base_len);
+                    memcpy(ext_buf + base_len, ep, elen);
+                    ext_buf[base_len + elen] = '\0';
+                    WIN_WHICH_TRY(ext_buf);
+                }
+                if (!eend) break;
+                ep = eend + 1;
+            }
+        }
+
+        if (!end) break;
+        p = end + 1;
+    }
+    #undef WIN_WHICH_TRY
     return NULL;
 #else
     if (strchr(name, '/')) {
@@ -263,7 +385,7 @@ static char** build_argv_array(const char* prog, void* argv_list) {
     if (!av) return NULL;
     av[0] = (char*)prog;
     for (int i = 0; i < n; i++) {
-        av[i + 1] = (char*)list_get(argv_list, i);
+        av[i + 1] = (char*)list_get_raw(argv_list, i);
     }
     av[n + 1] = NULL;
     return av;
@@ -279,7 +401,7 @@ static char** build_envp_array(void* env_list) {
     char** envp = (char**)malloc(sizeof(char*) * (size_t)(n + 1));
     if (!envp) return NULL;
     for (int i = 0; i < n; i++) {
-        envp[i] = (char*)list_get(env_list, i);
+        envp[i] = (char*)list_get_raw(env_list, i);
     }
     envp[n] = NULL;
     return envp;
@@ -361,7 +483,9 @@ char* os_run_capture_raw(const char* prog, void* argv_list, void* env_list) {
     free(av);
     free(envp);
 
-    size_t cap = 1024;
+    // Read buffer is page-sized for fewer syscalls on large output;
+    // result buffer starts at 4 KB with doubling growth.
+    size_t cap = 4096;
     size_t len = 0;
     char* result = (char*)malloc(cap);
     if (!result) {
@@ -371,7 +495,7 @@ char* os_run_capture_raw(const char* prog, void* argv_list, void* env_list) {
         waitpid(pid, &st, 0);
         return NULL;
     }
-    char buf[1024];
+    char buf[4096];
     for (;;) {
         ssize_t n = read(pipefd[0], buf, sizeof(buf));
         if (n < 0) {
@@ -407,16 +531,329 @@ char* os_run_capture_raw(const char* prog, void* argv_list, void* env_list) {
 
 #else // _WIN32
 
+// -----------------------------------------------------------------
+// Windows process-exec backend: CreateProcessW with argv-style launch.
+//
+// The POSIX branch uses execvp directly. On Windows, CreateProcessW
+// takes a single UTF-16 command-line string with the very particular
+// escaping rules consumed by the C runtime's argv parser. The helpers
+// below build that string correctly — the classic "Everyone quotes
+// command line arguments the wrong way" rules are applied verbatim.
+// -----------------------------------------------------------------
+
+// UTF-8 → UTF-16. Caller frees. Returns NULL on conversion failure.
+static wchar_t* utf8_to_wide(const char* utf8) {
+    if (!utf8) return NULL;
+    int wlen = MultiByteToWideChar(CP_UTF8, 0, utf8, -1, NULL, 0);
+    if (wlen <= 0) return NULL;
+    wchar_t* wide = (wchar_t*)malloc(sizeof(wchar_t) * (size_t)wlen);
+    if (!wide) return NULL;
+    if (MultiByteToWideChar(CP_UTF8, 0, utf8, -1, wide, wlen) <= 0) {
+        free(wide);
+        return NULL;
+    }
+    return wide;
+}
+
+// UTF-16 → UTF-8. Caller frees. Returns NULL on conversion failure.
+static char* wide_to_utf8(const wchar_t* wide) {
+    if (!wide) return NULL;
+    int len = WideCharToMultiByte(CP_UTF8, 0, wide, -1, NULL, 0, NULL, NULL);
+    if (len <= 0) return NULL;
+    char* utf8 = (char*)malloc((size_t)len);
+    if (!utf8) return NULL;
+    if (WideCharToMultiByte(CP_UTF8, 0, wide, -1, utf8, len, NULL, NULL) <= 0) {
+        free(utf8);
+        return NULL;
+    }
+    return utf8;
+}
+
+// Simple growing wide-string buffer for assembling a command line.
+typedef struct {
+    wchar_t* data;
+    size_t   len;
+    size_t   cap;
+    int      oom;
+} WBuf;
+
+static void wbuf_init(WBuf* b) { b->data = NULL; b->len = 0; b->cap = 0; b->oom = 0; }
+
+static int wbuf_reserve(WBuf* b, size_t extra) {
+    if (b->oom) return 0;
+    size_t need = b->len + extra + 1;
+    if (need > b->cap) {
+        size_t new_cap = b->cap ? b->cap * 2 : 256;
+        while (new_cap < need) new_cap *= 2;
+        wchar_t* nd = (wchar_t*)realloc(b->data, sizeof(wchar_t) * new_cap);
+        if (!nd) { b->oom = 1; return 0; }
+        b->data = nd;
+        b->cap = new_cap;
+    }
+    return 1;
+}
+
+static void wbuf_append(WBuf* b, const wchar_t* s) {
+    if (!s) return;
+    size_t slen = wcslen(s);
+    if (!wbuf_reserve(b, slen)) return;
+    memcpy(b->data + b->len, s, sizeof(wchar_t) * slen);
+    b->len += slen;
+    b->data[b->len] = L'\0';
+}
+
+static void wbuf_append_char(WBuf* b, wchar_t c) {
+    if (!wbuf_reserve(b, 1)) return;
+    b->data[b->len++] = c;
+    b->data[b->len] = L'\0';
+}
+
+// Escape and append `arg` for CRT argv parsing. Rules from MSFT:
+// https://learn.microsoft.com/en-us/archive/blogs/twistylittlepassagesallalike/everyone-quotes-command-line-arguments-the-wrong-way
+//   - If the arg contains no whitespace and no '"', append verbatim.
+//   - Otherwise wrap in quotes. Inside the quotes:
+//       * Any run of N backslashes followed by a '"' becomes 2N+1
+//         backslashes followed by \".
+//       * Any run of N backslashes at the very end of the arg (right
+//         before the closing quote) becomes 2N backslashes.
+//       * Other backslashes are passed through verbatim.
+static void append_escaped_arg(WBuf* b, const wchar_t* arg) {
+    int needs_quote = 0;
+    if (*arg == L'\0') {
+        needs_quote = 1;
+    } else {
+        for (const wchar_t* p = arg; *p; p++) {
+            if (*p == L' ' || *p == L'\t' || *p == L'"') {
+                needs_quote = 1;
+                break;
+            }
+        }
+    }
+
+    if (!needs_quote) {
+        wbuf_append(b, arg);
+        return;
+    }
+
+    wbuf_append_char(b, L'"');
+
+    const wchar_t* p = arg;
+    while (*p) {
+        size_t backslashes = 0;
+        while (*p == L'\\') { backslashes++; p++; }
+
+        if (*p == L'\0') {
+            // Trailing backslashes before closing quote — double them.
+            for (size_t i = 0; i < backslashes * 2; i++) wbuf_append_char(b, L'\\');
+            break;
+        } else if (*p == L'"') {
+            // N backslashes + '"' → 2N+1 backslashes + \"
+            for (size_t i = 0; i < backslashes * 2 + 1; i++) wbuf_append_char(b, L'\\');
+            wbuf_append_char(b, L'"');
+            p++;
+        } else {
+            for (size_t i = 0; i < backslashes; i++) wbuf_append_char(b, L'\\');
+            wbuf_append_char(b, *p);
+            p++;
+        }
+    }
+
+    wbuf_append_char(b, L'"');
+}
+
+// Build the command-line string for CreateProcessW. argv[0] is the
+// program name — we use `prog` if the caller's list is empty, else the
+// first list entry. Caller frees.
+static wchar_t* build_command_line(const char* prog, void* argv_list) {
+    WBuf b; wbuf_init(&b);
+
+    int n = argv_list ? list_size(argv_list) : 0;
+
+    const char* arg0_utf8 = (n > 0) ? (const char*)list_get_raw(argv_list, 0) : prog;
+    if (!arg0_utf8) arg0_utf8 = prog;
+    wchar_t* warg0 = utf8_to_wide(arg0_utf8);
+    if (!warg0) { free(b.data); return NULL; }
+    append_escaped_arg(&b, warg0);
+    free(warg0);
+
+    int start_index = (n > 0) ? 1 : 0;
+    for (int i = start_index; i < n; i++) {
+        const char* item = (const char*)list_get_raw(argv_list, i);
+        if (!item) continue;
+        wchar_t* w = utf8_to_wide(item);
+        if (!w) { free(b.data); return NULL; }
+        wbuf_append_char(&b, L' ');
+        append_escaped_arg(&b, w);
+        free(w);
+    }
+
+    if (b.oom) { free(b.data); return NULL; }
+    return b.data;
+}
+
+// Build a UTF-16 environment block from a list of "KEY=VALUE" strings.
+// Format: key1=val1\0key2=val2\0\0. Returns NULL if env_list is NULL
+// (inherit parent env) or on allocation failure.
+static wchar_t* build_environ_block(void* env_list) {
+    if (!env_list) return NULL;
+    int n = list_size(env_list);
+    WBuf b; wbuf_init(&b);
+
+    for (int i = 0; i < n; i++) {
+        const char* item = (const char*)list_get_raw(env_list, i);
+        if (!item) continue;
+        wchar_t* w = utf8_to_wide(item);
+        if (!w) { free(b.data); return NULL; }
+        wbuf_append(&b, w);
+        wbuf_append_char(&b, L'\0');
+        free(w);
+    }
+    wbuf_append_char(&b, L'\0');
+    if (b.oom) { free(b.data); return NULL; }
+    return b.data;
+}
+
+// Shared launch path. If `capture_stdout` is non-zero we redirect the
+// child's stdout to a pipe and read it to completion. `out_exit_code`
+// and `out_capture` are optional outputs.
+static int win_launch(const char* prog, void* argv_list, void* env_list,
+                      int capture_stdout,
+                      int* out_exit_code, char** out_capture) {
+    wchar_t* cmdline = build_command_line(prog, argv_list);
+    if (!cmdline) return -1;
+
+    wchar_t* wprog = utf8_to_wide(prog);
+    if (!wprog) { free(cmdline); return -1; }
+
+    wchar_t* wenv = build_environ_block(env_list);
+    // NULL from build_environ_block when env_list is NULL means "inherit" —
+    // that's the correct semantic, not an error.
+
+    STARTUPINFOW si;
+    memset(&si, 0, sizeof(si));
+    si.cb = sizeof(si);
+
+    HANDLE read_pipe = NULL, write_pipe = NULL;
+    SECURITY_ATTRIBUTES sa;
+
+    if (capture_stdout) {
+        memset(&sa, 0, sizeof(sa));
+        sa.nLength = sizeof(sa);
+        sa.bInheritHandle = TRUE;
+        sa.lpSecurityDescriptor = NULL;
+        if (!CreatePipe(&read_pipe, &write_pipe, &sa, 0)) {
+            free(cmdline); free(wprog); free(wenv);
+            return -1;
+        }
+        // The read end must NOT be inherited by the child.
+        SetHandleInformation(read_pipe, HANDLE_FLAG_INHERIT, 0);
+
+        si.dwFlags = STARTF_USESTDHANDLES;
+        si.hStdInput  = GetStdHandle(STD_INPUT_HANDLE);
+        si.hStdOutput = write_pipe;
+        si.hStdError  = GetStdHandle(STD_ERROR_HANDLE);
+    }
+
+    PROCESS_INFORMATION pi;
+    memset(&pi, 0, sizeof(pi));
+
+    DWORD flags = CREATE_UNICODE_ENVIRONMENT;
+    BOOL ok = CreateProcessW(
+        wprog,         // application name
+        cmdline,       // command line (modifiable — CreateProcessW may write)
+        NULL, NULL,
+        capture_stdout ? TRUE : FALSE,  // inherit handles only when capturing
+        flags,
+        wenv,          // NULL = inherit parent env
+        NULL,          // CWD = current
+        &si,
+        &pi);
+
+    free(cmdline);
+    free(wprog);
+    free(wenv);
+
+    if (capture_stdout) {
+        // Parent closes the write end so EOF happens when the child exits.
+        CloseHandle(write_pipe);
+    }
+
+    if (!ok) {
+        if (capture_stdout) CloseHandle(read_pipe);
+        return -1;
+    }
+
+    char* capture_buf = NULL;
+    size_t capture_len = 0;
+
+    if (capture_stdout) {
+        size_t cap = 1024;
+        capture_buf = (char*)malloc(cap);
+        if (!capture_buf) {
+            CloseHandle(read_pipe);
+            CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+            return -1;
+        }
+        char tmp[1024];
+        DWORD got = 0;
+        while (ReadFile(read_pipe, tmp, sizeof(tmp), &got, NULL) && got > 0) {
+            if (capture_len + got + 1 > cap) {
+                while (capture_len + got + 1 > cap) cap *= 2;
+                char* bigger = (char*)realloc(capture_buf, cap);
+                if (!bigger) {
+                    free(capture_buf);
+                    CloseHandle(read_pipe);
+                    CloseHandle(pi.hProcess); CloseHandle(pi.hThread);
+                    return -1;
+                }
+                capture_buf = bigger;
+            }
+            memcpy(capture_buf + capture_len, tmp, got);
+            capture_len += got;
+        }
+        capture_buf[capture_len] = '\0';
+        CloseHandle(read_pipe);
+    }
+
+    WaitForSingleObject(pi.hProcess, INFINITE);
+
+    DWORD exit_code = 0;
+    GetExitCodeProcess(pi.hProcess, &exit_code);
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+
+    if (out_exit_code) *out_exit_code = (int)exit_code;
+    if (out_capture) *out_capture = capture_buf;
+    else free(capture_buf);
+
+    return 0;
+}
+
 int os_run(const char* prog, void* argv_list, void* env_list) {
-    // TODO: CreateProcessW with explicit command-line and environment
-    // block. Until then, Windows builds get -1 and a clear failure mode.
-    (void)prog; (void)argv_list; (void)env_list;
-    return -1;
+    if (!prog) return -1;
+    if (!aether_sandbox_check("exec", prog)) return -1;
+
+    int exit_code = 0;
+    if (win_launch(prog, argv_list, env_list, 0, &exit_code, NULL) != 0) {
+        return -1;
+    }
+    return exit_code;
 }
 
 char* os_run_capture_raw(const char* prog, void* argv_list, void* env_list) {
-    (void)prog; (void)argv_list; (void)env_list;
-    return NULL;
+    if (!prog) return NULL;
+    if (!aether_sandbox_check("exec", prog)) return NULL;
+
+    char* capture = NULL;
+    int exit_code = 0;
+    if (win_launch(prog, argv_list, env_list, 1, &exit_code, &capture) != 0) {
+        free(capture);
+        return NULL;
+    }
+    // Caller conventions: on non-zero exit the POSIX branch still
+    // returns the captured stdout so the caller can inspect it.
+    (void)exit_code;
+    return capture ? capture : strdup("");
 }
 
 #endif // !_WIN32

@@ -34,7 +34,7 @@ builder make_greeting(name: string): string {
     prefix = "Hello"
     if _builder != null {
         if map_has(_builder, "prefix") == 1 {
-            prefix = map_get(_builder, "prefix")
+            prefix, _ = map.get(_builder, "prefix")
         }
     }
     result = "${prefix}, ${name}!"
@@ -59,7 +59,7 @@ builder process_items(label: string) {
     }
     println("process_items: ${label} item_count=${count}")
     if count > 0 {
-        first = map_get(_builder, "item0")
+        first, _ = map.get(_builder, "item0")
         println("process_items: first=${first}")
     }
 }
@@ -70,7 +70,7 @@ builder deploy(target: string) {
     mode = "default"
     if _builder != null {
         if map_has(_builder, "mode") == 1 {
-            mode = map_get(_builder, "mode")
+            mode, _ = map.get(_builder, "mode")
         }
     }
     println("deploy: ${target} mode=${mode}")

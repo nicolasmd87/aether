@@ -1,116 +1,135 @@
-// JSON Demo - Demonstrates JSON creation, stringification, and parsing
+// JSON Demo — creation, type dispatch via match, parsing, serialisation.
 // Run with: ae run examples/stdlib/json-demo.ae
 //
-// json.stringify() and json.get_string() return malloc'd strings — free with defer free().
+// The demo uses std.json's Go-style wrappers (json.parse, json.stringify,
+// json.object_get, json.array_get, ...) which return `(value, err)`
+// tuples, and `match` expressions for dispatch on JsonType — which reads
+// more cleanly than chained if-elses.
+//
+// JsonType constants (returned by json.type):
+//   0 = null, 1 = bool, 2 = number, 3 = string, 4 = array, 5 = object
 
 import std.json
+import std.string
+
+// Render any JsonValue back as a short human-readable string. Demonstrates
+// `match` on json.type — one arm per variant, no if-chains.
+render(v: ptr) -> string {
+    match (json.type(v)) {
+        0 -> { return "null" }
+        1 -> {
+            match (json.get_bool(v)) {
+                1 -> { return "true" }
+                _ -> { return "false" }
+            }
+        }
+        2 -> {
+            // json.stringify renders the number correctly (handles ints
+            // and floats via the parser's own formatter); call it and
+            // forward the string.
+            num_s, num_err = json.stringify(v)
+            match (num_err) {
+                "" -> { return num_s }
+                _  -> { return "<number?>" }
+            }
+        }
+        3 -> {
+            str_s, str_err = json.get_string(v)
+            match (str_err) {
+                "" -> {
+                    quoted = string.concat("\"", string.concat(str_s, "\""))
+                    return quoted
+                }
+                _ -> { return "<string?>" }
+            }
+        }
+        4 -> { return "<array>" }
+        5 -> { return "<object>" }
+        _ -> { return "<unknown>" }
+    }
+}
 
 main() {
     print("=== Aether JSON Demo ===\n\n")
 
-    // JSON type constants (from JsonType enum)
-    JSON_NULL = 0
-    JSON_BOOL = 1
-    JSON_NUMBER = 2
-    JSON_STRING = 3
-    JSON_ARRAY = 4
-    JSON_OBJECT = 5
+    // ---- Creation — infallible typed readers (sentinel 0 on wrong type).
 
-    // Create JSON values
-    print("Creating JSON values:\n")
-
-    // Numbers
     num = json.create_number(42.5)
-    print("  Number type: ")
-    print(json.type(num))
-    print(" (expected: 2 = JSON_NUMBER)\n")
-    print("  Number value: ")
-    print(json.get_number(num))
-    print("\n")
+    println("number ${json.get_number(num)} → render: ${render(num)}")
 
-    // Strings — json.get_string() returns a malloc'd string
-    str = json.create_string("hello world")
-    print("  String type: ")
-    print(json.type(str))
-    print(" (expected: 3 = JSON_STRING)\n")
-    str_val = json.get_string(str)
-    defer free(str_val)
-    println("  String value: ${str_val}")
+    str = json.create_string("hello")
+    println("string render: ${render(str)}")
 
-    // Booleans
     bool_val = json.create_bool(1)
-    print("  Bool value: ")
-    print(json.get_bool(bool_val))
-    print("\n")
+    println("bool render: ${render(bool_val)}")
 
-    // Null
     null_val = json.create_null()
-    print("  Is null: ")
-    print(json.is_null(null_val))
-    print("\n\n")
+    println("null render: ${render(null_val)}")
 
-    // Build an object
-    print("Building JSON object:\n")
+    // ---- Building an object and serialising it.
+
     obj = json.create_object()
-    json.object_set(obj, "name", json.create_string("Aether"))
-    json.object_set(obj, "version", json.create_number(0.21))
-    json.object_set(obj, "compiled", json.create_bool(1))
+    _ = json.object_set(obj, "name",    json.create_string("Aether"))
+    _ = json.object_set(obj, "version", json.create_number(0.21))
+    _ = json.object_set(obj, "ready",   json.create_bool(1))
 
-    // Check fields
     has_name = json.object_has(obj, "name")
-    println("  Has 'name': ${has_name}")
+    println("\nBuilt object, has 'name': ${has_name}")
 
-    name_val = json.object_get(obj, "name")
-    name_str = json.get_string(name_val)
-    defer free(name_str)
-    println("  name = ${name_str}")
+    // ---- Parsing + branching on type with `match`.
 
-    // Stringify — returns a plain string, print directly
-    print("\nStringify:\n")
-    json_text = json.stringify(obj)
-    defer free(json_text)
-    println("  ${json_text}")
+    print("\nParsing...\n")
+    v, err = json.parse("{\"greeting\":\"hi\",\"count\":7,\"active\":true,\"tags\":[1,2,3]}")
+    match (err) {
+        "" -> {
+            // Read each known field. For production code you'd want to handle
+            // object_get error tuples, but for a demo the happy path is fine.
+            greeting, _ = json.object_get(v, "greeting")
+            g_str, _ = json.get_string(greeting)
+            println("  greeting = ${g_str}")
 
-    // Build an array
-    print("\nBuilding JSON array:\n")
-    arr = json.create_array()
-    json.array_add(arr, json.create_number(1.0))
-    json.array_add(arr, json.create_number(2.0))
-    json.array_add(arr, json.create_number(3.0))
-    size = json.array_size(arr)
-    println("  Array size: ${size}")
+            count, _ = json.object_get(v, "count")
+            println("  count = ${json.get_int(count)}")
 
-    arr_text = json.stringify(arr)
-    defer free(arr_text)
-    println("  Array: ${arr_text}")
+            active, _ = json.object_get(v, "active")
+            println("  active = ${render(active)}")
 
-    // Parse a JSON string — Go-style tuple return
-    print("\nParsing JSON:\n")
-    parsed, perr = json.parse("{\"greeting\":\"hi\",\"count\":7}")
-    if perr == "" {
-        ptype = json.type(parsed)
-        println("  Parsed type: ${ptype} (expected: 5 = JSON_OBJECT)")
+            tags, _ = json.object_get(v, "tags")
+            println("  tags size = ${json.array_size(tags)}")
 
-        greeting = json.object_get(parsed, "greeting")
-        g_str = json.get_string(greeting)
-        println("  greeting = ${g_str}")
+            // Iterate the array, rendering each entry via match.
+            n = json.array_size(tags)
+            i = 0
+            while i < n {
+                elem, gerr = json.array_get(tags, i)
+                match (gerr) {
+                    "" -> {
+                        r = render(elem)
+                        println("    [${i}] = ${r}")
+                    }
+                    _ -> { println("    [${i}] = <err>") }
+                }
+                i = i + 1
+            }
 
-        count = json.object_get(parsed, "count")
-        c_val = json.get_int(count)
-        println("  count = ${c_val}")
-
-        json.free(parsed)
-    } else {
-        println("  Parse failed: ${perr}")
+            json.free(v)
+        }
+        _ -> { println("  parse failed: ${err}") }
     }
 
-    // Clean up
+    // ---- Strict-parse error with line:col position info.
+
+    print("\nStrict-parse error:\n")
+    _, merr = json.parse("{\n  \"bad\": 01\n}")
+    println("  error: ${merr}")
+
+    // ---- Cleanup — values built standalone release via json.free.
+
     json.free(num)
     json.free(str)
     json.free(bool_val)
     json.free(null_val)
     json.free(obj)
-    json.free(arr)
 
     print("\nJSON demo complete!\n")
 }

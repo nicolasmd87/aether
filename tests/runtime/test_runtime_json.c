@@ -40,7 +40,7 @@ TEST_CATEGORY(json_parse_string, TEST_CATEGORY_STDLIB) {
     ASSERT_NOT_NULL(value);
     ASSERT_EQ(JSON_STRING, json_type(value));
 
-    const char* str_val = json_get_string(value);
+    const char* str_val = json_get_string_raw(value);
     ASSERT_NOT_NULL(str_val);
     ASSERT_STREQ("hello world", str_val);
 
@@ -54,7 +54,7 @@ TEST_CATEGORY(json_parse_array, TEST_CATEGORY_STDLIB) {
     ASSERT_EQ(JSON_ARRAY, json_type(value));
     ASSERT_EQ(3, json_array_size(value));
 
-    JsonValue* first = json_array_get(value, 0);
+    JsonValue* first = json_array_get_raw(value, 0);
     ASSERT_EQ(1, json_get_int(first));
 
     json_free(value);
@@ -68,11 +68,11 @@ TEST_CATEGORY(json_parse_object, TEST_CATEGORY_STDLIB) {
 
     ASSERT_TRUE(json_object_has(value, "name"));
 
-    JsonValue* name_val = json_object_get(value, "name");
+    JsonValue* name_val = json_object_get_raw(value, "name");
     ASSERT_NOT_NULL(name_val);
-    ASSERT_STREQ("Alice", json_get_string(name_val));
+    ASSERT_STREQ("Alice", json_get_string_raw(name_val));
 
-    JsonValue* age_val = json_object_get(value, "age");
+    JsonValue* age_val = json_object_get_raw(value, "age");
     ASSERT_EQ(30, json_get_int(age_val));
 
     json_free(value);
@@ -82,12 +82,12 @@ TEST_CATEGORY(json_create_and_stringify, TEST_CATEGORY_STDLIB) {
     JsonValue* obj = json_create_object();
 
     JsonValue* name_val = json_create_string("Bob");
-    json_object_set(obj, "name", name_val);
+    json_object_set_raw(obj, "name", name_val);
 
     JsonValue* age_val = json_create_number(25);
-    json_object_set(obj, "age", age_val);
+    json_object_set_raw(obj, "age", age_val);
 
-    char* json_str = json_stringify(obj);
+    char* json_str = json_stringify_raw(obj);
     ASSERT_NOT_NULL(json_str);
     ASSERT_NOT_NULL(strstr(json_str, "name"));
     ASSERT_NOT_NULL(strstr(json_str, "Bob"));
@@ -99,12 +99,12 @@ TEST_CATEGORY(json_create_and_stringify, TEST_CATEGORY_STDLIB) {
 TEST_CATEGORY(json_array_operations, TEST_CATEGORY_STDLIB) {
     JsonValue* arr = json_create_array();
 
-    json_array_add(arr, json_create_number(10));
-    json_array_add(arr, json_create_number(20));
-    json_array_add(arr, json_create_number(30));
+    json_array_add_raw(arr, json_create_number(10));
+    json_array_add_raw(arr, json_create_number(20));
+    json_array_add_raw(arr, json_create_number(30));
 
     ASSERT_EQ(3, json_array_size(arr));
-    ASSERT_EQ(20, json_get_int(json_array_get(arr, 1)));
+    ASSERT_EQ(20, json_get_int(json_array_get_raw(arr, 1)));
 
     json_free(arr);
 }

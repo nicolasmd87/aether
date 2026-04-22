@@ -22,7 +22,7 @@ main() {
 
     // Test 2: get from empty list
     print("\nTest 2: get from empty list\n")
-    v = list.get(l, 0)
+    v, _ = list.get(l, 0)
     if v == 0 {
         print("  PASS: get(0) on empty list = NULL\n")
     } else {
@@ -33,7 +33,7 @@ main() {
     // Test 3: get negative index
     print("\nTest 3: get negative index\n")
     list.add(l, 42)
-    v2 = list.get(l, 0 - 1)
+    v2, _ = list.get(l, 0 - 1)
     if v2 == 0 {
         print("  PASS: get(-1) = NULL\n")
     } else {
@@ -43,7 +43,7 @@ main() {
 
     // Test 4: get past end
     print("\nTest 4: get past end\n")
-    v3 = list.get(l, 100)
+    v3, _ = list.get(l, 100)
     if v3 == 0 {
         print("  PASS: get(100) on size-1 list = NULL\n")
     } else {
@@ -70,7 +70,7 @@ main() {
     // Test 6: list set
     print("\nTest 6: list set\n")
     list.set(l, 0, 77)
-    v6 = list.get(l, 0)
+    v6, _ = list.get(l, 0)
     if v6 == 77 {
         print("  PASS: set(0, 77) then get(0) = 77\n")
     } else {
@@ -110,7 +110,7 @@ main() {
 
     // Test 9: get from empty map
     print("\nTest 9: get from empty map\n")
-    v9 = map.get(m, "missing")
+    v9, _ = map.get(m, "missing")
     if v9 == 0 {
         print("  PASS: get from empty map = NULL\n")
     } else {
@@ -133,7 +133,7 @@ main() {
     map.put(m, "key", 10)
     map.put(m, "key", 20)
     if map.size(m) == 1 {
-        v11 = map.get(m, "key")
+        v11, _ = map.get(m, "key")
         if v11 == 20 {
             print("  PASS: overwrite keeps size=1, value=20\n")
         } else {
@@ -172,7 +172,7 @@ main() {
     map.put(m2, "k12", 12)
     map.put(m2, "k13", 13)
     if map.size(m2) == 13 {
-        v13 = map.get(m2, "k13")
+        v13, _ = map.get(m2, "k13")
         if v13 == 13 {
             print("  PASS: 13 keys after resize, k13=13\n")
         } else {
@@ -187,9 +187,12 @@ main() {
     // Test 14: all keys still accessible after resize
     print("\nTest 14: all keys accessible after resize\n")
     all_good = 1
-    if map.get(m2, "k1") != 1 { all_good = 0 }
-    if map.get(m2, "k7") != 7 { all_good = 0 }
-    if map.get(m2, "k12") != 12 { all_good = 0 }
+    k1v, _ = map.get(m2, "k1")
+    if k1v != 1 { all_good = 0 }
+    k7v, _ = map.get(m2, "k7")
+    if k7v != 7 { all_good = 0 }
+    k12v, _ = map.get(m2, "k12")
+    if k12v != 12 { all_good = 0 }
     if all_good == 1 {
         print("  PASS: k1=1, k7=7, k12=12 after resize\n")
     } else {
@@ -203,7 +206,8 @@ main() {
     map.clear(m)
     if map.size(m) == 0 {
         map.put(m, "new", 42)
-        if map.get(m, "new") == 42 {
+        new_v, _ = map.get(m, "new")
+        if new_v == 42 {
             print("  PASS: clear + re-use works\n")
         } else {
             print("  FAIL\n")
@@ -220,7 +224,7 @@ main() {
     m3 = map.new()
     sv = string.new("hello")
     map.put(m3, "greeting", sv)
-    got = map.get(m3, "greeting")
+    got, _ = map.get(m3, "greeting")
     cstr = string.to_cstr(got)
     if cstr == "hello" {
         print("  PASS: managed string stored and retrieved\n")

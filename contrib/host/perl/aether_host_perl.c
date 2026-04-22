@@ -22,7 +22,7 @@ static int   perl_perms_depth = 0;
 
 // Permission checker — same as other host modules
 extern int list_size(void*);
-extern void* list_get(void*, int);
+extern void* list_get_raw(void*, int);
 
 static int pattern_match(const char* pat, const char* resource) {
     // Normalize IPv4-mapped IPv6 addresses so a grant for "10.0.0.1"
@@ -50,8 +50,8 @@ static int perms_allow(void* perms, const char* category, const char* resource) 
     int n = list_size(perms);
     if (n == 0) return 0;
     for (int i = 0; i < n; i += 2) {
-        const char* cat = (const char*)list_get(perms, i);
-        const char* pat = (const char*)list_get(perms, i + 1);
+        const char* cat = (const char*)list_get_raw(perms, i);
+        const char* pat = (const char*)list_get_raw(perms, i + 1);
         if (!cat || !pat) continue;
         if (cat[0] == '*' && pat[0] == '*') return 1;
         if (strcmp(cat, category) == 0 && pattern_match(pat, resource)) return 1;
@@ -122,8 +122,8 @@ int aether_perl_run_sandboxed(void* perms, const char* code) {
         int pos = snprintf(scrub, sizeof(scrub),
             "my %%keep; ");
         for (int i = 0; i < n && pos < 3900; i += 2) {
-            const char* cat = (const char*)list_get(perms, i);
-            const char* pat = (const char*)list_get(perms, i + 1);
+            const char* cat = (const char*)list_get_raw(perms, i);
+            const char* pat = (const char*)list_get_raw(perms, i + 1);
             if (cat && strcmp(cat, "env") == 0 && pat) {
                 if (strcmp(pat, "*") == 0) {
                     pos += snprintf(scrub + pos, sizeof(scrub) - pos,

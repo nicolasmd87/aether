@@ -1,12 +1,13 @@
 // Regression test: std.io edge cases
-// Covers: file read/write, non-existent files, empty files, getenv
+// Covers: file read/write, non-existent files, empty files, getenv.
+// Uses the Go-style wrappers: read_file/write_file/append_file/delete_file
+// all return `(value, err)` or `err`.
 
 import std.io
 
 main() {
     print("=== IO Edge Case Tests ===\n\n")
 
-    // Use platform temp dir
     tmp = io.getenv("TEMP")
     if tmp == 0 {
         tmp = io.getenv("TMPDIR")
@@ -15,50 +16,43 @@ main() {
         tmp = "/tmp"
     }
 
-    // Test 1: read non-existent file returns NULL
+    // Test 1: read non-existent file returns error.
     print("Test 1: read non-existent file\n")
-    content = io.read_file("${tmp}/aether_nonexistent_xyz_987")
-    if content == 0 {
-        print("  PASS: read_file returns NULL for missing file\n")
+    _, e1 = io.read_file("${tmp}/aether_nonexistent_xyz_987")
+    if e1 != "" {
+        print("  PASS: read_file returns error for missing file\n")
     } else {
-        print("  FAIL\n")
+        print("  FAIL: expected error\n")
         exit(1)
     }
 
     // Test 2: write + read round-trip
     print("\nTest 2: write + read round-trip\n")
     test_path = "${tmp}/aether_io_test.txt"
-    ok = io.write_file(test_path, "hello io")
-    if ok == 1 {
-        content2 = io.read_file(test_path)
-        if content2 == "hello io" {
-            print("  PASS: write + read round-trip\n")
-        } else {
-            print("  FAIL: content mismatch\n")
-            exit(1)
-        }
+    we = io.write_file(test_path, "hello io")
+    if we != "" { println("  FAIL: write: ${we}"); exit(1) }
+    content2, re2 = io.read_file(test_path)
+    if re2 != "" { println("  FAIL: read: ${re2}"); exit(1) }
+    if content2 == "hello io" {
+        print("  PASS: write + read round-trip\n")
     } else {
-        print("  FAIL: write returned 0\n")
+        print("  FAIL: content mismatch\n")
         exit(1)
     }
 
     // Test 3: append
     print("\nTest 3: append to file\n")
-    ok2 = io.append_file(test_path, " world")
-    if ok2 == 1 {
-        content3 = io.read_file(test_path)
-        if content3 == "hello io world" {
-            print("  PASS: append works\n")
-        } else {
-            print("  FAIL: content mismatch\n")
-            exit(1)
-        }
+    ae3 = io.append_file(test_path, " world")
+    if ae3 != "" { println("  FAIL: append: ${ae3}"); exit(1) }
+    content3, _ = io.read_file(test_path)
+    if content3 == "hello io world" {
+        print("  PASS: append works\n")
     } else {
-        print("  FAIL: append returned 0\n")
+        print("  FAIL: content mismatch\n")
         exit(1)
     }
 
-    // Test 4: file_exists
+    // Test 4: file_exists (bare extern — still int)
     print("\nTest 4: file_exists\n")
     if io.file_exists(test_path) == 1 {
         print("  PASS: file exists after write\n")
@@ -69,23 +63,20 @@ main() {
 
     // Test 5: delete
     print("\nTest 5: delete file\n")
-    if io.delete_file(test_path) == 1 {
-        if io.file_exists(test_path) == 0 {
-            print("  PASS: file deleted\n")
-        } else {
-            print("  FAIL: file still exists\n")
-            exit(1)
-        }
+    de5 = io.delete_file(test_path)
+    if de5 != "" { println("  FAIL: delete: ${de5}"); exit(1) }
+    if io.file_exists(test_path) == 0 {
+        print("  PASS: file deleted\n")
     } else {
-        print("  FAIL: delete returned 0\n")
+        print("  FAIL: file still exists\n")
         exit(1)
     }
 
-    // Test 6: delete non-existent file
+    // Test 6: delete non-existent file returns error.
     print("\nTest 6: delete non-existent file\n")
-    r = io.delete_file("${tmp}/aether_nonexistent_xyz_987")
-    if r == 0 {
-        print("  PASS: delete non-existent returns 0\n")
+    de6 = io.delete_file("${tmp}/aether_nonexistent_xyz_987")
+    if de6 != "" {
+        print("  PASS: delete non-existent returns error\n")
     } else {
         print("  FAIL\n")
         exit(1)
@@ -94,22 +85,18 @@ main() {
     // Test 7: write empty content
     print("\nTest 7: write empty content\n")
     test_path2 = "${tmp}/aether_io_empty_test.txt"
-    ok3 = io.write_file(test_path2, "")
-    if ok3 == 1 {
-        content4 = io.read_file(test_path2)
-        if content4 == "" {
-            print("  PASS: empty file write + read\n")
-        } else {
-            print("  FAIL: content not empty\n")
-            exit(1)
-        }
+    we7 = io.write_file(test_path2, "")
+    if we7 != "" { println("  FAIL: write: ${we7}"); exit(1) }
+    content4, _ = io.read_file(test_path2)
+    if content4 == "" {
+        print("  PASS: empty file write + read\n")
     } else {
-        print("  FAIL: write returned 0\n")
+        print("  FAIL: content not empty\n")
         exit(1)
     }
-    io.delete_file(test_path2)
+    _ = io.delete_file(test_path2)
 
-    // Test 8: getenv on known variable
+    // Test 8: getenv on known variable (bare extern — stays string)
     print("\nTest 8: getenv PATH\n")
     path_val = io.getenv("PATH")
     if path_val != 0 {
@@ -119,7 +106,7 @@ main() {
         exit(1)
     }
 
-    // Test 9: getenv on unknown variable
+    // Test 9: getenv on unknown variable returns null.
     print("\nTest 9: getenv unknown\n")
     unknown = io.getenv("AETHER_NONEXISTENT_VAR_XYZ")
     if unknown == 0 {
@@ -129,11 +116,11 @@ main() {
         exit(1)
     }
 
-    // Test 10: file_info
+    // Test 10: file_info on non-existent returns error.
     print("\nTest 10: file_info on non-existent\n")
-    info = io.file_info("${tmp}/aether_nonexistent_xyz_987")
-    if info == 0 {
-        print("  PASS: file_info returns NULL for missing file\n")
+    info, ierr = io.file_info("${tmp}/aether_nonexistent_xyz_987")
+    if ierr != "" {
+        print("  PASS: file_info returns error for missing file\n")
     } else {
         io.file_info_free(info)
         print("  FAIL\n")

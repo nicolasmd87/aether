@@ -1,0 +1,46 @@
+{
+  "name": "aether",
+  "version": "0.75.0",
+  "description": "Actor-based systems language with compile-time verification",
+  "author": {
+    "name": "Aether Contributors",
+    "url": "https://github.com/nicolasmd87/aether"
+  },
+  "license": "MIT",
+  "runtime": {
+    "scheduler": "multicore",
+    "threads": 8,
+    "numa": true,
+    "simd": {
+      "enabled": true,
+      "isa": ["avx2", "neon"]
+    },
+    "pools": {
+      "actor_pool": 256,
+      "msg_pool": 4096,
+      "arena_initial": 65536
+    }
+  },
+  "stdlib": ["string", "math", "fs", "net", "json", "collections", "io", "log", "os"],
+  "targets": [
+    {"name": "linux", "arch": "x86_64", "status": "tier1"},
+    {"name": "linux", "arch": "arm64", "status": "tier1"},
+    {"name": "macos", "arch": "arm64", "status": "tier1"},
+    {"name": "macos", "arch": "x86_64", "status": "tier2"},
+    {"name": "windows", "arch": "x86_64", "status": "tier2"},
+    {"name": "wasm", "arch": "wasm32", "status": "tier3"},
+    {"name": "embedded", "arch": "arm32", "status": "tier3"}
+  ],
+  "features": {
+    "actors": true,
+    "sandbox": true,
+    "coroutines": false,
+    "async_io": true,
+    "https": true
+  },
+  "meta": {
+    "rfc8259": true,
+    "utf8": true,
+    "max_depth": 256
+  }
+}

@@ -275,6 +275,7 @@ char* path_join(const char* path1, const char* path2) {
     size_t total = len1 + len2 + (needs_sep ? 1 : 0);
 
     char* result = (char*)malloc(total + 1);
+    if (!result) return NULL;
     strcpy(result, path1);
     if (needs_sep) {
         result[len1] = sep;
@@ -304,7 +305,8 @@ char* path_dirname(const char* path) {
     if (len == 0) len = 1;  // Root directory
 
     char* result = (char*)malloc(len + 1);
-    strncpy(result, path, len);
+    if (!result) return NULL;
+    memcpy(result, path, len);
     result[len] = '\0';
 
     return result;
@@ -366,6 +368,7 @@ DirList* dir_list_raw(const char* path) {
     if (!path) return NULL;
 
     DirList* list = (DirList*)malloc(sizeof(DirList));
+    if (!list) return NULL;
     list->entries = NULL;
     list->count = 0;
 
@@ -379,14 +382,23 @@ DirList* dir_list_raw(const char* path) {
         return list;
     }
 
+    // Capacity-doubling growth for the entries array. Without it every
+    // readdir step reallocated + memcpy'd the whole list, turning an
+    // N-entry directory into O(N^2) work.
+    int cap = 0;
     do {
         if (strcmp(find_data.cFileName, ".") != 0 &&
             strcmp(find_data.cFileName, "..") != 0) {
-            char** new_entries = (char**)realloc(list->entries, (list->count + 1) * sizeof(char*));
-            if (!new_entries) break;
-            list->entries = new_entries;
-            list->entries[list->count] = strdup(find_data.cFileName);
-            list->count++;
+            if (list->count >= cap) {
+                int new_cap = cap ? cap * 2 : 16;
+                char** new_entries = (char**)realloc(list->entries, new_cap * sizeof(char*));
+                if (!new_entries) break;
+                list->entries = new_entries;
+                cap = new_cap;
+            }
+            char* name_copy = strdup(find_data.cFileName);
+            if (!name_copy) break;
+            list->entries[list->count++] = name_copy;
         }
     } while (FindNextFileA(hFind, &find_data));
 
@@ -395,14 +407,20 @@ DirList* dir_list_raw(const char* path) {
     DIR* dir = opendir(path);
     if (!dir) return list;
 
+    int cap = 0;
     struct dirent* entry;
     while ((entry = readdir(dir)) != NULL) {
         if (strcmp(entry->d_name, ".") != 0 && strcmp(entry->d_name, "..") != 0) {
-            char** new_entries = (char**)realloc(list->entries, (list->count + 1) * sizeof(char*));
-            if (!new_entries) break;
-            list->entries = new_entries;
-            list->entries[list->count] = strdup(entry->d_name);
-            list->count++;
+            if (list->count >= cap) {
+                int new_cap = cap ? cap * 2 : 16;
+                char** new_entries = (char**)realloc(list->entries, new_cap * sizeof(char*));
+                if (!new_entries) break;
+                list->entries = new_entries;
+                cap = new_cap;
+            }
+            char* name_copy = strdup(entry->d_name);
+            if (!name_copy) break;
+            list->entries[list->count++] = name_copy;
         }
     }
 
@@ -668,7 +686,7 @@ DirList* fs_glob_raw(const char* pattern) {
 // Multi-pattern glob: takes a list of patterns, returns merged DirList.
 // The list is an ArrayList (from std.list) containing string pointers.
 extern int list_size(void*);
-extern void* list_get(void*, int);
+extern void* list_get_raw(void*, int);
 
 DirList* fs_glob_multi_raw(void* pattern_list) {
     if (!pattern_list) return NULL;
@@ -680,7 +698,7 @@ DirList* fs_glob_multi_raw(void* pattern_list) {
 
     int n = list_size(pattern_list);
     for (int i = 0; i < n; i++) {
-        const char* pattern = (const char*)list_get(pattern_list, i);
+        const char* pattern = (const char*)list_get_raw(pattern_list, i);
         if (!pattern) continue;
 
         DirList* partial = fs_glob_raw(pattern);

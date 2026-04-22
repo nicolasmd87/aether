@@ -1,421 +1,1697 @@
+// aether_json.c — Clean-room fast JSON parser for std.json.
+//
+// Design summary (see docs/json-parser-design.md for the full rationale):
+//
+//   * Arena-allocated per document. One bump-pointer arena holds every
+//     JsonValue, every string payload, every container backing array for
+//     a parsed document. json_free() releases the arena in O(chunks),
+//     not O(nodes).
+//
+//   * Flat containers. Arrays and objects use a plain `JsonValue**`
+//     (plus parallel `char**` + `uint32_t*` for object keys/lengths)
+//     instead of the previous ArrayList/HashMap wrappers. Linear lookup
+//     for objects — the canonical size range (<32 keys) is cache-friendly
+//     enough that the branch-prediction win beats hashing.
+//
+//   * Character classification via a 256-entry lookup table. Every hot
+//     decision ("is this whitespace? structural? safe string byte?") is
+//     a single LUT read.
+//
+//   * Fast string scan. Non-escape, non-ASCII-control, non-" runs are
+//     consumed by a tight loop with a LUT guard. Only escapes, control
+//     chars, and the closing quote leave the fast loop.
+//
+//   * UTF-8 DFA. Bjoern Hoehrmann's public-domain state machine
+//     validates multi-byte sequences in one pass with no branches per
+//     byte (arXiv/Hoehrmann 2010). Rejects overlongs, surrogate halves,
+//     and codepoints above U+10FFFF.
+//
+//   * Integer fast path. Numbers containing only digits (with an
+//     optional leading minus) avoid strtod and parse via a tight
+//     integer accumulator. strtod is reserved for floats.
+//
+//   * Position-aware errors. `json_last_error()` returns a thread-local
+//     "<reason> at <line>:<col>" string. First error wins (innermost
+//     failure is usually the most specific).
+//
+// The API in aether_json.h is preserved exactly. JsonValue is still
+// opaque to callers; only the internals changed. All existing unit
+// tests, regression tests, and callers continue to work unchanged.
+
 #include "aether_json.h"
-#include "../collections/aether_collections.h"
+
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <stdio.h>
-#include <ctype.h>
+#include <stdarg.h>
+#include <stdint.h>
+#include <stddef.h>
+
+// ---------------------------------------------------------------------------
+// Thread-local storage portability shim
+// ---------------------------------------------------------------------------
+
+#if defined(_MSC_VER)
+    #define JSON_THREAD_LOCAL __declspec(thread)
+#elif defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
+    #define JSON_THREAD_LOCAL _Thread_local
+#else
+    #define JSON_THREAD_LOCAL __thread
+#endif
+
+// Branch hints. Compiler-agnostic no-ops when unsupported.
+#if defined(__GNUC__) || defined(__clang__)
+    #define JSON_LIKELY(x)   __builtin_expect(!!(x), 1)
+    #define JSON_UNLIKELY(x) __builtin_expect(!!(x), 0)
+#else
+    #define JSON_LIKELY(x)   (x)
+    #define JSON_UNLIKELY(x) (x)
+#endif
+
+// ---------------------------------------------------------------------------
+// Error reporting
+// ---------------------------------------------------------------------------
+
+// Error buffer sized to hold reason + " at line:col" without truncation.
+// JSON_ERR_REASON_BUF is the space for the reason alone; the outer
+// JSON_ERROR_BUF_SIZE adds room for " at %d:%d" (max ~30 chars for
+// 32-bit line/col).
+#define JSON_ERR_REASON_BUF 200
+#define JSON_ERROR_BUF_SIZE 256
+
+static JSON_THREAD_LOCAL char g_json_err_buf[JSON_ERROR_BUF_SIZE];
+static JSON_THREAD_LOCAL int  g_json_err_set;
+
+static void err_clear(void) {
+    g_json_err_buf[0] = '\0';
+    g_json_err_set = 0;
+}
+
+const char* json_last_error(void) {
+    return g_json_err_set ? g_json_err_buf : "";
+}
+
+// Every parser error goes through this. First-error-wins so the innermost
+// diagnostic is preserved; outer callers that detect a NULL return don't
+// overwrite the deeper reason.
+static void err_set(int line, int col, const char* fmt, ...) {
+    if (g_json_err_set) return;
+    char msg[JSON_ERR_REASON_BUF];
+    va_list ap;
+    va_start(ap, fmt);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+    // msg is capped at JSON_ERR_REASON_BUF-1, leaving room for " at N:N"
+    // (max ~30 chars for 32-bit line/col) inside the outer buffer.
+    snprintf(g_json_err_buf, sizeof(g_json_err_buf),
+             "%s at %d:%d", msg, line, col);
+    g_json_err_set = 1;
+}
+
+// Used once from json_parse_raw when the caller hands us a NULL pointer.
+static void err_set_no_pos(const char* reason) {
+    if (g_json_err_set) return;
+    snprintf(g_json_err_buf, sizeof(g_json_err_buf), "%s", reason);
+    g_json_err_set = 1;
+}
+
+// ---------------------------------------------------------------------------
+// Arena allocator
+//
+// Chunked bump allocator. First chunk is sized generously (16 KB) so
+// tiny documents never grow the arena. Subsequent chunks double in
+// size, capped at 2 MB to avoid allocating absurd amounts on the first
+// big value. Allocations bigger than the current chunk's remaining
+// capacity spill to a dedicated oversized chunk (no growth doubling)
+// so we don't waste gigabytes aligning to a power of two.
+//
+// All allocations are 8-byte aligned.
+// ---------------------------------------------------------------------------
+
+typedef struct ArenaChunk {
+    struct ArenaChunk* next;
+    size_t cap;
+    size_t used;
+    // data[] follows as the remainder of the allocation.
+} ArenaChunk;
+
+typedef struct Arena {
+    ArenaChunk* head;
+    ArenaChunk* tail;
+} Arena;
+
+#define ARENA_ALIGN 8u
+#define ARENA_INITIAL_CHUNK (16u * 1024u)
+#define ARENA_MAX_AUTO_CHUNK (2u * 1024u * 1024u)
+
+static size_t arena_align_up(size_t n) {
+    return (n + (ARENA_ALIGN - 1u)) & ~((size_t)ARENA_ALIGN - 1u);
+}
+
+static ArenaChunk* arena_new_chunk(size_t cap) {
+    // Allocate the header + payload in one malloc. cap is payload bytes.
+    ArenaChunk* c = (ArenaChunk*)malloc(sizeof(ArenaChunk) + cap);
+    if (!c) return NULL;
+    c->next = NULL;
+    c->cap = cap;
+    c->used = 0;
+    return c;
+}
+
+static Arena* arena_create(void) {
+    Arena* a = (Arena*)malloc(sizeof(Arena));
+    if (!a) return NULL;
+    a->head = arena_new_chunk(ARENA_INITIAL_CHUNK);
+    if (!a->head) { free(a); return NULL; }
+    a->tail = a->head;
+    return a;
+}
+
+static void arena_destroy(Arena* a) {
+    if (!a) return;
+    ArenaChunk* c = a->head;
+    while (c) {
+        ArenaChunk* next = c->next;
+        free(c);
+        c = next;
+    }
+    free(a);
+}
+
+static void* arena_alloc(Arena* a, size_t n) {
+    n = arena_align_up(n);
+    ArenaChunk* c = a->tail;
+    if (JSON_LIKELY(c->used + n <= c->cap)) {
+        void* p = (char*)c + sizeof(ArenaChunk) + c->used;
+        c->used += n;
+        return p;
+    }
+    // Grow. Decide chunk size: double the previous, clamped, but never
+    // smaller than the requested allocation.
+    size_t next_cap = c->cap * 2u;
+    if (next_cap > ARENA_MAX_AUTO_CHUNK) next_cap = ARENA_MAX_AUTO_CHUNK;
+    if (next_cap < n) next_cap = n;
+    ArenaChunk* nc = arena_new_chunk(next_cap);
+    if (!nc) return NULL;
+    a->tail->next = nc;
+    a->tail = nc;
+    void* p = (char*)nc + sizeof(ArenaChunk);
+    nc->used = n;
+    return p;
+}
+
+// Grow an arena-backed contiguous array. `old` must either be NULL (new
+// allocation) or the most recent thing at the tail of the arena's current
+// chunk (so we can extend in place). When in-place growth isn't possible
+// a new buffer is allocated and the old data is copied. Old space leaks
+// into the arena until arena_destroy — acceptable given typical doubling
+// growth and short-lived arenas.
+static void* arena_grow(Arena* a, void* old, size_t old_bytes, size_t new_bytes) {
+    void* np = arena_alloc(a, new_bytes);
+    if (!np) return NULL;
+    if (old && old_bytes) memcpy(np, old, old_bytes);
+    return np;
+}
+
+// Duplicate a byte range into the arena. Returns a null-terminated copy
+// so callers can treat it as a C string. Returns NULL on arena exhaustion.
+static char* arena_strndup(Arena* a, const char* src, size_t n) {
+    char* dst = (char*)arena_alloc(a, n + 1);
+    if (!dst) return NULL;
+    if (n) memcpy(dst, src, n);
+    dst[n] = '\0';
+    return dst;
+}
+
+// ---------------------------------------------------------------------------
+// Character classification lookup table
+//
+// Eight independent flag bits per byte. Multiple predicates fold into a
+// single LUT read. Initialised statically so there's no init-order cost.
+// ---------------------------------------------------------------------------
+
+enum {
+    CC_WHITESPACE  = 1u << 0,  // space, tab, LF, CR
+    CC_DIGIT       = 1u << 1,  // 0-9
+    CC_STRUCTURAL  = 1u << 2,  // { } [ ] , :
+    CC_STR_OK      = 1u << 3,  // legal unescaped byte in a JSON string
+                               //   (>= 0x20, != '"', != '\\', ASCII)
+    CC_HEX         = 1u << 4,  // 0-9 a-f A-F (for \uXXXX)
+    CC_NUM_START   = 1u << 5   // '-' or 0-9 — can start a number
+};
+
+static const uint8_t JSON_CC[256] = {
+    // Control chars 0x00-0x1F: nothing set (none are CC_STR_OK,
+    //   none are whitespace except specific ones below).
+    [0x09] = CC_WHITESPACE,  // \t
+    [0x0A] = CC_WHITESPACE,  // \n
+    [0x0D] = CC_WHITESPACE,  // \r
+    [' ']  = CC_WHITESPACE,
+
+    ['0'] = CC_DIGIT | CC_STR_OK | CC_HEX | CC_NUM_START,
+    ['1'] = CC_DIGIT | CC_STR_OK | CC_HEX | CC_NUM_START,
+    ['2'] = CC_DIGIT | CC_STR_OK | CC_HEX | CC_NUM_START,
+    ['3'] = CC_DIGIT | CC_STR_OK | CC_HEX | CC_NUM_START,
+    ['4'] = CC_DIGIT | CC_STR_OK | CC_HEX | CC_NUM_START,
+    ['5'] = CC_DIGIT | CC_STR_OK | CC_HEX | CC_NUM_START,
+    ['6'] = CC_DIGIT | CC_STR_OK | CC_HEX | CC_NUM_START,
+    ['7'] = CC_DIGIT | CC_STR_OK | CC_HEX | CC_NUM_START,
+    ['8'] = CC_DIGIT | CC_STR_OK | CC_HEX | CC_NUM_START,
+    ['9'] = CC_DIGIT | CC_STR_OK | CC_HEX | CC_NUM_START,
+
+    ['a'] = CC_STR_OK | CC_HEX, ['b'] = CC_STR_OK | CC_HEX,
+    ['c'] = CC_STR_OK | CC_HEX, ['d'] = CC_STR_OK | CC_HEX,
+    ['e'] = CC_STR_OK | CC_HEX, ['f'] = CC_STR_OK | CC_HEX,
+    ['A'] = CC_STR_OK | CC_HEX, ['B'] = CC_STR_OK | CC_HEX,
+    ['C'] = CC_STR_OK | CC_HEX, ['D'] = CC_STR_OK | CC_HEX,
+    ['E'] = CC_STR_OK | CC_HEX, ['F'] = CC_STR_OK | CC_HEX,
+
+    ['{'] = CC_STRUCTURAL, ['}'] = CC_STRUCTURAL,
+    ['['] = CC_STRUCTURAL, [']'] = CC_STRUCTURAL,
+    [','] = CC_STRUCTURAL, [':'] = CC_STRUCTURAL,
+
+    ['-'] = CC_STR_OK | CC_NUM_START,
+    ['+'] = CC_STR_OK,
+    ['.'] = CC_STR_OK,
+};
+
+// Fill the remaining printable ASCII range (0x20..0x7E minus '"' and '\\')
+// as CC_STR_OK. Done in a constructor so the static init stays readable.
+// Because C89 static init can't use loops, we post-patch via a small
+// table-completion function called on first parse.
+//
+// Multi-byte UTF-8 lead bytes (>=0x80) are NOT marked CC_STR_OK — the
+// fast string scan falls through to the DFA for them, which is the
+// correct behavior (validation required).
+static int g_cc_inited = 0;
+static uint8_t JSON_CC_RW[256];  // mutable copy used at runtime
+
+static void cc_init(void) {
+    if (g_cc_inited) return;
+    memcpy(JSON_CC_RW, JSON_CC, sizeof(JSON_CC_RW));
+    for (int c = 0x20; c < 0x80; c++) {
+        if (c == '"' || c == '\\') continue;
+        JSON_CC_RW[c] |= CC_STR_OK;
+    }
+    g_cc_inited = 1;
+}
+
+#define CC(c) (JSON_CC_RW[(unsigned char)(c)])
+
+// ---------------------------------------------------------------------------
+// SIMD string fast-loop
+//
+// Scans forward over "safe" JSON-string bytes (printable ASCII that is
+// not '"' and not '\\'). Returns the offset of the first byte that
+// needs special handling — quote, backslash, control char, or any
+// non-ASCII byte (which falls to the UTF-8 DFA). Purely monotone: a
+// byte is classified in isolation, so the scan is parallelisable.
+//
+// Three implementations selected at compile time. Each produces the
+// same result; the scalar path is the baseline, the SIMD paths just
+// advance 16 bytes at a time when every byte in the chunk is safe.
+//
+// Line/col accounting: safe bytes are by definition >= 0x20, so no
+// newlines appear. The caller bumps col by the returned count.
+// ---------------------------------------------------------------------------
+
+// Classification predicate used by the scalar tail of every variant.
+// Inlined for the branch predictor.
+static inline int is_str_safe_byte(unsigned char c) {
+    // c >= 0x20 AND c < 0x80 AND c != '"' AND c != '\\'.
+    return c >= 0x20 && c < 0x80 && c != '"' && c != '\\';
+}
+
+#if defined(__SSE2__)
+#include <emmintrin.h>
+static size_t scan_str_safe(const char* p, size_t max) {
+    size_t i = 0;
+    // SSE2 gives us 16-byte vectors. For each block, build a per-byte
+    // "unsafe" mask via three compares ORed together; if the mask is
+    // zero, every byte is safe and we bulk-advance by 16.
+    while (max - i >= 16) {
+        __m128i v  = _mm_loadu_si128((const __m128i*)(p + i));
+        __m128i q  = _mm_cmpeq_epi8(v, _mm_set1_epi8('"'));
+        __m128i bs = _mm_cmpeq_epi8(v, _mm_set1_epi8('\\'));
+        // byte < 0x20 (unsigned) OR byte >= 0x80:
+        //   signed compare `v < 0x20` is true for 0x00-0x1F (non-negative
+        //   small) AND 0x80-0xFF (signed-negative). Exactly the "unsafe
+        //   low OR high" set.
+        __m128i lo = _mm_cmplt_epi8(v, _mm_set1_epi8(0x20));
+        __m128i bad = _mm_or_si128(_mm_or_si128(q, bs), lo);
+        int mask = _mm_movemask_epi8(bad);
+        if (mask == 0) { i += 16; continue; }
+        return i + (size_t)__builtin_ctz((unsigned)mask);
+    }
+    while (i < max && is_str_safe_byte((unsigned char)p[i])) i++;
+    return i;
+}
+#elif defined(__ARM_NEON) && defined(__aarch64__)
+#include <arm_neon.h>
+static size_t scan_str_safe(const char* p, size_t max) {
+    size_t i = 0;
+    while (max - i >= 16) {
+        uint8x16_t v  = vld1q_u8((const uint8_t*)(p + i));
+        uint8x16_t q  = vceqq_u8(v, vdupq_n_u8('"'));
+        uint8x16_t bs = vceqq_u8(v, vdupq_n_u8('\\'));
+        // Same "signed < 0x20" trick as SSE: catches 0x00-0x1F and 0x80-0xFF.
+        int8x16_t  vs  = vreinterpretq_s8_u8(v);
+        uint8x16_t lo  = vcltq_s8(vs, vdupq_n_s8(0x20));
+        uint8x16_t bad = vorrq_u8(vorrq_u8(q, bs), lo);
+        if (vmaxvq_u8(bad) == 0) { i += 16; continue; }
+        // NEON lacks a direct movemask. Narrow-shift each u16 pair to a
+        // nibble so each input byte contributes 4 bits to a u64; then
+        // ctz the u64 and divide by 4 for the byte offset. This is the
+        // canonical trick for "find first non-zero byte" on arm64.
+        uint8x8_t narrowed = vshrn_n_u16(vreinterpretq_u16_u8(bad), 4);
+        uint64_t m = vget_lane_u64(vreinterpret_u64_u8(narrowed), 0);
+        return i + (size_t)(__builtin_ctzll(m) >> 2);
+    }
+    while (i < max && is_str_safe_byte((unsigned char)p[i])) i++;
+    return i;
+}
+#else
+// Portable scalar fallback. Used on WASM, embedded, older x86 without
+// SSE2 (rare: SSE2 has been baseline on x86_64 since AMD64), or any
+// target where neither intrinsic header is present.
+static size_t scan_str_safe(const char* p, size_t max) {
+    size_t i = 0;
+    while (i < max && is_str_safe_byte((unsigned char)p[i])) i++;
+    return i;
+}
+#endif
+
+// ---------------------------------------------------------------------------
+// UTF-8 DFA (Bjoern Hoehrmann, public domain)
+//
+// State transitions for validating UTF-8 byte-by-byte. Two 256+ tables
+// drive a state machine that accepts well-formed UTF-8 sequences and
+// rejects every malformed case (overlongs, surrogate halves, sequences
+// past U+10FFFF, continuation bytes at the start of a sequence).
+//
+// Usage:
+//   uint32_t st = UTF8_ACCEPT, cp = 0;
+//   for (each byte) { utf8_step(&st, &cp, byte); }
+//   if (st == UTF8_ACCEPT) valid.
+//
+// On exit:
+//   UTF8_ACCEPT (0) = success; `cp` holds the last codepoint decoded.
+//   UTF8_REJECT (12) = invalid sequence.
+//   any other value = mid-sequence (incomplete input).
+// ---------------------------------------------------------------------------
+
+#define UTF8_ACCEPT 0
+#define UTF8_REJECT 12
+
+static const uint8_t UTF8_DFA[] = {
+    // Byte class table (256 entries): maps byte → class (0..11).
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0, 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
+    1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1, 9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,9,
+    7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7, 7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,7,
+    8,8,2,2,2,2,2,2,2,2,2,2,2,2,2,2, 2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,2,
+    10,3,3,3,3,3,3,3,3,3,3,3,3,4,3,3, 11,6,6,6,5,8,8,8,8,8,8,8,8,8,8,8,
+
+    // State transition table (indexed by state*16 + class). 12 * 12 = 144,
+    // padded to a nice power of two.
+    0,12,24,36,60,96,84,12,12,12,48,72, 12,12,12,12,12,12,12,12,12,12,12,12,
+    12, 0,12,12,12,12,12, 0,12, 0,12,12, 12,24,12,12,12,12,12,24,12,24,12,12,
+    12,12,12,12,12,12,12,24,12,12,12,12, 12,24,12,12,12,12,12,12,12,24,12,12,
+    12,12,12,12,12,12,12,36,12,36,12,12, 12,36,12,12,12,12,12,36,12,36,12,12,
+    12,36,12,12,12,12,12,12,12,12,12,12,
+};
+
+static inline uint32_t utf8_step(uint32_t* st, uint32_t* cp, uint8_t byte) {
+    uint32_t type = UTF8_DFA[byte];
+    *cp = (*st != UTF8_ACCEPT)
+        ? (byte & 0x3fu) | (*cp << 6u)
+        : (0xffu >> type) & byte;
+    *st = UTF8_DFA[256 + *st + type];
+    return *st;
+}
+
+// ---------------------------------------------------------------------------
+// JsonValue layout
+//
+// Opaque to the world; internals can change freely. Every value stores
+// its type and a union of type-specific data. The arena pointer is ONLY
+// valid on the root value — interior values share the root's arena.
+// ---------------------------------------------------------------------------
+
+enum {
+    JV_FLAG_ROOT = 0x01u
+};
 
 struct JsonValue {
-    JsonType type;
+    uint8_t type;
+    uint8_t flags;
+    uint8_t _pad[6];
     union {
-        int bool_value;
-        double number_value;
-        AetherString* string_value;
-        ArrayList* array_value;
-        HashMap* object_value;
+        int      boolean;
+        double   number;
+        struct {
+            const char* data;
+            uint32_t    length;
+        } str;
+        struct {
+            JsonValue** items;   // arena-allocated array of pointers
+            uint32_t    count;
+            uint32_t    capacity;
+        } arr;
+        struct {
+            const char** keys;        // each key is its own arena'd/heap'd string
+            uint32_t*    key_lens;    // length of each key (strlen cached)
+            JsonValue**  values;
+            uint32_t     count;
+            uint32_t     capacity;
+        } obj;
     } data;
+    Arena* arena;  // root only; interior values set this to NULL
 };
+
+// ---------------------------------------------------------------------------
+// Parser state
+// ---------------------------------------------------------------------------
 
 #define JSON_MAX_DEPTH 256
 
-static void skip_whitespace(const char** json) {
-    while (**json && isspace(**json)) (*json)++;
+typedef struct {
+    const char* p;      // current cursor
+    const char* end;    // one past last byte
+    int line;           // 1-indexed
+    int col;            // 1-indexed
+    Arena* arena;       // where we allocate values/strings/arrays
+} Parser;
+
+static inline int p_eof(const Parser* s) {
+    return s->p >= s->end;
 }
 
-static JsonValue* parse_value_depth(const char** json, int depth);
+static inline unsigned char p_peek(const Parser* s) {
+    return p_eof(s) ? 0u : (unsigned char)*s->p;
+}
 
-static JsonValue* parse_null(const char** json) {
-    if (strncmp(*json, "null", 4) == 0) {
-        *json += 4;
-        return json_create_null();
+static inline void p_advance(Parser* s) {
+    // Caller has already checked EOF if needed.
+    if (*s->p == '\n') { s->line++; s->col = 1; }
+    else { s->col++; }
+    s->p++;
+}
+
+static void skip_whitespace(Parser* s) {
+    while (s->p < s->end && (CC(*s->p) & CC_WHITESPACE)) {
+        p_advance(s);
     }
-    return NULL;
 }
 
-static JsonValue* parse_bool(const char** json) {
-    if (strncmp(*json, "true", 4) == 0) {
-        *json += 4;
-        return json_create_bool(1);
+// ---------------------------------------------------------------------------
+// JsonValue construction helpers (arena-side)
+// ---------------------------------------------------------------------------
+
+static JsonValue* jv_new_in(Arena* a, uint8_t type) {
+    JsonValue* v = (JsonValue*)arena_alloc(a, sizeof(JsonValue));
+    if (!v) return NULL;
+    memset(v, 0, sizeof(JsonValue));
+    v->type = type;
+    return v;
+}
+
+static JsonValue* jv_new_null(Arena* a)   { return jv_new_in(a, JSON_NULL); }
+static JsonValue* jv_new_bool(Arena* a, int b) {
+    JsonValue* v = jv_new_in(a, JSON_BOOL);
+    if (v) v->data.boolean = !!b;
+    return v;
+}
+static JsonValue* jv_new_number(Arena* a, double n) {
+    JsonValue* v = jv_new_in(a, JSON_NUMBER);
+    if (v) v->data.number = n;
+    return v;
+}
+
+// ---------------------------------------------------------------------------
+// Number parser
+//
+// RFC 8259 grammar:
+//   number = [ minus ] int [ frac ] [ exp ]
+//   int    = zero / ( digit1-9 *DIGIT )
+//
+// Single-pass design. Accumulate the sign, integer part (int64), and
+// fractional part (also int64, with digit count) as we validate the
+// grammar. Then reconstruct the final double via pow10 lookup plus one
+// multiply — no strtod in the hot path.
+//
+// Fallback: if the input has more digits than an int64 can hold without
+// precision loss (19+), or the exponent is too large for an exact pow10,
+// we hand off to strtod which gives correctly-rounded IEEE-754 results.
+// That guarantees we never silently return a wrong double.
+//
+// Powers of 10 up to 1e22 are exactly representable in double; beyond
+// that strtod is the only correct answer.
+// ---------------------------------------------------------------------------
+
+static const double POW10_POS[] = {
+    1e0,  1e1,  1e2,  1e3,  1e4,  1e5,  1e6,  1e7,
+    1e8,  1e9,  1e10, 1e11, 1e12, 1e13, 1e14, 1e15,
+    1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22,
+};
+#define POW10_FAST_MAX 22
+
+// Exact representability in double means: no more than ~15.95 decimal
+// digits, i.e. 15 safe + 16th sometimes correct. We cap at 18 digits
+// because int64 holds 18 digits cleanly, and strtod still gets called
+// for the 16-to-18-digit grey zone to guarantee correct rounding.
+#define FAST_INT_SAFE_DIGITS 15
+
+static JsonValue* parse_number(Parser* s) {
+    const char* start = s->p;
+    int line0 = s->line, col0 = s->col;
+
+    int negative = 0;
+    if (p_peek(s) == '-') { negative = 1; p_advance(s); }
+
+    if (p_eof(s) || !(CC(*s->p) & CC_DIGIT)) {
+        err_set(s->line, s->col, "expected digit in number");
+        return NULL;
     }
-    if (strncmp(*json, "false", 5) == 0) {
-        *json += 5;
-        return json_create_bool(0);
-    }
-    return NULL;
-}
 
-static JsonValue* parse_number(const char** json) {
-    char* end;
-    double value = strtod(*json, &end);
-    if (end == *json) return NULL;
-    *json = end;
-    return json_create_number(value);
-}
+    // Accumulate the integer-part digits directly. int64 holds 18 safely,
+    // so we track overflow and fall through to strtod if the span is
+    // longer than that.
+    uint64_t int_acc = 0;
+    int int_digits = 0;
+    int int_overflow = 0;
 
-static JsonValue* parse_string(const char** json) {
-    if (**json != '"') return NULL;
-    (*json)++;
-
-    int capacity = 256;
-    char* buffer = malloc(capacity);
-    if (!buffer) return NULL;
-    int i = 0;
-
-    while (**json && **json != '"') {
-        // Grow buffer if needed (leave room for null terminator)
-        if (i >= capacity - 2) {
-            capacity *= 2;
-            char* nb = realloc(buffer, capacity);
-            if (!nb) { free(buffer); return NULL; }
-            buffer = nb;
+    if (*s->p == '0') {
+        int_acc = 0;
+        int_digits = 1;
+        p_advance(s);
+        if (!p_eof(s) && (CC(*s->p) & CC_DIGIT)) {
+            err_set(line0, col0, "leading zeros not allowed in numbers");
+            return NULL;
         }
-        if (**json == '\\') {
-            (*json)++;
-            if (!**json) break;  // Truncated escape at end of input
-            switch (**json) {
-                case 'n': buffer[i++] = '\n'; break;
-                case 't': buffer[i++] = '\t'; break;
-                case 'r': buffer[i++] = '\r'; break;
-                case '\\': buffer[i++] = '\\'; break;
-                case '"': buffer[i++] = '"'; break;
-                case '/': buffer[i++] = '/'; break;
-                default: buffer[i++] = **json; break;
+    } else {
+        while (!p_eof(s) && (CC(*s->p) & CC_DIGIT)) {
+            unsigned d = (unsigned)(*s->p - '0');
+            if (int_acc > (UINT64_MAX - d) / 10u) int_overflow = 1;
+            else int_acc = int_acc * 10u + d;
+            int_digits++;
+            p_advance(s);
+        }
+    }
+
+    int has_decimal = 0;
+    int frac_digits = 0;
+    uint64_t frac_acc = 0;
+    int frac_overflow = 0;
+
+    if (!p_eof(s) && *s->p == '.') {
+        has_decimal = 1;
+        p_advance(s);
+        if (p_eof(s) || !(CC(*s->p) & CC_DIGIT)) {
+            err_set(s->line, s->col, "expected digit after decimal point");
+            return NULL;
+        }
+        while (!p_eof(s) && (CC(*s->p) & CC_DIGIT)) {
+            unsigned d = (unsigned)(*s->p - '0');
+            if (frac_acc > (UINT64_MAX - d) / 10u) frac_overflow = 1;
+            else frac_acc = frac_acc * 10u + d;
+            frac_digits++;
+            p_advance(s);
+        }
+    }
+
+    int has_exponent = 0;
+    int exp_sign = 1;
+    int exponent = 0;
+    int exp_overflow = 0;
+
+    if (!p_eof(s) && (*s->p == 'e' || *s->p == 'E')) {
+        has_exponent = 1;
+        p_advance(s);
+        if (!p_eof(s) && (*s->p == '+' || *s->p == '-')) {
+            if (*s->p == '-') exp_sign = -1;
+            p_advance(s);
+        }
+        if (p_eof(s) || !(CC(*s->p) & CC_DIGIT)) {
+            err_set(s->line, s->col, "expected digit in exponent");
+            return NULL;
+        }
+        while (!p_eof(s) && (CC(*s->p) & CC_DIGIT)) {
+            int d = *s->p - '0';
+            // Clamp the exponent magnitude at something that will force
+            // the strtod fallback; no point accumulating to int-overflow.
+            if (exponent > 10000) exp_overflow = 1;
+            else exponent = exponent * 10 + d;
+            p_advance(s);
+        }
+    }
+
+    int effective_exp = (has_exponent ? exp_sign * exponent : 0) - frac_digits;
+    size_t len = (size_t)(s->p - start);
+
+    // Integer-only fast path: no decimal, no exponent, fits in int64.
+    if (!has_decimal && !has_exponent && !int_overflow) {
+        // Signed result. int_acc <= INT64_MAX for non-negative; for negative
+        // we allow the full INT64_MIN magnitude (1 more than INT64_MAX abs).
+        if (negative) {
+            if (int_acc > (uint64_t)INT64_MAX + 1ULL) {
+                // Exceeds INT64_MIN magnitude — fall through to strtod.
+            } else {
+                double val = -(double)int_acc;
+                if (int_acc == (uint64_t)INT64_MAX + 1ULL) val = (double)INT64_MIN;
+                JsonValue* v = jv_new_number(s->arena, val);
+                if (!v) { err_set(line0, col0, "out of memory"); return NULL; }
+                return v;
             }
-            (*json)++;
         } else {
-            buffer[i++] = **json;
-            (*json)++;
+            if (int_acc <= (uint64_t)INT64_MAX) {
+                double val = (double)(int64_t)int_acc;
+                JsonValue* v = jv_new_number(s->arena, val);
+                if (!v) { err_set(line0, col0, "out of memory"); return NULL; }
+                return v;
+            }
         }
     }
 
-    if (**json == '"') (*json)++;
-    buffer[i] = '\0';
+    // Fast-double path. Combines the int + frac parts into one integer
+    // mantissa, then scales by a single pow10 lookup. Safe only when:
+    //   - Neither accumulator overflowed.
+    //   - Total significant digits fit in 15 (double's fully-exact range).
+    //   - |effective_exp| <= POW10_FAST_MAX so our lookup is exact.
+    //   - The exponent literal itself didn't overflow.
+    int total_digits = int_digits + frac_digits;
+    if (!int_overflow && !frac_overflow && !exp_overflow &&
+        total_digits <= FAST_INT_SAFE_DIGITS) {
+        // Merge int_acc and frac_acc into a combined mantissa
+        // (int_acc * 10^frac_digits + frac_acc), which still fits in
+        // uint64 when total_digits <= 19, and within exact-double range
+        // when total_digits <= 15.
+        uint64_t mantissa = int_acc;
+        if (frac_digits > 0) {
+            mantissa = int_acc * (uint64_t)POW10_POS[frac_digits] + frac_acc;
+        }
 
-    JsonValue* value = (JsonValue*)malloc(sizeof(JsonValue));
-    if (!value) { free(buffer); return NULL; }
-    value->type = JSON_STRING;
-    value->data.string_value = string_new(buffer);
-    free(buffer);
-    return value;
+        double val = (double)mantissa;
+        int e = effective_exp;
+        if (e >= -POW10_FAST_MAX && e <= POW10_FAST_MAX) {
+            if (e > 0)      val *= POW10_POS[e];
+            else if (e < 0) val /= POW10_POS[-e];
+            if (negative) val = -val;
+            JsonValue* v = jv_new_number(s->arena, val);
+            if (!v) { err_set(line0, col0, "out of memory"); return NULL; }
+            return v;
+        }
+    }
+
+    // Slow path: hand off to strtod for correct IEEE-754 rounding on
+    // edge cases (> 15 significant digits, huge exponents, denormals).
+    // Numbers rarely exceed a handful of characters; use a stack buffer.
+    char stackbuf[64];
+    char* numbuf;
+    if (len < sizeof(stackbuf)) {
+        memcpy(stackbuf, start, len);
+        stackbuf[len] = '\0';
+        numbuf = stackbuf;
+    } else {
+        numbuf = arena_strndup(s->arena, start, len);
+        if (!numbuf) { err_set(line0, col0, "out of memory"); return NULL; }
+    }
+
+    char* endp = NULL;
+    double val = strtod(numbuf, &endp);
+    if (endp != numbuf + len) {
+        err_set(line0, col0, "number conversion failed");
+        return NULL;
+    }
+
+    JsonValue* v = jv_new_number(s->arena, val);
+    if (!v) { err_set(line0, col0, "out of memory"); return NULL; }
+    return v;
 }
 
-static JsonValue* parse_array(const char** json, int depth) {
-    if (**json != '[') return NULL;
-    (*json)++;
+// ---------------------------------------------------------------------------
+// UTF-8 encoding helper (for \uXXXX decoding)
+// ---------------------------------------------------------------------------
 
-    JsonValue* arr = json_create_array();
-    skip_whitespace(json);
-
-    if (**json == ']') {
-        (*json)++;
-        return arr;
+// Encode a code point as UTF-8 into `buf`. Returns byte count (1-4), or
+// 0 for invalid code points (lone surrogates, > U+10FFFF).
+static int encode_utf8(uint32_t cp, char* buf) {
+    if (cp < 0x80u) {
+        buf[0] = (char)cp;
+        return 1;
     }
+    if (cp < 0x800u) {
+        buf[0] = (char)(0xC0u | (cp >> 6));
+        buf[1] = (char)(0x80u | (cp & 0x3Fu));
+        return 2;
+    }
+    if (cp < 0x10000u) {
+        if (cp >= 0xD800u && cp <= 0xDFFFu) return 0;  // surrogate
+        buf[0] = (char)(0xE0u | (cp >> 12));
+        buf[1] = (char)(0x80u | ((cp >> 6) & 0x3Fu));
+        buf[2] = (char)(0x80u | (cp & 0x3Fu));
+        return 3;
+    }
+    if (cp <= 0x10FFFFu) {
+        buf[0] = (char)(0xF0u | (cp >> 18));
+        buf[1] = (char)(0x80u | ((cp >> 12) & 0x3Fu));
+        buf[2] = (char)(0x80u | ((cp >> 6) & 0x3Fu));
+        buf[3] = (char)(0x80u | (cp & 0x3Fu));
+        return 4;
+    }
+    return 0;
+}
+
+// Parse exactly 4 hex digits. Returns value 0..0xFFFF, or -1 on error.
+static int parse_hex4(Parser* s) {
+    if (s->end - s->p < 4) {
+        err_set(s->line, s->col, "truncated \\u escape");
+        return -1;
+    }
+    int v = 0;
+    for (int i = 0; i < 4; i++) {
+        unsigned char c = (unsigned char)s->p[i];
+        int d;
+        if (c >= '0' && c <= '9') d = c - '0';
+        else if (c >= 'a' && c <= 'f') d = c - 'a' + 10;
+        else if (c >= 'A' && c <= 'F') d = c - 'A' + 10;
+        else {
+            err_set(s->line, s->col + i, "expected hex digit in \\u escape");
+            return -1;
+        }
+        v = (v << 4) | d;
+    }
+    for (int i = 0; i < 4; i++) p_advance(s);
+    return v;
+}
+
+// ---------------------------------------------------------------------------
+// String parser
+//
+// Two-phase for speed:
+//   1. Fast-scan: a tight loop consumes runs of "safe" bytes via the
+//      CC_STR_OK lookup. Breaks out only on escape, quote, control char,
+//      or non-ASCII (>= 0x80).
+//   2. When the fast loop breaks, handle the specific case:
+//        - '"'  → close string
+//        - '\\' → decode escape (incl. \\uXXXX and surrogate pairs)
+//        - < 0x20 → RFC violation, reject
+//        - >= 0x80 → validate via UTF-8 DFA, memcpy the bytes
+//
+// Output goes into a growing arena-allocated buffer; at the end the
+// buffer is sliced to the final length.
+// ---------------------------------------------------------------------------
+
+static const char* parse_string_raw(Parser* s, uint32_t* out_len) {
+    if (p_peek(s) != '"') {
+        err_set(s->line, s->col, "expected string");
+        return NULL;
+    }
+    int line0 = s->line, col0 = s->col;
+    p_advance(s);  // consume opening quote
+
+    // Pre-scan: locate the closing quote without advancing state. The
+    // decoded string cannot be longer than the raw span (escapes only
+    // shrink or match), so a single arena_alloc sized to the span is
+    // a tight upper bound. Without this, a naive "allocate remaining
+    // input bytes per string" strategy blows up to gigabytes on large
+    // documents with many strings.
+    const char* scan = s->p;
+    while (scan < s->end) {
+        unsigned char c = (unsigned char)*scan;
+        if (c == '"') break;
+        if (c == '\\') {
+            // Skip backslash + next byte; for \uXXXX the 4 hex digits
+            // after 'u' are plain ASCII (no quote, no backslash) and
+            // fall through the default branch naturally.
+            scan++;
+            if (scan >= s->end) {
+                err_set(line0, col0, "unterminated escape");
+                return NULL;
+            }
+            scan++;
+            continue;
+        }
+        scan++;
+    }
+    if (scan >= s->end) {
+        err_set(line0, col0, "unterminated string");
+        return NULL;
+    }
+
+    size_t span = (size_t)(scan - s->p);
+    char* dst = (char*)arena_alloc(s->arena, span + 1);
+    if (!dst) { err_set(line0, col0, "out of memory"); return NULL; }
+    size_t di = 0;
+
+    while (s->p < s->end) {
+        // Fast loop: SIMD-accelerated scan over "safe" printable ASCII
+        // non-escape bytes. scan_str_safe returns the count of leading
+        // safe bytes in the remaining input; SSE2 / NEON process 16 at
+        // a time, scalar falls back to the LUT. Safe bytes contain no
+        // newlines (0x0A < 0x20 so it's always "unsafe"), so line/col
+        // accounting simplifies to bumping col by the run length.
+        size_t remaining = (size_t)(s->end - s->p);
+        size_t run_len = scan_str_safe(s->p, remaining);
+        if (run_len) {
+            memcpy(dst + di, s->p, run_len);
+            di += run_len;
+            s->p += run_len;
+            s->col += (int)run_len;
+        }
+
+        if (s->p >= s->end) {
+            err_set(line0, col0, "unterminated string");
+            return NULL;
+        }
+
+        unsigned char c = (unsigned char)*s->p;
+
+        if (c == '"') {
+            p_advance(s);
+            dst[di] = '\0';
+            *out_len = (uint32_t)di;
+            return dst;
+        }
+
+        if (c == '\\') {
+            p_advance(s);
+            if (p_eof(s)) {
+                err_set(s->line, s->col, "unterminated escape");
+                return NULL;
+            }
+            unsigned char esc = (unsigned char)*s->p;
+            switch (esc) {
+                case '"':  dst[di++] = '"';  p_advance(s); break;
+                case '\\': dst[di++] = '\\'; p_advance(s); break;
+                case '/':  dst[di++] = '/';  p_advance(s); break;
+                case 'b':  dst[di++] = '\b'; p_advance(s); break;
+                case 'f':  dst[di++] = '\f'; p_advance(s); break;
+                case 'n':  dst[di++] = '\n'; p_advance(s); break;
+                case 'r':  dst[di++] = '\r'; p_advance(s); break;
+                case 't':  dst[di++] = '\t'; p_advance(s); break;
+                case 'u': {
+                    p_advance(s);  // consume 'u'
+                    int hi = parse_hex4(s);
+                    if (hi < 0) return NULL;
+                    uint32_t cp;
+                    if (hi >= 0xD800 && hi <= 0xDBFF) {
+                        // High surrogate — require \\uXXXX low surrogate next.
+                        if (s->end - s->p < 2 || s->p[0] != '\\' || s->p[1] != 'u') {
+                            err_set(s->line, s->col,
+                                    "high surrogate must be followed by \\u low surrogate");
+                            return NULL;
+                        }
+                        p_advance(s); p_advance(s);
+                        int lo = parse_hex4(s);
+                        if (lo < 0) return NULL;
+                        if (lo < 0xDC00 || lo > 0xDFFF) {
+                            err_set(s->line, s->col, "expected low surrogate after high");
+                            return NULL;
+                        }
+                        cp = 0x10000u
+                             + (((uint32_t)hi - 0xD800u) << 10)
+                             + ((uint32_t)lo - 0xDC00u);
+                    } else if (hi >= 0xDC00 && hi <= 0xDFFF) {
+                        err_set(s->line, s->col, "unpaired low surrogate");
+                        return NULL;
+                    } else {
+                        cp = (uint32_t)hi;
+                    }
+                    int n = encode_utf8(cp, dst + di);
+                    if (n == 0) {
+                        err_set(s->line, s->col, "invalid code point in \\u escape");
+                        return NULL;
+                    }
+                    di += (size_t)n;
+                    break;
+                }
+                default:
+                    err_set(s->line, s->col, "invalid escape \\%c", esc);
+                    return NULL;
+            }
+            continue;
+        }
+
+        if (c < 0x20) {
+            err_set(s->line, s->col, "control character U+%04X must be escaped", c);
+            return NULL;
+        }
+
+        // Non-ASCII (>= 0x80): validate via UTF-8 DFA and memcpy the bytes.
+        uint32_t st = UTF8_ACCEPT, cp = 0;
+        const char* utf8_start = s->p;
+        while (s->p < s->end) {
+            utf8_step(&st, &cp, (uint8_t)*s->p);
+            p_advance(s);
+            if (st == UTF8_ACCEPT || st == UTF8_REJECT) break;
+        }
+        if (st != UTF8_ACCEPT) {
+            err_set(s->line, s->col, "invalid UTF-8 sequence");
+            return NULL;
+        }
+        size_t utf8_len = (size_t)(s->p - utf8_start);
+        memcpy(dst + di, utf8_start, utf8_len);
+        di += utf8_len;
+    }
+
+    err_set(line0, col0, "unterminated string");
+    return NULL;
+}
+
+static JsonValue* parse_string(Parser* s) {
+    uint32_t len = 0;
+    const char* data = parse_string_raw(s, &len);
+    if (!data) return NULL;
+    JsonValue* v = jv_new_in(s->arena, JSON_STRING);
+    if (!v) { err_set(s->line, s->col, "out of memory"); return NULL; }
+    v->data.str.data = data;
+    v->data.str.length = len;
+    return v;
+}
+
+// ---------------------------------------------------------------------------
+// Recursive descent for arrays, objects, and the value dispatcher
+// ---------------------------------------------------------------------------
+
+static JsonValue* parse_value_depth(Parser* s, int depth);
+
+static JsonValue* parse_null_lit(Parser* s) {
+    int line0 = s->line, col0 = s->col;
+    if ((size_t)(s->end - s->p) < 4 || memcmp(s->p, "null", 4) != 0) {
+        err_set(line0, col0, "expected 'null'");
+        return NULL;
+    }
+    for (int i = 0; i < 4; i++) p_advance(s);
+    JsonValue* v = jv_new_null(s->arena);
+    if (!v) { err_set(line0, col0, "out of memory"); return NULL; }
+    return v;
+}
+
+static JsonValue* parse_bool_lit(Parser* s) {
+    int line0 = s->line, col0 = s->col;
+    if ((size_t)(s->end - s->p) >= 4 && memcmp(s->p, "true", 4) == 0) {
+        for (int i = 0; i < 4; i++) p_advance(s);
+        JsonValue* v = jv_new_bool(s->arena, 1);
+        if (!v) { err_set(line0, col0, "out of memory"); return NULL; }
+        return v;
+    }
+    if ((size_t)(s->end - s->p) >= 5 && memcmp(s->p, "false", 5) == 0) {
+        for (int i = 0; i < 5; i++) p_advance(s);
+        JsonValue* v = jv_new_bool(s->arena, 0);
+        if (!v) { err_set(line0, col0, "out of memory"); return NULL; }
+        return v;
+    }
+    err_set(line0, col0, "expected 'true' or 'false'");
+    return NULL;
+}
+
+// Grow the arr->items[] buffer to at least `needed` entries. Power-of-two
+// growth to amortise the allocation cost.
+static int arr_reserve(JsonValue* arr, Arena* a, uint32_t needed) {
+    if (needed <= arr->data.arr.capacity) return 1;
+    uint32_t new_cap = arr->data.arr.capacity ? arr->data.arr.capacity : 4;
+    while (new_cap < needed) new_cap *= 2;
+    JsonValue** grown = (JsonValue**)arena_grow(
+        a,
+        arr->data.arr.items,
+        sizeof(JsonValue*) * arr->data.arr.capacity,
+        sizeof(JsonValue*) * new_cap);
+    if (!grown) return 0;
+    arr->data.arr.items = grown;
+    arr->data.arr.capacity = new_cap;
+    return 1;
+}
+
+// Analogous for objects — three parallel arrays grow together.
+static int obj_reserve(JsonValue* obj, Arena* a, uint32_t needed) {
+    if (needed <= obj->data.obj.capacity) return 1;
+    uint32_t new_cap = obj->data.obj.capacity ? obj->data.obj.capacity : 4;
+    while (new_cap < needed) new_cap *= 2;
+
+    const char** gk = (const char**)arena_grow(
+        a,
+        obj->data.obj.keys,
+        sizeof(const char*) * obj->data.obj.capacity,
+        sizeof(const char*) * new_cap);
+    if (!gk) return 0;
+
+    uint32_t* gl = (uint32_t*)arena_grow(
+        a,
+        obj->data.obj.key_lens,
+        sizeof(uint32_t) * obj->data.obj.capacity,
+        sizeof(uint32_t) * new_cap);
+    if (!gl) return 0;
+
+    JsonValue** gv = (JsonValue**)arena_grow(
+        a,
+        obj->data.obj.values,
+        sizeof(JsonValue*) * obj->data.obj.capacity,
+        sizeof(JsonValue*) * new_cap);
+    if (!gv) return 0;
+
+    obj->data.obj.keys     = gk;
+    obj->data.obj.key_lens = gl;
+    obj->data.obj.values   = gv;
+    obj->data.obj.capacity = new_cap;
+    return 1;
+}
+
+static JsonValue* parse_array(Parser* s, int depth) {
+    int line0 = s->line, col0 = s->col;
+    p_advance(s);  // consume '['
+
+    JsonValue* arr = jv_new_in(s->arena, JSON_ARRAY);
+    if (!arr) { err_set(line0, col0, "out of memory"); return NULL; }
+
+    skip_whitespace(s);
+    if (p_peek(s) == ']') { p_advance(s); return arr; }
 
     while (1) {
-        skip_whitespace(json);
-        JsonValue* value = parse_value_depth(json, depth + 1);
-        if (value) {
-            json_array_add(arr, value);
-        }
+        skip_whitespace(s);
+        JsonValue* elem = parse_value_depth(s, depth + 1);
+        if (!elem) return NULL;
 
-        skip_whitespace(json);
-        if (**json == ',') {
-            (*json)++;
-        } else {
-            break;
+        if (!arr_reserve(arr, s->arena, arr->data.arr.count + 1)) {
+            err_set(s->line, s->col, "out of memory");
+            return NULL;
         }
+        arr->data.arr.items[arr->data.arr.count++] = elem;
+
+        skip_whitespace(s);
+        unsigned char c = p_peek(s);
+        if (c == ',') { p_advance(s); continue; }
+        if (c == ']') { p_advance(s); return arr; }
+
+        err_set(s->line, s->col, "expected ',' or ']' in array");
+        return NULL;
     }
-
-    skip_whitespace(json);
-    if (**json == ']') (*json)++;
-
-    return arr;
 }
 
-static JsonValue* parse_object(const char** json, int depth) {
-    if (**json != '{') return NULL;
-    (*json)++;
+static JsonValue* parse_object(Parser* s, int depth) {
+    int line0 = s->line, col0 = s->col;
+    p_advance(s);  // consume '{'
 
-    JsonValue* obj = json_create_object();
-    skip_whitespace(json);
+    JsonValue* obj = jv_new_in(s->arena, JSON_OBJECT);
+    if (!obj) { err_set(line0, col0, "out of memory"); return NULL; }
 
-    if (**json == '}') {
-        (*json)++;
-        return obj;
-    }
+    skip_whitespace(s);
+    if (p_peek(s) == '}') { p_advance(s); return obj; }
 
     while (1) {
-        skip_whitespace(json);
-
-        if (**json != '"') break;
-        JsonValue* key_val = parse_string(json);
-        if (!key_val) break;
-
-        AetherString* key = key_val->data.string_value;
-        free(key_val);  // Free the JsonValue wrapper, but not the string
-
-        skip_whitespace(json);
-        if (**json == ':') (*json)++;
-
-        skip_whitespace(json);
-        JsonValue* value = parse_value_depth(json, depth + 1);
-        if (value) {
-            json_object_set(obj, key->data, value);
+        skip_whitespace(s);
+        if (p_peek(s) != '"') {
+            err_set(s->line, s->col, "expected string key in object");
+            return NULL;
         }
-        string_release(key);
+        uint32_t key_len = 0;
+        const char* key = parse_string_raw(s, &key_len);
+        if (!key) return NULL;
 
-        skip_whitespace(json);
-        if (**json == ',') {
-            (*json)++;
-        } else {
-            break;
+        skip_whitespace(s);
+        if (p_peek(s) != ':') {
+            err_set(s->line, s->col, "expected ':' after object key");
+            return NULL;
         }
-    }
+        p_advance(s);
 
-    skip_whitespace(json);
-    if (**json == '}') (*json)++;
+        skip_whitespace(s);
+        JsonValue* val = parse_value_depth(s, depth + 1);
+        if (!val) return NULL;
 
-    return obj;
-}
-
-static JsonValue* parse_value_depth(const char** json, int depth) {
-    if (depth > JSON_MAX_DEPTH) return NULL;
-    skip_whitespace(json);
-
-    if (**json == 'n') return parse_null(json);
-    if (**json == 't' || **json == 'f') return parse_bool(json);
-    if (**json == '"') return parse_string(json);
-    if (**json == '[') return parse_array(json, depth);
-    if (**json == '{') return parse_object(json, depth);
-    if (**json == '-' || isdigit(**json)) return parse_number(json);
-
-    return NULL;
-}
-
-JsonValue* json_parse_raw(const char* json_str) {
-    if (!json_str) return NULL;
-    const char* json = json_str;
-    return parse_value_depth(&json, 0);
-}
-
-// Internal append helper — builds a plain char* buffer, doesn't depend on AetherString
-static void append_cstr(char** result, size_t* len, size_t* cap, const char* str) {
-    size_t slen = strlen(str);
-    while (*len + slen + 1 > *cap) {
-        *cap = (*cap == 0) ? 256 : *cap * 2;
-        *result = (char*)realloc(*result, *cap);
-    }
-    memcpy(*result + *len, str, slen);
-    *len += slen;
-    (*result)[*len] = '\0';
-}
-
-static void stringify_value_buf(JsonValue* value, char** buf, size_t* len, size_t* cap, int depth);
-
-char* json_stringify(JsonValue* value) {
-    char* buf = NULL;
-    size_t len = 0, cap = 0;
-    stringify_value_buf(value, &buf, &len, &cap, 0);
-    if (!buf) {
-        buf = (char*)malloc(1);
-        if (buf) buf[0] = '\0';
-    }
-    return buf;
-}
-
-static void stringify_value_buf(JsonValue* value, char** buf, size_t* len, size_t* cap, int depth) {
-    if (!value || depth > JSON_MAX_DEPTH) {
-        append_cstr(buf, len, cap, "null");
-        return;
-    }
-
-    switch (value->type) {
-        case JSON_NULL:
-            append_cstr(buf, len, cap, "null");
-            break;
-
-        case JSON_BOOL:
-            append_cstr(buf, len, cap, value->data.bool_value ? "true" : "false");
-            break;
-
-        case JSON_NUMBER: {
-            char numbuf[64];
-            snprintf(numbuf, sizeof(numbuf), "%g", value->data.number_value);
-            append_cstr(buf, len, cap, numbuf);
-            break;
+        if (!obj_reserve(obj, s->arena, obj->data.obj.count + 1)) {
+            err_set(s->line, s->col, "out of memory");
+            return NULL;
         }
+        uint32_t idx = obj->data.obj.count++;
+        obj->data.obj.keys[idx] = key;
+        obj->data.obj.key_lens[idx] = key_len;
+        obj->data.obj.values[idx] = val;
 
-        case JSON_STRING:
-            append_cstr(buf, len, cap, "\"");
-            if (value->data.string_value) {
-                append_cstr(buf, len, cap, value->data.string_value->data);
-            }
-            append_cstr(buf, len, cap, "\"");
-            break;
+        skip_whitespace(s);
+        unsigned char c = p_peek(s);
+        if (c == ',') { p_advance(s); continue; }
+        if (c == '}') { p_advance(s); return obj; }
 
-        case JSON_ARRAY: {
-            append_cstr(buf, len, cap, "[");
-            int size = list_size(value->data.array_value);
-            for (int i = 0; i < size; i++) {
-                if (i > 0) append_cstr(buf, len, cap, ",");
-                JsonValue* item = (JsonValue*)list_get(value->data.array_value, i);
-                stringify_value_buf(item, buf, len, cap, depth + 1);
-            }
-            append_cstr(buf, len, cap, "]");
-            break;
-        }
-
-        case JSON_OBJECT: {
-            append_cstr(buf, len, cap, "{");
-            MapKeys* keys = map_keys(value->data.object_value);
-            if (keys) {
-                for (int i = 0; i < keys->count; i++) {
-                    if (i > 0) append_cstr(buf, len, cap, ",");
-                    append_cstr(buf, len, cap, "\"");
-                    append_cstr(buf, len, cap, keys->keys[i]->data);
-                    append_cstr(buf, len, cap, "\":");
-                    JsonValue* val = (JsonValue*)map_get(value->data.object_value, keys->keys[i]->data);
-                    stringify_value_buf(val, buf, len, cap, depth + 1);
-                }
-                map_keys_free(keys);
-            }
-            append_cstr(buf, len, cap, "}");
-            break;
-        }
+        err_set(s->line, s->col, "expected ',' or '}' in object");
+        return NULL;
     }
 }
 
-static void json_free_depth(JsonValue* value, int depth) {
-    if (!value) return;
-    if (depth > JSON_MAX_DEPTH) { free(value); return; }
-
-    switch (value->type) {
-        case JSON_STRING:
-            string_release(value->data.string_value);
-            break;
-        case JSON_ARRAY: {
-            int size = list_size(value->data.array_value);
-            for (int i = 0; i < size; i++) {
-                json_free_depth((JsonValue*)list_get(value->data.array_value, i), depth + 1);
-            }
-            list_free(value->data.array_value);
-            break;
-        }
-        case JSON_OBJECT: {
-            MapKeys* keys = map_keys(value->data.object_value);
-            if (keys) {
-                for (int i = 0; i < keys->count; i++) {
-                    json_free_depth((JsonValue*)map_get(value->data.object_value, keys->keys[i]->data), depth + 1);
-                }
-                map_keys_free(keys);
-            }
-            map_free(value->data.object_value);
-            break;
-        }
+static JsonValue* parse_value_depth(Parser* s, int depth) {
+    if (depth > JSON_MAX_DEPTH) {
+        err_set(s->line, s->col, "nesting depth exceeds limit of %d", JSON_MAX_DEPTH);
+        return NULL;
+    }
+    skip_whitespace(s);
+    if (p_eof(s)) {
+        err_set(s->line, s->col, "unexpected end of input");
+        return NULL;
+    }
+    unsigned char c = (unsigned char)*s->p;
+    switch (c) {
+        case 'n':  return parse_null_lit(s);
+        case 't':
+        case 'f':  return parse_bool_lit(s);
+        case '"':  return parse_string(s);
+        case '[':  return parse_array(s, depth);
+        case '{':  return parse_object(s, depth);
         default:
-            break;
+            if (CC(c) & CC_NUM_START) return parse_number(s);
+            err_set(s->line, s->col, "unexpected character '%c'", c);
+            return NULL;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Public parse entry points
+// ---------------------------------------------------------------------------
+
+JsonValue* json_parse_raw_n(const char* data, size_t n) {
+    cc_init();
+    err_clear();
+
+    if (!data) {
+        err_set_no_pos("null input");
+        return NULL;
     }
 
-    free(value);
+    Arena* a = arena_create();
+    if (!a) {
+        err_set_no_pos("out of memory");
+        return NULL;
+    }
+
+    Parser s;
+    s.p = data;
+    s.end = data + n;
+    s.line = 1;
+    s.col = 1;
+    s.arena = a;
+
+    JsonValue* root = parse_value_depth(&s, 0);
+    if (!root) {
+        arena_destroy(a);
+        return NULL;
+    }
+
+    skip_whitespace(&s);
+    if (!p_eof(&s)) {
+        err_set(s.line, s.col, "unexpected trailing content");
+        arena_destroy(a);
+        return NULL;
+    }
+
+    root->flags |= JV_FLAG_ROOT;
+    root->arena = a;
+    return root;
 }
 
-void json_free(JsonValue* value) {
-    json_free_depth(value, 0);
+JsonValue* json_parse_raw(const char* s) {
+    return json_parse_raw_n(s, s ? strlen(s) : 0);
 }
 
-JsonType json_type(JsonValue* value) {
-    return value ? value->type : JSON_NULL;
+// ---------------------------------------------------------------------------
+// Accessors (all NULL-safe)
+// ---------------------------------------------------------------------------
+
+JsonType json_type(JsonValue* v) {
+    return v ? (JsonType)v->type : JSON_NULL;
 }
 
-int json_is_null(JsonValue* value) {
-    return !value || value->type == JSON_NULL;
+int json_is_null(JsonValue* v) {
+    return !v || v->type == JSON_NULL;
 }
 
-int json_get_bool(JsonValue* value) {
-    return (value && value->type == JSON_BOOL) ? value->data.bool_value : 0;
+int json_get_bool(JsonValue* v) {
+    return (v && v->type == JSON_BOOL) ? v->data.boolean : 0;
 }
 
-double json_get_number(JsonValue* value) {
-    return (value && value->type == JSON_NUMBER) ? value->data.number_value : 0.0;
+double json_get_number(JsonValue* v) {
+    return (v && v->type == JSON_NUMBER) ? v->data.number : 0.0;
 }
 
-int json_get_int(JsonValue* value) {
-    return (int)json_get_number(value);
+int json_get_int(JsonValue* v) {
+    return (int)json_get_number(v);
 }
 
-const char* json_get_string(JsonValue* value) {
-    if (!value || value->type != JSON_STRING || !value->data.string_value) return NULL;
-    return value->data.string_value->data;
+const char* json_get_string_raw(JsonValue* v) {
+    if (!v || v->type != JSON_STRING) return NULL;
+    return v->data.str.data;
 }
 
-JsonValue* json_object_get(JsonValue* obj, const char* key) {
+JsonValue* json_object_get_raw(JsonValue* obj, const char* key) {
     if (!obj || obj->type != JSON_OBJECT || !key) return NULL;
-    return (JsonValue*)map_get(obj->data.object_value, key);
-}
-
-void json_object_set(JsonValue* obj, const char* key, JsonValue* value) {
-    if (!obj || obj->type != JSON_OBJECT || !key) return;
-    map_put_raw(obj->data.object_value, key, value);
+    size_t klen = strlen(key);
+    if (klen > UINT32_MAX) return NULL;
+    uint32_t k32 = (uint32_t)klen;
+    for (uint32_t i = 0; i < obj->data.obj.count; i++) {
+        if (obj->data.obj.key_lens[i] == k32 &&
+            memcmp(obj->data.obj.keys[i], key, k32) == 0) {
+            return obj->data.obj.values[i];
+        }
+    }
+    return NULL;
 }
 
 int json_object_has(JsonValue* obj, const char* key) {
-    if (!obj || obj->type != JSON_OBJECT || !key) return 0;
-    return map_has(obj->data.object_value, key);
+    return json_object_get_raw(obj, key) != NULL;
 }
 
-JsonValue* json_array_get(JsonValue* arr, int index) {
+JsonValue* json_array_get_raw(JsonValue* arr, int index) {
     if (!arr || arr->type != JSON_ARRAY) return NULL;
-    return (JsonValue*)list_get(arr->data.array_value, index);
-}
-
-void json_array_add(JsonValue* arr, JsonValue* value) {
-    if (!arr || arr->type != JSON_ARRAY) return;
-    list_add_raw(arr->data.array_value, value);
+    if (index < 0 || (uint32_t)index >= arr->data.arr.count) return NULL;
+    return arr->data.arr.items[(uint32_t)index];
 }
 
 int json_array_size(JsonValue* arr) {
     if (!arr || arr->type != JSON_ARRAY) return 0;
-    return list_size(arr->data.array_value);
+    return (int)arr->data.arr.count;
 }
 
-JsonValue* json_create_null() {
-    JsonValue* value = (JsonValue*)malloc(sizeof(JsonValue));
-    value->type = JSON_NULL;
-    return value;
+// ---------------------------------------------------------------------------
+// Mutators — supports adding heap-built JsonValues into arena-backed containers.
+//
+// Strategy: deep-copy the incoming value (and its entire subtree) into
+// the parent's arena. The original JsonValue is then freed. This keeps
+// ownership clean — the parent's arena owns everything after insertion —
+// at the cost of one O(n) copy per mutation. Mutation is rare compared
+// to parsing; this is the right tradeoff.
+//
+// Exception: if the parent has no arena (itself heap-allocated, from
+// json_create_*), we still deep-copy into an arena — we CREATE one for
+// the parent if it doesn't have one yet. This unifies the free path.
+// ---------------------------------------------------------------------------
+
+// Forward decl for deep_copy which is mutually recursive.
+static JsonValue* deep_copy_into_arena(JsonValue* src, Arena* dst_arena);
+
+// Copy a byte range into dst_arena as a null-terminated string.
+static const char* arena_copy_str(Arena* a, const char* src, uint32_t len) {
+    char* dst = (char*)arena_alloc(a, (size_t)len + 1);
+    if (!dst) return NULL;
+    if (len) memcpy(dst, src, len);
+    dst[len] = '\0';
+    return dst;
 }
 
-JsonValue* json_create_bool(int val) {
-    JsonValue* value = (JsonValue*)malloc(sizeof(JsonValue));
-    value->type = JSON_BOOL;
-    value->data.bool_value = val;
-    return value;
+static JsonValue* deep_copy_into_arena(JsonValue* src, Arena* dst_arena) {
+    if (!src) return NULL;
+    JsonValue* out = (JsonValue*)arena_alloc(dst_arena, sizeof(JsonValue));
+    if (!out) return NULL;
+    memset(out, 0, sizeof(JsonValue));
+    out->type = src->type;
+
+    switch (src->type) {
+        case JSON_NULL: break;
+        case JSON_BOOL: out->data.boolean = src->data.boolean; break;
+        case JSON_NUMBER: out->data.number = src->data.number; break;
+        case JSON_STRING: {
+            uint32_t len = src->data.str.length;
+            const char* c = arena_copy_str(dst_arena, src->data.str.data, len);
+            if (!c) return NULL;
+            out->data.str.data = c;
+            out->data.str.length = len;
+            break;
+        }
+        case JSON_ARRAY: {
+            uint32_t n = src->data.arr.count;
+            if (n) {
+                JsonValue** items = (JsonValue**)arena_alloc(
+                    dst_arena, sizeof(JsonValue*) * n);
+                if (!items) return NULL;
+                for (uint32_t i = 0; i < n; i++) {
+                    items[i] = deep_copy_into_arena(src->data.arr.items[i], dst_arena);
+                    if (!items[i]) return NULL;
+                }
+                out->data.arr.items = items;
+            }
+            out->data.arr.count = n;
+            out->data.arr.capacity = n;
+            break;
+        }
+        case JSON_OBJECT: {
+            uint32_t n = src->data.obj.count;
+            if (n) {
+                const char** keys = (const char**)arena_alloc(
+                    dst_arena, sizeof(const char*) * n);
+                uint32_t* lens = (uint32_t*)arena_alloc(
+                    dst_arena, sizeof(uint32_t) * n);
+                JsonValue** vals = (JsonValue**)arena_alloc(
+                    dst_arena, sizeof(JsonValue*) * n);
+                if (!keys || !lens || !vals) return NULL;
+                for (uint32_t i = 0; i < n; i++) {
+                    uint32_t kl = src->data.obj.key_lens[i];
+                    keys[i] = arena_copy_str(dst_arena, src->data.obj.keys[i], kl);
+                    if (!keys[i]) return NULL;
+                    lens[i] = kl;
+                    vals[i] = deep_copy_into_arena(src->data.obj.values[i], dst_arena);
+                    if (!vals[i]) return NULL;
+                }
+                out->data.obj.keys = keys;
+                out->data.obj.key_lens = lens;
+                out->data.obj.values = vals;
+            }
+            out->data.obj.count = n;
+            out->data.obj.capacity = n;
+            break;
+        }
+    }
+    return out;
 }
 
-JsonValue* json_create_number(double val) {
-    JsonValue* value = (JsonValue*)malloc(sizeof(JsonValue));
-    value->type = JSON_NUMBER;
-    value->data.number_value = val;
-    return value;
+// Make sure `container` has an arena it can own. If it doesn't, promote
+// the container to an arena-backed root: allocate a new arena, deep-copy
+// the container into it, and swap the pointers in-place. After this the
+// container IS the root of a new arena.
+static int ensure_container_arena(JsonValue* container) {
+    if (container->arena) return 1;  // already rooted in an arena
+    Arena* a = arena_create();
+    if (!a) return 0;
+    // Deep-copy the container's contents into the new arena. We can't
+    // simply point existing heap allocations into the arena — the arena
+    // must own everything for a clean free.
+    JsonValue* copy = deep_copy_into_arena(container, a);
+    if (!copy) { arena_destroy(a); return 0; }
+    // Move copy's internals into `container` so the caller's pointer
+    // stays valid.
+    container->type = copy->type;
+    container->data = copy->data;
+    container->flags |= JV_FLAG_ROOT;
+    container->arena = a;
+    return 1;
 }
 
-JsonValue* json_create_string(const char* val) {
-    JsonValue* value = (JsonValue*)malloc(sizeof(JsonValue));
-    value->type = JSON_STRING;
-    value->data.string_value = string_new(val);
-    return value;
+// Recursively free a heap-allocated JsonValue tree. Used to tear down
+// values created by json_create_* after they've been absorbed into an
+// arena-backed container (or when the caller calls json_free on a
+// standalone heap value).
+static void heap_free_tree(JsonValue* v);
+
+static void heap_free_tree(JsonValue* v) {
+    if (!v) return;
+    if (v->arena) {
+        // Shouldn't reach here — heap tree means no arena.
+        // Defensive: if arena is set, free the arena and return.
+        arena_destroy(v->arena);
+        free(v);
+        return;
+    }
+    switch (v->type) {
+        case JSON_STRING:
+            free((void*)v->data.str.data);
+            break;
+        case JSON_ARRAY:
+            for (uint32_t i = 0; i < v->data.arr.count; i++) {
+                heap_free_tree(v->data.arr.items[i]);
+            }
+            free(v->data.arr.items);
+            break;
+        case JSON_OBJECT:
+            for (uint32_t i = 0; i < v->data.obj.count; i++) {
+                free((void*)v->data.obj.keys[i]);
+                heap_free_tree(v->data.obj.values[i]);
+            }
+            free(v->data.obj.keys);
+            free(v->data.obj.key_lens);
+            free(v->data.obj.values);
+            break;
+        default:
+            break;
+    }
+    free(v);
 }
 
-JsonValue* json_create_array() {
-    JsonValue* value = (JsonValue*)malloc(sizeof(JsonValue));
-    value->type = JSON_ARRAY;
-    value->data.array_value = list_new();
-    return value;
+int json_array_add_raw(JsonValue* arr, JsonValue* value) {
+    if (!arr || arr->type != JSON_ARRAY || !value) return 0;
+    if (!ensure_container_arena(arr)) return 0;
+
+    JsonValue* copy = deep_copy_into_arena(value, arr->arena);
+    if (!copy) return 0;
+
+    if (!arr_reserve(arr, arr->arena, arr->data.arr.count + 1)) return 0;
+    arr->data.arr.items[arr->data.arr.count++] = copy;
+
+    // The caller passed ownership to us. Free the incoming tree.
+    if (value->arena) arena_destroy(value->arena);
+    else              heap_free_tree(value);
+
+    return 1;
 }
 
-JsonValue* json_create_object() {
-    JsonValue* value = (JsonValue*)malloc(sizeof(JsonValue));
-    value->type = JSON_OBJECT;
-    value->data.object_value = map_new();
-    return value;
+int json_object_set_raw(JsonValue* obj, const char* key, JsonValue* value) {
+    if (!obj || obj->type != JSON_OBJECT || !key || !value) return 0;
+    if (!ensure_container_arena(obj)) return 0;
+
+    size_t klen = strlen(key);
+    if (klen > UINT32_MAX) return 0;
+    uint32_t k32 = (uint32_t)klen;
+
+    JsonValue* copy = deep_copy_into_arena(value, obj->arena);
+    if (!copy) return 0;
+
+    // If the key already exists, replace the value pointer in place.
+    for (uint32_t i = 0; i < obj->data.obj.count; i++) {
+        if (obj->data.obj.key_lens[i] == k32 &&
+            memcmp(obj->data.obj.keys[i], key, k32) == 0) {
+            obj->data.obj.values[i] = copy;
+            if (value->arena) arena_destroy(value->arena);
+            else              heap_free_tree(value);
+            return 1;
+        }
+    }
+
+    // New key: grow arrays and append.
+    if (!obj_reserve(obj, obj->arena, obj->data.obj.count + 1)) return 0;
+    const char* key_copy = arena_copy_str(obj->arena, key, k32);
+    if (!key_copy) return 0;
+
+    uint32_t idx = obj->data.obj.count++;
+    obj->data.obj.keys[idx] = key_copy;
+    obj->data.obj.key_lens[idx] = k32;
+    obj->data.obj.values[idx] = copy;
+
+    if (value->arena) arena_destroy(value->arena);
+    else              heap_free_tree(value);
+    return 1;
 }
 
+// ---------------------------------------------------------------------------
+// Creators — build values outside of a parse. These are heap-allocated
+// standalone trees; adding them to an arena-backed container transfers
+// ownership (see mutators above).
+// ---------------------------------------------------------------------------
+
+static JsonValue* heap_new(uint8_t type) {
+    JsonValue* v = (JsonValue*)malloc(sizeof(JsonValue));
+    if (!v) return NULL;
+    memset(v, 0, sizeof(JsonValue));
+    v->type = type;
+    return v;
+}
+
+JsonValue* json_create_null(void) {
+    return heap_new(JSON_NULL);
+}
+
+JsonValue* json_create_bool(int b) {
+    JsonValue* v = heap_new(JSON_BOOL);
+    if (v) v->data.boolean = !!b;
+    return v;
+}
+
+JsonValue* json_create_number(double n) {
+    JsonValue* v = heap_new(JSON_NUMBER);
+    if (v) v->data.number = n;
+    return v;
+}
+
+JsonValue* json_create_string(const char* s) {
+    JsonValue* v = heap_new(JSON_STRING);
+    if (!v) return NULL;
+    size_t len = s ? strlen(s) : 0;
+    char* copy = (char*)malloc(len + 1);
+    if (!copy) { free(v); return NULL; }
+    if (len && s) memcpy(copy, s, len);
+    copy[len] = '\0';
+    v->data.str.data = copy;
+    v->data.str.length = (uint32_t)len;
+    return v;
+}
+
+JsonValue* json_create_array(void) {
+    return heap_new(JSON_ARRAY);
+}
+
+JsonValue* json_create_object(void) {
+    return heap_new(JSON_OBJECT);
+}
+
+// ---------------------------------------------------------------------------
+// json_free — works for both arena-backed (root) and heap-allocated trees.
+// ---------------------------------------------------------------------------
+
+void json_free(JsonValue* v) {
+    if (!v) return;
+    if (v->arena) {
+        arena_destroy(v->arena);
+        // The JsonValue lived inside the arena, so nothing else to free.
+        return;
+    }
+    // Heap path.
+    heap_free_tree(v);
+}
+
+// ---------------------------------------------------------------------------
+// Stringify
+//
+// Single growing buffer. Escapes only the required bytes; emits raw
+// UTF-8 as-is (no \uXXXX encoding needed since the parser only accepted
+// valid UTF-8 in the first place).
+// ---------------------------------------------------------------------------
+
+typedef struct {
+    char*  data;
+    size_t len;
+    size_t cap;
+    int    oom;
+} StrBuf;
+
+static int sb_reserve(StrBuf* b, size_t extra) {
+    if (b->oom) return 0;
+    if (b->len + extra + 1 > b->cap) {
+        size_t new_cap = b->cap ? b->cap : 256;
+        while (new_cap < b->len + extra + 1) new_cap *= 2;
+        char* nd = (char*)realloc(b->data, new_cap);
+        if (!nd) { b->oom = 1; return 0; }
+        b->data = nd;
+        b->cap = new_cap;
+    }
+    return 1;
+}
+
+static void sb_append(StrBuf* b, const char* s, size_t n) {
+    if (!sb_reserve(b, n)) return;
+    memcpy(b->data + b->len, s, n);
+    b->len += n;
+    b->data[b->len] = '\0';
+}
+
+static void sb_append_char(StrBuf* b, char c) {
+    sb_append(b, &c, 1);
+}
+
+static void sb_append_cstr(StrBuf* b, const char* s) {
+    sb_append(b, s, strlen(s));
+}
+
+// Emit a JSON-escaped string literal (with surrounding quotes).
+static void sb_emit_string(StrBuf* b, const char* s, uint32_t n) {
+    sb_append_char(b, '"');
+    const char* p = s;
+    const char* end = s + n;
+    const char* run_start = p;
+
+    while (p < end) {
+        unsigned char c = (unsigned char)*p;
+        const char* esc = NULL;
+        char short_esc[3];
+        if (c == '"')       esc = "\\\"";
+        else if (c == '\\') esc = "\\\\";
+        else if (c == '\b') esc = "\\b";
+        else if (c == '\f') esc = "\\f";
+        else if (c == '\n') esc = "\\n";
+        else if (c == '\r') esc = "\\r";
+        else if (c == '\t') esc = "\\t";
+        else if (c < 0x20) {
+            // Other controls → \u00XX
+            snprintf(short_esc, sizeof(short_esc), "%02X", c);
+            if (run_start < p) sb_append(b, run_start, (size_t)(p - run_start));
+            sb_append(b, "\\u00", 4);
+            sb_append(b, short_esc, 2);
+            p++;
+            run_start = p;
+            continue;
+        } else {
+            p++;
+            continue;
+        }
+        // Flush accumulated run, then the escape.
+        if (run_start < p) sb_append(b, run_start, (size_t)(p - run_start));
+        sb_append_cstr(b, esc);
+        p++;
+        run_start = p;
+    }
+    if (run_start < end) sb_append(b, run_start, (size_t)(end - run_start));
+    sb_append_char(b, '"');
+}
+
+static void sb_emit_value(StrBuf* b, JsonValue* v, int depth);
+
+static void sb_emit_array(StrBuf* b, JsonValue* v, int depth) {
+    sb_append_char(b, '[');
+    for (uint32_t i = 0; i < v->data.arr.count; i++) {
+        if (i) sb_append_char(b, ',');
+        sb_emit_value(b, v->data.arr.items[i], depth + 1);
+    }
+    sb_append_char(b, ']');
+}
+
+static void sb_emit_object(StrBuf* b, JsonValue* v, int depth) {
+    sb_append_char(b, '{');
+    for (uint32_t i = 0; i < v->data.obj.count; i++) {
+        if (i) sb_append_char(b, ',');
+        sb_emit_string(b, v->data.obj.keys[i], v->data.obj.key_lens[i]);
+        sb_append_char(b, ':');
+        sb_emit_value(b, v->data.obj.values[i], depth + 1);
+    }
+    sb_append_char(b, '}');
+}
+
+static void sb_emit_value(StrBuf* b, JsonValue* v, int depth) {
+    if (!v || depth > JSON_MAX_DEPTH) {
+        sb_append(b, "null", 4);
+        return;
+    }
+    switch (v->type) {
+        case JSON_NULL:   sb_append(b, "null", 4); break;
+        case JSON_BOOL:
+            sb_append_cstr(b, v->data.boolean ? "true" : "false");
+            break;
+        case JSON_NUMBER: {
+            char nb[64];
+            int n = snprintf(nb, sizeof(nb), "%g", v->data.number);
+            if (n > 0) sb_append(b, nb, (size_t)n);
+            break;
+        }
+        case JSON_STRING:
+            sb_emit_string(b, v->data.str.data, v->data.str.length);
+            break;
+        case JSON_ARRAY:  sb_emit_array(b, v, depth); break;
+        case JSON_OBJECT: sb_emit_object(b, v, depth); break;
+        default:
+            sb_append(b, "null", 4);
+            break;
+    }
+}
+
+char* json_stringify_raw(JsonValue* v) {
+    StrBuf b = {0};
+    sb_emit_value(&b, v, 0);
+    if (b.oom) {
+        free(b.data);
+        // Return an empty string rather than NULL so existing callers
+        // that don't check for NULL don't crash — matches prior behavior.
+        char* empty = (char*)malloc(1);
+        if (empty) empty[0] = '\0';
+        return empty;
+    }
+    if (!b.data) {
+        char* empty = (char*)malloc(1);
+        if (empty) empty[0] = '\0';
+        return empty;
+    }
+    return b.data;
+}

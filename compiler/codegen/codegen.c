@@ -1226,14 +1226,14 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         print_line(gen, "typedef int (*aether_sandbox_check_fn)(const char*, const char*);");
         print_line(gen, "extern aether_sandbox_check_fn _aether_sandbox_checker;");
         print_line(gen, "extern int list_size(void*);");
-        print_line(gen, "extern void* list_get(void*, int);");
+        print_line(gen, "extern void* list_get_raw(void*, int);");
         print_line(gen, "static int _aether_perms_allow(void* ctx, const char* category, const char* resource) {");
         print_line(gen, "    if (!ctx) return 1;");
         print_line(gen, "    int n = list_size(ctx);");
         print_line(gen, "    if (n == 0) return 0;");
         print_line(gen, "    for (int i = 0; i < n; i += 2) {");
-        print_line(gen, "        const char* cat = (const char*)list_get(ctx, i);");
-        print_line(gen, "        const char* pat = (const char*)list_get(ctx, i + 1);");
+        print_line(gen, "        const char* cat = (const char*)list_get_raw(ctx, i);");
+        print_line(gen, "        const char* pat = (const char*)list_get_raw(ctx, i + 1);");
         print_line(gen, "        if (!cat || !pat) continue;");
         print_line(gen, "        if (cat[0] == '*' && pat[0] == '*') return 1;");
         print_line(gen, "        if (strcmp(cat, category) == 0) {");

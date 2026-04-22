@@ -1131,6 +1131,15 @@ static void build_gcc_cmd(char* cmd, size_t size,
         }
     }
 
+    // Optional OpenSSL linker flags — baked in at `ae` build time from
+    // pkg-config. When OpenSSL wasn't detected, this is an empty string
+    // and HTTPS calls error cleanly at runtime.
+#ifdef AETHER_OPENSSL_LIBS
+    const char* openssl_libs = AETHER_OPENSSL_LIBS;
+#else
+    const char* openssl_libs = "";
+#endif
+
     if (tc.has_lib) {
         char lib_dir[1024];
         strncpy(lib_dir, tc.lib, sizeof(lib_dir) - 1);
@@ -1139,12 +1148,12 @@ static void build_gcc_cmd(char* cmd, size_t size,
         if (slash) *slash = '\0';
 
         snprintf(cmd, size,
-            "gcc %s %s \"%s\"%s %s -L%s -laether -o \"%s\" -pthread -lm %s",
-            opt, tc.include_flags, c_file, config_c, extra, lib_dir, out_file, link_flags);
+            "gcc %s %s \"%s\"%s %s -L%s -laether -o \"%s\" -pthread -lm %s %s",
+            opt, tc.include_flags, c_file, config_c, extra, lib_dir, out_file, openssl_libs, link_flags);
     } else {
         snprintf(cmd, size,
-            "gcc %s %s \"%s\"%s %s %s -o \"%s\" -pthread -lm %s",
-            opt, tc.include_flags, c_file, config_c, extra, tc.runtime_srcs, out_file, link_flags);
+            "gcc %s %s \"%s\"%s %s %s -o \"%s\" -pthread -lm %s %s",
+            opt, tc.include_flags, c_file, config_c, extra, tc.runtime_srcs, out_file, openssl_libs, link_flags);
     }
 #endif
 }

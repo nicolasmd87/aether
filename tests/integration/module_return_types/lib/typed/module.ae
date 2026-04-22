@@ -6,7 +6,7 @@ extern string_concat(a: string, b: string) -> string
 extern string_length(s: string) -> int
 extern map_new() -> ptr
 extern map_put_raw(m: ptr, key: string, value: ptr) -> int
-extern map_get(m: ptr, key: string) -> ptr
+extern map_get_raw(m: ptr, key: string) -> ptr
 
 // Returns string — the caller must infer string, not int
 greet(name: string) {
