@@ -454,7 +454,14 @@ static inline uint32_t utf8_step(uint32_t* st, uint32_t* cp, uint8_t byte) {
 // ---------------------------------------------------------------------------
 
 enum {
-    JV_FLAG_ROOT = 0x01u
+    JV_FLAG_ROOT        = 0x01u,
+    // Set on a JsonValue whose own struct bytes were allocated via `malloc`
+    // (from `heap_new`), not carved out of an arena. These need `free(v)`
+    // on top of whatever else `json_free` does. Critical for the case where
+    // a heap-created container gets promoted to arena-backed via
+    // `ensure_container_arena` — after that, `v->arena` is set but the
+    // struct itself still sits on the heap.
+    JV_FLAG_HEAP_STRUCT = 0x02u
 };
 
 // Parallel arrays for an object's (key, key_len, value) triples.
@@ -1432,10 +1439,12 @@ static void heap_free_tree(JsonValue* v);
 static void heap_free_tree(JsonValue* v) {
     if (!v) return;
     if (v->arena) {
-        // Shouldn't reach here — heap tree means no arena.
-        // Defensive: if arena is set, free the arena and return.
+        // Shouldn't reach here — heap tree means no arena. Defensive
+        // cleanup: destroy the arena, and only free the struct itself
+        // if it was heap-allocated (otherwise it's arena-owned memory
+        // that's already gone with arena_destroy).
         arena_destroy(v->arena);
-        free(v);
+        if (v->flags & JV_FLAG_HEAP_STRUCT) free(v);
         return;
     }
     switch (v->type) {
@@ -1537,6 +1546,7 @@ static JsonValue* heap_new(uint8_t type) {
     if (!v) return NULL;
     memset(v, 0, sizeof(JsonValue));
     v->type = type;
+    v->flags = JV_FLAG_HEAP_STRUCT;
     return v;
 }
 
@@ -1585,10 +1595,15 @@ void json_free(JsonValue* v) {
     if (!v) return;
     if (v->arena) {
         arena_destroy(v->arena);
-        // The JsonValue lived inside the arena, so nothing else to free.
+        // The arena is gone, but the JsonValue struct itself may have
+        // been malloc'd (heap_new) and then retrofitted with an arena
+        // via ensure_container_arena. The JV_FLAG_HEAP_STRUCT flag is
+        // the only reliable signal for that case — parsed roots have
+        // flag == 0 because their struct bytes live in the arena.
+        if (v->flags & JV_FLAG_HEAP_STRUCT) free(v);
         return;
     }
-    // Heap path.
+    // Heap path — no arena ever attached.
     heap_free_tree(v);
 }
 
