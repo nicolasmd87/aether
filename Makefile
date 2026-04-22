@@ -327,7 +327,7 @@ test-ae: compiler ae stdlib
 	printf 'fi\n'                                                                                   >> "$$script"; \
 	chmod +x "$$script"; \
 	root=$$(pwd); \
-	find tests/syntax tests/compiler tests/integration tests/regression -path '*/lib/*' -prune -o -path '*/custom_lib_dir/*' -prune -o -path 'tests/integration/namespace_*' -prune -o -path 'tests/integration/closure_actor_state_reject/*' -prune -o -path 'tests/integration/reserved_keyword_error/*' -prune -o -path 'tests/integration/ae_run_cflags/*' -prune -o -path 'tests/integration/bin_path_match/*' -prune -o -name '*.ae' -print 2>/dev/null | sort | \
+	find tests/syntax tests/compiler tests/integration tests/regression -path '*/lib/*' -prune -o -path '*/custom_lib_dir/*' -prune -o -path 'tests/integration/namespace_*' -prune -o -path 'tests/integration/closure_actor_state_reject/*' -prune -o -path 'tests/integration/reserved_keyword_error/*' -prune -o -path 'tests/integration/ae_run_cflags/*' -prune -o -path 'tests/integration/bin_path_match/*' -prune -o -path 'tests/integration/http_external_ptr/*' -prune -o -name '*.ae' -print 2>/dev/null | sort | \
 	xargs -P $(NPROC) -I{} "$$script" "{}" "$$tmpdir" "$$root"; \
 	for sh_test in $$(find tests/integration -name 'test_*.sh' 2>/dev/null | sort); do \
 		name=$$(echo "$$sh_test" | sed 's|tests/||;s|/|_|g;s|\.sh$$||'); \
