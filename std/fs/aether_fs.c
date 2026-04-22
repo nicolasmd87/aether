@@ -21,6 +21,26 @@ int fs_symlink_raw(const char* t, const char* l) { (void)t; (void)l; return 0; }
 char* fs_readlink_raw(const char* p) { (void)p; return NULL; }
 int fs_is_symlink(const char* p) { (void)p; return 0; }
 int fs_unlink_raw(const char* p) { (void)p; return 0; }
+int fs_write_atomic_raw(const char* p, const char* d, int l) {
+    (void)p; (void)d; (void)l; return 0;
+}
+int fs_rename_raw(const char* f, const char* t) { (void)f; (void)t; return 0; }
+int fs_stat_raw(const char* p, int* k, int* s, int* m) {
+    (void)p;
+    if (k) *k = 0; if (s) *s = 0; if (m) *m = 0;
+    return 0;
+}
+int fs_try_stat(const char* p) { (void)p; return 0; }
+int fs_get_stat_kind(void)  { return 0; }
+int fs_get_stat_size(void)  { return 0; }
+int fs_get_stat_mtime(void) { return 0; }
+char* fs_read_binary_raw(const char* p, int* n) {
+    (void)p; if (n) *n = 0; return NULL;
+}
+int fs_try_read_binary(const char* p) { (void)p; return 0; }
+const char* fs_get_read_binary(void) { return NULL; }
+int fs_get_read_binary_length(void) { return 0; }
+void fs_release_read_binary(void) {}
 char* path_join(const char* a, const char* b) { (void)a; (void)b; return NULL; }
 char* path_dirname(const char* p) { (void)p; return NULL; }
 char* path_basename(const char* p) { (void)p; return NULL; }
@@ -259,6 +279,223 @@ int fs_unlink_raw(const char* path) {
 }
 
 #endif // !_WIN32
+
+// ---------------------------------------------------------------------
+// Durable/atomic/stat helpers. Cross-platform — rely on fopen + stat +
+// rename which exist on both POSIX and Windows CRT. The POSIX-specific
+// fsync path is guarded by #ifndef _WIN32; Windows gets a best-effort
+// fflush (no FlushFileBuffers call for v1 — good enough for the
+// atomicity guarantee, since rename itself is still the durable step).
+// ---------------------------------------------------------------------
+
+#include <time.h>
+
+int fs_write_atomic_raw(const char* path, const char* data, int length) {
+    if (!path || length < 0) return 0;
+    if (!aether_sandbox_check("fs_write", path)) return 0;
+
+    // Build a tmp path <path>.tmp.<pid>.<counter>. The counter keeps
+    // concurrent writers from the same PID (unlikely but cheap to
+    // guard against) from stomping each other's tmp files.
+    static unsigned long s_counter = 0;
+    char tmp[4096];
+    int plen = (int)strlen(path);
+    if (plen <= 0 || plen >= (int)sizeof(tmp) - 32) return 0;
+    long pid =
+#ifdef _WIN32
+        (long)_getpid();
+#else
+        (long)getpid();
+#endif
+    unsigned long n = ++s_counter;
+    snprintf(tmp, sizeof(tmp), "%s.tmp.%ld.%lu", path, pid, n);
+
+    FILE* fp = fopen(tmp, "wb");
+    if (!fp) return 0;
+
+    size_t written = (length > 0) ? fwrite(data, 1, (size_t)length, fp) : 0;
+    int fwrite_ok = (written == (size_t)length);
+
+#ifndef _WIN32
+    // Flush + fsync before rename. Without fsync a power loss between
+    // the rename and the kernel flushing the tmp's data could leave
+    // the destination pointing at zero-length or garbage contents.
+    int fsync_ok = 1;
+    if (fwrite_ok) {
+        if (fflush(fp) != 0) fsync_ok = 0;
+        else if (fsync(fileno(fp)) != 0) fsync_ok = 0;
+    }
+#else
+    int fsync_ok = fwrite_ok ? (fflush(fp) == 0) : 0;
+#endif
+
+    if (fclose(fp) != 0) fsync_ok = 0;
+
+    if (!fwrite_ok || !fsync_ok) {
+        remove(tmp);  // don't leak a half-written tmp file
+        return 0;
+    }
+
+    // rename(2) is atomic on POSIX when src and dst are on the same
+    // filesystem — which they always are here, since we put the tmp
+    // right next to the destination. On Windows rename will fail if
+    // the destination exists, so drop it first; we don't race-check
+    // because concurrent writers to the same path is already UB.
+#ifdef _WIN32
+    remove(path);
+#endif
+    if (rename(tmp, path) != 0) {
+        remove(tmp);
+        return 0;
+    }
+    return 1;
+}
+
+int fs_rename_raw(const char* from, const char* to) {
+    if (!from || !to) return 0;
+    if (!aether_sandbox_check("fs_write", from)) return 0;
+    if (!aether_sandbox_check("fs_write", to)) return 0;
+    return rename(from, to) == 0 ? 1 : 0;
+}
+
+// Kind encoding for fs_stat_raw's out_kind:
+//   1 = regular file, 2 = directory, 3 = symlink, 4 = other.
+// A symlink is reported as kind 3 even if its target is a file or
+// directory — lstat(2) never follows. Callers that want "size of
+// the target" should readlink + stat the target explicitly.
+#define FS_STAT_KIND_FILE    1
+#define FS_STAT_KIND_DIR     2
+#define FS_STAT_KIND_SYMLINK 3
+#define FS_STAT_KIND_OTHER   4
+
+int fs_stat_raw(const char* path, int* out_kind,
+                int* out_size, int* out_mtime) {
+    if (!path) {
+        if (out_kind)  *out_kind  = 0;
+        if (out_size)  *out_size  = 0;
+        if (out_mtime) *out_mtime = 0;
+        return 0;
+    }
+    if (!aether_sandbox_check("fs_read", path)) {
+        if (out_kind)  *out_kind  = 0;
+        if (out_size)  *out_size  = 0;
+        if (out_mtime) *out_mtime = 0;
+        return 0;
+    }
+
+    struct stat st;
+#ifndef _WIN32
+    if (lstat(path, &st) != 0) {
+#else
+    // Windows CRT has no lstat; stat follows symlinks, but Windows
+    // symlinks already go through a different code path we stub out
+    // (fs_is_symlink returns 0). Good enough for v1.
+    if (stat(path, &st) != 0) {
+#endif
+        if (out_kind)  *out_kind  = 0;
+        if (out_size)  *out_size  = 0;
+        if (out_mtime) *out_mtime = 0;
+        return 0;
+    }
+
+    int kind;
+#ifndef _WIN32
+    if (S_ISLNK(st.st_mode))       kind = FS_STAT_KIND_SYMLINK;
+    else
+#endif
+    if (S_ISREG(st.st_mode))       kind = FS_STAT_KIND_FILE;
+    else if (S_ISDIR(st.st_mode))  kind = FS_STAT_KIND_DIR;
+    else                           kind = FS_STAT_KIND_OTHER;
+
+    if (out_kind)  *out_kind  = kind;
+    if (out_size)  *out_size  = (int)st.st_size;
+    if (out_mtime) *out_mtime = (int)st.st_mtime;
+    return 1;
+}
+
+// Thread-local cache for the split fs_try_stat / fs_get_stat_* pair.
+// Storing last-stat result here lets Aether callers work without
+// allocating C out-params. The trio is called sequentially by the
+// Aether-side file_stat wrapper, so the cache only has to survive
+// that short window on the calling thread.
+#if defined(__GNUC__) || defined(__clang__)
+  #define AETHER_FS_TLS __thread
+#else
+  #define AETHER_FS_TLS
+#endif
+static AETHER_FS_TLS int s_last_kind  = 0;
+static AETHER_FS_TLS int s_last_size  = 0;
+static AETHER_FS_TLS int s_last_mtime = 0;
+
+int fs_try_stat(const char* path) {
+    int k = 0, sz = 0, mt = 0;
+    int ok = fs_stat_raw(path, &k, &sz, &mt);
+    if (!ok) {
+        s_last_kind = 0; s_last_size = 0; s_last_mtime = 0;
+        return 0;
+    }
+    s_last_kind = k; s_last_size = sz; s_last_mtime = mt;
+    return 1;
+}
+
+int fs_get_stat_kind(void)  { return s_last_kind;  }
+int fs_get_stat_size(void)  { return s_last_size;  }
+int fs_get_stat_mtime(void) { return s_last_mtime; }
+
+char* fs_read_binary_raw(const char* path, int* out_len) {
+    if (out_len) *out_len = 0;
+    if (!path) return NULL;
+    if (!aether_sandbox_check("fs_read", path)) return NULL;
+
+    FILE* fp = fopen(path, "rb");
+    if (!fp) return NULL;
+
+    if (fseek(fp, 0, SEEK_END) != 0) { fclose(fp); return NULL; }
+    long size = ftell(fp);
+    if (size < 0) { fclose(fp); return NULL; }
+    if (fseek(fp, 0, SEEK_SET) != 0) { fclose(fp); return NULL; }
+
+    // Allocate size+1 so we can append a NUL past the end — handy for
+    // callers who know the content is text and want to treat it as a
+    // C string. The `out_len` byte count does NOT include this NUL.
+    char* buf = (char*)malloc((size_t)size + 1);
+    if (!buf) { fclose(fp); return NULL; }
+
+    size_t read = (size > 0) ? fread(buf, 1, (size_t)size, fp) : 0;
+    fclose(fp);
+    if (read != (size_t)size) { free(buf); return NULL; }
+
+    buf[size] = '\0';
+    if (out_len) *out_len = (int)size;
+    return buf;
+}
+
+// TLS cache for the split fs_try_read_binary path. The cached buffer
+// is owned here; the getter hands back a borrowed pointer valid
+// until the next fs_try_read_binary call or until fs_release_read_binary
+// explicitly releases it. Aether callers copy the bytes out before
+// issuing another read.
+static AETHER_FS_TLS char* s_read_binary_buf = NULL;
+static AETHER_FS_TLS int   s_read_binary_len = 0;
+
+void fs_release_read_binary(void) {
+    free(s_read_binary_buf);
+    s_read_binary_buf = NULL;
+    s_read_binary_len = 0;
+}
+
+int fs_try_read_binary(const char* path) {
+    fs_release_read_binary();  // drop any previous read
+    int len = 0;
+    char* buf = fs_read_binary_raw(path, &len);
+    if (!buf) return 0;
+    s_read_binary_buf = buf;
+    s_read_binary_len = len;
+    return 1;
+}
+
+const char* fs_get_read_binary(void) { return s_read_binary_buf; }
+int fs_get_read_binary_length(void)  { return s_read_binary_len; }
 
 // Path operations
 char* path_join(const char* path1, const char* path2) {
