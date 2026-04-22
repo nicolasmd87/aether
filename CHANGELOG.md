@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`fs.read_binary` now preserves embedded NUL bytes** (`std/fs/module.ae`). Fixes a bug introduced in PR #200 (v0.80.0): the wrapper used `string_concat("", raw)` to copy the TLS buffer into an owned Aether string, but `string_concat` is strlen-based — any binary payload with an embedded NUL truncated at the first zero byte, even though the wrapper reported the full length. Swapped in `string_new_with_length(raw, n)` which memcpy's exactly n bytes and records the length in the AetherString header. Callers now see `string.length(content) == n` and `string.char_at(content, i)` returns the i-th byte including NULs. The extern signature is unchanged; the returned `ptr` is now a proper length-aware AetherString. Regression test: `tests/integration/fs_read_binary_nul/` (10-byte file with NUL at offset 3; checks reported length, string.length, and byte-by-byte content). Known footgun worth flagging separately: `data != "literal"` on an AetherString return now compiles to `strcmp(void*, void*)` and reads past the magic header; callers should use `string.equals(data, "literal") != 1`.
+
 ## [0.81.0]
 
 ### Fixed
