@@ -16,6 +16,7 @@ Parser* create_parser(Token** tokens, int token_count) {
     parser->current_token = 0;
     parser->suppress_errors = 0;  // By default, show errors
     parser->parsing_builder = 0;
+    parser->in_condition = 0;
     return parser;
 }
 
@@ -47,14 +48,39 @@ Token* advance_token(Parser* parser) {
     return parser->tokens[parser->current_token++];
 }
 
+// True when `token`'s source text looks like a reserved keyword (all
+// alphanumeric/underscore, starts with a letter). Used to generate a
+// friendlier error than "Expected IDENTIFIER, got MESSAGE_KEYWORD"
+// when a user picks a name that collides with the grammar. Skips
+// TOKEN_IDENTIFIER itself and anything whose value is punctuation.
+static int token_is_reserved_keyword(Token* token) {
+    if (!token || !token->value || token->type == TOKEN_IDENTIFIER) return 0;
+    const char* s = token->value;
+    if (!((*s >= 'a' && *s <= 'z') || (*s >= 'A' && *s <= 'Z') || *s == '_')) return 0;
+    for (const char* p = s + 1; *p; p++) {
+        if (!((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+              (*p >= '0' && *p <= '9') || *p == '_')) return 0;
+    }
+    return 1;
+}
+
 Token* expect_token(Parser* parser, AeTokenType expected) {
     Token* token = peek_token(parser);
     if (!token || token->type != expected) {
         char error_msg[256];
-        snprintf(error_msg, sizeof(error_msg), 
-                "Expected %s, got %s", 
+        if (expected == TOKEN_IDENTIFIER && token_is_reserved_keyword(token)) {
+            // User picked a reserved keyword as an identifier name —
+            // point at the keyword and suggest a rename so they don't
+            // have to guess which grammar slot was wanted.
+            snprintf(error_msg, sizeof(error_msg),
+                "'%s' is a reserved keyword and cannot be used as an identifier; rename it (e.g. '%s_' or 'msg')",
+                token->value, token->value);
+        } else {
+            snprintf(error_msg, sizeof(error_msg),
+                "Expected %s, got %s",
                 token_type_to_string(expected),
                 token ? token_type_to_string(token->type) : "EOF");
+        }
         parser_error(parser, error_msg);
         return NULL;
     }
@@ -869,8 +895,16 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
                     if (trailing) {
                         add_child(func_call, trailing);
                     }
-                } else if (next_tok && next_tok->type == TOKEN_LEFT_BRACE) {
+                } else if (next_tok && next_tok->type == TOKEN_LEFT_BRACE &&
+                           !parser->in_condition) {
                     // Trailing block without params: func(args) { body }
+                    //
+                    // Suppressed when we're parsing an if/while/for condition:
+                    // the `{` there is the start of the statement's body, not
+                    // a trailing closure attached to the rightmost call. Eating
+                    // it here would swallow the real body and produce silently
+                    // wrong code (e.g. an infinite while loop because the
+                    // increment statement becomes the if-body).
                     ASTNode* trailing = create_ast_node(AST_CLOSURE, "trailing",
                                                          next_tok->line, next_tok->column);
                     trailing->node_type = create_type(TYPE_FUNCTION);
@@ -1297,7 +1331,10 @@ ASTNode* parse_python_style_declaration(Parser* parser) {
 
 ASTNode* parse_if_statement(Parser* parser) {
     advance_token(parser); // if
+    int saved_in_condition = parser->in_condition;
+    parser->in_condition = 1;
     ASTNode* condition = parse_expression(parser);
+    parser->in_condition = saved_in_condition;
     if (!condition) return NULL;
     
     ASTNode* then_branch = parse_statement(parser);
@@ -1331,7 +1368,13 @@ ASTNode* parse_for_loop(Parser* parser) {
         ASTNode* start_expr = parse_expression(parser);
         if (!start_expr) return NULL;
         if (!expect_token(parser, TOKEN_DOTDOT)) return NULL;
+        // end_expr is terminated by `{` (the loop body) — the same
+        // trailing-block ambiguity if/while have. See parse_if_statement
+        // for the rationale.
+        int saved_in_condition = parser->in_condition;
+        parser->in_condition = 1;
         ASTNode* end_expr = parse_expression(parser);
+        parser->in_condition = saved_in_condition;
         if (!end_expr) return NULL;
 
         ASTNode* body = parse_statement(parser);
@@ -1428,7 +1471,10 @@ ASTNode* parse_for_loop(Parser* parser) {
 
 ASTNode* parse_while_loop(Parser* parser) {
     advance_token(parser); // while
+    int saved_in_condition = parser->in_condition;
+    parser->in_condition = 1;
     ASTNode* condition = parse_expression(parser);
+    parser->in_condition = saved_in_condition;
     if (!condition) return NULL;
     
     ASTNode* body = parse_statement(parser);
@@ -1544,10 +1590,16 @@ ASTNode* parse_case_statement(Parser* parser) {
 //   }
 ASTNode* parse_match_statement(Parser* parser) {
     advance_token(parser); // consume 'match'
-    
-    // Parse the expression to match on (parens optional)
+
+    // Parse the expression to match on (parens optional). When there are
+    // no parens, the `{` that follows introduces the match arms — the same
+    // trailing-block ambiguity if/while have. Guarding the condition flag
+    // keeps `match f(x) { ... }` from eating the arms as a closure on f.
     int has_paren = match_token(parser, TOKEN_LEFT_PAREN);
+    int saved_in_condition = parser->in_condition;
+    if (!has_paren) parser->in_condition = 1;
     ASTNode* expression = parse_expression(parser);
+    parser->in_condition = saved_in_condition;
     if (!expression) return NULL;
     if (has_paren && !expect_token(parser, TOKEN_RIGHT_PAREN)) return NULL;
 
@@ -2178,12 +2230,25 @@ ASTNode* parse_block(Parser* parser) {
             add_child(block, stmt);
         } else {
             // Prevent infinite loops on unexpected tokens inside blocks.
-            parser_error(parser, "Expected statement in block");
+            // If the block-head token is a reserved keyword being used as
+            // if it were an identifier (e.g. `message = "hello"`), point
+            // at it directly instead of the generic "expected statement"
+            // that leaves users guessing.
+            Token* stmt_head = peek_token(parser);
+            if (stmt_head && token_is_reserved_keyword(stmt_head)) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                    "'%s' is a reserved keyword and cannot be used as an identifier; rename it (e.g. '%s_' or 'msg')",
+                    stmt_head->value, stmt_head->value);
+                parser_error(parser, msg);
+            } else {
+                parser_error(parser, "Expected statement in block");
+            }
             if (parser->current_token == start_token) {
                 advance_token(parser);
             }
         }
-        
+
         if (is_at_end(parser)) break;
     }
     

@@ -14,10 +14,11 @@ can be changed freely and what's load-bearing.
    -pedantic`. SIMD kernels gated behind compile-time feature detection
    (`__SSE2__`, `__ARM_NEON`) with a scalar fallback that's always
    compiled — no target is SIMD-only.
-3. **Fast enough that JSON isn't a bottleneck.** Post-rewrite throughput
-   is a multiple of the original byte-at-a-time parser, and a meaningful
-   fraction of yyjson's scalar throughput on the same hardware. Measured
-   ratios live in [`benchmarks/json/baseline.md`](../benchmarks/json/baseline.md).
+3. **Fast enough that JSON isn't a bottleneck.** Every byte in the hot
+   path is touched at most once. Allocations happen from a per-document
+   arena, not per-node. Hot classification decisions are a single LUT
+   read. Measurement harness lives in
+   [`benchmarks/json/baseline.md`](../benchmarks/json/baseline.md).
 4. **Low maintenance.** One `.c` file, one design doc, no vendored deps.
    Anyone who reads this file should be able to maintain the parser
    without additional context.
@@ -53,18 +54,20 @@ Alignment is fixed at 8 bytes. All allocations round up.
 
 ### Why not a tape?
 
-yyjson, simdjson, and several other fast parsers store parsed values in
-a **tape**: a flat array of fixed-size slots indexed by position. This
-is terrific for cache locality but would break Aether's JSON API because
-the creation path (`json_create_string`, `json_object_set`, …) needs
-values that exist *outside* of any parse. The tape representation
-couples value lifetimes to a tape, making standalone creation awkward.
+Several fast parsers store parsed values in a **tape**: a flat array of
+fixed-size slots indexed by position, with parent/child relationships
+encoded via sibling offsets. That layout is maximally cache-friendly
+but it couples value lifetimes to the tape and makes the creation path
+(`json_create_string`, `json_object_set`, …) awkward — a standalone
+value has nowhere to live without a tape to sit in.
 
-We chose to preserve the API shape — values are reachable through a tree
-of pointers, same as before — and win cache locality instead from the
-arena's chunk-local allocation. Values allocated close in time end up
-close in memory. Not as good as a tape but close enough; the remaining
-gap vs. yyjson is partly this choice, documented in `baseline.md`.
+We preserve the API shape — values are reachable through a tree of
+pointers — and recover cache locality from the arena's chunk-local
+allocation. Values allocated close in time end up close in memory, and
+`JsonValue` itself is sized to fit two per 64-byte cache line
+(see "JsonValue sizing" below). A full tape representation is possible
+later with copy-on-mutate preservation of the creation API; the design
+is sketched in "When to change what" near the end of this doc.
 
 ### Heap path for `json_create_*`
 
@@ -141,8 +144,8 @@ each allocating the remaining input size, the arena exploded to gigabytes
 before the process was killed.
 
 The pre-scan turns per-string allocation into `O(string bytes)` instead
-of `O(remaining document bytes)`. That's what got us from OOM to
-6× speedup.
+of `O(remaining document bytes)`. Without it, correctness degrades into
+an OOM long before throughput becomes interesting.
 
 ## UTF-8 validation: Hoehrmann's DFA
 
@@ -195,10 +198,9 @@ loop bumps col by the run length without checking for '\n'.
 Why not SIMD for UTF-8 validation or structural scan? Those either need
 tape-based output (structural) or have significantly more state to
 track (UTF-8 DFA state carries across bytes). The string fast-loop is
-the one place SIMD drops in with no architectural follow-through. If
-parse throughput ever shows up in a profile that matters more than
-these ~50% of yyjson, the next step is tape representation, not more
-SIMD.
+the one place SIMD drops in with no architectural follow-through. If a
+profile ever puts parse throughput ahead of everything else, the next
+structural step is tape representation, not more SIMD.
 
 ## Number parsing: validate + dispatch
 
@@ -231,15 +233,66 @@ The `POW10_POS` table tops out at `1e22` because doubles can exactly
 represent powers of ten only through that index; past 22 the `strtod`
 fallback is the only correct answer.
 
-## Containers: parallel flat arrays
+## Containers: flat arrays + one indirection for objects
 
-`JsonValue::arr` is `{ JsonValue** items; uint32_t count, capacity }`.
-`JsonValue::obj` is the same pattern with three parallel arrays:
-`const char** keys; uint32_t* key_lens; JsonValue** values`.
+`JsonValue::arr` is `{ JsonValue** items; uint32_t count, capacity }` —
+a pointer to an arena-owned array plus inline count/capacity.
 
-Growth uses simple doubling (cap=4 initial) and copies via
-`arena_grow`. Old buffers become arena garbage until the arena is
-freed — waste is bounded by `O(final size)` per container.
+`JsonValue::obj` holds the same count/capacity pair inline but reaches
+its three parallel arrays through a single `JsonObjBlock*`:
+
+```c
+typedef struct JsonObjBlock {
+    const char** keys;
+    uint32_t*    key_lens;
+    JsonValue**  values;
+} JsonObjBlock;
+```
+
+Reading an object field is `obj->data.obj.blk->values[i]` — one extra
+pointer load compared to inlining the three arrays in `JsonValue`. The
+payoff is that the `obj` union variant is 16 bytes instead of 32, which
+collapses `sizeof(JsonValue)` from 48 to 32 and lets two values share a
+64-byte cache line on every machine we care about (see the next
+section). Since every non-trivial object access is going to miss cache
+*somewhere* — either on the value struct or on the block — putting the
+indirection at the block level is essentially free, and halving the
+value struct's footprint pays back across the whole parsed tree.
+
+Growth uses simple doubling with an initial capacity of
+`JSON_CONTAINER_INITIAL_CAP` (= 8). Realistic JSON objects cluster in
+the 5–15 key range, so starting at 8 skips one doubling cycle in the
+common case; tiny objects waste a few unused pointers which round-off
+into the arena anyway. Old buffers become arena garbage until the arena
+is freed — waste is bounded by `O(final size)` per container.
+
+## JsonValue sizing
+
+```c
+struct JsonValue {
+    uint8_t type;           // 1
+    uint8_t flags;          // 1  (JV_FLAG_ROOT)
+    uint8_t _pad[6];        // 6  — needed to align the union at offset 8
+    union {
+        int      boolean;                           // 4
+        double   number;                            // 8
+        struct { const char* data; uint32_t length; } str;  // 16
+        struct { JsonValue** items; uint32_t c, cap; } arr; // 16
+        struct { JsonObjBlock* blk; uint32_t c, cap; } obj; // 16
+    } data;                 // 16 bytes — widest variant is str / arr / obj
+    Arena* arena;           // 8  — set on root only (interior: NULL)
+};                          // 32 bytes total
+```
+
+Two values per 64-byte cache line. That matters because every parsed
+tree is a graph of JsonValues pointing at JsonValues; fewer cache lines
+touched per traversal is a direct throughput win, with no change to
+any code that reads the fields.
+
+The `_pad[6]` after `type`/`flags` is forced by the union's 8-byte
+alignment (it contains a `double`). The `arena` pointer lives on the
+root only — interior values keep it `NULL` and use it as a
+"is-this-a-root" marker when the mutation path needs to branch.
 
 ### Object lookup: linear scan
 
@@ -285,63 +338,56 @@ concurrently hold independent arenas and see independent error slots.
 
 `cc_init`'s first-run race is benign (both threads write the same bytes).
 
-## Remaining gap vs. yyjson
+## Structural headroom
 
-Measured throughput in [baseline.md](../benchmarks/json/baseline.md)
-shows we run at roughly half of yyjson's scalar speed. The gap is made
-up of three pieces:
+Three deliberate structural choices bound how far the parser can go
+without a larger rewrite. Each one trades a specific complexity cost
+for its current behaviour, and each has a concrete path forward if the
+bound starts to pinch.
 
-### 1. Tape representation (biggest remaining item — deferred)
+### Tape representation (deferred, path documented)
 
-yyjson stores parsed values in a flat 16-byte-slot array ("tape")
-with parent/child relationships encoded via sibling offsets. Our
-tree-based representation uses 48-byte `JsonValue` structs with
-pointer fields. Same tree shape, but 3× the bytes per node — so it
-fills the L2/L3 cache sooner, and pointer-chasing during
-`json_object_get`/`json_array_get` dominates compared to an index
-walk in contiguous memory.
+The fastest contemporary JSON parsers store parsed values in a flat
+slot array ("tape") with parent/child relationships encoded as sibling
+offsets. That layout is maximally cache-dense for traversal but assumes
+the whole tree is written once and never mutated — "insert a child"
+would invalidate every downstream sibling offset.
 
-Why we haven't shipped it: our `json_object_set` / `json_array_add`
-mutation APIs let users add arbitrary children to existing values,
-including heap-created values from `json_create_*` into parsed
-arena-backed values. A pure tape layout cannot accept mutations
-without a full rebuild, because "insert a child" would invalidate
-every downstream sibling offset.
+Our `json_object_set` / `json_array_add` mutation APIs let callers add
+arbitrary children to parsed trees, including heap-created values from
+`json_create_*`. A pure tape can't absorb those without a full rebuild.
 
-The proper design is **dual representation with copy-on-mutate**:
-- `json.parse` produces a flat tape.
-- `json.array_add` / `json.object_set` on a tape-backed value first
-  promotes the subtree to the existing tree representation (one O(n)
-  deep-copy per root), sets an "is-tree" flag, and then mutates.
+The path forward is **dual representation with copy-on-mutate**:
+
+- `json.parse` produces a flat tape for the parsed document.
+- `json.array_add` / `json.object_set` on a tape-backed value promotes
+  the affected subtree to the existing tree representation once (one
+  deep-copy), flips a flag on the root, then mutates as today.
 - Subsequent calls on the promoted root skip the conversion.
-- Accessors (`object_get`, `array_get`, `get_bool`, …) branch on the
-  flag once to pick the right code path.
+- Accessors (`object_get`, `array_get`, `get_*`, …) branch on the
+  tape/tree flag once to pick the right code path.
 
-Estimated incremental throughput on parse: around +30-50% for
-well-shaped documents (api-response, large), driven by cache
-locality on the parse output. It does not make a difference for
-tiny documents or deeply-nested structures. The architectural risk
-is real: every accessor function gains a dispatch branch, the
-mutation path has a new failure mode (copy allocation can OOM),
-and every test needs to cover both flavours.
+What's deferred about this is the breadth of the change, not the
+design. Every accessor gains a dispatch branch; the mutation path gets
+a new OOM mode (copy allocation can fail mid-tree); every test needs
+two flavours. That's worth doing, but it's a standalone review cycle,
+not a rider on an incremental perf pass. The change-point names the
+files in "When to change what" below.
 
-That's why it's deferred: the design is clear, the gain is
-measurable but not dramatic, and ripping out the core data layout
-needs its own review cycle. The change-point in "When to change
-what" below names the files and touch points.
+### Full SIMD parsing (not on the roadmap)
 
-### 2. Full SIMD parsing (not on the roadmap)
+Vectorised parsers classify every byte into
+"structural / whitespace / string-char / escape" with a single wide
+compare, producing a bitmap the parser walks. The bitmap is only useful
+if the parser writes tape slots; producing a tree of `JsonValue*` from
+the bitmap adds back all the branches the SIMD was meant to save.
 
-simdjson and yyjson-with-SIMD use SIMD to classify every byte into
-"structural / whitespace / string-char / escape" in a single vector
-pass, producing a bitmap the parser walks. That requires tape output
-(the bitmap is consumed while writing tape slots) and is an
-architectural commitment to SIMD-everywhere. We ship a targeted SIMD
-kernel (`scan_str_safe`) because it's surgical and has a clean scalar
-fallback — going further than that trades maintainability for single-
-digit-percent wins on top of tape.
+So a full-SIMD path is a tape-path with different input. The targeted
+SIMD kernel we do ship (`scan_str_safe`) lives inside the string parser
+where it drops in cleanly and coexists with a scalar fallback that's
+always compiled. Anything beyond that depends on tape landing first.
 
-### 3. Things we deliberately don't do
+### Things we deliberately don't do
 
 - **Streaming / incremental parsing** — everything is parsed into
   memory in one go. JSON payloads that don't fit in RAM are rare and
@@ -369,8 +415,11 @@ digit-percent wins on top of tape.
 - **`make test-json-asan`** — parses the bench corpus under
   `-fsanitize=address,undefined`. Catches leaks, OOB, UB.
 - **`make test-json-valgrind`** — Valgrind run where available.
-- **`make bench-json` / `make bench-json-compare`** — perf bench
-  vs. committed baseline and optional yyjson reference.
+- **`make bench-json` / `make bench-json-compare`** — reproducible
+  benchmark harness; see
+  [benchmarks/json/baseline.md](../benchmarks/json/baseline.md) for
+  the methodology. Absolute throughput numbers are not committed — run
+  the harness on the machine you care about.
 
 ## When to change what
 
@@ -379,6 +428,7 @@ digit-percent wins on top of tape.
 | Land tape representation                   | New `TapeSlot` struct + `JV_FLAG_TAPE` flag on `JsonValue`; rewrite `parse_value_depth`/`parse_array`/`parse_object` to produce tape slots; add `tape_promote_to_tree()` helper called lazily from the mutators; branch in every accessor on `flags & JV_FLAG_TAPE`. |
 | Add SIMD for structural scan (tape-only)   | New `scan_structurals()` beside `scan_str_safe`, called from the tape parser. Needs tape to land first. |
 | Improve object lookup for large objects    | Threshold-based switch in `json_object_get_raw`: linear scan below ~32 keys, open-addressed hash above. |
+| Resize the object backing block            | `JsonObjBlock` lives behind `JsonValue::data.obj.blk`. Adding a fourth parallel array (e.g. cached hash) goes here. |
 | Support streaming                          | New `json_parse_stream` API + state object. Would likely need its own arena-resetting allocator. |
 | Change max depth                           | `JSON_MAX_DEPTH` near top of file.        |
 | Add a pretty-print mode                    | New flag in a `json_stringify_opts` struct, new builder path. |

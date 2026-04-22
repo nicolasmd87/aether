@@ -1,0 +1,73 @@
+// Regression: `if call_a() != call_b() { body }` must parse as an
+// if-statement whose condition is the `!=` comparison and whose body
+// is the `{ body }` block. Previously the parser consumed the `{` as
+// a trailing-block argument attached to `call_b()` (the rightmost
+// call in the condition), leaving the if-statement with only its
+// post-block siblings as its true body — so programs like
+//
+//     while i < n {
+//         if f(a) != f(b) { return 0 }
+//         i = i + 1
+//     }
+//
+// compiled to generated C where `return 0` never fired and the loop
+// increment moved inside the `if`, producing an infinite loop.
+//
+// The bug fires with ANY function call (user function OR extern), not
+// just extern calls — this test uses a plain user function so it
+// doesn't depend on std.string semantics.
+
+g(x: int) { return x + 1 }
+
+// Case A: if with calls on both sides of !=
+diff_count(a: int, b: int, limit: int) {
+    i = 0
+    d = 0
+    while i < limit {
+        if g(a) != g(b) { d = d + 1 }
+        i = i + 1
+    }
+    return d
+}
+
+// Case B: while-cond with calls on both sides of !=, plus return inside if
+first_diff(a: int, b: int, limit: int) {
+    i = 0
+    while i < limit {
+        if g(a) != g(b) { return i }
+        i = i + 1
+    }
+    return -1
+}
+
+main() {
+    // Both inputs equal — no differences.
+    if diff_count(5, 5, 3) != 0 {
+        println("FAIL: diff_count(5,5,3) should be 0")
+        exit(1)
+    }
+    println("PASS: diff_count(5,5,3) = 0")
+
+    // Different inputs — every iteration a mismatch.
+    if diff_count(5, 7, 3) != 3 {
+        println("FAIL: diff_count(5,7,3) should be 3")
+        exit(1)
+    }
+    println("PASS: diff_count(5,7,3) = 3")
+
+    // Equal — first_diff returns -1 (loop completes without early return).
+    // If the `return i` got eaten into the wrong block and the loop body
+    // never incremented, this either hangs or returns the wrong value.
+    if first_diff(5, 5, 3) != -1 {
+        println("FAIL: first_diff equal should be -1")
+        exit(1)
+    }
+    println("PASS: first_diff(5,5,3) = -1")
+
+    // Different — first_diff returns 0 on first iteration.
+    if first_diff(5, 7, 3) != 0 {
+        println("FAIL: first_diff differ should be 0")
+        exit(1)
+    }
+    println("PASS: first_diff(5,7,3) = 0")
+}

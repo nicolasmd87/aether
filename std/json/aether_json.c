@@ -144,6 +144,13 @@ typedef struct Arena {
 #define ARENA_INITIAL_CHUNK (16u * 1024u)
 #define ARENA_MAX_AUTO_CHUNK (2u * 1024u * 1024u)
 
+// Starting capacity for the backing arrays of arrays and objects.
+// Realistic JSON objects almost always have more than 4 keys (API
+// responses, log records, config nodes all cluster at 5–15); starting
+// at 8 skips one doubling cycle for the typical case and wastes only
+// a handful of pointers when an object really is tiny.
+#define JSON_CONTAINER_INITIAL_CAP 8u
+
 static size_t arena_align_up(size_t n) {
     return (n + (ARENA_ALIGN - 1u)) & ~((size_t)ARENA_ALIGN - 1u);
 }
@@ -438,11 +445,26 @@ static inline uint32_t utf8_step(uint32_t* st, uint32_t* cp, uint8_t byte) {
 // Opaque to the world; internals can change freely. Every value stores
 // its type and a union of type-specific data. The arena pointer is ONLY
 // valid on the root value — interior values share the root's arena.
+//
+// Object backing lives behind a single pointer (JsonObjBlock) rather
+// than three parallel array pointers inline in the value. That makes
+// the union's widest member 16 bytes — same as `str` and `arr` — so the
+// whole JsonValue fits into a 32-byte footprint and two values share one
+// 64-byte cache line.
 // ---------------------------------------------------------------------------
 
 enum {
     JV_FLAG_ROOT = 0x01u
 };
+
+// Parallel arrays for an object's (key, key_len, value) triples.
+// Held behind one pointer from JsonValue so the value itself stays small.
+// Allocated lazily on first reserve; NULL for empty objects.
+typedef struct JsonObjBlock {
+    const char** keys;
+    uint32_t*    key_lens;
+    JsonValue**  values;
+} JsonObjBlock;
 
 struct JsonValue {
     uint8_t type;
@@ -461,11 +483,9 @@ struct JsonValue {
             uint32_t    capacity;
         } arr;
         struct {
-            const char** keys;        // each key is its own arena'd/heap'd string
-            uint32_t*    key_lens;    // length of each key (strlen cached)
-            JsonValue**  values;
-            uint32_t     count;
-            uint32_t     capacity;
+            JsonObjBlock* blk;   // NULL when capacity == 0
+            uint32_t      count;
+            uint32_t      capacity;
         } obj;
     } data;
     Arena* arena;  // root only; interior values set this to NULL
@@ -1012,7 +1032,8 @@ static JsonValue* parse_bool_lit(Parser* s) {
 // growth to amortise the allocation cost.
 static int arr_reserve(JsonValue* arr, Arena* a, uint32_t needed) {
     if (needed <= arr->data.arr.capacity) return 1;
-    uint32_t new_cap = arr->data.arr.capacity ? arr->data.arr.capacity : 4;
+    uint32_t new_cap = arr->data.arr.capacity ? arr->data.arr.capacity
+                                              : JSON_CONTAINER_INITIAL_CAP;
     while (new_cap < needed) new_cap *= 2;
     JsonValue** grown = (JsonValue**)arena_grow(
         a,
@@ -1025,36 +1046,46 @@ static int arr_reserve(JsonValue* arr, Arena* a, uint32_t needed) {
     return 1;
 }
 
-// Analogous for objects — three parallel arrays grow together.
+// Analogous for objects — the three parallel arrays grow together,
+// reachable through a single JsonObjBlock pointer hanging off the value.
+// First reserve allocates the block; subsequent reserves grow the arrays.
 static int obj_reserve(JsonValue* obj, Arena* a, uint32_t needed) {
     if (needed <= obj->data.obj.capacity) return 1;
-    uint32_t new_cap = obj->data.obj.capacity ? obj->data.obj.capacity : 4;
+    uint32_t old_cap = obj->data.obj.capacity;
+    uint32_t new_cap = old_cap ? old_cap : JSON_CONTAINER_INITIAL_CAP;
     while (new_cap < needed) new_cap *= 2;
 
+    JsonObjBlock* blk = obj->data.obj.blk;
+    if (!blk) {
+        blk = (JsonObjBlock*)arena_alloc(a, sizeof(JsonObjBlock));
+        if (!blk) return 0;
+        blk->keys = NULL;
+        blk->key_lens = NULL;
+        blk->values = NULL;
+        obj->data.obj.blk = blk;
+    }
+
     const char** gk = (const char**)arena_grow(
-        a,
-        obj->data.obj.keys,
-        sizeof(const char*) * obj->data.obj.capacity,
+        a, blk->keys,
+        sizeof(const char*) * old_cap,
         sizeof(const char*) * new_cap);
     if (!gk) return 0;
 
     uint32_t* gl = (uint32_t*)arena_grow(
-        a,
-        obj->data.obj.key_lens,
-        sizeof(uint32_t) * obj->data.obj.capacity,
+        a, blk->key_lens,
+        sizeof(uint32_t) * old_cap,
         sizeof(uint32_t) * new_cap);
     if (!gl) return 0;
 
     JsonValue** gv = (JsonValue**)arena_grow(
-        a,
-        obj->data.obj.values,
-        sizeof(JsonValue*) * obj->data.obj.capacity,
+        a, blk->values,
+        sizeof(JsonValue*) * old_cap,
         sizeof(JsonValue*) * new_cap);
     if (!gv) return 0;
 
-    obj->data.obj.keys     = gk;
-    obj->data.obj.key_lens = gl;
-    obj->data.obj.values   = gv;
+    blk->keys     = gk;
+    blk->key_lens = gl;
+    blk->values   = gv;
     obj->data.obj.capacity = new_cap;
     return 1;
 }
@@ -1126,9 +1157,10 @@ static JsonValue* parse_object(Parser* s, int depth) {
             return NULL;
         }
         uint32_t idx = obj->data.obj.count++;
-        obj->data.obj.keys[idx] = key;
-        obj->data.obj.key_lens[idx] = key_len;
-        obj->data.obj.values[idx] = val;
+        JsonObjBlock* blk = obj->data.obj.blk;
+        blk->keys[idx] = key;
+        blk->key_lens[idx] = key_len;
+        blk->values[idx] = val;
 
         skip_whitespace(s);
         unsigned char c = p_peek(s);
@@ -1244,13 +1276,16 @@ const char* json_get_string_raw(JsonValue* v) {
 
 JsonValue* json_object_get_raw(JsonValue* obj, const char* key) {
     if (!obj || obj->type != JSON_OBJECT || !key) return NULL;
+    uint32_t n = obj->data.obj.count;
+    if (!n) return NULL;
     size_t klen = strlen(key);
     if (klen > UINT32_MAX) return NULL;
     uint32_t k32 = (uint32_t)klen;
-    for (uint32_t i = 0; i < obj->data.obj.count; i++) {
-        if (obj->data.obj.key_lens[i] == k32 &&
-            memcmp(obj->data.obj.keys[i], key, k32) == 0) {
-            return obj->data.obj.values[i];
+    const JsonObjBlock* blk = obj->data.obj.blk;
+    for (uint32_t i = 0; i < n; i++) {
+        if (blk->key_lens[i] == k32 &&
+            memcmp(blk->keys[i], key, k32) == 0) {
+            return blk->values[i];
         }
     }
     return NULL;
@@ -1335,24 +1370,28 @@ static JsonValue* deep_copy_into_arena(JsonValue* src, Arena* dst_arena) {
         case JSON_OBJECT: {
             uint32_t n = src->data.obj.count;
             if (n) {
+                JsonObjBlock* blk = (JsonObjBlock*)arena_alloc(
+                    dst_arena, sizeof(JsonObjBlock));
                 const char** keys = (const char**)arena_alloc(
                     dst_arena, sizeof(const char*) * n);
                 uint32_t* lens = (uint32_t*)arena_alloc(
                     dst_arena, sizeof(uint32_t) * n);
                 JsonValue** vals = (JsonValue**)arena_alloc(
                     dst_arena, sizeof(JsonValue*) * n);
-                if (!keys || !lens || !vals) return NULL;
+                if (!blk || !keys || !lens || !vals) return NULL;
+                const JsonObjBlock* src_blk = src->data.obj.blk;
                 for (uint32_t i = 0; i < n; i++) {
-                    uint32_t kl = src->data.obj.key_lens[i];
-                    keys[i] = arena_copy_str(dst_arena, src->data.obj.keys[i], kl);
+                    uint32_t kl = src_blk->key_lens[i];
+                    keys[i] = arena_copy_str(dst_arena, src_blk->keys[i], kl);
                     if (!keys[i]) return NULL;
                     lens[i] = kl;
-                    vals[i] = deep_copy_into_arena(src->data.obj.values[i], dst_arena);
+                    vals[i] = deep_copy_into_arena(src_blk->values[i], dst_arena);
                     if (!vals[i]) return NULL;
                 }
-                out->data.obj.keys = keys;
-                out->data.obj.key_lens = lens;
-                out->data.obj.values = vals;
+                blk->keys = keys;
+                blk->key_lens = lens;
+                blk->values = vals;
+                out->data.obj.blk = blk;
             }
             out->data.obj.count = n;
             out->data.obj.capacity = n;
@@ -1409,15 +1448,20 @@ static void heap_free_tree(JsonValue* v) {
             }
             free(v->data.arr.items);
             break;
-        case JSON_OBJECT:
-            for (uint32_t i = 0; i < v->data.obj.count; i++) {
-                free((void*)v->data.obj.keys[i]);
-                heap_free_tree(v->data.obj.values[i]);
+        case JSON_OBJECT: {
+            JsonObjBlock* blk = v->data.obj.blk;
+            if (blk) {
+                for (uint32_t i = 0; i < v->data.obj.count; i++) {
+                    free((void*)blk->keys[i]);
+                    heap_free_tree(blk->values[i]);
+                }
+                free(blk->keys);
+                free(blk->key_lens);
+                free(blk->values);
+                free(blk);
             }
-            free(v->data.obj.keys);
-            free(v->data.obj.key_lens);
-            free(v->data.obj.values);
             break;
+        }
         default:
             break;
     }
@@ -1453,13 +1497,16 @@ int json_object_set_raw(JsonValue* obj, const char* key, JsonValue* value) {
     if (!copy) return 0;
 
     // If the key already exists, replace the value pointer in place.
-    for (uint32_t i = 0; i < obj->data.obj.count; i++) {
-        if (obj->data.obj.key_lens[i] == k32 &&
-            memcmp(obj->data.obj.keys[i], key, k32) == 0) {
-            obj->data.obj.values[i] = copy;
-            if (value->arena) arena_destroy(value->arena);
-            else              heap_free_tree(value);
-            return 1;
+    JsonObjBlock* blk = obj->data.obj.blk;
+    if (blk) {
+        for (uint32_t i = 0; i < obj->data.obj.count; i++) {
+            if (blk->key_lens[i] == k32 &&
+                memcmp(blk->keys[i], key, k32) == 0) {
+                blk->values[i] = copy;
+                if (value->arena) arena_destroy(value->arena);
+                else              heap_free_tree(value);
+                return 1;
+            }
         }
     }
 
@@ -1469,9 +1516,10 @@ int json_object_set_raw(JsonValue* obj, const char* key, JsonValue* value) {
     if (!key_copy) return 0;
 
     uint32_t idx = obj->data.obj.count++;
-    obj->data.obj.keys[idx] = key_copy;
-    obj->data.obj.key_lens[idx] = k32;
-    obj->data.obj.values[idx] = copy;
+    blk = obj->data.obj.blk;  // re-read; obj_reserve may have just allocated it
+    blk->keys[idx] = key_copy;
+    blk->key_lens[idx] = k32;
+    blk->values[idx] = copy;
 
     if (value->arena) arena_destroy(value->arena);
     else              heap_free_tree(value);
@@ -1641,11 +1689,15 @@ static void sb_emit_array(StrBuf* b, JsonValue* v, int depth) {
 
 static void sb_emit_object(StrBuf* b, JsonValue* v, int depth) {
     sb_append_char(b, '{');
-    for (uint32_t i = 0; i < v->data.obj.count; i++) {
-        if (i) sb_append_char(b, ',');
-        sb_emit_string(b, v->data.obj.keys[i], v->data.obj.key_lens[i]);
-        sb_append_char(b, ':');
-        sb_emit_value(b, v->data.obj.values[i], depth + 1);
+    uint32_t n = v->data.obj.count;
+    if (n) {
+        const JsonObjBlock* blk = v->data.obj.blk;
+        for (uint32_t i = 0; i < n; i++) {
+            if (i) sb_append_char(b, ',');
+            sb_emit_string(b, blk->keys[i], blk->key_lens[i]);
+            sb_append_char(b, ':');
+            sb_emit_value(b, blk->values[i], depth + 1);
+        }
     }
     sb_append_char(b, '}');
 }

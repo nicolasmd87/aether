@@ -1,0 +1,13 @@
+// Exercises the [build] cflags from aether.toml. The adjacent shim.c
+// requires AE_CFLAGS_TEST_MARKER to be defined (via -D in cflags) or
+// the #error fires and the C compile fails.
+extern ae_cflags_probe_value() -> int
+
+main() {
+    v = ae_cflags_probe_value()
+    if v != 1 {
+        println("FAIL: probe value wrong")
+        exit(1)
+    }
+    println("OK")
+}

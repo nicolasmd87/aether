@@ -1,0 +1,9 @@
+// A reserved keyword (`message`) used as a parameter name — must fail
+// to compile, but with a helpful error that names the offending
+// keyword and suggests a rename.
+extern svnae_error_create(code: int, message: string) -> ptr
+
+main() {
+    p = svnae_error_create(1, "boom")
+    println("ok")
+}
