@@ -87,9 +87,17 @@ extern path_is_absolute(path: string) -> int
 extern fs_glob_raw(pattern: string) -> ptr
 extern fs_glob_multi_raw(patterns: ptr) -> ptr
 
-// string_concat used for duplicating borrowed strings.
+// string_concat used for duplicating borrowed strings. strlen-based —
+// do NOT use for binary payloads (it truncates at the first embedded
+// NUL). Length-aware reads use string_new_with_length.
 extern string_concat(a: string, b: string) -> string
 extern string_length(str: string) -> int
+
+// Length-preserving string constructor. Takes an explicit byte count
+// so binary payloads with embedded NULs survive the copy. Returns a
+// ref-counted AetherString with the exact byte content — consumers
+// reading up to `length` see the full file.
+extern string_new_with_length(data: string, length: int) -> ptr
 
 // ---- Go-style wrappers ----
 
@@ -296,9 +304,13 @@ file_stat(path: string) -> {
 // exact byte length. Returns (content, length, "") on success,
 // ("", 0, error) on failure.
 //
-// The returned string is a length-aware copy; the borrowed buffer
-// inside the runtime is released after the copy completes, so the
-// caller doesn't have to manage lifetime.
+// The returned string is a length-aware copy: `string.length(content)`
+// equals the returned `length` even when the payload contains NULs.
+// Under the hood the copy goes through `string_new_with_length`
+// rather than `string_concat`, which is strlen-based and would
+// silently truncate at the first embedded NUL. The TLS buffer inside
+// the runtime is released after the copy completes, so the caller
+// doesn't have to manage lifetime.
 read_binary(path: string) -> {
     ok = fs_try_read_binary(path)
     if ok == 0 {
@@ -306,12 +318,7 @@ read_binary(path: string) -> {
     }
     raw = fs_get_read_binary()
     n = fs_get_read_binary_length()
-    // Copy out of the TLS buffer before releasing so the returned
-    // string owns its bytes. string_concat("", raw) produces an
-    // Aether string whose data is a NUL-terminated copy; for
-    // payloads with embedded NULs, use the length we return here
-    // rather than string.length() on the result.
-    owned = string_concat(raw, "")
+    owned = string_new_with_length(raw, n)
     fs_release_read_binary()
     return owned, n, ""
 }

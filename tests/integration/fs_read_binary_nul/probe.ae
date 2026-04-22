@@ -1,0 +1,76 @@
+// Regression: fs.read_binary preserves embedded NUL bytes.
+//
+// The wrapper previously used string_concat("", raw) to copy the TLS
+// buffer's bytes into an owned Aether string — but string_concat is
+// strlen-based, so any byte stream with an embedded NUL got truncated
+// at the first zero byte. Reported length said 10, actual string had
+// 3 bytes.
+//
+// Fix: the wrapper now uses string_new_with_length(raw, n) which
+// takes an explicit byte count and memcpy's the full payload.
+
+import std.fs
+import std.string
+import std.io
+
+// Setup is in C — string literals can't hold NUL bytes, and fs.write
+// would strlen-truncate the payload on the write side (a separate
+// follow-on). The shim writes 10 bytes with byte[3] = 0x00.
+extern rb_probe_write_binary(path: string) -> int
+
+main() {
+    print("=== fs.read_binary with embedded NULs ===\n\n")
+
+    tmp = io.getenv("TMPDIR")
+    if tmp == 0 { tmp = io.getenv("TEMP") }
+    if tmp == 0 { tmp = "/tmp" }
+    path = "${tmp}/aether_rb_embedded_nul_test.bin"
+
+    print("Test 1: setup — write 10-byte file with NUL at offset 3\n")
+    ok = rb_probe_write_binary(path)
+    if ok != 1 {
+        print("  FAIL: shim failed to write file\n")
+        exit(1)
+    }
+    print("  PASS: file written\n")
+
+    print("\nTest 2: fs.read_binary reports length 10\n")
+    data, n, err = fs.read_binary(path)
+    if err != "" {
+        println("  FAIL: read failed: ${err}")
+        exit(1)
+    }
+    if n != 10 {
+        println("  FAIL: expected 10, got ${n}")
+        exit(1)
+    }
+    print("  PASS: length reported as 10\n")
+
+    print("\nTest 3: string.length on returned string matches reported length\n")
+    actual = string.length(data)
+    if actual != 10 {
+        println("  FAIL: string.length = ${actual}, expected 10 (strlen-truncation bug)")
+        exit(1)
+    }
+    print("  PASS: string is length-aware, not strlen-truncated\n")
+
+    print("\nTest 4: every byte preserved, including the NUL\n")
+    // File layout: 01 02 03 00 05 06 07 08 09 0A
+    if string.char_at(data, 0) != 1  { print("  FAIL [0]\n"); exit(1) }
+    if string.char_at(data, 1) != 2  { print("  FAIL [1]\n"); exit(1) }
+    if string.char_at(data, 2) != 3  { print("  FAIL [2]\n"); exit(1) }
+    if string.char_at(data, 3) != 0  { print("  FAIL [3] — embedded NUL lost\n"); exit(1) }
+    if string.char_at(data, 4) != 5  { print("  FAIL [4]\n"); exit(1) }
+    if string.char_at(data, 5) != 6  { print("  FAIL [5]\n"); exit(1) }
+    if string.char_at(data, 6) != 7  { print("  FAIL [6]\n"); exit(1) }
+    if string.char_at(data, 7) != 8  { print("  FAIL [7]\n"); exit(1) }
+    if string.char_at(data, 8) != 9  { print("  FAIL [8]\n"); exit(1) }
+    if string.char_at(data, 9) != 10 { print("  FAIL [9]\n"); exit(1) }
+    print("  PASS: all 10 bytes intact including byte[3]=0x00\n")
+
+    print("\nTest 5: cleanup\n")
+    fs.delete(path)
+    print("  PASS: file removed\n")
+
+    print("\n=== embedded-NUL read_binary test passed ===\n")
+}

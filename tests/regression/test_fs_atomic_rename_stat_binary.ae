@@ -165,7 +165,12 @@ main() {
         println("  FAIL: expected length 10, got ${n}")
         exit(1)
     }
-    if data != "0123456789" {
+    // fs.read_binary returns a length-aware AetherString (via
+    // string_new_with_length). Direct `data != "literal"` compiles to
+    // strcmp over a void*, which reads past the AetherString's header
+    // and finds garbage — use string.equals so the comparison runs
+    // through the str_data/str_len-aware path.
+    if string.equals(data, "0123456789") != 1 {
         println("  FAIL: content mismatch, got '${data}'")
         exit(1)
     }
@@ -185,7 +190,7 @@ main() {
         println("  FAIL: empty file length should be 0, got ${n_e}")
         exit(1)
     }
-    if data_e != "" {
+    if string.equals(data_e, "") != 1 {
         println("  FAIL: empty file should produce empty string")
         exit(1)
     }
