@@ -6,6 +6,7 @@
 
 typedef struct ArrayList ArrayList;
 typedef struct HashMap HashMap;
+typedef struct IntArray IntArray;
 
 ArrayList* list_new();
 int list_add_raw(ArrayList* list, void* item);
@@ -41,5 +42,59 @@ typedef struct {
 // a Go-style `(keys, err)` tuple.
 MapKeys* map_keys_raw(HashMap* map);
 void map_keys_free(MapKeys* keys);
+
+// -------------------------------------------------------------------
+// IntArray — fixed-size packed int buffer with O(1) random access.
+//
+// The std.list wrappers store `void*` items, so packing ints costs a
+// boxing allocation per entry. For DP tables (blame LCS, edit-distance,
+// etc.) and other hot loops doing flat int-keyed lookup, IntArray is
+// the simpler, faster tool: heap-allocated `int[size]`, direct access.
+//
+// Size is fixed at allocation — no amortised growth, no over-capacity.
+// Callers that need a growing buffer reach for std.list. Callers that
+// need a multi-dimensional access pattern (M rows × N cols) compute
+// `row * N + col` themselves; IntArray is flat.
+//
+// Bounds checking: intarr_set and intarr_get both check and return
+// safely on out-of-range (set is a no-op, get returns 0). The `_unchecked`
+// variants skip the check for hot loops that have already validated
+// the index — use them sparingly.
+// -------------------------------------------------------------------
+
+// Allocate an IntArray of `size` elements, zero-initialised. Returns
+// NULL if size is negative or allocation failed. Name is `_raw` so the
+// Aether-side wrapper can be named `intarr.new` without colliding with
+// this extern's mangled C name.
+IntArray* intarr_new_raw(int size);
+
+// Allocate and fill with `init` at every index. Same failure modes as
+// intarr_new_raw.
+IntArray* intarr_new_filled_raw(int size, int init);
+
+// Number of elements. Returns -1 if `arr` is NULL — distinguishable
+// from a legal empty array (size 0).
+int intarr_size(IntArray* arr);
+
+// Read the value at `i`. Returns 0 if `arr` is NULL or `i` is
+// out-of-range. Aether wrapper `intarr.get` turns these into Go-style
+// `(value, err)` returns.
+int intarr_get_raw(IntArray* arr, int i);
+
+// Write `value` at `i`. No-op if `arr` is NULL or `i` is out-of-range.
+void intarr_set_raw(IntArray* arr, int i, int value);
+
+// Hot-path skip-the-bounds-check variants. Caller is responsible for
+// keeping the index in [0, size). Out-of-range access is undefined
+// behaviour. Used for inner loops in DP table walks.
+int  intarr_get_unchecked(IntArray* arr, int i);
+void intarr_set_unchecked(IntArray* arr, int i, int value);
+
+// Fill every element with `value`. Useful for resetting a DP table
+// between problem instances without reallocating.
+void intarr_fill(IntArray* arr, int value);
+
+// Release the backing buffer and the struct. Idempotent on NULL.
+void intarr_free(IntArray* arr);
 
 #endif

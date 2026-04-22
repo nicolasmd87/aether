@@ -116,6 +116,51 @@ main() {
 
 Raw extern: `map_put_raw` (returns 1/0).
 
+### Fixed-size int array (`std.intarr`)
+
+Packed int buffer with O(1) random access. For DP tables, flat
+int-keyed lookup, and other hot paths where `std.list`'s `void*`-boxed
+items cost an allocation per entry. Size is fixed at allocation —
+callers that need growth use `std.list`.
+
+```aether
+import std.intarr
+
+main() {
+    // Blame LCS DP table: M rows * N cols, flat buffer.
+    rows = 100
+    cols = 50
+    dp, err = intarr.new(rows * cols)
+    if err != "" { return }
+
+    // Hot loop — _unchecked skips the bounds check (valid index required).
+    r = 0
+    while r < rows {
+        c = 0
+        while c < cols {
+            intarr_set_unchecked(dp, r * cols + c, r + c)
+            c = c + 1
+        }
+        r = r + 1
+    }
+
+    intarr_free(dp)
+}
+```
+
+**Functions:**
+- `intarr.new(size)` → `(ptr, string)` - Allocate zero-initialised array
+- `intarr.new_filled(size, init)` → `(ptr, string)` - Allocate with every slot set to `init`
+- `intarr.get(arr, i)` → `(int, string)` - Bounds-checked read
+- `intarr.set(arr, i, value)` → `string` - Bounds-checked write
+- `intarr_size(arr)` → `int` - Returns -1 for null
+- `intarr_fill(arr, value)` - Reset every slot to `value`
+- `intarr_free(arr)` - Release
+
+**Hot-path (caller-validated) variants, no bounds check:**
+- `intarr_get_raw(arr, i)` / `intarr_set_raw(arr, i, v)` - Safe on OOB (returns 0 / no-op), no error report
+- `intarr_get_unchecked(arr, i)` / `intarr_set_unchecked(arr, i, v)` - Undefined behaviour on OOB, for inner loops
+
 ---
 
 ## Strings (`std.string`)
