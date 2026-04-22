@@ -59,6 +59,38 @@ JsonValue* json_object_get_raw(JsonValue* obj, const char* key);
 int json_object_set_raw(JsonValue* obj, const char* key, JsonValue* value);
 int json_object_has(JsonValue* obj, const char* key);
 
+// Object-key iteration. Keys are yielded in insertion order: the order
+// they appeared in the parsed JSON, and the order `json_object_set_raw`
+// was called on builder-constructed objects. Mutating the object during
+// iteration is not supported — the observed order is undefined and
+// entries may be skipped or revisited. Indices are valid in [0, size).
+
+// Number of entries in the object. Returns -1 if `obj` is not a
+// JSON_OBJECT — distinguishable from "empty object" (returns 0).
+// Named `_raw` for consistency with the other object accessors, and
+// so the Aether-side wrapper `object_size` doesn't collide with it
+// after module-prefix mangling.
+int json_object_size_raw(JsonValue* obj);
+
+// Key at index `i` — a borrowed, NUL-terminated pointer into the
+// object's internal storage, valid until json_free(root) is called.
+// Returns NULL if `obj` is not a JSON_OBJECT or `i` is out of range.
+// Keys are NUL-terminated even for inputs parsed via json_parse_raw_n
+// (the parser arena-copies each key and writes a trailing '\0').
+const char* json_object_key_at(JsonValue* obj, int i);
+
+// Length of the key at index `i`, matching json_object_key_at(obj, i).
+// Returns -1 if `obj` is not a JSON_OBJECT or `i` is out of range.
+// Useful for callers that want to avoid an extra strlen; JSON per
+// RFC 8259 disallows embedded NULs in keys, so strlen is also correct.
+int json_object_key_len_at(JsonValue* obj, int i);
+
+// Value at index `i` — borrowed from the object. Returns NULL only
+// when `obj` is not a JSON_OBJECT or `i` is out of range. A valid
+// entry whose value is a JSON null still returns a non-NULL JsonValue*;
+// use json_is_null() to distinguish that from the out-of-range NULL.
+JsonValue* json_object_value_at(JsonValue* obj, int i);
+
 JsonValue* json_array_get_raw(JsonValue* arr, int index);
 // Returns 1 on success, 0 if `arr` is not a JSON_ARRAY, null value,
 // or allocation failure. Ownership of `value` transfers to the array.

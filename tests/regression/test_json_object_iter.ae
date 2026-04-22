@@ -1,0 +1,200 @@
+// Regression: object-key iteration.
+//
+// std.json exposes object_get / object_has / object_set but nothing
+// that enumerates the keys of an object — painful when the keys are
+// user data (prop maps, path-keyed dicts, headers, etc.). This test
+// pins the new accessors:
+//
+//   object_size(obj)         -> int
+//   object_entry(obj, i)     -> (key, value, err)
+//
+// Iteration order is insertion order; out-of-range and non-object
+// yield the documented error shapes.
+
+import std.json
+import std.string
+
+main() {
+    print("=== JSON object-key iteration ===\n\n")
+
+    // ---- Test 1: empty object ------------------------------------
+
+    print("Test 1: empty object\n")
+    j_empty, _ = json.parse("{}")
+    n_empty = json.object_size(j_empty)
+    if n_empty != 0 {
+        println("  FAIL: empty object_size should be 0, got ${n_empty}")
+        exit(1)
+    }
+    _, _, err_oob_empty = json.object_entry(j_empty, 0)
+    if err_oob_empty == "" {
+        print("  FAIL: object_entry(empty, 0) must signal out-of-range\n")
+        exit(1)
+    }
+    print("  PASS: empty object has size 0 and out-of-range at index 0\n")
+
+    // ---- Test 2: single key --------------------------------------
+
+    print("\nTest 2: single key\n")
+    j_one, _ = json.parse("{\"only\": 42}")
+    if json.object_size(j_one) != 1 {
+        print("  FAIL: single-key object_size must be 1\n")
+        exit(1)
+    }
+    k0, v0, e0 = json.object_entry(j_one, 0)
+    if e0 != "" {
+        println("  FAIL: object_entry(j_one, 0) returned err: ${e0}")
+        exit(1)
+    }
+    if k0 != "only" {
+        println("  FAIL: expected key 'only', got '${k0}'")
+        exit(1)
+    }
+    if json.get_int(v0) != 42 {
+        print("  FAIL: value at key 'only' should be 42\n")
+        exit(1)
+    }
+    print("  PASS: single key round-trips\n")
+
+    // ---- Test 3: insertion order preserved through parse ---------
+
+    print("\nTest 3: parsed object preserves key order\n")
+    j_ord, _ = json.parse("{\"b\": 1, \"a\": 2, \"c\": 3}")
+    if json.object_size(j_ord) != 3 {
+        print("  FAIL: parsed 3-key object_size\n")
+        exit(1)
+    }
+    keys_parsed = ""
+    i = 0
+    while i < 3 {
+        kk, _, _ = json.object_entry(j_ord, i)
+        keys_parsed = string_concat(keys_parsed, kk)
+        i = i + 1
+    }
+    if keys_parsed != "bac" {
+        println("  FAIL: parsed key order should be 'bac', got '${keys_parsed}'")
+        exit(1)
+    }
+    print("  PASS: parsed order = 'bac' (insertion, NOT sorted)\n")
+
+    // ---- Test 4: insertion order preserved through builder -------
+
+    print("\nTest 4: built object preserves key order\n")
+    j_built = json.create_object()
+    json.object_set(j_built, "x", json.create_number(1.0))
+    json.object_set(j_built, "y", json.create_number(2.0))
+    json.object_set(j_built, "z", json.create_number(3.0))
+    keys_built = ""
+    i2 = 0
+    while i2 < json.object_size(j_built) {
+        kb, _, _ = json.object_entry(j_built, i2)
+        keys_built = string_concat(keys_built, kb)
+        i2 = i2 + 1
+    }
+    if keys_built != "xyz" {
+        println("  FAIL: built key order should be 'xyz', got '${keys_built}'")
+        exit(1)
+    }
+    print("  PASS: built order = 'xyz'\n")
+
+    // ---- Test 5: negative index signals out-of-range -------------
+
+    print("\nTest 5: negative index\n")
+    _, _, err_neg = json.object_entry(j_ord, -1)
+    if err_neg == "" {
+        print("  FAIL: object_entry(_, -1) must signal an error\n")
+        exit(1)
+    }
+    print("  PASS: negative index yields error\n")
+
+    // ---- Test 6: out-of-range positive index ---------------------
+
+    print("\nTest 6: positive OOB index\n")
+    _, _, err_oob = json.object_entry(j_ord, 99)
+    if err_oob == "" {
+        print("  FAIL: object_entry(_, 99) must signal an error\n")
+        exit(1)
+    }
+    print("  PASS: too-large index yields error\n")
+
+    // ---- Test 7: object_size on a non-object -> -1 --------------
+
+    print("\nTest 7: non-object returns -1\n")
+    j_arr, _ = json.parse("[1,2,3]")
+    if json.object_size(j_arr) != -1 {
+        print("  FAIL: object_size on an array should be -1\n")
+        exit(1)
+    }
+    _, _, err_notobj = json.object_entry(j_arr, 0)
+    if err_notobj == "" {
+        print("  FAIL: object_entry on an array must signal error\n")
+        exit(1)
+    }
+    print("  PASS: non-object rejected cleanly\n")
+
+    // ---- Test 8: nested — outer values are themselves objects ----
+
+    print("\nTest 8: nested object iteration\n")
+    j_nest, _ = json.parse("{\"outer\": {\"a\": 1, \"b\": 2}, \"other\": {\"c\": 3}}")
+    // Find "outer" via iteration (not object_get, which would bypass the new API).
+    nested_val = null
+    i5 = 0
+    while i5 < json.object_size(j_nest) {
+        kn, vn, _ = json.object_entry(j_nest, i5)
+        if kn == "outer" {
+            nested_val = vn
+        }
+        i5 = i5 + 1
+    }
+    if nested_val == null {
+        print("  FAIL: iteration didn't find 'outer'\n")
+        exit(1)
+    }
+    if json.object_size(nested_val) != 2 {
+        print("  FAIL: nested object size\n")
+        exit(1)
+    }
+    k_a, v_a, _ = json.object_entry(nested_val, 0)
+    if k_a != "a" {
+        println("  FAIL: nested[0] key should be 'a', got '${k_a}'")
+        exit(1)
+    }
+    if json.get_int(v_a) != 1 {
+        print("  FAIL: nested[0] value should be 1\n")
+        exit(1)
+    }
+    print("  PASS: nested objects iterate cleanly\n")
+
+    // ---- Test 9: stress — 32 keys through builder + iterate ------
+
+    print("\nTest 9: 32-key stress (builder path, exercises obj_reserve growth)\n")
+    j_big = json.create_object()
+    i3 = 0
+    while i3 < 32 {
+        // Key is "k${i3}" — string interpolation builds the owned string.
+        k = "k${i3}"
+        json.object_set(j_big, k, json.create_number(i3))
+        i3 = i3 + 1
+    }
+    if json.object_size(j_big) != 32 {
+        print("  FAIL: 32-key build: object_size\n")
+        exit(1)
+    }
+    i4 = 0
+    while i4 < 32 {
+        expected_key = "k${i4}"
+        kx, vx, _ = json.object_entry(j_big, i4)
+        if kx != expected_key {
+            println("  FAIL: index ${i4} key should be '${expected_key}', got '${kx}'")
+            exit(1)
+        }
+        if json.get_int(vx) != i4 {
+            println("  FAIL: value at index ${i4} should be ${i4}")
+            exit(1)
+        }
+        i4 = i4 + 1
+    }
+    print("  PASS: 32 keys iterated, insertion-order preserved, values intact\n")
+
+    print("\n=== All object-iteration tests passed ===\n")
+}

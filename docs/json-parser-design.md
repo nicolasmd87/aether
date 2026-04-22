@@ -266,6 +266,16 @@ common case; tiny objects waste a few unused pointers which round-off
 into the arena anyway. Old buffers become arena garbage until the arena
 is freed — waste is bounded by `O(final size)` per container.
 
+**Iteration order.** The parallel-array layout means objects iterate
+in insertion order by construction — the parser appends to the tail as
+it reads each `key: value` pair, and the builder's `json_object_set_raw`
+does the same on first insert. The public iteration API
+(`json_object_size_raw` / `json_object_key_at` / `json_object_value_at`,
+and the Aether-side `object_entry(obj, i)` wrapper) commits to this
+order: parsed JSON iterates in the order keys appeared in the source,
+built JSON iterates in the order `object_set` was called. Callers that
+need sorted iteration copy the keys and sort.
+
 ## JsonValue sizing
 
 ```c

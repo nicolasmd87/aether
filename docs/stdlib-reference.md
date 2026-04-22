@@ -472,6 +472,10 @@ Raw extern: `json_parse_raw`.
 - `json.object_get(obj, key)` - Get value by key (key is a raw string)
 - `json.object_set(obj, key, value)` - Set key-value pair
 - `json.object_has(obj, key)` - Check if key exists (returns 1/0)
+- `json.object_size(obj)` - Number of entries (`0` for empty, `-1` if not an object)
+- `json.object_entry(obj, i)` - `(key, value, err)` for the i-th entry; keys
+  are yielded in insertion order (same as parsed input; same as the order
+  `object_set` was called). Mutating `obj` during iteration is not supported.
 
 **Array Operations:**
 - `json.array_get(arr, index)` - Get value at index

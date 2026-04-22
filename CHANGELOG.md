@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`std.json` object-key iteration** (`std/json/aether_json.h`, `std/json/aether_json.c`, `std/json/module.ae`). Four new C accessors — `json_object_size_raw`, `json_object_key_at`, `json_object_key_len_at`, `json_object_value_at` — expose the parallel-array storage that `JsonObjBlock` already keeps. Two Aether wrappers — `json.object_size(obj)` and `json.object_entry(obj, i)` with Go-style `(key, value, err)` return — cover the common loop case. Iteration order is insertion order across both parse and builder paths (documented explicitly in `docs/json-parser-design.md`). Fills a gap vs. every other general-purpose JSON library (cJSON, nlohmann::json, serde_json, Python `json`) so callers can enumerate prop maps, path-keyed dicts, headers, and other JSON where the keys themselves are user data. Regression test: `tests/regression/test_json_object_iter.ae` — empty object, single key, parse-order preservation, builder-order preservation, negative/OOB index, non-object rejection, nested iteration, 32-key stress through `obj_reserve`'s growth path.
+
 ## [0.78.0]
 
 ### Changed

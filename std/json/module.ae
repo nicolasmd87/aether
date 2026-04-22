@@ -33,6 +33,9 @@ extern json_get_string_raw(value: ptr) -> string
 extern json_object_get_raw(obj: ptr, key: string) -> ptr
 extern json_object_set_raw(obj: ptr, key: string, value: ptr) -> int
 extern json_object_has(obj: ptr, key: string) -> int
+extern json_object_size_raw(obj: ptr) -> int
+extern json_object_key_at(obj: ptr, i: int) -> string
+extern json_object_value_at(obj: ptr, i: int) -> ptr
 
 // ---- array operations (raw externs) ----
 extern json_array_get_raw(arr: ptr, index: int) -> ptr
@@ -113,6 +116,41 @@ object_set(obj: ptr, key: string, value: ptr) -> {
         return "not an object"
     }
     return ""
+}
+
+// Number of entries in a JSON object.
+// Returns 0 for an empty object, -1 if `obj` is not a JSON_OBJECT.
+object_size(obj: ptr) -> int {
+    return json_object_size_raw(obj)
+}
+
+// Read the (key, value) pair at index `i` in iteration order. Keys
+// are yielded in insertion order — the order they appeared in parsed
+// JSON input, or the order `object_set` was called for a built object.
+//
+// - (key, value, "")                  : index in range
+// - ("", null, "index out of range")  : i < 0 or i >= object_size(obj)
+// - ("", null, "not an object")       : `obj` is not a JSON_OBJECT
+//
+// The key is an owned string; the value is borrowed from `obj` and
+// must not be json.free'd separately, nor used after `obj` is freed.
+// Mutating `obj` during iteration is not supported: order becomes
+// unpredictable and entries may be skipped or revisited.
+object_entry(obj: ptr, i: int) -> {
+    if json_type(obj) != 5 {
+        return "", null, "not an object"
+    }
+    n = json_object_size_raw(obj)
+    if i < 0 {
+        return "", null, "index out of range"
+    }
+    if i >= n {
+        return "", null, "index out of range"
+    }
+    raw_key = json_object_key_at(obj, i)
+    owned_key = string_concat(raw_key, "")
+    v = json_object_value_at(obj, i)
+    return owned_key, v, ""
 }
 
 // Index into a JSON array.
