@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`std.fs.write_binary(path, data, length) -> string`** (`std/fs/module.ae`, `std/fs/aether_fs.c`, `std/fs/aether_fs.h`). Non-atomic binary write — `fopen("wb")` + `fwrite(length bytes)` + `fclose`. Completes the binary-safe I/O pair with `fs.read_binary` (v0.82.0): caller passes an explicit byte length, so payloads with embedded NULs survive the write. Cheaper than `fs.write_atomic` when a partial file on crash is acceptable (scratch writes, caches, any destination not load-bearing for another process). Regression test: `tests/integration/fs_write_binary_nul/` — seeds a 10-byte file with NUL at offset 3 via a C shim, reads it via `fs.read_binary`, writes it back via `fs.write_binary`, reads it a second time, and verifies every byte round-trips.
+
+### Fixed
+
+- **AetherString payloads now survive `fs.write_atomic` and `fs.write_binary`** (`std/fs/aether_fs.c`). Both extern impls took `const char* data` and passed it straight to `fwrite`, but callers hand in whatever pointer the Aether variable holds — which for `fs.read_binary`'s return value (and anything built via `string_new_with_length`) is an `AetherString*` struct pointer, not the payload. The first 40 bytes written to disk were the AetherString header (magic `0xAE57C0DE`, refcount, length, capacity, data-ptr), not the intended bytes. `fs.write_atomic` carried this latent bug since v0.82.0 — existing callers masked it by passing string literals (plain `char*`), which happen to point at the data directly, so the test suite didn't catch it. Fixed by adding a shared `fs_unwrap_bytes(data, length, &out_len)` helper that dispatches on `is_aether_string()` and unwraps when needed. Regression test covers both `write_binary` and `write_atomic` with a 10-byte NUL-embedded payload whose round-trip exposes the header-leak.
+
 ## [0.85.0]
 
 ### Fixed
