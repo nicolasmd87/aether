@@ -987,7 +987,15 @@ static void get_extra_sources_for_bin(const char* ae_file, char* out, size_t out
     FILE* f = fopen("aether.toml", "r");
     if (!f) return;
 
-    char line[1024];
+    // 1 KiB was too small for projects with many extra_sources on one
+    // logical line: `extra_sources = ["a.c", "b.c", ..., "zz.c"]`. fgets
+    // silently truncates at the buffer boundary, dropping the tail of
+    // the array and producing link errors for the omitted shims — no
+    // warning, just "undefined reference to ..." at link time. 8 KiB
+    // fits ~250 comma-separated filenames of average length; projects
+    // hitting even that limit should switch to multi-line TOML arrays
+    // (tracked separately — parser still only handles single-line).
+    char line[8192];
     int in_bin = 0;
     int matched = 0;
 
