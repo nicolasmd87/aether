@@ -1,0 +1,102 @@
+// contrib.sqlite — thin SQLite veneer for Aether.
+// Import with: import contrib.sqlite
+//
+// v1 surface:
+//   sqlite.open(path)           -> (db,   err)
+//   sqlite.close(db)            -> err
+//   sqlite.exec(db, sql)        -> err                   // DDL + no-row DML
+//   sqlite.query(db, sql)       -> (rs,   err)           // materialised result set
+//
+//   sqlite.row_count(rs)        -> int
+//   sqlite.col_count(rs)        -> int
+//   sqlite.col_name(rs, i)      -> string
+//   sqlite.cell(rs, row, col)   -> string     // "" if the DB stored NULL
+//   sqlite.free(rs)             -> void
+//
+// Parameter binding (?1, :name, etc.) is deliberately out of scope
+// for v1 — see docs/stdlib-vs-contrib.md for the "one obvious shape"
+// criterion. Users who need it can wait for an additive API or drop
+// down to sqlite3_prepare_v2 / bind / step via extern themselves.
+//
+// Build:
+//   - Drop `contrib/sqlite/aether_sqlite.c` into your project's
+//     aether.toml [[bin]] `extra_sources`, OR pass `--extra` on the
+//     command line.
+//   - Add `[build] link_flags = "-lsqlite3"` to your aether.toml so
+//     the system libsqlite3 is linked.
+//   - If the system doesn't have libsqlite3, the link step fails —
+//     this module doesn't provide a runtime "sqlite unavailable"
+//     fallback because SQLite isn't auto-detected by the Aether
+//     toolchain the way OpenSSL and zlib are. The test harness
+//     probes `sqlite.open(":memory:")` and skips gracefully when the
+//     symbol table is empty (unlikely at runtime — a link failure
+//     stops the build), which covers the CI matrix.
+
+// ---- Raw externs ----
+extern sqlite_open_raw(path: string) -> ptr
+extern sqlite_close_raw(db: ptr) -> int
+// Returns NULL on success, an owned error string on failure.
+extern sqlite_exec_raw(db: ptr, sql: string) -> string
+// Returns a ResultSet ptr on success, NULL on failure.
+extern sqlite_query_raw(db: ptr, sql: string) -> ptr
+extern sqlite_rs_row_count(rs: ptr) -> int
+extern sqlite_rs_col_count(rs: ptr) -> int
+extern sqlite_rs_col_name(rs: ptr, idx: int) -> string
+extern sqlite_rs_cell(rs: ptr, row: int, col: int) -> string
+extern sqlite_rs_free(rs: ptr)
+
+// ---- Go-style wrappers ----
+
+// Open a database at `path`. Use ":memory:" for an in-RAM database.
+// Creates the file if it doesn't exist. Returns (db, "") on success,
+// (null, "cannot open database") on failure.
+open(path: string) -> {
+    db = sqlite_open_raw(path)
+    if db == null {
+        return null, "cannot open database"
+    }
+    return db, ""
+}
+
+// Close the database handle. Returns "" on success, error on failure
+// (e.g. if a result set was leaked and still holds a statement).
+close(db: ptr) -> string {
+    ok = sqlite_close_raw(db)
+    if ok == 0 {
+        return "sqlite close failed"
+    }
+    return ""
+}
+
+// Execute a statement that returns no rows (CREATE TABLE, INSERT,
+// UPDATE, DELETE, PRAGMA, ...). Returns "" on success, the sqlite
+// error text on failure.
+exec(db: ptr, sql: string) -> string {
+    err = sqlite_exec_raw(db, sql)
+    if err == null {
+        return ""
+    }
+    return err
+}
+
+// Execute a statement that returns rows (SELECT, WITH). Returns
+// (rs, "") on success, (null, error) on failure. Caller MUST free
+// the returned result set with sqlite.free(rs).
+query(db: ptr, sql: string) -> {
+    rs = sqlite_query_raw(db, sql)
+    if rs == null {
+        return null, "sqlite query failed"
+    }
+    return rs, ""
+}
+
+// Result-set accessors. These are thin aliases over the raw externs
+// with the same names minus the `_rs` infix, so callers can treat
+// sqlite.row_count(rs) as the natural idiomatic form.
+row_count(rs: ptr) -> int { return sqlite_rs_row_count(rs) }
+col_count(rs: ptr) -> int { return sqlite_rs_col_count(rs) }
+col_name(rs: ptr, idx: int) -> string { return sqlite_rs_col_name(rs, idx) }
+cell(rs: ptr, row: int, col: int) -> string { return sqlite_rs_cell(rs, row, col) }
+
+// Free the result set. Safe to call on a null pointer (no-op).
+free(rs: ptr) { sqlite_rs_free(rs) }
