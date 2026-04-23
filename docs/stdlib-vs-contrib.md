@@ -29,7 +29,7 @@ any one is "no", it belongs in `contrib/`.
 
 3. **Are the dependencies minimal and well-scoped?** A `std/` module
    adds to the baseline cost of building Aether. `OpenSSL` is already a
-   dependency (we link `-lssl -lcrypto`), so `std.crypto` is free.
+   dependency (we link `-lssl -lcrypto`), so `std.cryptography` is free.
    `zlib` is similarly ambient on every POSIX box. `SQLite` is a
    4 MiB amalgamation — significant weight for projects that don't
    need it.
@@ -43,7 +43,7 @@ any one is "no", it belongs in `contrib/`.
 
 ## Applied: Zero-C LOC plan
 
-### `std.crypto.sha1` / `std.crypto.sha256` — **std/**
+### `std.cryptography.sha1` / `std.cryptography.sha256` — **std/**
 
 1. Every serious stdlib has hashing. (yes)
 2. One obvious shape: `crypto.sha256(bytes, length) -> string` returning
@@ -54,7 +54,7 @@ any one is "no", it belongs in `contrib/`.
 4. The API is a pure function: `bytes in, hex digest out`. No state,
    no configuration, no lifecycle. (yes)
 
-Lands in `std/crypto/module.ae` and `std/crypto/aether_crypto.c`.
+Lands in `std/cryptography/module.ae` and `std/cryptography/aether_cryptography.c`.
 
 ### `std.zlib` — **std/**
 
