@@ -1,0 +1,138 @@
+#include "aether_zlib.h"
+#include "../string/aether_string.h"
+
+#include <stdlib.h>
+#include <string.h>
+
+#ifdef AETHER_HAS_ZLIB
+#include <zlib.h>
+#endif
+
+/* Unwrap the payload from a `data` argument that may be either an
+ * AetherString* or a plain char*. Mirrors the helper in
+ * std/fs/aether_fs.c and std/cryptography/aether_cryptography.c —
+ * without this dispatch a length-aware AetherString from
+ * fs.read_binary would leak its struct header into the stream. */
+static inline const unsigned char* zlib_unwrap_bytes(const char* data, int length, size_t* out_len) {
+    if (!data) { *out_len = 0; return NULL; }
+    if (is_aether_string(data)) {
+        const AetherString* s = (const AetherString*)data;
+        *out_len = (length >= 0) ? (size_t)length : s->length;
+        return (const unsigned char*)s->data;
+    }
+    *out_len = (length >= 0) ? (size_t)length : strlen(data);
+    return (const unsigned char*)data;
+}
+
+/* Thread-local buffers for the split-accessor pattern. One pair per
+ * direction so a caller can interleave deflate + inflate without the
+ * two fighting over a single slot. */
+static _Thread_local unsigned char* tls_deflate_buf = NULL;
+static _Thread_local int            tls_deflate_len = 0;
+static _Thread_local unsigned char* tls_inflate_buf = NULL;
+static _Thread_local int            tls_inflate_len = 0;
+
+static void free_deflate_tls(void) {
+    if (tls_deflate_buf) { free(tls_deflate_buf); tls_deflate_buf = NULL; }
+    tls_deflate_len = 0;
+}
+static void free_inflate_tls(void) {
+    if (tls_inflate_buf) { free(tls_inflate_buf); tls_inflate_buf = NULL; }
+    tls_inflate_len = 0;
+}
+
+#ifdef AETHER_HAS_ZLIB
+
+int zlib_try_deflate(const char* data, int length, int level) {
+    free_deflate_tls();  /* drop any leftover from a previous call */
+    if (length < 0) return 0;
+
+    size_t in_len;
+    const unsigned char* in = zlib_unwrap_bytes(data, length, &in_len);
+    if (in_len > 0 && !in) return 0;
+
+    uLongf bound = compressBound((uLong)in_len);
+    unsigned char* out = (unsigned char*)malloc(bound > 0 ? bound : 1);
+    if (!out) return 0;
+
+    uLongf out_size = bound;
+    int lvl = (level < -1 || level > 9) ? Z_DEFAULT_COMPRESSION : level;
+    int rc = compress2(out, &out_size, in, (uLong)in_len, lvl);
+    if (rc != Z_OK) { free(out); return 0; }
+
+    tls_deflate_buf = out;
+    tls_deflate_len = (int)out_size;
+    return 1;
+}
+
+int zlib_try_inflate(const char* data, int length) {
+    free_inflate_tls();
+    if (length < 0) return 0;
+
+    size_t in_len;
+    const unsigned char* in = zlib_unwrap_bytes(data, length, &in_len);
+    if (in_len == 0) return 0;  /* empty isn't a valid zlib stream */
+    if (!in) return 0;
+
+    z_stream strm;
+    memset(&strm, 0, sizeof(strm));
+    strm.next_in = (Bytef*)in;
+    strm.avail_in = (uInt)in_len;
+
+    if (inflateInit(&strm) != Z_OK) return 0;
+
+    /* 4x the input as a first-cut output guess. Most deflate streams
+     * fit in 2-8x their compressed size; grow geometrically if not. */
+    size_t cap = in_len * 4;
+    if (cap < 64) cap = 64;
+    unsigned char* out = (unsigned char*)malloc(cap);
+    if (!out) { inflateEnd(&strm); return 0; }
+
+    size_t produced = 0;
+    for (;;) {
+        strm.next_out = out + produced;
+        strm.avail_out = (uInt)(cap - produced);
+
+        int rc = inflate(&strm, Z_NO_FLUSH);
+        produced = cap - strm.avail_out;
+
+        if (rc == Z_STREAM_END) break;
+        if (rc != Z_OK) { free(out); inflateEnd(&strm); return 0; }
+        if (strm.avail_out == 0) {
+            size_t new_cap = cap * 2;
+            if (new_cap < cap) { free(out); inflateEnd(&strm); return 0; }
+            unsigned char* bigger = (unsigned char*)realloc(out, new_cap);
+            if (!bigger) { free(out); inflateEnd(&strm); return 0; }
+            out = bigger;
+            cap = new_cap;
+        }
+    }
+    inflateEnd(&strm);
+
+    tls_inflate_buf = out;
+    tls_inflate_len = (int)produced;
+    return 1;
+}
+
+#else /* !AETHER_HAS_ZLIB */
+
+int zlib_try_deflate(const char* data, int length, int level) {
+    (void)data; (void)length; (void)level; return 0;
+}
+int zlib_try_inflate(const char* data, int length) {
+    (void)data; (void)length; return 0;
+}
+
+#endif /* AETHER_HAS_ZLIB */
+
+const char* zlib_get_deflate_bytes(void) {
+    return (const char*)(tls_deflate_buf ? tls_deflate_buf : (unsigned char*)"");
+}
+int zlib_get_deflate_length(void) { return tls_deflate_len; }
+void zlib_release_deflate(void)   { free_deflate_tls(); }
+
+const char* zlib_get_inflate_bytes(void) {
+    return (const char*)(tls_inflate_buf ? tls_inflate_buf : (unsigned char*)"");
+}
+int zlib_get_inflate_length(void) { return tls_inflate_len; }
+void zlib_release_inflate(void)   { free_inflate_tls(); }

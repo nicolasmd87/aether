@@ -1169,6 +1169,15 @@ static void build_gcc_cmd(char* cmd, size_t size,
     const char* openssl_libs = "";
 #endif
 
+    // Same story for zlib — used by std.zlib.deflate/inflate. Empty
+    // when zlib wasn't detected; std.zlib wrappers then report
+    // "zlib unavailable" at runtime.
+#ifdef AETHER_ZLIB_LIBS
+    const char* zlib_libs = AETHER_ZLIB_LIBS;
+#else
+    const char* zlib_libs = "";
+#endif
+
     if (tc.has_lib) {
         char lib_dir[1024];
         strncpy(lib_dir, tc.lib, sizeof(lib_dir) - 1);
@@ -1177,12 +1186,12 @@ static void build_gcc_cmd(char* cmd, size_t size,
         if (slash) *slash = '\0';
 
         snprintf(cmd, size,
-            "gcc %s %s \"%s\"%s %s -L%s -laether -o \"%s\" -pthread -lm %s %s",
-            opt, tc.include_flags, c_file, config_c, extra, lib_dir, out_file, openssl_libs, link_flags);
+            "gcc %s %s \"%s\"%s %s -L%s -laether -o \"%s\" -pthread -lm %s %s %s",
+            opt, tc.include_flags, c_file, config_c, extra, lib_dir, out_file, openssl_libs, zlib_libs, link_flags);
     } else {
         snprintf(cmd, size,
-            "gcc %s %s \"%s\"%s %s %s -o \"%s\" -pthread -lm %s %s",
-            opt, tc.include_flags, c_file, config_c, extra, tc.runtime_srcs, out_file, openssl_libs, link_flags);
+            "gcc %s %s \"%s\"%s %s %s -o \"%s\" -pthread -lm %s %s %s",
+            opt, tc.include_flags, c_file, config_c, extra, tc.runtime_srcs, out_file, openssl_libs, zlib_libs, link_flags);
     }
 #endif
 }

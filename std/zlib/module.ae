@@ -1,0 +1,73 @@
+// std.zlib - One-shot zlib deflate/inflate.
+// Import with: import std.zlib
+//
+// v1 exposes two functions that operate on in-memory byte buffers:
+//
+//   zlib.deflate(data, length, level) -> (bytes, length, err)
+//   zlib.inflate(data, length)        -> (bytes, length, err)
+//
+// `level` is 0..9 (0 = no compression, 9 = best); pass -1 for the
+// library default. Output is variable-length binary (may contain
+// embedded NULs) — the wrapper returns a length-aware AetherString
+// via string_new_with_length, so string.length matches the reported
+// byte count.
+//
+// Streaming APIs and gzip-framed (RFC 1952) variants are out of
+// scope for v1 — additive future work under the same module. See
+// docs/stdlib-vs-contrib.md for the "one obvious shape" criterion.
+//
+// When the toolchain was built without zlib (AETHER_HAS_ZLIB
+// undefined), the wrappers return ("", 0, "zlib unavailable")
+// rather than crashing.
+
+// Split-accessor boundary: try_ performs the op and stashes the
+// result in a TLS buffer; get_ returns a borrowed pointer and
+// length; release_ frees early (otherwise the buffer is freed on
+// the next try_ call on the same thread).
+extern zlib_try_deflate(data: string, length: int, level: int) -> int
+extern zlib_get_deflate_bytes() -> string
+extern zlib_get_deflate_length() -> int
+extern zlib_release_deflate()
+
+extern zlib_try_inflate(data: string, length: int) -> int
+extern zlib_get_inflate_bytes() -> string
+extern zlib_get_inflate_length() -> int
+extern zlib_release_inflate()
+
+// Length-preserving string constructor from std.string — takes an
+// explicit byte count so binary payloads with embedded NULs survive
+// the copy out of the TLS buffer into an owned AetherString.
+extern string_new_with_length(data: string, length: int) -> ptr
+
+// Compress `length` bytes of `data` at the given level (0..9, or -1
+// for the library default). Returns (bytes, byte_count, "") on
+// success, ("", 0, error) on failure. The returned string is
+// length-aware: string.length(bytes) == byte_count.
+deflate(data: string, length: int, level: int) -> {
+    ok = zlib_try_deflate(data, length, level)
+    if ok == 0 {
+        return "", 0, "zlib deflate failed"
+    }
+    raw = zlib_get_deflate_bytes()
+    n = zlib_get_deflate_length()
+    owned = string_new_with_length(raw, n)
+    zlib_release_deflate()
+    return owned, n, ""
+}
+
+// Decompress `length` bytes of `data` (a zlib stream — RFC 1950).
+// Returns (bytes, byte_count, "") on success, ("", 0, error) on
+// corruption, truncation, or empty input. The output buffer grows
+// geometrically — callers don't need to know the decompressed size
+// in advance.
+inflate(data: string, length: int) -> {
+    ok = zlib_try_inflate(data, length)
+    if ok == 0 {
+        return "", 0, "zlib inflate failed"
+    }
+    raw = zlib_get_inflate_bytes()
+    n = zlib_get_inflate_length()
+    owned = string_new_with_length(raw, n)
+    zlib_release_inflate()
+    return owned, n, ""
+}

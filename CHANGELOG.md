@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`std.zlib` — one-shot deflate/inflate** (`std/zlib/module.ae`, `std/zlib/aether_zlib.c`, `std/zlib/aether_zlib.h`, Makefile, `tools/ae.c`). Two pure functions that operate on in-memory byte buffers: `zlib.deflate(data, length, level) -> (bytes, length, err)` and `zlib.inflate(data, length) -> (bytes, length, err)`. Output matches the `fs.read_binary` shape — a length-aware AetherString plus explicit byte count, so embedded NULs survive the round-trip (the unwrap helper inside the extern impl mirrors the one added in v0.86.0 for `fs.write_binary`). Under the hood `deflate` uses `compress2` with `compressBound` sizing; `inflate` uses streaming `inflate()` with a geometric-grow output buffer so callers don't need to know the decompressed size in advance. Auto-detects zlib via pkg-config (same pattern as OpenSSL); when absent the wrappers return `("", 0, "zlib unavailable")` rather than crashing. Streaming APIs and gzip-framed (RFC 1952) variants are deliberately out of scope for v1 — additive future work. Level accepts 0..9 (or -1 for default); out-of-range values are clamped to default. Regression test: `tests/integration/zlib_roundtrip/` (6 cases — text round-trip with compression-ratio check, empty-stream round-trip, empty-input error, garbage-input error, 32-byte binary payload with NULs scattered every 4th byte, level-clamp).
+
 ## [0.89.0]
 
 ### Added
