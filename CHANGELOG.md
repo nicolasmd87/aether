@@ -9,9 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`std.cryptography` — SHA-1 and SHA-256 hex digests** (`std/cryptography/module.ae`, `std/cryptography/aether_cryptography.c`, `std/cryptography/aether_cryptography.h`). Pure one-shot functions: `cryptography.sha1_hex(data, length) -> (digest, err)` and `cryptography.sha256_hex(data, length) -> (digest, err)`. Bytes in, lowercase-hex digest out. Binary-safe via an explicit byte length — embedded NULs survive; `length=0` hashes the empty string. Thin veneer over OpenSSL's EVP API (already linked for `std.net`'s TLS support). When the toolchain is built without OpenSSL the wrappers return `("", "openssl unavailable")` rather than crashing. SHA-1 is included for interop with legacy formats (Git object IDs, Subversion rep-stores, HMAC-SHA1 fixtures) — prefer SHA-256 for new work. Streaming, HMAC, KDFs, and symmetric ciphers are out of scope for v1; see `docs/stdlib-vs-contrib.md` for the "one obvious shape" criterion. Regression test: `tests/integration/cryptography_sha/` (6 cases — sha256(""), sha256("abc"), sha1("abc"), sha256/sha1 of a 10-byte AetherString with NUL at offset 3, and length=0 short-circuit).
+
+### Fixed
+
+- **`CHANGELOG.md` merge-conflict marker cleanup on `## [0.86.0]`**. A manual merge of the two v0.86.0 PRs left `<<<<<<<` / `=======` / `>>>>>>>` markers in the committed file on `main`. Resolved by keeping both blocks under the same version header.
+
 ## [0.86.0]
 
-<<<<<<< feat/fs-write-binary
 ### Added
 
 - **`std.fs.write_binary(path, data, length) -> string`** (`std/fs/module.ae`, `std/fs/aether_fs.c`, `std/fs/aether_fs.h`). Non-atomic binary write — `fopen("wb")` + `fwrite(length bytes)` + `fclose`. Completes the binary-safe I/O pair with `fs.read_binary` (v0.82.0): caller passes an explicit byte length, so payloads with embedded NULs survive the write. Cheaper than `fs.write_atomic` when a partial file on crash is acceptable (scratch writes, caches, any destination not load-bearing for another process). Regression test: `tests/integration/fs_write_binary_nul/` — seeds a 10-byte file with NUL at offset 3 via a C shim, reads it via `fs.read_binary`, writes it back via `fs.write_binary`, reads it a second time, and verifies every byte round-trips.
@@ -19,11 +28,10 @@ next version number before tagging the release.
 ### Fixed
 
 - **AetherString payloads now survive `fs.write_atomic` and `fs.write_binary`** (`std/fs/aether_fs.c`). Both extern impls took `const char* data` and passed it straight to `fwrite`, but callers hand in whatever pointer the Aether variable holds — which for `fs.read_binary`'s return value (and anything built via `string_new_with_length`) is an `AetherString*` struct pointer, not the payload. The first 40 bytes written to disk were the AetherString header (magic `0xAE57C0DE`, refcount, length, capacity, data-ptr), not the intended bytes. `fs.write_atomic` carried this latent bug since v0.82.0 — existing callers masked it by passing string literals (plain `char*`), which happen to point at the data directly, so the test suite didn't catch it. Fixed by adding a shared `fs_unwrap_bytes(data, length, &out_len)` helper that dispatches on `is_aether_string()` and unwraps when needed. Regression test covers both `write_binary` and `write_atomic` with a 10-byte NUL-embedded payload whose round-trip exposes the header-leak.
-=======
+
 ### Changed
 
-- **`docs/stdlib-vs-contrib.md` — placement rubric for new modules** (plus cross-link from `CONTRIBUTING.md`). Captures the four-question rubric (is it expected in a stdlib; does it have one obvious API shape; are deps minimal; is the surface stable and small) for deciding whether a new module belongs in `std/` or `contrib/`. Applies the rubric to the in-flight Zero-C LOC plan: `std.crypto.sha1/sha256` and `std.zlib` go in `std/` (OpenSSL + zlib are already ambient, both have one obvious shape), `sqlite` goes in `contrib/` (4 MiB amalgamation, opinionated API surface), the HTTP client split stays inside `std.net` / `std.http`. Documents only — no code changes.
->>>>>>> main
+- **`docs/stdlib-vs-contrib.md` — placement rubric for new modules** (plus cross-link from `CONTRIBUTING.md`). Captures the four-question rubric (is it expected in a stdlib; does it have one obvious API shape; are deps minimal; is the surface stable and small) for deciding whether a new module belongs in `std/` or `contrib/`. Applies the rubric to the in-flight Zero-C LOC plan: `std.cryptography.sha1/sha256` and `std.zlib` go in `std/` (OpenSSL + zlib are already ambient, both have one obvious shape), `sqlite` goes in `contrib/` (4 MiB amalgamation, opinionated API surface), the HTTP client split stays inside `std.net` / `std.http`. Documents only — no code changes.
 
 ## [0.85.0]
 

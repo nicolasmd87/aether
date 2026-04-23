@@ -1,0 +1,125 @@
+// Regression: std.cryptography.sha1 / sha256 produce the correct digest
+// against known vectors, including binary payloads with embedded NULs.
+// The NUL-embedded case would fail if the extern impl didn't unwrap
+// AetherString pointers — it would end up hashing the struct header
+// (magic 0xAE57C0DE + refcount + length + capacity + data-ptr) instead
+// of the payload, and the digest wouldn't match the reference value.
+
+import std.cryptography
+import std.fs
+import std.string
+import std.io
+
+extern cryptography_probe_write_binary(path: string) -> int
+
+main() {
+    print("=== std.cryptography SHA-1 / SHA-256 ===\n\n")
+
+    // ---- Test 1: sha256("") matches the well-known empty-string vector ----
+    print("Test 1: sha256(empty)\n")
+    d1, err1 = cryptography.sha256_hex("", 0)
+    if err1 != "" {
+        println("  FAIL: sha256 errored: ${err1}")
+        exit(1)
+    }
+    if string.equals(d1, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855") != 1 {
+        println("  FAIL: got ${d1}")
+        exit(1)
+    }
+    print("  PASS\n")
+
+    // ---- Test 2: sha256("abc") matches the FIPS 180-2 example ----
+    print("\nTest 2: sha256(\"abc\")\n")
+    d2, err2 = cryptography.sha256_hex("abc", 3)
+    if err2 != "" {
+        println("  FAIL: sha256 errored: ${err2}")
+        exit(1)
+    }
+    if string.equals(d2, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad") != 1 {
+        println("  FAIL: got ${d2}")
+        exit(1)
+    }
+    print("  PASS\n")
+
+    // ---- Test 3: sha1("abc") matches the FIPS 180-1 example ----
+    print("\nTest 3: sha1(\"abc\")\n")
+    d3, err3 = cryptography.sha1_hex("abc", 3)
+    if err3 != "" {
+        println("  FAIL: sha1 errored: ${err3}")
+        exit(1)
+    }
+    if string.equals(d3, "a9993e364706816aba3e25717850c26c9cd0d89d") != 1 {
+        println("  FAIL: got ${d3}")
+        exit(1)
+    }
+    print("  PASS\n")
+
+    // ---- Test 4: digests survive binary payloads with embedded NULs ----
+    // Seed a 10-byte file (NUL at offset 3) via C shim; read it back
+    // through fs.read_binary (length-aware AetherString); hash it.
+    print("\nTest 4: sha256 of a 10-byte AetherString with NUL at offset 3\n")
+    tmp = io.getenv("TMPDIR")
+    if tmp == 0 { tmp = io.getenv("TEMP") }
+    if tmp == 0 { tmp = "/tmp" }
+    path = "${tmp}/aether_crypto_nul_test.bin"
+
+    ok = cryptography_probe_write_binary(path)
+    if ok != 1 {
+        print("  FAIL: shim failed to write seed file\n")
+        exit(1)
+    }
+
+    data, n, rerr = fs.read_binary(path)
+    if rerr != "" {
+        println("  FAIL: read_binary errored: ${rerr}")
+        exit(1)
+    }
+    if n != 10 {
+        println("  FAIL: expected 10 bytes, got ${n}")
+        exit(1)
+    }
+
+    d4, err4 = cryptography.sha256_hex(data, n)
+    if err4 != "" {
+        println("  FAIL: sha256 errored: ${err4}")
+        exit(1)
+    }
+    // Expected: echo -ne '\x01\x02\x03\x00\x05\x06\x07\x08\x09\x0a' | sha256sum
+    if string.equals(d4, "ee021f03a8b259a43b8c0f11abc1f0ea22dcbcaaa970cdc890432797a4bd208e") != 1 {
+        println("  FAIL: got ${d4}")
+        println("  (if this hashes to the AetherString header, the unwrap path is broken)")
+        exit(1)
+    }
+    print("  PASS: NUL-preserving digest matches reference\n")
+
+    // ---- Test 5: sha1 on the same AetherString payload ----
+    print("\nTest 5: sha1 of the same 10-byte AetherString\n")
+    d5, err5 = cryptography.sha1_hex(data, n)
+    if err5 != "" {
+        println("  FAIL: sha1 errored: ${err5}")
+        exit(1)
+    }
+    // Expected: same file | sha1sum
+    if string.equals(d5, "e1216be765a2fd09d09cbe3acd718e23dcfc7205") != 1 {
+        println("  FAIL: got ${d5}")
+        exit(1)
+    }
+    print("  PASS\n")
+
+    // ---- Test 6: length=0 on a non-empty buffer still hashes empty ----
+    print("\nTest 6: length=0 hashes the empty string regardless of buffer\n")
+    d6, err6 = cryptography.sha256_hex(data, 0)
+    if err6 != "" {
+        println("  FAIL: sha256 errored: ${err6}")
+        exit(1)
+    }
+    if string.equals(d6, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855") != 1 {
+        println("  FAIL: length=0 should equal sha256(empty), got ${d6}")
+        exit(1)
+    }
+    print("  PASS\n")
+
+    fs.delete(path)
+
+    print("\n=== All std.cryptography tests passed ===\n")
+}

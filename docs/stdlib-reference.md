@@ -569,6 +569,43 @@ Raw extern: `json_parse_raw`.
 
 ---
 
+## Cryptography (`std.cryptography`)
+
+One-shot SHA-1 and SHA-256 hex digests. Pure functions — bytes in,
+lowercase-hex digest out, binary-safe via an explicit byte length
+(embedded NULs are fine; pass 0 to hash the empty string).
+
+Built on OpenSSL's EVP API, which is already linked for `std.net`'s
+TLS support. When the Aether toolchain was built without OpenSSL,
+the wrappers return `("", "openssl unavailable")` rather than
+crashing — callers should always check the error slot.
+
+```aether
+import std.cryptography
+import std.fs
+
+main() {
+    // Text payload — length is explicit.
+    digest, err = cryptography.sha256_hex("abc", 3)
+    // digest == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+
+    // Binary payload via fs.read_binary — AetherString with embedded
+    // NULs survives because the extern unwraps the struct.
+    data, n, _ = fs.read_binary("payload.bin")
+    sha, _ = cryptography.sha256_hex(data, n)
+}
+```
+
+**Functions:**
+- `cryptography.sha1_hex(data, length)` → `(string, string)` - 40-char lowercase hex digest. Included for interop with legacy formats (Git, Subversion, HMAC-SHA1). Prefer SHA-256 for new work.
+- `cryptography.sha256_hex(data, length)` → `(string, string)` - 64-char lowercase hex digest.
+
+Raw externs: `cryptography_sha1_hex_raw`, `cryptography_sha256_hex_raw` — return allocated `char*` or NULL on failure. The Go-style wrappers translate the NULL into `("", "openssl unavailable")`.
+
+Streaming, HMAC, key derivation, and symmetric ciphers are out of scope for v1 — see [stdlib-vs-contrib.md](stdlib-vs-contrib.md) for the "one obvious shape" criterion. Callers that need more should link OpenSSL directly.
+
+---
+
 ## Networking
 
 ### HTTP (`std.http`)
