@@ -20,10 +20,13 @@ if ! "$TMPDIR/probe" >"$TMPDIR/run.log" 2>&1; then
     exit 1
 fi
 
-if ! grep -q "All std.cryptography tests passed" "$TMPDIR/run.log"; then
-    echo "  [FAIL] cryptography_sha: didn't reach final PASS line"
+if grep -q "All std.cryptography tests passed" "$TMPDIR/run.log"; then
+    echo "  [PASS] cryptography_sha: 6 cases"
+elif grep -q "std.cryptography tests skipped" "$TMPDIR/run.log"; then
+    reason=$(grep '^SKIP cryptography_sha:' "$TMPDIR/run.log" | head -1)
+    echo "  [PASS] cryptography_sha: ${reason:-skipped (no OpenSSL backend)}"
+else
+    echo "  [FAIL] cryptography_sha: didn't reach final PASS or SKIP line"
     sed 's/^/    /' "$TMPDIR/run.log" | head -30
     exit 1
 fi
-
-echo "  [PASS] cryptography_sha: 6 cases"

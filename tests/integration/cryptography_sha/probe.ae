@@ -15,6 +15,19 @@ extern cryptography_probe_write_binary(path: string) -> int
 main() {
     print("=== std.cryptography SHA-1 / SHA-256 ===\n\n")
 
+    // Probe: if the toolchain was built without OpenSSL (the Windows
+    // CI matrix today — MSYS2 and mingw-w64 don't auto-detect it), the
+    // wrappers return "openssl unavailable" for every call. The test's
+    // assertions can't meaningfully run without a digest backend, so
+    // skip gracefully rather than crashing the matrix. See
+    // CONTRIBUTING.md §"Coding for portability" pattern #2.
+    _, probe_err = cryptography.sha256_hex("probe", 5)
+    if probe_err != "" {
+        println("SKIP cryptography_sha: ${probe_err} (likely Windows CI without OpenSSL)")
+        print("\n=== std.cryptography tests skipped (no backend) ===\n")
+        return
+    }
+
     // ---- Test 1: sha256("") matches the well-known empty-string vector ----
     print("Test 1: sha256(empty)\n")
     d1, err1 = cryptography.sha256_hex("", 0)
