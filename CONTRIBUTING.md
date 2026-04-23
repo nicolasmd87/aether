@@ -92,8 +92,12 @@ if (!buffer) {
 
 ## Stdlib modules
 
-When adding a new `std/<name>/` module or modifying an existing one,
-follow the canonical stdlib module pattern documented in
+When adding a new module, decide first whether it belongs in `std/`
+(stability commitment, shipped with every Aether build) or `contrib/`
+(opt-in, can evolve without stability constraint). The rubric is in
+[docs/stdlib-vs-contrib.md](docs/stdlib-vs-contrib.md).
+
+Once you know the placement, follow the canonical module pattern in
 [docs/stdlib-module-pattern.md](docs/stdlib-module-pattern.md).
 
 The short version: fallible C functions get a `_raw` suffix and a
