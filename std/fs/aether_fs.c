@@ -2,6 +2,7 @@
 #include "../../runtime/config/aether_optimization_config.h"
 #include "../../runtime/utils/aether_compiler.h"
 #include "../../runtime/aether_sandbox.h"
+#include "../string/aether_string.h"
 
 #if !AETHER_HAS_FILESYSTEM
 // Stubs when filesystem is unavailable (WASM, embedded)
@@ -21,6 +22,9 @@ int fs_symlink_raw(const char* t, const char* l) { (void)t; (void)l; return 0; }
 char* fs_readlink_raw(const char* p) { (void)p; return NULL; }
 int fs_is_symlink(const char* p) { (void)p; return 0; }
 int fs_unlink_raw(const char* p) { (void)p; return 0; }
+int fs_write_binary_raw(const char* p, const char* d, int l) {
+    (void)p; (void)d; (void)l; return 0;
+}
 int fs_write_atomic_raw(const char* p, const char* d, int l) {
     (void)p; (void)d; (void)l; return 0;
 }
@@ -82,6 +86,26 @@ DirList* fs_glob_multi_raw(void* l) { (void)l; return NULL; }
     #include <dirent.h>
     #include <unistd.h>
 #endif
+
+// Unwrap the payload+length from a value that may be either an
+// AetherString* (from fs.read_binary, string_new_with_length, etc.)
+// or a plain C string literal. Extern fn signatures say `const char*`
+// but Aether passes whichever pointer the variable holds — without
+// this dispatch, AetherString inputs end up writing the struct
+// header (magic 0xAE57C0DE, refcount, length, capacity, data-ptr)
+// to disk instead of the intended bytes. When `explicit_len` is
+// non-negative the caller's length wins (used by write_binary and
+// write_atomic, which take an explicit-length param for binary safety).
+static inline const char* fs_unwrap_bytes(const char* data, int explicit_len, size_t* out_len) {
+    if (!data) { *out_len = 0; return NULL; }
+    if (is_aether_string(data)) {
+        const AetherString* s = (const AetherString*)data;
+        *out_len = (explicit_len >= 0) ? (size_t)explicit_len : s->length;
+        return s->data;
+    }
+    *out_len = (explicit_len >= 0) ? (size_t)explicit_len : strlen(data);
+    return data;
+}
 
 // File operations
 File* file_open_raw(const char* path, const char* mode) {
@@ -297,9 +321,33 @@ int fs_unlink_raw(const char* path) {
 
 #include <time.h>
 
+int fs_write_binary_raw(const char* path, const char* data, int length) {
+    if (!path || length < 0) return 0;
+    if (length > 0 && !data) return 0;
+    if (!aether_sandbox_check("fs_write", path)) return 0;
+
+    size_t want;
+    const char* bytes = fs_unwrap_bytes(data, length, &want);
+
+    FILE* fp = fopen(path, "wb");
+    if (!fp) return 0;
+
+    size_t written = (want > 0) ? fwrite(bytes, 1, want, fp) : 0;
+    int fwrite_ok = (written == want);
+    int close_ok = (fclose(fp) == 0);
+
+    // Non-atomic: on failure, the caller sees a partial file. This is
+    // the explicit contract — use fs_write_atomic_raw when that's not
+    // acceptable.
+    return (fwrite_ok && close_ok) ? 1 : 0;
+}
+
 int fs_write_atomic_raw(const char* path, const char* data, int length) {
     if (!path || length < 0) return 0;
     if (!aether_sandbox_check("fs_write", path)) return 0;
+
+    size_t want;
+    const char* bytes = fs_unwrap_bytes(data, length, &want);
 
     // Build a tmp path <path>.tmp.<pid>.<counter>. The counter keeps
     // concurrent writers from the same PID (unlikely but cheap to
@@ -320,8 +368,8 @@ int fs_write_atomic_raw(const char* path, const char* data, int length) {
     FILE* fp = fopen(tmp, "wb");
     if (!fp) return 0;
 
-    size_t written = (length > 0) ? fwrite(data, 1, (size_t)length, fp) : 0;
-    int fwrite_ok = (written == (size_t)length);
+    size_t written = (want > 0) ? fwrite(bytes, 1, want, fp) : 0;
+    int fwrite_ok = (written == want);
 
 #ifndef _WIN32
     // Flush + fsync before rename. Without fsync a power loss between
