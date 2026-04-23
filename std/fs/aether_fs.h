@@ -55,6 +55,17 @@ char* fs_readlink_raw(const char* path);
 int   fs_is_symlink(const char* path);
 int   fs_unlink_raw(const char* path);
 
+// Non-atomic binary write to `path` — opens "wb", writes exactly
+// `length` bytes, closes. Binary-safe (embedded NULs OK) because
+// the length is explicit. Simpler and cheaper than fs_write_atomic_raw
+// when the caller doesn't need the write-to-tmp + fsync + rename
+// dance — useful for scratch files, caches, or any write where a
+// partial state on crash is acceptable. Returns 1 on success, 0 on
+// any failure (open/write/close). On failure, whatever was written
+// stays on disk — caller's responsibility to remove(2) the partial
+// file if needed.
+int fs_write_binary_raw(const char* path, const char* data, int length);
+
 // Durable write to `path`: writes to `<path>.tmp.<pid>`, fsyncs, then
 // renames over the destination. Survives a crash in the middle of a
 // write without leaving a half-finished file at `path`. Takes a

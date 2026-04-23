@@ -11,9 +11,19 @@ next version number before tagging the release.
 
 ## [0.86.0]
 
+<<<<<<< feat/fs-write-binary
+### Added
+
+- **`std.fs.write_binary(path, data, length) -> string`** (`std/fs/module.ae`, `std/fs/aether_fs.c`, `std/fs/aether_fs.h`). Non-atomic binary write — `fopen("wb")` + `fwrite(length bytes)` + `fclose`. Completes the binary-safe I/O pair with `fs.read_binary` (v0.82.0): caller passes an explicit byte length, so payloads with embedded NULs survive the write. Cheaper than `fs.write_atomic` when a partial file on crash is acceptable (scratch writes, caches, any destination not load-bearing for another process). Regression test: `tests/integration/fs_write_binary_nul/` — seeds a 10-byte file with NUL at offset 3 via a C shim, reads it via `fs.read_binary`, writes it back via `fs.write_binary`, reads it a second time, and verifies every byte round-trips.
+
+### Fixed
+
+- **AetherString payloads now survive `fs.write_atomic` and `fs.write_binary`** (`std/fs/aether_fs.c`). Both extern impls took `const char* data` and passed it straight to `fwrite`, but callers hand in whatever pointer the Aether variable holds — which for `fs.read_binary`'s return value (and anything built via `string_new_with_length`) is an `AetherString*` struct pointer, not the payload. The first 40 bytes written to disk were the AetherString header (magic `0xAE57C0DE`, refcount, length, capacity, data-ptr), not the intended bytes. `fs.write_atomic` carried this latent bug since v0.82.0 — existing callers masked it by passing string literals (plain `char*`), which happen to point at the data directly, so the test suite didn't catch it. Fixed by adding a shared `fs_unwrap_bytes(data, length, &out_len)` helper that dispatches on `is_aether_string()` and unwraps when needed. Regression test covers both `write_binary` and `write_atomic` with a 10-byte NUL-embedded payload whose round-trip exposes the header-leak.
+=======
 ### Changed
 
 - **`docs/stdlib-vs-contrib.md` — placement rubric for new modules** (plus cross-link from `CONTRIBUTING.md`). Captures the four-question rubric (is it expected in a stdlib; does it have one obvious API shape; are deps minimal; is the surface stable and small) for deciding whether a new module belongs in `std/` or `contrib/`. Applies the rubric to the in-flight Zero-C LOC plan: `std.crypto.sha1/sha256` and `std.zlib` go in `std/` (OpenSSL + zlib are already ambient, both have one obvious shape), `sqlite` goes in `contrib/` (4 MiB amalgamation, opinionated API surface), the HTTP client split stays inside `std.net` / `std.http`. Documents only — no code changes.
+>>>>>>> main
 
 ## [0.85.0]
 
