@@ -1,5 +1,21 @@
-#ifndef AETHER_UI_GTK4_H
-#define AETHER_UI_GTK4_H
+// Aether UI Backend ABI
+//
+// This header declares the cross-platform widget API that every Aether UI
+// backend must implement. The three backends are:
+//
+//   contrib/aether_ui/aether_ui_gtk4.c   — Linux, backed by GTK4
+//   contrib/aether_ui/aether_ui_macos.m  — macOS, backed by AppKit
+//   contrib/aether_ui/aether_ui_win32.c  — Windows, backed by USER32+GDI+
+//
+// The Aether DSL layer (contrib/aether_ui/module.ae) declares matching
+// `extern` functions and is platform-neutral. Build-time backend selection
+// happens in build.sh based on `uname -s`.
+//
+// Cross-platform test server (AetherUIDriver) lives in aether_ui_test_server.c
+// and is linked into every backend.
+
+#ifndef AETHER_UI_BACKEND_H
+#define AETHER_UI_BACKEND_H
 
 #include <stdint.h>
 
@@ -15,6 +31,8 @@ void aether_ui_app_run_raw(int app_handle);
 // Widget creation
 int aether_ui_text_create(const char* text);
 int aether_ui_button_create(const char* label, void* boxed_closure);
+int aether_ui_button_create_plain(const char* label);
+void aether_ui_set_onclick_ctx(void* ctx, void* boxed_closure);
 int aether_ui_vstack_create(int spacing);
 int aether_ui_hstack_create(int spacing);
 int aether_ui_spacer_create(void);

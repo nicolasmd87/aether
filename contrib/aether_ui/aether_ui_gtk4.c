@@ -4,7 +4,7 @@
 // This file is compiled separately and linked with Aether programs via:
 //   ae build app.ae --extra contrib/aether_ui/aether_ui_gtk4.c $(pkg-config --cflags --libs gtk4)
 
-#include "aether_ui_gtk4.h"
+#include "aether_ui_backend.h"
 #include <gtk/gtk.h>
 #include <stdlib.h>
 #include <string.h>
@@ -160,7 +160,17 @@ static void on_activate(GtkApplication* gtk_app, gpointer user_data) {
         }
     }
 
-    gtk_window_present(GTK_WINDOW(window));
+    // Honor AETHER_UI_HEADLESS for CI and unattended scenarios. The window
+    // is realized, the event loop still pumps, and the test server still
+    // responds — but the window is never presented. Matches the Win32
+    // backend's SW_HIDE semantics.
+    const char* headless = getenv("AETHER_UI_HEADLESS");
+    int is_headless = headless && headless[0] && headless[0] != '0';
+    if (is_headless) {
+        gtk_widget_realize(window);
+    } else {
+        gtk_window_present(GTK_WINDOW(window));
+    }
 }
 
 int aether_ui_app_create(const char* title, int width, int height) {

@@ -12,7 +12,7 @@
 
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
-#include "aether_ui_gtk4.h"  // same API surface
+#include "aether_ui_backend.h"  // cross-platform backend ABI
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -194,8 +194,16 @@ static void update_text_bindings(int state_handle) {
             [self.window setContentView:root];
         }
     }
-    [self.window makeKeyAndOrderFront:nil];
-    [NSApp activateIgnoringOtherApps:YES];
+    // Honor AETHER_UI_HEADLESS for CI and unattended scenarios. The window
+    // still exists and receives events (so the test server keeps working),
+    // but it is never ordered onto the visible desktop. Matches the
+    // SW_HIDE / gtk_widget_realize semantics in the other backends.
+    const char* headless = getenv("AETHER_UI_HEADLESS");
+    int is_headless = headless && headless[0] && headless[0] != '0';
+    if (!is_headless) {
+        [self.window makeKeyAndOrderFront:nil];
+        [NSApp activateIgnoringOtherApps:YES];
+    }
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)sender {
