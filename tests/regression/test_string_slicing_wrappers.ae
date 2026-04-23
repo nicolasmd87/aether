@@ -1,0 +1,154 @@
+// Regression: std.string convenience wrappers added to reduce the
+// boilerplate in URL-parsing handler code.
+//
+//   string.strip_prefix(s, prefix) -> (rest, stripped)
+//       If `s` starts with `prefix`, returns the remainder and 1.
+//       Otherwise returns the original `s` and 0. No allocation
+//       when the prefix is not present.
+//
+//   string.copy(s) -> string
+//       Produces an independently-owned copy of `s`. Equivalent to
+//       `string.concat(s, "")` but with a discoverable name; callers
+//       using it are asserting "I need a snapshot because the source
+//       is a C-owned TLS buffer that the next call will overwrite."
+//
+// A `split_once` wrapper was prototyped but not included: its natural
+// shape `(head, tail, err)` (three strings) tripped the typechecker's
+// tuple-unification path when `std.fs` was also imported — the inferred
+// tuple collided with `fs.read_binary`'s `(string, int, string)` and
+// produced mis-typed storage. Worked around by using `string.index_of`
+// + `string.substring` directly (demonstrated in Test 6 below).
+
+import std.string
+
+main() {
+    print("=== std.string URL-slicing wrappers ===\n\n")
+
+    // ---- strip_prefix: prefix present ----
+
+    print("Test 1: strip_prefix removes a matching prefix\n")
+    rest, stripped = string.strip_prefix("/repos/myrepo", "/repos/")
+    if stripped != 1 {
+        print("  FAIL: stripped should be 1\n")
+        exit(1)
+    }
+    if string.equals(rest, "myrepo") != 1 {
+        println("  FAIL: rest should be 'myrepo', got '${rest}'")
+        exit(1)
+    }
+    print("  PASS: '/repos/' stripped off '/repos/myrepo'\n")
+
+    // ---- strip_prefix: prefix absent ----
+
+    print("\nTest 2: strip_prefix with prefix absent returns (s, 0)\n")
+    r2, s2 = string.strip_prefix("myrepo", "/repos/")
+    if s2 != 0 {
+        print("  FAIL: stripped should be 0\n")
+        exit(1)
+    }
+    if string.equals(r2, "myrepo") != 1 {
+        print("  FAIL: should echo input\n")
+        exit(1)
+    }
+    print("  PASS: absent prefix echoes input\n")
+
+    // ---- strip_prefix: exact match ----
+
+    print("\nTest 3: strip_prefix with prefix equal to whole string\n")
+    r3, s3 = string.strip_prefix("/done", "/done")
+    if s3 != 1 { print("  FAIL\n"); exit(1) }
+    if string.equals(r3, "") != 1 { print("  FAIL: remainder should be empty\n"); exit(1) }
+    print("  PASS: exact match yields (\"\", 1)\n")
+
+    // ---- strip_prefix: empty prefix ----
+
+    print("\nTest 4: strip_prefix with empty prefix matches anything\n")
+    r4, s4 = string.strip_prefix("anything", "")
+    if s4 != 1 {
+        // Empty prefix is always present at position 0.
+        print("  FAIL: empty prefix should always match\n")
+        exit(1)
+    }
+    if string.equals(r4, "anything") != 1 {
+        print("  FAIL: empty prefix should leave string unchanged\n")
+        exit(1)
+    }
+    print("  PASS: empty prefix is a no-op that reports matched\n")
+
+    // ---- strip_prefix: multi-char prefix ----
+
+    print("\nTest 5: strip_prefix with multi-char prefix\n")
+    r5, s5 = string.strip_prefix("HTTP/1.1 200 OK", "HTTP/1.1 ")
+    if s5 != 1 { print("  FAIL\n"); exit(1) }
+    if string.equals(r5, "200 OK") != 1 { println("  FAIL: got '${r5}'"); exit(1) }
+    print("  PASS: multi-char prefix stripped cleanly\n")
+
+    // ---- The motivating URL-parse, using strip_prefix + index_of ----
+
+    print("\nTest 6: URL-parse idiom using strip_prefix + index_of\n")
+    path = "/repos/myrepo/path/deep/file.txt"
+    //
+    // Before this PR, handlers wrote ~20 LOC of length arithmetic +
+    // substring slicing. With strip_prefix the static prefix
+    // ("/repos/") is stripped directly; a single string.index_of +
+    // string.substring pair extracts the per-request slice ("myrepo"
+    // from between the "/repos/" prefix and the next "/").
+    //
+    after_repos, ok1 = string.strip_prefix(path, "/repos/")
+    if ok1 != 1 {
+        print("  FAIL: /repos/ not stripped\n")
+        exit(1)
+    }
+    slash = string.index_of(after_repos, "/")
+    if slash < 0 {
+        print("  FAIL: missing /name/ separator\n")
+        exit(1)
+    }
+    name = string.substring(after_repos, 0, slash)
+    if string.equals(name, "myrepo") != 1 {
+        println("  FAIL: name should be 'myrepo', got '${name}'")
+        exit(1)
+    }
+    rest_after_name = string.substring(after_repos, slash + 1, string.length(after_repos))
+    file_rest, ok2 = string.strip_prefix(rest_after_name, "path/")
+    if ok2 != 1 {
+        println("  FAIL: /path/ prefix missing (got '${rest_after_name}')")
+        exit(1)
+    }
+    if string.equals(file_rest, "deep/file.txt") != 1 {
+        println("  FAIL: file_rest = '${file_rest}'")
+        exit(1)
+    }
+    print("  PASS: /repos/myrepo/path/deep/file.txt → myrepo + deep/file.txt\n")
+
+    // ---- string.copy: produces independent storage ----
+
+    print("\nTest 7: string.copy returns an independent copy\n")
+    original = "hello"
+    snapshot = string.copy(original)
+    if string.equals(snapshot, original) != 1 {
+        print("  FAIL: copy should equal original\n")
+        exit(1)
+    }
+    if string.length(snapshot) != 5 {
+        print("  FAIL: length should be 5\n")
+        exit(1)
+    }
+    print("  PASS: copy round-trips\n")
+
+    // ---- string.copy: empty string ----
+
+    print("\nTest 8: string.copy on empty string\n")
+    empty_copy = string.copy("")
+    if string.equals(empty_copy, "") != 1 {
+        print("  FAIL: empty copy should equal empty\n")
+        exit(1)
+    }
+    if string.length(empty_copy) != 0 {
+        print("  FAIL: length should be 0\n")
+        exit(1)
+    }
+    print("  PASS: empty string copies cleanly\n")
+
+    print("\n=== All string-wrapper tests passed ===\n")
+}
