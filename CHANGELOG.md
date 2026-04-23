@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`std.string`: `strip_prefix`, `copy`** (`std/string/module.ae`). Two convenience wrappers for URL-parsing / handler patterns. `strip_prefix(s, prefix) -> (rest, stripped)` removes a prefix if present; cleaner than manual `starts_with` + `substring` length arithmetic. `copy(s) -> string` is a named alias for `string_concat(s, "")` that gives the "snapshot a borrowed TLS buffer" idiom a discoverable name. Both are pure-Aether wrappers — no new externs, built on `string_starts_with` / `string_substring` / `string_concat`. Regression test: `tests/regression/test_string_slicing_wrappers.ae` (8 cases). Complements the existing `string.starts_with` / `string.ends_with` / `string.index_of` / `string.substring` that already handle prefix/suffix/slicing. A planned third wrapper, `split_once(s, sep) -> (head, tail, err)`, was not included: the typechecker's tuple-unification path produced mis-typed storage when a `(string, string, string)` tuple shape collided with an existing `(string, int, string)` shape from `std.fs`. For now, callers compose `string.index_of` + `string.substring` directly.
+
 ## [0.83.0]
 
 ### Added
