@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Changed
+
+- **`docs/stdlib-vs-contrib.md` — placement rubric for new modules** (plus cross-link from `CONTRIBUTING.md`). Captures the four-question rubric (is it expected in a stdlib; does it have one obvious API shape; are deps minimal; is the surface stable and small) for deciding whether a new module belongs in `std/` or `contrib/`. Applies the rubric to the in-flight Zero-C LOC plan: `std.crypto.sha1/sha256` and `std.zlib` go in `std/` (OpenSSL + zlib are already ambient, both have one obvious shape), `sqlite` goes in `contrib/` (4 MiB amalgamation, opinionated API surface), the HTTP client split stays inside `std.net` / `std.http`. Documents only — no code changes.
+
 ## [0.85.0]
 
 ### Fixed
