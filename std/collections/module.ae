@@ -32,6 +32,21 @@ extern map_free(map: ptr)
 extern map_keys_raw(map: ptr) -> ptr
 extern map_keys_free(keys: ptr)
 
+// ---- IntArray raw externs ----
+// Fixed-size packed int buffer with O(1) random access. For DP
+// tables and other hot loops where std.list's void*-boxed items
+// would cost an allocation per entry. Go-style wrappers live in
+// std.intarr — import that module for `intarr.new(size)` / etc.
+extern intarr_new_raw(size: int) -> ptr
+extern intarr_new_filled_raw(size: int, init: int) -> ptr
+extern intarr_size(arr: ptr) -> int
+extern intarr_get_raw(arr: ptr, i: int) -> int
+extern intarr_set_raw(arr: ptr, i: int, value: int)
+extern intarr_get_unchecked(arr: ptr, i: int) -> int
+extern intarr_set_unchecked(arr: ptr, i: int, value: int)
+extern intarr_fill(arr: ptr, value: int)
+extern intarr_free(arr: ptr)
+
 // ---- Go-style wrappers ----
 
 // Append an item to a list. Returns "" on success, error on failure
@@ -91,3 +106,8 @@ map_keys(map: ptr) -> {
     }
     return keys, ""
 }
+
+// Go-style wrappers for IntArray live in std/intarr/module.ae so that
+// users can write `intarr.new(size)` / `intarr.get(a, i)`. Import
+// `std.intarr` for those; importing `std.collections` gets the raw
+// externs declared above, which are fine for hot-path use.

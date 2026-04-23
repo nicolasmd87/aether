@@ -1,0 +1,112 @@
+// std.intarr - Fixed-size packed-int buffer (alias for std.collections)
+//
+// For DP tables, flat int-keyed lookup, and other hot paths where
+// std.list's void*-boxed items cost an allocation per entry. Size is
+// fixed at allocation — callers that need growth use std.list instead.
+// Callers that need multi-dimensional access compute `row * N + col`
+// themselves; this is a flat buffer.
+//
+// API shape:
+//   - Raw externs are direct — bounds-check on read (return 0 on OOB)
+//     and write (no-op on OOB). Fast path uses the `_unchecked`
+//     variants for validated-index inner loops.
+//   - Go-style wrappers (`new`, `get`, `set`) return tuples/errors
+//     for callers that want to distinguish "absent" from "stored zero".
+
+// ---- Raw externs (escape hatch; also the hot-path API) ----
+// The `_raw` suffix on new/get/set keeps them from colliding with
+// the mangled C names of the `new` / `get` / `set` wrappers below.
+// The hot-path `_unchecked` variants need no suffix — they have no
+// Aether wrapper so there's nothing to collide with.
+
+// Allocate an IntArray of `size` ints, zero-initialised. Returns null
+// if `size` is negative or allocation fails.
+extern intarr_new_raw(size: int) -> ptr
+
+// Allocate and fill every index with `init`.
+extern intarr_new_filled_raw(size: int, init: int) -> ptr
+
+// Number of elements. -1 if `arr` is null.
+extern intarr_size(arr: ptr) -> int
+
+// Read at `i`. Returns 0 if `arr` is null or `i` is out-of-range.
+// Use `intarr.get` (below) to distinguish stored-zero from OOB.
+extern intarr_get_raw(arr: ptr, i: int) -> int
+
+// Write `value` at `i`. No-op if `arr` is null or `i` is out-of-range.
+// Use `intarr.set` (below) if you need an error on OOB.
+extern intarr_set_raw(arr: ptr, i: int, value: int)
+
+// Hot-path variants — caller guarantees index is in [0, size). OOB
+// access is undefined behaviour. Don't use from outside a tight loop.
+extern intarr_get_unchecked(arr: ptr, i: int) -> int
+extern intarr_set_unchecked(arr: ptr, i: int, value: int)
+
+// Fill every element with `value`. Useful for resetting a DP table.
+extern intarr_fill(arr: ptr, value: int)
+
+// Release. Idempotent on null.
+extern intarr_free(arr: ptr)
+
+// ---- Go-style wrappers ----
+
+// Allocate an IntArray of `size` elements, zero-initialised.
+// Returns (ptr, "") on success, (null, error) on failure.
+new(size: int) -> {
+    if size < 0 {
+        return null, "negative size"
+    }
+    a = intarr_new_raw(size)
+    if a == null {
+        return null, "allocation failed"
+    }
+    return a, ""
+}
+
+// Allocate and fill with `init` at every index.
+new_filled(size: int, init: int) -> {
+    if size < 0 {
+        return null, "negative size"
+    }
+    a = intarr_new_filled_raw(size, init)
+    if a == null {
+        return null, "allocation failed"
+    }
+    return a, ""
+}
+
+// Bounds-checked read. Returns (value, "") on success, (0, error)
+// for null array or OOB index. Use the raw `intarr_get_raw` directly
+// (imported above) when you don't need to tell absent apart from
+// stored-zero — it's one fewer function call and one fewer branch.
+get(arr: ptr, i: int) -> {
+    if arr == null {
+        return 0, "null array"
+    }
+    n = intarr_size(arr)
+    if i < 0 {
+        return 0, "index out of range"
+    }
+    if i >= n {
+        return 0, "index out of range"
+    }
+    return intarr_get_raw(arr, i), ""
+}
+
+// Bounds-checked write. Returns "" on success, error for null array
+// or OOB index. Use the raw `intarr_set_raw` directly in hot paths
+// where a no-op-on-OOB is acceptable.
+set(arr: ptr, i: int, value: int) -> {
+    if arr == null {
+        return "null array"
+    }
+    n = intarr_size(arr)
+    if i < 0 {
+        return "index out of range"
+    }
+    if i >= n {
+        return "index out of range"
+    }
+    intarr_set_raw(arr, i, value)
+    return ""
+}

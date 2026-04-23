@@ -1,0 +1,207 @@
+// Regression: std.intarr — fixed-size packed int buffer for hot-path
+// int-keyed lookup (DP tables, flat index buffers). Covers:
+//   - allocation + size reporting
+//   - zero-initialisation
+//   - intarr_new_filled_raw sets every slot
+//   - raw get/set round-trip (hot-path API)
+//   - Go-style wrapper error shapes (OOB, negative, null)
+//   - intarr_fill resets a buffer between iterations
+//   - 2D-indexed access via row * N + col (blame LCS pattern)
+//   - unchecked hot-path variants
+
+import std.intarr
+
+main() {
+    print("=== std.intarr ===\n\n")
+
+    // ---- Test 1: basic allocation ------------------------------
+
+    print("Test 1: allocation + size\n")
+    a, err = intarr.new(5)
+    if err != "" {
+        println("  FAIL: new(5): ${err}")
+        exit(1)
+    }
+    if intarr_size(a) != 5 {
+        println("  FAIL: size != 5")
+        exit(1)
+    }
+    print("  PASS: 5-element array allocated\n")
+
+    // ---- Test 2: zero-initialisation --------------------------
+
+    print("\nTest 2: zero-initialisation\n")
+    i = 0
+    while i < 5 {
+        if intarr_get_raw(a, i) != 0 {
+            println("  FAIL: slot ${i} not zero")
+            exit(1)
+        }
+        i = i + 1
+    }
+    print("  PASS: every slot zero\n")
+
+    // ---- Test 3: raw set/get round-trip -----------------------
+
+    print("\nTest 3: set then get (raw, hot-path)\n")
+    intarr_set_raw(a, 0, 42)
+    intarr_set_raw(a, 2, 99)
+    intarr_set_raw(a, 4, -17)
+    if intarr_get_raw(a, 0) != 42  { print("  FAIL [0]\n"); exit(1) }
+    if intarr_get_raw(a, 2) != 99  { print("  FAIL [2]\n"); exit(1) }
+    if intarr_get_raw(a, 4) != -17 { print("  FAIL [4]\n"); exit(1) }
+    // Untouched slots still zero
+    if intarr_get_raw(a, 1) != 0   { print("  FAIL [1]\n"); exit(1) }
+    if intarr_get_raw(a, 3) != 0   { print("  FAIL [3]\n"); exit(1) }
+    print("  PASS: 42/99/-17 round-trip, untouched slots stay zero\n")
+
+    intarr_free(a)
+
+    // ---- Test 4: new_filled sets every index ------------------
+
+    print("\nTest 4: new_filled\n")
+    b, err2 = intarr.new_filled(4, 7)
+    if err2 != "" {
+        println("  FAIL: new_filled: ${err2}")
+        exit(1)
+    }
+    i = 0
+    while i < 4 {
+        if intarr_get_raw(b, i) != 7 {
+            println("  FAIL: slot ${i} != 7")
+            exit(1)
+        }
+        i = i + 1
+    }
+    print("  PASS: every slot == 7\n")
+
+    // ---- Test 5: fill resets --------------------------------
+
+    print("\nTest 5: intarr_fill resets\n")
+    intarr_fill(b, -1)
+    i = 0
+    while i < 4 {
+        if intarr_get_raw(b, i) != -1 {
+            println("  FAIL: slot ${i} after fill")
+            exit(1)
+        }
+        i = i + 1
+    }
+    print("  PASS: fill(-1) applied to every slot\n")
+
+    intarr_free(b)
+
+    // ---- Test 6: wrapper error shapes -----------------------
+
+    print("\nTest 6: intarr.get error shapes\n")
+    c, _ = intarr.new(3)
+
+    _, err_oob = intarr.get(c, 99)
+    if err_oob == "" { print("  FAIL: OOB positive should error\n"); exit(1) }
+
+    _, err_neg = intarr.get(c, -1)
+    if err_neg == "" { print("  FAIL: negative should error\n"); exit(1) }
+
+    _, err_null = intarr.get(null, 0)
+    if err_null == "" { print("  FAIL: null array should error\n"); exit(1) }
+
+    // In-range succeeds
+    intarr_set_raw(c, 1, 7)
+    v, err_ok = intarr.get(c, 1)
+    if err_ok != "" { println("  FAIL: in-range errored: ${err_ok}"); exit(1) }
+    if v != 7 { print("  FAIL: wrong value\n"); exit(1) }
+
+    print("  PASS: OOB, negative, null all error; in-range returns the value\n")
+
+    // ---- Test 7: intarr.set error shapes -----------------------
+
+    print("\nTest 7: intarr.set error shapes\n")
+    err_s_oob = intarr.set(c, 99, 1)
+    if err_s_oob == "" { print("  FAIL: set OOB should error\n"); exit(1) }
+
+    err_s_null = intarr.set(null, 0, 1)
+    if err_s_null == "" { print("  FAIL: set null should error\n"); exit(1) }
+
+    err_s_ok = intarr.set(c, 2, 123)
+    if err_s_ok != "" { println("  FAIL: in-range set errored: ${err_s_ok}"); exit(1) }
+    if intarr_get_raw(c, 2) != 123 { print("  FAIL: value didn't stick\n"); exit(1) }
+
+    print("  PASS\n")
+
+    intarr_free(c)
+
+    // ---- Test 8: 2D DP-table pattern (blame LCS shape) ----------
+    //
+    // The motivating use case: build a flat buffer of size M*N and
+    // access it with `row * N + col`. This is the blame-LCS DP
+    // table shape. No bounds checks in the inner loop — the
+    // _unchecked variants are for this pattern.
+
+    print("\nTest 8: 2D DP-table pattern (5x4 flat buffer)\n")
+    rows = 5
+    cols = 4
+    dp, _ = intarr.new(rows * cols)
+
+    // Fill: dp[r][c] = r * 10 + c
+    r = 0
+    while r < rows {
+        cc = 0
+        while cc < cols {
+            intarr_set_unchecked(dp, r * cols + cc, r * 10 + cc)
+            cc = cc + 1
+        }
+        r = r + 1
+    }
+
+    // Read back and verify
+    r = 0
+    while r < rows {
+        cc = 0
+        while cc < cols {
+            got = intarr_get_unchecked(dp, r * cols + cc)
+            want = r * 10 + cc
+            if got != want {
+                println("  FAIL: dp[${r}][${cc}] = ${got}, want ${want}")
+                exit(1)
+            }
+            cc = cc + 1
+        }
+        r = r + 1
+    }
+    print("  PASS: 5x4 grid round-trips via row*cols+col\n")
+
+    intarr_free(dp)
+
+    // ---- Test 9: negative size rejected -----------------------
+
+    print("\nTest 9: negative size rejected\n")
+    _, err_neg_sz = intarr.new(-5)
+    if err_neg_sz == "" {
+        print("  FAIL: negative size should error\n")
+        exit(1)
+    }
+    print("  PASS: size=-5 errors cleanly\n")
+
+    // ---- Test 10: zero-size legal -----------------------------
+
+    print("\nTest 10: zero-size legal\n")
+    z, err_z = intarr.new(0)
+    if err_z != "" {
+        println("  FAIL: size=0 errored: ${err_z}")
+        exit(1)
+    }
+    if intarr_size(z) != 0 {
+        print("  FAIL: zero-sized array's size != 0\n")
+        exit(1)
+    }
+    // OOB on zero-size: every index is OOB
+    _, err_z_get = intarr.get(z, 0)
+    if err_z_get == "" {
+        print("  FAIL: get on zero-size should error at idx 0\n")
+        exit(1)
+    }
+    intarr_free(z)
+    print("  PASS: zero-size legal; all accesses error\n")
+
+    print("\n=== All intarr tests passed ===\n")
+}
