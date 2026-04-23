@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`ae build` now handles long `extra_sources` lines in `aether.toml`** (`tools/ae.c`). `get_extra_sources_for_bin` read the TOML one line at a time with a 1 KiB fixed buffer; a single-line `extra_sources = ["a.c", ...]` that exceeded 1023 characters got silently truncated by `fgets`, dropping every entry past the cutoff from the link command. Failure mode was loud but the diagnostic was bad — linker errored with "undefined reference to `shim_23_value`" and no hint that the TOML parser dropped the entry. Downstream projects hit this at ~33 comma-separated filenames. Bumped the buffer to 8 KiB (fits ~250 average-length filenames); projects that exceed even that should switch to multi-line TOML arrays once the parser learns them (separate work). Regression test: `tests/integration/toml_extra_sources_long_line/` builds a synthetic 30-shim project with a ~1300-byte single-line `extra_sources` array and asserts every shim links and runs.
+
 ## [0.84.0]
 
 ### Added
