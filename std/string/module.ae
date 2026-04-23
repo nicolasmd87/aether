@@ -99,3 +99,25 @@ to_double(s: string) -> {
     }
     return string_get_double(s), ""
 }
+
+// If `s` starts with `prefix`, return (s-after-prefix, 1).
+// Otherwise return (s, 0). An empty prefix is treated as always
+// matching and leaves `s` unchanged — callers can use the 1/0
+// flag to tell "matched and stripped" from "no match".
+strip_prefix(s: string, prefix: string) -> {
+    if string_starts_with(s, prefix) != 1 {
+        return s, 0
+    }
+    prefix_len = string_length(prefix)
+    s_len = string_length(s)
+    return string_substring(s, prefix_len, s_len), 1
+}
+
+// Return an independently-owned copy of `s`. Useful when `s` is
+// borrowed from a TLS buffer or arena that the next C call will
+// overwrite — calling `copy` guarantees the returned string outlives
+// such a handoff. Equivalent to `string_concat(s, "")` but with a
+// discoverable name.
+copy(s: string) -> string {
+    return string_concat(s, "")
+}

@@ -289,6 +289,10 @@ main() {
 - `string.array_size(arr)` - Get number of parts in split result
 - `string.array_get(arr, index)` - Get string at index from split result
 - `string.array_free(arr)` - Free split result array
+- `string.strip_prefix(s, prefix)` → `(rest, stripped)` - If `s` starts with `prefix`, returns the remainder and 1. Otherwise returns `s` and 0. Cleaner than manual `starts_with` + `substring` length arithmetic.
+- `string.copy(s)` - Return an independently-owned copy of `s`. Equivalent to `string.concat(s, "")` but with a discoverable name; callers use it to snapshot a borrowed TLS buffer before the next C call overwrites it.
+
+For a `split_once`-style operation (find the first `sep` in `s`, return the halves), use `string.index_of(s, sep)` + two `string.substring` calls — two lines of code that avoid a tuple-unification foot-gun the typechecker currently has around three-string tuples.
 
 **Conversion:**
 - `string.to_cstr(str)` - Get raw C string pointer
