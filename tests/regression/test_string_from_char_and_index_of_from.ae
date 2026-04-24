@@ -1,0 +1,130 @@
+// Regression: two std.string helpers aimed at packed-string parsers.
+//
+//   string.from_char(code) -> string
+//       Produces a 1-byte string whose single byte is `code & 0xff`.
+//       Intended use: building up records separated by single-byte
+//       markers (`\x01`, `\x02`, etc.) without routing through
+//       NUL-terminated literals. Always length 1, even for code=0.
+//
+//   string.index_of_from(s, needle, start) -> int
+//       Like index_of, but scans from byte offset `start`. Returns
+//       the absolute offset of the hit (not relative), or -1 on
+//       miss. Saves the substring+index_of allocation dance in
+//       loops that walk a packed string record-by-record.
+//
+// Both came out of the Subversion port's packed-handle pattern
+// (ae/ra/packed.ae etc.) — the downstream project was open-coding
+// both around their absence, with workarounds that allocated per
+// step.
+
+import std.string
+
+main() {
+    print("=== std.string from_char + index_of_from ===\n\n")
+
+    // ---- from_char ----
+
+    print("Test 1: from_char produces a 1-byte string\n")
+    sep = string.from_char(2)       // \x02 / record separator
+    if string.length(sep) != 1 {
+        println("  FAIL: length should be 1, got ${string.length(sep)}")
+        exit(1)
+    }
+    if string.char_at(sep, 0) != 2 {
+        println("  FAIL: byte should be 2, got ${string.char_at(sep, 0)}")
+        exit(1)
+    }
+    print("  PASS: length 1, byte=2\n")
+
+    print("Test 2: from_char(0) is a 1-byte NUL string (not empty)\n")
+    nul = string.from_char(0)
+    if string.length(nul) != 1 {
+        println("  FAIL: length should be 1 even for NUL, got ${string.length(nul)}")
+        exit(1)
+    }
+    if string.char_at(nul, 0) != 0 {
+        println("  FAIL: byte should be 0, got ${string.char_at(nul, 0)}")
+        exit(1)
+    }
+    print("  PASS: from_char(0) has length 1 and byte value 0\n")
+
+    print("Test 3: from_char masks high bits (code & 0xff)\n")
+    masked = string.from_char(256 + 65)       // should be 'A'
+    if string.length(masked) != 1 {
+        println("  FAIL: length should be 1")
+        exit(1)
+    }
+    if string.char_at(masked, 0) != 65 {
+        println("  FAIL: byte should be 65 ('A'), got ${string.char_at(masked, 0)}")
+        exit(1)
+    }
+    print("  PASS: 321 masks to 65 ('A')\n")
+
+    // ---- index_of_from ----
+
+    print("Test 4: index_of_from finds a later hit past an earlier one\n")
+    // Three "\x02"-separated records: "aa" "bb" "cc".
+    // Bytes:   a a \x02 b b \x02 c c
+    // Indices: 0 1  2   3 4  5   6 7
+    rec = string.concat(
+        string.concat(
+            string.concat("aa", string.from_char(2)),
+            string.concat("bb", string.from_char(2))),
+        "cc")
+    // First separator is at index 2; start at 3 and we should find 5.
+    hit = string.index_of_from(rec, string.from_char(2), 3)
+    if hit != 5 {
+        println("  FAIL: expected hit at 5, got ${hit}")
+        exit(1)
+    }
+    print("  PASS: second separator found at offset 5\n")
+
+    print("Test 5: index_of_from returns -1 when start is past all hits\n")
+    hit = string.index_of_from(rec, string.from_char(2), 6)
+    if hit != -1 {
+        println("  FAIL: expected -1 past all separators, got ${hit}")
+        exit(1)
+    }
+    print("  PASS: -1 when past the last separator\n")
+
+    print("Test 6: index_of_from with start=0 matches index_of\n")
+    h_from = string.index_of_from(rec, "bb", 0)
+    h_plain = string.index_of(rec, "bb")
+    if h_from != h_plain {
+        println("  FAIL: from=${h_from} vs plain=${h_plain}")
+        exit(1)
+    }
+    if h_from != 3 {
+        println("  FAIL: expected 3, got ${h_from}")
+        exit(1)
+    }
+    print("  PASS: start=0 behaviour matches index_of\n")
+
+    print("Test 7: index_of_from clamps negative start to 0\n")
+    h = string.index_of_from(rec, "aa", -5)
+    if h != 0 {
+        println("  FAIL: negative start should clamp to 0, got ${h}")
+        exit(1)
+    }
+    print("  PASS: negative start clamps to 0\n")
+
+    print("Test 8: index_of_from returns -1 when start > length\n")
+    h = string.index_of_from(rec, "aa", 100)
+    if h != -1 {
+        println("  FAIL: start past end should return -1, got ${h}")
+        exit(1)
+    }
+    print("  PASS: start past end returns -1\n")
+
+    print("Test 9: from_char bytes concat cleanly through index_of\n")
+    // Build "x\x01y" and find the \x01 at offset 1.
+    packed = string.concat(string.concat("x", string.from_char(1)), "y")
+    h = string.index_of(packed, string.from_char(1))
+    if h != 1 {
+        println("  FAIL: expected 1, got ${h}")
+        exit(1)
+    }
+    print("  PASS: \\x01 in middle of packed string located via index_of\n")
+
+    print("\nAll from_char + index_of_from tests passed.\n")
+}

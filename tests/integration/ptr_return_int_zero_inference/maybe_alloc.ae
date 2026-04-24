@@ -1,0 +1,25 @@
+// Regression for new_defects.md §3. In a function declared `-> ptr`,
+// writing `out = 0` as the first assignment used to infer `out` as
+// int. The generated C then emitted `int out = 0` and a later
+// `out = ptr_new()` truncated the 64-bit pointer to 32 bits before
+// widening back to `void*` on return. Downstream dereferences
+// segfaulted.
+//
+// Fix: a post-inference pass in type_inference.c widens `out` to
+// `ptr` when any later assignment in the same block is ptr-typed,
+// but only inside ptr-returning functions.
+
+extern ptr_new() -> ptr
+
+maybe_alloc(flag: int) -> ptr {
+    out = 0
+    if flag == 1 {
+        out = ptr_new()
+    }
+    return out
+}
+
+main() {
+    p = maybe_alloc(0)
+    println("done")
+}

@@ -1,0 +1,108 @@
+// Regression: std.os.now_utc_iso8601() — current UTC time as a
+// "YYYY-MM-DDThh:mm:ssZ" string. We can't assert an exact value
+// (time marches on) but we can assert the shape: 20 chars, the
+// right punctuation in the right slots, every digit slot a digit,
+// and plausible numeric ranges for the month / day / hour / minute
+// / second fields.
+//
+// The downstream use case that prompted the API: Subversion's
+// rev-blob `date:` field is an ISO-8601 UTC string, set on every
+// commit. svnae_fsfs_now_iso8601 in the port's C shim wrapped
+// time(NULL)+gmtime_r+strftime; with this std helper it drops to
+// a one-liner.
+
+import std.os
+import std.string
+
+fail(msg: string) {
+    println("  FAIL: ${msg}")
+    exit(1)
+}
+
+is_digit(c: int) -> int {
+    if c < 48 { return 0 }
+    if c > 57 { return 0 }
+    return 1
+}
+
+digit_val(c: int) -> int {
+    return c - 48
+}
+
+two_digit_int(s: string, pos: int) -> int {
+    a = string.char_at(s, pos)
+    b = string.char_at(s, pos + 1)
+    if is_digit(a) == 0 { return -1 }
+    if is_digit(b) == 0 { return -1 }
+    return digit_val(a) * 10 + digit_val(b)
+}
+
+main() {
+    print("=== std.os.now_utc_iso8601 ===\n\n")
+
+    ts = os.now_utc_iso8601()
+
+    print("Test 1: length is 20\n")
+    if string.length(ts) != 20 {
+        fail("expected length 20, got ${string.length(ts)} — '${ts}'")
+    }
+    print("  PASS: '${ts}' has length 20\n")
+
+    print("Test 2: punctuation at the right positions\n")
+    // YYYY-MM-DDThh:mm:ssZ
+    //     ^  ^  ^  ^  ^   ^
+    //     4  7 10 13 16  19
+    if string.char_at(ts, 4) != 45 { fail("byte 4 should be '-'") }
+    if string.char_at(ts, 7) != 45 { fail("byte 7 should be '-'") }
+    if string.char_at(ts, 10) != 84 { fail("byte 10 should be 'T'") }
+    if string.char_at(ts, 13) != 58 { fail("byte 13 should be ':'") }
+    if string.char_at(ts, 16) != 58 { fail("byte 16 should be ':'") }
+    if string.char_at(ts, 19) != 90 { fail("byte 19 should be 'Z'") }
+    print("  PASS: '-', '-', 'T', ':', ':', 'Z' in right slots\n")
+
+    print("Test 3: every non-punctuation byte is a digit\n")
+    i = 0
+    while i < 20 {
+        if i != 4 {
+            if i != 7 {
+                if i != 10 {
+                    if i != 13 {
+                        if i != 16 {
+                            if i != 19 {
+                                c = string.char_at(ts, i)
+                                if is_digit(c) == 0 {
+                                    fail("byte ${i} ('${string.substring(ts, i, i + 1)}') is not a digit")
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        i = i + 1
+    }
+    print("  PASS: all digit slots contain digits\n")
+
+    print("Test 4: plausible numeric ranges\n")
+    year = two_digit_int(ts, 0) * 100 + two_digit_int(ts, 2)
+    if year < 2020 { fail("year ${year} is before 2020 — clock skew?") }
+    if year > 2100 { fail("year ${year} is after 2100 — clock skew?") }
+    month = two_digit_int(ts, 5)
+    if month < 1 { fail("month ${month} < 1") }
+    if month > 12 { fail("month ${month} > 12") }
+    day = two_digit_int(ts, 8)
+    if day < 1 { fail("day ${day} < 1") }
+    if day > 31 { fail("day ${day} > 31") }
+    hour = two_digit_int(ts, 11)
+    if hour < 0 { fail("hour ${hour} < 0") }
+    if hour > 23 { fail("hour ${hour} > 23") }
+    minute = two_digit_int(ts, 14)
+    if minute < 0 { fail("minute ${minute} < 0") }
+    if minute > 59 { fail("minute ${minute} > 59") }
+    second = two_digit_int(ts, 17)
+    if second < 0 { fail("second ${second} < 0") }
+    if second > 60 { fail("second ${second} > 60 (leap sec allowed)") }
+    print("  PASS: y=${year} m=${month} d=${day} h=${hour} m=${minute} s=${second}\n")
+
+    print("\nAll now_utc_iso8601 tests passed.\n")
+}

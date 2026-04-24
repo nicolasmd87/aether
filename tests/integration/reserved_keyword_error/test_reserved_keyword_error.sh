@@ -15,6 +15,7 @@ fail=0
 check_case() {
     src="$1"
     label="$2"
+    kw="$3"          # the reserved word the error must name
     tmpdir="$(mktemp -d)"
     log="$tmpdir/cc.log"
 
@@ -31,8 +32,8 @@ check_case() {
         return
     fi
 
-    if ! grep -qi "reserved" "$log" || ! grep -q "message" "$log"; then
-        echo "  [FAIL] $label: error message doesn't mention 'reserved' + 'message'"
+    if ! grep -qi "reserved" "$log" || ! grep -q "$kw" "$log"; then
+        echo "  [FAIL] $label: error message doesn't mention 'reserved' + '$kw'"
         echo "        got:"
         sed 's/^/          /' "$log" | head -8
         fail=1
@@ -48,11 +49,34 @@ check_case() {
         return
     fi
 
+    # The `help:` line for the reserved-keyword error must match the
+    # error. Previously E0100 fell back to the generic syntax-error
+    # hint ("check for missing parentheses, braces, or keywords"),
+    # which pointed users at a parse problem that wasn't there.
+    # Extract the first error block (up to the first blank line) and
+    # check its help line talks about renaming, not parentheses.
+    first_block="$(awk '/^error/{flag=1} flag; /^$/{if(flag) exit}' "$log")"
+    if echo "$first_block" | grep -q "missing parentheses"; then
+        echo "  [FAIL] $label: reserved-keyword error still carries the generic 'missing parentheses' hint"
+        echo "$first_block" | sed 's/^/          /'
+        fail=1
+        rm -rf "$tmpdir"
+        return
+    fi
+    if ! echo "$first_block" | grep -qi "help:.*rename"; then
+        echo "  [FAIL] $label: reserved-keyword error's help: line should suggest renaming"
+        echo "$first_block" | sed 's/^/          /'
+        fail=1
+        rm -rf "$tmpdir"
+        return
+    fi
+
     echo "  [PASS] $label"
     rm -rf "$tmpdir"
 }
 
-check_case "$SCRIPT_DIR/message_as_param.ae"  "reserved_keyword_error: extern parameter name"
-check_case "$SCRIPT_DIR/message_as_local.ae"  "reserved_keyword_error: local variable name"
+check_case "$SCRIPT_DIR/message_as_param.ae"  "reserved_keyword_error: extern parameter name (message)" "message"
+check_case "$SCRIPT_DIR/message_as_local.ae"  "reserved_keyword_error: local variable name (message)"   "message"
+check_case "$SCRIPT_DIR/state_as_param.ae"    "reserved_keyword_error: extern parameter name (state)"   "state"
 
 exit $fail

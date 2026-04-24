@@ -47,7 +47,19 @@ int string_starts_with(const void* str, const char* prefix);
 int string_ends_with(const void* str, const char* suffix);
 int string_contains(const void* str, const char* substring);
 int string_index_of(const void* str, const char* substring);
+// Like string_index_of but starts scanning at byte offset `start`.
+// Returns the absolute offset of the hit (not relative to `start`),
+// or -1. Same binary-safety split as string_index_of: the haystack
+// is data-aware (handles AetherString with embedded NULs), the
+// needle is strlen-based.
+int string_index_of_from(const void* str, const char* substring, int start);
 char* string_substring(const void* str, int start, int end);
+
+// Construct a 1-byte AetherString from a byte code (0..255).
+// Primary use: emitting known single-byte markers (\x01, \x02, etc.)
+// into packed-string record formats without routing through a
+// NUL-terminated literal. Always length 1, even for code=0.
+AetherString* string_from_char(int code);
 char* string_to_upper(const void* str);
 char* string_to_lower(const void* str);
 char* string_trim(const void* str);
@@ -65,6 +77,25 @@ void string_array_free(AetherStringArray* arr);
 
 // Conversion
 const char* string_to_cstr(const void* str);
+
+// Public FFI accessors for consuming a `-> string` return from C.
+//
+// A function that an Aether program declares as `-> string` returns an
+// AetherString* — a 24-byte magic-tagged header whose `data` field
+// points at the payload — NOT a plain char*. C shims that type the
+// same extern as `extern const char* foo(...)` and hand the result to
+// memcpy/strlen read into the struct header and get garbage (the
+// magic bytes, not the content). These helpers accept either shape
+// (AetherString* or raw char*), return the byte pointer / length the
+// shim actually wanted, and are safe to call on NULL.
+//
+// Preferred over `string_to_cstr` / `string_length` in FFI code
+// because the `aether_` prefix matches the ABI-mangled export names
+// and signals intent to reviewers. See docs/aether-string-abi.md for
+// the full ABI contract.
+const char* aether_string_data(const void* s);
+size_t      aether_string_length(const void* s);
+
 AetherString* string_from_int(int value);
 // 64-bit sibling of string_from_int. Uses `long long` so it covers
 // Aether's `long` type across platforms where `long` is 32-bit (MSVC).

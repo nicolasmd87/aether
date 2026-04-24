@@ -1,0 +1,69 @@
+// Regression for new_defects.md section 1. Read a 10-byte binary file
+// via fs.read_binary (which returns AetherString*), pass the result
+// through two C shim entry points that unwrap it via the new public
+// helpers `aether_string_data` and `aether_string_length`.
+//
+// Pre-fix, downstream shims typed the extern as `const char* foo()`
+// and ran memcpy/strlen on the result — which reads into the 24-byte
+// struct header. This test verifies:
+//   1. the helpers exist and link,
+//   2. they return the correct byte pointer + length,
+//   3. embedded NULs survive round-trip through C.
+
+import std.fs
+import std.io
+
+extern ffi_shim_write_binary(path: string) -> int
+extern ffi_shim_check_bytes(s: string) -> int
+
+main() {
+    print("=== aether_string_ffi_unwrap ===\n\n")
+
+    tmp = io.getenv("TMPDIR")
+    if tmp == 0 { tmp = io.getenv("TEMP") }
+    if tmp == 0 { tmp = "/tmp" }
+    path = "${tmp}/aether_ffi_unwrap.bin"
+
+    print("Test 1: setup — write 10-byte file via C shim\n")
+    ok = ffi_shim_write_binary(path)
+    if ok != 1 {
+        print("  FAIL: shim failed to write file\n")
+        exit(1)
+    }
+    print("  PASS: file written\n")
+
+    print("\nTest 2: fs.read_binary returns a string (AetherString*)\n")
+    data, n, err = fs.read_binary(path)
+    if err != "" {
+        println("  FAIL: read failed: ${err}")
+        exit(1)
+    }
+    if n != 10 {
+        println("  FAIL: expected length 10, got ${n}")
+        exit(1)
+    }
+    print("  PASS: length 10\n")
+
+    print("\nTest 3: C shim unwraps via aether_string_data/length\n")
+    rc = ffi_shim_check_bytes(data)
+    if rc == -1 {
+        println("  FAIL: shim reported wrong length — aether_string_length broken")
+        exit(1)
+    }
+    if rc >= 100 {
+        offset = rc - 100
+        println("  FAIL: byte mismatch at offset ${offset} — aether_string_data returned wrong pointer")
+        exit(1)
+    }
+    if rc != 0 {
+        println("  FAIL: shim reported unexpected code ${rc}")
+        exit(1)
+    }
+    print("  PASS: all 10 bytes round-tripped through C unwrap\n")
+
+    print("\nTest 4: cleanup\n")
+    fs.delete(path)
+    print("  PASS: file removed\n")
+
+    print("\n=== aether_string_ffi_unwrap passed ===\n")
+}

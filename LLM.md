@@ -28,6 +28,54 @@ Erlang's actor syntax, compiling via C.**
   string interpolation, pattern matching.
 - **Actor model is Erlang-ish** but message types are declared, not
   duck-typed. `receive` + `send`, not `!` / mailbox-matching.
+- **Capability discipline at three levels, bidirectional host interop.**
+  Module: `--emit=lib` rejects `std.fs|net|os` imports by default,
+  opt-in via `--with=fs,net,os`. Scope: `hide`/`seal except` on any
+  lexical block (closure, trailing-block DSL, actor handler) denies
+  names from enclosing scopes at compile time. Runtime:
+  `libaether_sandbox.so` (LD_PRELOAD) intercepts libc (`open*`,
+  `connect`/`bind`/`accept`, `execve`/`fork`, `mmap`/`mprotect`,
+  `dlopen`, `getenv`) against a builder-DSL grant list, inherited
+  across `execve` — covers normal-libc code, adversaries using
+  `openat2` / `io_uring` / raw `syscall()` bypass it. Aether can be
+  the guest (host-lang apps embed via `--emit=lib` → Python ctypes /
+  Java Panama / Ruby Fiddle SDKs generated from `aether_describe()`
+  manifest; Go stubbed) OR the host (embeds Lua/Python/Perl/Ruby/Tcl/JS
+  in-process via `contrib.host.<lang>.run_sandboxed(perms, code)`;
+  Java/Go/aether-hosts-aether are separate-process). `hide`/`seal
+  except` don't travel into hosted non-Aether interpreters — those
+  are contained by grants + LD_PRELOAD only; `hide`/`seal except`
+  shape the Aether-side grant-assembly block. Closest analogue: Pony
+  object capabilities, but coarser (stdlib category / name / libc
+  entry point). See `docs/emit-lib.md`, `docs/hide-and-seal.md`,
+  `docs/containment-sandbox.md`, `docs/embedded-namespaces-and-host-bindings.md`.
+
+  Current cross-cutting gaps (`contrib/host/TODO.md` /
+  `docs/next-steps.md` → *Host Language Bridges*): capturing
+  stdout/stderr from hosted scripts (pipe rewire vs. shared-map key
+  vs. pass-through — undecided), native shared-map bindings for
+  Perl and Ruby (currently tied-hash via `eval`, which swallows
+  writes — Python/Lua/Tcl/JS have proper native bindings), and a
+  `bytes` mode on the shared map so callers don't have to base64
+  binary payloads.
+
+  Worked examples: `examples/embedded-java/trading/` (direction 1),
+  `examples/sandbox-spawn.ae` (direction 2). Integration tests:
+  `tests/integration/namespace_{python,ruby,java}/` and
+  `tests/integration/embedded_java_trading_e2e/` (direction 1).
+  Canonical docs: `docs/embedded-namespaces-and-host-bindings.md`
+  (direction 1 / typed-SDK story),
+  `docs/aether-embedded-in-host-applications.md` (direction 1 /
+  rationale — also the YAML/HCL/Pkl/Jsonnet/Starlark comparison),
+  `docs/containment-sandbox.md` (direction 2 / how the in-process
+  checker and LD_PRELOAD share a code path).
+
+  What's novel is the combination: _most_ embeddable languages
+  (Lua, Wren, Starlark, Hermes) give you the embedding but leave
+  capability management to the host. _Most_ capability-secure
+  languages (Pony, E) don't ship polyglot SDK generators or
+  in-process interpreter bridges. Aether bundles both directions
+  behind one permissions model.
 
 Syntax looks Go-ish at a glance (braces, `func_name(x: int) -> int`).
 Don't overshoot — there's no `go` keyword, no channels (send-to-actor

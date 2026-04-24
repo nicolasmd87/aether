@@ -164,17 +164,66 @@ int string_contains(const void* str, const char* substring) {
 
 int string_index_of(const void* str, const char* substring) {
     if (!str || !substring) return -1;
-    size_t sub_len = strlen(substring);
+    // Needle is binary-aware too: accepts AetherString* (for
+    // embedded NULs) or plain char*. Before this, passing an
+    // AetherString needle ran strlen past the struct header and
+    // returned garbage lengths — matters for packed-string
+    // protocols that use string_from_char(2) as a separator.
+    size_t sub_len = str_len(substring);
+    const char* sub_data = str_data(substring);
     size_t slen = str_len(str);
     const char* sdata = str_data(str);
     if (sub_len > slen) return -1;
 
     for (size_t i = 0; i <= slen - sub_len; i++) {
-        if (memcmp(sdata + i, substring, sub_len) == 0) {
+        if (memcmp(sdata + i, sub_data, sub_len) == 0) {
             return (int)i;
         }
     }
     return -1;
+}
+
+// Like string_index_of but starts the scan at byte offset `start`.
+// Returns the absolute offset of the hit (not relative to `start`),
+// or -1 on miss. Negative `start` is clamped to 0; `start` past the
+// end returns -1.
+//
+// Both haystack and needle are binary-aware (accept AetherString*
+// or plain char*). Common idiom: scanning for the next record
+// separator in a multi-record packed string. Before this API,
+// callers did `substring(s, start, length) + index_of(tail, needle)
+// + start` which allocates a fresh copy of the tail on each step.
+int string_index_of_from(const void* str, const char* substring, int start) {
+    if (!str || !substring) return -1;
+    size_t sub_len = str_len(substring);
+    const char* sub_data = str_data(substring);
+    size_t slen = str_len(str);
+    const char* sdata = str_data(str);
+    if (start < 0) start = 0;
+    if ((size_t)start > slen) return -1;
+    if (sub_len > slen - (size_t)start) return -1;
+
+    for (size_t i = (size_t)start; i <= slen - sub_len; i++) {
+        if (memcmp(sdata + i, sub_data, sub_len) == 0) {
+            return (int)i;
+        }
+    }
+    return -1;
+}
+
+// Construct a 1-byte AetherString whose single byte is `code & 0xff`.
+// Fills the gap where callers want to encode a known ASCII / low-byte
+// marker (e.g. \x01, \x02) into a string without routing through a
+// NUL-terminated literal. `code` is masked to the low 8 bits —
+// higher bits are silently dropped (caller's responsibility not to
+// pass >255 for legitimate single-byte values).
+//
+// The returned AetherString length is always 1, even when `code` is
+// 0 (a NUL byte) — embedded NULs are preserved via
+// string_new_with_length, not string_new.
+AetherString* string_from_char(int code) {
+    char byte = (char)(code & 0xff);
+    return string_new_with_length(&byte, 1);
 }
 
 char* string_substring(const void* str, int start, int end) {
@@ -355,6 +404,20 @@ const char* string_to_cstr(const void* str) {
     if (is_aether_string(str)) return ((const AetherString*)str)->data;
     // Already a plain char*
     return (const char*)str;
+}
+
+// Public FFI accessors. See aether_string.h for the rationale — C
+// shims that consume a `-> string` extern return must NOT treat the
+// pointer as `const char*` for memcpy/strlen, or they read into the
+// struct header. These helpers unwrap the AetherString if present and
+// fall back to strlen-based handling for plain char* returns (legacy
+// raw-TLS externs). Safe on NULL.
+const char* aether_string_data(const void* s) {
+    return str_data(s);
+}
+
+size_t aether_string_length(const void* s) {
+    return str_len(s);
 }
 
 AetherString* string_from_int(int value) {
