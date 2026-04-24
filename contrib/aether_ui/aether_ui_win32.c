@@ -1988,11 +1988,20 @@ void aether_ui_menu_bar_attach(int app_handle, int bar_handle) {
 void aether_ui_menu_popup(int menu_handle, int anchor_widget) {
     MenuEntry* m = menu_at(menu_handle);
     Widget* w = widget_at(anchor_widget);
-    if (!m || !w) return;
+    if (!m || !w || !w->hwnd) return;
+    // TrackPopupMenu runs its own modal message loop and only returns
+    // when the menu is dismissed by a click or Escape. In headless
+    // contexts (widget smoke tests, CI without a window server) there
+    // is no user input and no outer message pump, so the call would
+    // block indefinitely. Require a visible ancestor window before
+    // showing the popup — that is both what the API semantically needs
+    // and a clean gate for test environments that never mount widgets.
+    HWND owner = GetParent(w->hwnd);
+    if (!owner || !IsWindowVisible(owner)) return;
     POINT pt;
     GetCursorPos(&pt);
     TrackPopupMenu(m->hmenu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON,
-                   pt.x, pt.y, 0, GetParent(w->hwnd), NULL);
+                   pt.x, pt.y, 0, owner, NULL);
 }
 
 // ---------------------------------------------------------------------------
