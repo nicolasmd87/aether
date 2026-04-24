@@ -279,25 +279,30 @@ test-fast: compiler-fast
 	@echo "==================================="
 	./build/test_runner$(EXE_EXT)
 
+# test-valgrind / test-asan / test-memory: link the test runner's own
+# main() from TEST_SRC together with the compiler-as-library sources.
+# Must use COMPILER_LIB_SRC (no aetherc.c) — linking COMPILER_SRC here
+# pulls in aetherc's main() and collides with test_main.c's main().
+# The test-fast target at line ~275 is the reference pattern.
 test-valgrind: compiler
 	@echo "==================================="
 	@echo "Running Tests with Valgrind"
 	@echo "==================================="
-	$(CC) $(CFLAGS) -O0 -g $(TEST_SRC) $(COMPILER_SRC) $(RUNTIME_SRC) $(STD_SRC) $(STD_REACTOR_SRC) -Icompiler -Istd -o build/test_runner$(EXE_EXT) $(LDFLAGS)
+	$(CC) $(CFLAGS) -O0 -g $(TEST_SRC) $(COMPILER_LIB_SRC) $(RUNTIME_SRC) $(STD_SRC) $(STD_REACTOR_SRC) $(COLLECTIONS_SRC) -Icompiler -Istd -Istd/collections -o build/test_runner$(EXE_EXT) $(LDFLAGS)
 	valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1 ./build/test_runner$(EXE_EXT)
 
 test-asan: compiler
 	@echo "==================================="
 	@echo "Running Tests with AddressSanitizer"
 	@echo "==================================="
-	$(CC) -fsanitize=address -fsanitize=leak -fno-omit-frame-pointer -O1 -g $(TEST_SRC) $(COMPILER_SRC) $(RUNTIME_SRC) $(STD_SRC) $(STD_REACTOR_SRC) -Icompiler -Istd -o build/test_runner_asan$(EXE_EXT) -lpthread -lm
+	$(CC) -fsanitize=address -fsanitize=leak -fno-omit-frame-pointer -O1 -g $(TEST_SRC) $(COMPILER_LIB_SRC) $(RUNTIME_SRC) $(STD_SRC) $(STD_REACTOR_SRC) $(COLLECTIONS_SRC) -Icompiler -Istd -Istd/collections -o build/test_runner_asan$(EXE_EXT) $(LDFLAGS) -lpthread -lm
 	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 ./build/test_runner_asan$(EXE_EXT)
 
 test-memory: compiler
 	@echo "==================================="
 	@echo "Running Memory Tracking Tests"
 	@echo "==================================="
-	$(CC) $(CFLAGS) -DAETHER_MEMORY_TRACKING $(TEST_SRC) $(COMPILER_SRC) $(RUNTIME_SRC) $(STD_SRC) $(STD_REACTOR_SRC) -Icompiler -Istd -o build/test_runner_mem$(EXE_EXT) $(LDFLAGS)
+	$(CC) $(CFLAGS) -DAETHER_MEMORY_TRACKING $(TEST_SRC) $(COMPILER_LIB_SRC) $(RUNTIME_SRC) $(STD_SRC) $(STD_REACTOR_SRC) $(COLLECTIONS_SRC) -Icompiler -Istd -Istd/collections -o build/test_runner_mem$(EXE_EXT) $(LDFLAGS)
 	./build/test_runner_mem$(EXE_EXT)
 
 test-manual-runtime: compiler
@@ -350,7 +355,7 @@ test-ae: compiler ae stdlib
 	printf 'fi\n'                                                                                   >> "$$script"; \
 	chmod +x "$$script"; \
 	root=$$(pwd); \
-	find tests/syntax tests/compiler tests/integration tests/regression -path '*/lib/*' -prune -o -path '*/custom_lib_dir/*' -prune -o -path 'tests/integration/namespace_*' -prune -o -path 'tests/integration/closure_actor_state_reject/*' -prune -o -path 'tests/integration/reserved_keyword_error/*' -prune -o -path 'tests/integration/ae_run_cflags/*' -prune -o -path 'tests/integration/bin_path_match/*' -prune -o -path 'tests/integration/http_external_ptr/*' -prune -o -path 'tests/integration/fs_read_binary_nul/*' -prune -o -path 'tests/integration/fs_write_binary_nul/*' -prune -o -path 'tests/integration/cryptography_sha/*' -prune -o -path 'tests/integration/sqlite_roundtrip/*' -prune -o -path 'tests/integration/zlib_roundtrip/*' -prune -o -name '*.ae' -print 2>/dev/null | sort | \
+	find tests/syntax tests/compiler tests/integration tests/regression -path '*/lib/*' -prune -o -path '*/custom_lib_dir/*' -prune -o -path 'tests/integration/namespace_*' -prune -o -path 'tests/integration/closure_actor_state_reject/*' -prune -o -path 'tests/integration/reserved_keyword_error/*' -prune -o -path 'tests/integration/ae_run_cflags/*' -prune -o -path 'tests/integration/bin_path_match/*' -prune -o -path 'tests/integration/http_external_ptr/*' -prune -o -path 'tests/integration/fs_read_binary_nul/*' -prune -o -path 'tests/integration/fs_write_binary_nul/*' -prune -o -path 'tests/integration/cryptography_sha/*' -prune -o -path 'tests/integration/sqlite_roundtrip/*' -prune -o -path 'tests/integration/zlib_roundtrip/*' -prune -o -path 'tests/integration/aether_string_ffi_unwrap/*' -prune -o -path 'tests/integration/ptr_return_int_zero_inference/*' -prune -o -name '*.ae' -print 2>/dev/null | sort | \
 	xargs -P $(NPROC) -I{} "$$script" "{}" "$$tmpdir" "$$root"; \
 	for sh_test in $$(find tests/integration -name 'test_*.sh' 2>/dev/null | sort); do \
 		name=$$(echo "$$sh_test" | sed 's|tests/||;s|/|_|g;s|\.sh$$||'); \

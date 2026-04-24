@@ -866,6 +866,126 @@ void infer_function_return_types(ASTNode* program, SymbolTable* table) {
     }
 }
 
+// Classic truncation-on-assign: inside a function returning `ptr`, the
+// pattern
+//     out = 0          // inferred as int (0 is a valid int literal)
+//     if cond { out = some_ptr_call() }
+//     return out       // emitted as `return out;` where out is `int`
+// generates `int out = 0;` in C. On 64-bit targets the later ptr-typed
+// write truncates to 32 bits; the caller then dereferences a junk
+// pointer. The language accepts `0` as either int or ptr, so the
+// declaration's type should widen when a subsequent assignment gives
+// it a ptr value. This pass walks each function body once, finds the
+// offending pattern, and widens both the decl's node_type and the
+// symbol-table entry so codegen emits `void* out = NULL;`.
+//
+// Conservative on purpose:
+//   - only triggers when the declaration's initializer is the literal 0
+//     (not any int expression) — widening arbitrary int locals to ptr
+//     would hide real type mismatches.
+//   - only looks at assignments in the same block (and its children);
+//     a ptr write in a later branch still counts.
+static int is_literal_zero(ASTNode* init) {
+    if (!init || init->type != AST_LITERAL || !init->value) return 0;
+    const char* p = init->value;
+    if (*p == '+' || *p == '-') p++;
+    if (*p == '\0') return 0;
+    for (; *p; p++) if (*p != '0') return 0;
+    return 1;
+}
+
+static int assignment_to_is_ptr(ASTNode* node, const char* name) {
+    if (!node) return 0;
+    if (node->type == AST_ASSIGNMENT && node->child_count >= 2) {
+        ASTNode* lhs = node->children[0];
+        ASTNode* rhs = node->children[1];
+        if (lhs && lhs->value && strcmp(lhs->value, name) == 0 &&
+            rhs && rhs->node_type && rhs->node_type->kind == TYPE_PTR) {
+            return 1;
+        }
+    }
+    // Reassignment via AST_VARIABLE_DECLARATION with the same name is
+    // how Python-style reassigns lower in practice; RHS is children[0].
+    if (node->type == AST_VARIABLE_DECLARATION && node->value &&
+        strcmp(node->value, name) == 0 && node->child_count > 0) {
+        ASTNode* rhs = node->children[0];
+        if (rhs && rhs->node_type && rhs->node_type->kind == TYPE_PTR) {
+            return 1;
+        }
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        if (assignment_to_is_ptr(node->children[i], name)) return 1;
+    }
+    return 0;
+}
+
+static void widen_ptr_assigned_locals_in_block(ASTNode* block, SymbolTable* symbols) {
+    if (!block) return;
+    if (block->type == AST_BLOCK) {
+        for (int i = 0; i < block->child_count; i++) {
+            ASTNode* stmt = block->children[i];
+            if (!stmt) continue;
+            if (stmt->type == AST_VARIABLE_DECLARATION &&
+                stmt->value && stmt->child_count > 0 &&
+                stmt->node_type && stmt->node_type->kind == TYPE_INT &&
+                is_literal_zero(stmt->children[0])) {
+                // Scan later siblings (including nested blocks) for a
+                // ptr-typed write to this name.
+                int widen = 0;
+                for (int j = i + 1; j < block->child_count; j++) {
+                    if (assignment_to_is_ptr(block->children[j], stmt->value)) {
+                        widen = 1;
+                        break;
+                    }
+                }
+                if (widen) {
+                    free_type(stmt->node_type);
+                    stmt->node_type = create_type(TYPE_PTR);
+                    // Also tag the initializer so later code treats the
+                    // literal 0 as a ptr-slot null (codegen reads this
+                    // when emitting the `= ...` for the declaration).
+                    if (stmt->children[0]->node_type) {
+                        free_type(stmt->children[0]->node_type);
+                    }
+                    stmt->children[0]->node_type = create_type(TYPE_PTR);
+                    if (symbols) {
+                        Symbol* sym = lookup_symbol(symbols, stmt->value);
+                        if (sym) {
+                            if (sym->type) free_type(sym->type);
+                            sym->type = create_type(TYPE_PTR);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Recurse into children so nested blocks (if/while/for bodies) get
+    // the same treatment for their own locals.
+    for (int i = 0; i < block->child_count; i++) {
+        widen_ptr_assigned_locals_in_block(block->children[i], symbols);
+    }
+}
+
+static void widen_ptr_assigned_locals(ASTNode* program, SymbolTable* symbols) {
+    if (!program) return;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* node = program->children[i];
+        if (!node) continue;
+        if (node->type != AST_FUNCTION_DEFINITION &&
+            node->type != AST_BUILDER_FUNCTION) continue;
+        // Only widen inside ptr-returning functions — widening in an
+        // int-returning function would change the return type and
+        // break code that genuinely wanted an int accumulator.
+        if (!node->node_type || node->node_type->kind != TYPE_PTR) continue;
+        for (int c = 0; c < node->child_count; c++) {
+            ASTNode* child = node->children[c];
+            if (child && child->type == AST_BLOCK) {
+                widen_ptr_assigned_locals_in_block(child, symbols);
+            }
+        }
+    }
+}
+
 // Main inference function
 int infer_all_types(ASTNode* program, SymbolTable* table) {
     if (!program) return 0;
@@ -897,9 +1017,15 @@ int infer_all_types(ASTNode* program, SymbolTable* table) {
     
     // Phase 6: Infer function return types (now that return expressions have types)
     infer_function_return_types(program, table);
-    
+
+    // Phase 7: Widen `out = 0` locals to ptr when a later assignment in
+    // the same ptr-returning function is ptr-typed. See
+    // widen_ptr_assigned_locals above for the rationale — prevents
+    // silent pointer truncation on 64-bit targets.
+    widen_ptr_assigned_locals(program, table);
+
     free_inference_context(ctx);
-    
+
     return success;
 }
 

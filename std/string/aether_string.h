@@ -77,6 +77,25 @@ void string_array_free(AetherStringArray* arr);
 
 // Conversion
 const char* string_to_cstr(const void* str);
+
+// Public FFI accessors for consuming a `-> string` return from C.
+//
+// A function that an Aether program declares as `-> string` returns an
+// AetherString* — a 24-byte magic-tagged header whose `data` field
+// points at the payload — NOT a plain char*. C shims that type the
+// same extern as `extern const char* foo(...)` and hand the result to
+// memcpy/strlen read into the struct header and get garbage (the
+// magic bytes, not the content). These helpers accept either shape
+// (AetherString* or raw char*), return the byte pointer / length the
+// shim actually wanted, and are safe to call on NULL.
+//
+// Preferred over `string_to_cstr` / `string_length` in FFI code
+// because the `aether_` prefix matches the ABI-mangled export names
+// and signals intent to reviewers. See docs/aether-string-abi.md for
+// the full ABI contract.
+const char* aether_string_data(const void* s);
+size_t      aether_string_length(const void* s);
+
 AetherString* string_from_int(int value);
 // 64-bit sibling of string_from_int. Uses `long long` so it covers
 // Aether's `long` type across platforms where `long` is 32-bit (MSVC).

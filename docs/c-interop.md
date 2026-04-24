@@ -211,6 +211,44 @@ main() {
 
 The generated C is `list_add(items, (void*)(intptr_t)(i))`, which is the well-defined idiom for storing integer values in `void*` containers.
 
+## Consuming `-> string` Returns From C
+
+An extern declared `-> string` does NOT give the C side a plain `const char*`. It returns an `AetherString*` — a 24-byte, magic-tagged header whose `data` field points at the actual bytes:
+
+```c
+struct AetherString {
+    unsigned int magic;      // 0xAE57C0DE
+    int          ref_count;
+    size_t       length;
+    size_t       capacity;
+    char        *data;       // <- the payload the shim actually wants
+};
+```
+
+If a C shim types the same extern as `extern const char* foo(...)` and then runs `memcpy(dst, result, n)` or `strlen(result)` on it, the shim reads into the struct header instead of the payload: the first bytes are the magic, followed by the ref count, lengths, etc. The symptom is garbage data + wildly wrong lengths; there is no build warning and no runtime diagnostic.
+
+The fix is to unwrap the result through the public helpers in `aether_string.h`:
+
+```c
+#include "aether_string.h"
+
+extern const void* read_config_file(const char* path);
+// (Note: redeclaring the extern's return as `const void*` makes the
+// unwrap requirement obvious. `const char*` compiles but is a trap.)
+
+void load(const char* path, char* out, size_t cap) {
+    const void* result = read_config_file(path);
+    const char* data   = aether_string_data(result);     // real byte pointer
+    size_t      len    = aether_string_length(result);   // exact length
+    if (len > cap) len = cap;
+    memcpy(out, data, len);                               // binary-safe
+}
+```
+
+Both helpers accept either an `AetherString*` (the common case) or a raw `char*` (legacy TLS-arena externs whose names end in `_raw`), so shims can be agnostic about which flavour they got. Both are safe on NULL.
+
+> **Historical note:** older shims open-coded this unwrap by pattern-matching the magic number themselves (`#define AETHER_STRING_MAGIC 0xAE57C0DE` + cast). `aether_string_data` / `aether_string_length` have replaced that pattern — downstream projects (including the svn-aether port) can delete the open-coded unwrap once they pick up the new headers.
+
 ## Embedding Aether in C Applications
 
 If you want to embed Aether actors in your existing C application (the reverse direction), see the [C Embedding Guide](c-embedding.md). This covers:

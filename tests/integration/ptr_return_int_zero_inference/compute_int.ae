@@ -1,0 +1,17 @@
+// Counter-regression: an int-returning function must KEEP `out = 0`
+// as `int out = 0`. Widening to ptr here would be wrong — there's no
+// pointer assignment anywhere in this function. Guards against an
+// over-eager fix for defect §3.
+
+compute(n: int) -> int {
+    out = 0
+    if n > 0 {
+        out = n * 2
+    }
+    return out
+}
+
+main() {
+    x = compute(5)
+    println("done")
+}

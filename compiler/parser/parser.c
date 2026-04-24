@@ -75,12 +75,25 @@ Token* expect_token(Parser* parser, AeTokenType expected) {
             snprintf(error_msg, sizeof(error_msg),
                 "'%s' is a reserved keyword and cannot be used as an identifier; rename it (e.g. '%s_' or 'msg')",
                 token->value, token->value);
-        } else {
-            snprintf(error_msg, sizeof(error_msg),
-                "Expected %s, got %s",
-                token_type_to_string(expected),
-                token ? token_type_to_string(token->type) : "EOF");
+            // Emit with a reserved-keyword-specific hint so the `help:`
+            // line matches the error (previous default hint was the
+            // generic "check for missing parentheses, braces, or
+            // keywords", which misled users into hunting for a parse
+            // problem that wasn't there).
+            char hint[128];
+            snprintf(hint, sizeof(hint),
+                "rename to '%s_' or another identifier",
+                token->value);
+            if (!parser->suppress_errors) {
+                aether_error_full(error_msg, token->line, token->column,
+                                  hint, NULL, AETHER_ERR_SYNTAX);
+            }
+            return NULL;
         }
+        snprintf(error_msg, sizeof(error_msg),
+            "Expected %s, got %s",
+            token_type_to_string(expected),
+            token ? token_type_to_string(token->type) : "EOF");
         parser_error(parser, error_msg);
         return NULL;
     }
@@ -2240,7 +2253,14 @@ ASTNode* parse_block(Parser* parser) {
                 snprintf(msg, sizeof(msg),
                     "'%s' is a reserved keyword and cannot be used as an identifier; rename it (e.g. '%s_' or 'msg')",
                     stmt_head->value, stmt_head->value);
-                parser_error(parser, msg);
+                char hint[128];
+                snprintf(hint, sizeof(hint),
+                    "rename to '%s_' or another identifier",
+                    stmt_head->value);
+                if (!parser->suppress_errors) {
+                    aether_error_full(msg, stmt_head->line, stmt_head->column,
+                                      hint, NULL, AETHER_ERR_SYNTAX);
+                }
             } else {
                 parser_error(parser, "Expected statement in block");
             }

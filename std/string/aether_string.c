@@ -406,6 +406,20 @@ const char* string_to_cstr(const void* str) {
     return (const char*)str;
 }
 
+// Public FFI accessors. See aether_string.h for the rationale — C
+// shims that consume a `-> string` extern return must NOT treat the
+// pointer as `const char*` for memcpy/strlen, or they read into the
+// struct header. These helpers unwrap the AetherString if present and
+// fall back to strlen-based handling for plain char* returns (legacy
+// raw-TLS externs). Safe on NULL.
+const char* aether_string_data(const void* s) {
+    return str_data(s);
+}
+
+size_t aether_string_length(const void* s) {
+    return str_len(s);
+}
+
 AetherString* string_from_int(int value) {
     char buffer[32];
     snprintf(buffer, sizeof(buffer), "%d", value);

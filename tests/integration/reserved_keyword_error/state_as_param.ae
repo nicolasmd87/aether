@@ -1,0 +1,11 @@
+// Regression for new_defects.md §2: `state` is a reserved keyword.
+// Previously E0100's `help:` line defaulted to "check for missing
+// parentheses, braces, or keywords", which made users hunt for a
+// parse bug that wasn't there. The help line now has to talk about
+// renaming the identifier.
+extern svnae_wc_nodelist_append(L: ptr, path: string, kind: int,
+    base_rev: int, base_sha1: string, state: int, conflicted: int) -> int
+
+main() {
+    println("ok")
+}
