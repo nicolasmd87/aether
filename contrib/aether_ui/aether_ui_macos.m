@@ -33,6 +33,20 @@ typedef struct {
 } AeClosure;
 
 // ---------------------------------------------------------------------------
+// AETHER_UI_HEADLESS contract — set by CI, widget smoke tests, or any
+// caller that wants to exercise the backend without a user sitting at
+// the keyboard. Every API that would otherwise run a modal message
+// loop (alert, sheet, file/save dialog, popup menu) returns immediately
+// when this flag is set. Without this, those APIs can spin their own
+// tracking loop and block the process forever — there is no user input
+// on CI and no outer runloop to dismiss the modal.
+// ---------------------------------------------------------------------------
+static int aeui_is_headless(void) {
+    const char* v = getenv("AETHER_UI_HEADLESS");
+    return v && v[0] && v[0] != '0';
+}
+
+// ---------------------------------------------------------------------------
 // Widget type tags — mirror of widget_type_name() in the GTK4 backend.
 // Kept in a parallel array so the test server can report types without
 // guessing via isKindOfClass:.
@@ -940,6 +954,7 @@ void aether_ui_set_tooltip_ctx(void* ctx, const char* text) {
 // ---------------------------------------------------------------------------
 
 void aether_ui_alert_impl(const char* title, const char* message) {
+    if (aeui_is_headless()) return;  // runModal would block forever on CI
     NSAlert* alert = [[NSAlert alloc] init];
     [alert setMessageText:[NSString stringWithUTF8String:title ? title : ""]];
     [alert setInformativeText:[NSString stringWithUTF8String:message ? message : ""]];
@@ -948,6 +963,7 @@ void aether_ui_alert_impl(const char* title, const char* message) {
 }
 
 char* aether_ui_file_open(const char* title) {
+    if (aeui_is_headless()) return strdup("");  // runModal would block forever
     NSOpenPanel* panel = [NSOpenPanel openPanel];
     if (title) [panel setTitle:[NSString stringWithUTF8String:title]];
     [panel setCanChooseFiles:YES];
@@ -1087,6 +1103,7 @@ void aether_ui_sheet_set_body_impl(int handle, int root_handle) {
 }
 
 void aether_ui_sheet_present_impl(int handle) {
+    if (aeui_is_headless()) return;  // sheet tracking needs an interactive runloop
     if (!sheet_windows || handle < 1 || handle > (int)[sheet_windows count]) return;
     NSWindow* sheet = sheet_windows[handle - 1];
     if (primary_window) {
@@ -2122,14 +2139,19 @@ void aether_ui_menu_bar_attach(int app_handle, int bar_handle) {
 
 void aether_ui_menu_popup(int menu_handle, int anchor_widget) {
     if (menu_handle < 1 || menu_handle > mac_menu_count) return;
+    // popUpMenuPositioningItem tracks the menu in its own loop until
+    // dismissed. With no NSApp run-loop active (widget smoke tests,
+    // any headless caller) the loop can fail to dismiss and block the
+    // caller. Respect AETHER_UI_HEADLESS unconditionally.
+    if (aeui_is_headless()) return;
     NSView* anchor = (__bridge NSView*)aether_ui_get_widget(anchor_widget);
     NSMenu* m = mac_menus[menu_handle - 1].menu;
     NSPoint loc = [NSEvent mouseLocation];
     // `inView:` requires the view to be attached to a window; otherwise
-    // Cocoa throws NSInternalInconsistencyException. When the anchor has
-    // no window (headless tests, widget constructed but not mounted),
-    // fall back to screen-space positioning with `inView:nil`, which
-    // popUpMenuPositioningItem explicitly documents as supported.
+    // Cocoa throws NSInternalInconsistencyException. When the anchor
+    // has no window, fall back to screen-space positioning with
+    // `inView:nil`, which popUpMenuPositioningItem explicitly documents
+    // as supported.
     NSView* viewArg = (anchor && anchor.window) ? anchor : nil;
     if (viewArg) {
         loc = [viewArg.window convertPointFromScreen:loc];

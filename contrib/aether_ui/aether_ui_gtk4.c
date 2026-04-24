@@ -33,6 +33,18 @@ static void ensure_gtk_init(void) {
 }
 
 // ---------------------------------------------------------------------------
+// AETHER_UI_HEADLESS contract — set by CI, widget smoke tests, or any
+// caller that wants to exercise the backend without a user. Every API
+// that would otherwise show a modal dialog (alert, file_open, …)
+// returns without UI when this flag is set. Without this, modal
+// dialogs can block waiting for interaction that never comes.
+// ---------------------------------------------------------------------------
+static int aeui_is_headless(void) {
+    const char* v = getenv("AETHER_UI_HEADLESS");
+    return v && v[0] && v[0] != '0';
+}
+
+// ---------------------------------------------------------------------------
 // Widget registry — flat array of GtkWidget*, 1-based handles.
 // ---------------------------------------------------------------------------
 static GtkWidget** widgets = NULL;
@@ -926,6 +938,7 @@ void aether_ui_set_margin(int handle, int top, int right, int bottom, int left) 
 
 // Alert dialog — modal message box with OK button.
 void aether_ui_alert_impl(const char* title, const char* message) {
+    if (aeui_is_headless()) return;  // modal dialog would block on CI
     ensure_gtk_init();
     GtkAlertDialog* dialog = gtk_alert_dialog_new("%s", message ? message : "");
     if (title) gtk_alert_dialog_set_detail(dialog, title);

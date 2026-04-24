@@ -69,6 +69,20 @@ static inline void invoke_closure(AeClosure* c) {
 }
 
 // ---------------------------------------------------------------------------
+// AETHER_UI_HEADLESS contract — set by CI, widget smoke tests, or any
+// caller that wants to exercise the backend without a user. Every API
+// that would otherwise run a modal message loop (MessageBox,
+// TrackPopupMenu, GetOpenFileName, GetSaveFileName) returns without
+// showing UI when this flag is set. Without this, those APIs block the
+// calling thread forever — there is no user input on CI and no outer
+// message pump to dismiss.
+// ---------------------------------------------------------------------------
+static int aeui_is_headless(void) {
+    const char* v = getenv("AETHER_UI_HEADLESS");
+    return v && v[0] && v[0] != '0';
+}
+
+// ---------------------------------------------------------------------------
 // UTF-8 ↔ UTF-16 helpers.
 //
 // Windows uses UTF-16 internally (`wchar_t`). Aether uses UTF-8 (`char*`).
@@ -1665,12 +1679,14 @@ void aether_ui_on_double_click_impl(int handle, void* boxed_closure) {
 // System services: alert, file open, clipboard, timer, open URL, dark mode.
 // ---------------------------------------------------------------------------
 void aether_ui_alert_impl(const char* title, const char* message) {
+    if (aeui_is_headless()) return;  // MessageBox would block indefinitely
     ensure_win_init();
     MessageBoxW(NULL, utf8_to_wide(message), utf8_to_wide(title),
                 MB_OK | MB_ICONINFORMATION);
 }
 
 char* aether_ui_file_open(const char* title) {
+    if (aeui_is_headless()) return NULL;  // modal file dialog would block
     ensure_win_init();
     wchar_t file[1024] = L"";
     OPENFILENAMEW ofn;
@@ -1986,16 +2002,17 @@ void aether_ui_menu_bar_attach(int app_handle, int bar_handle) {
 }
 
 void aether_ui_menu_popup(int menu_handle, int anchor_widget) {
+    // TrackPopupMenu runs its own modal message loop and only returns
+    // when the menu is dismissed by a click or Escape. In headless
+    // contexts (widget smoke tests, CI without a window server) the
+    // call would block indefinitely — no user input, no outer message
+    // pump to dismiss. Respect AETHER_UI_HEADLESS and also require a
+    // visible ancestor window as a second guard for programming errors
+    // that pop a menu from an unmounted widget.
+    if (aeui_is_headless()) return;
     MenuEntry* m = menu_at(menu_handle);
     Widget* w = widget_at(anchor_widget);
     if (!m || !w || !w->hwnd) return;
-    // TrackPopupMenu runs its own modal message loop and only returns
-    // when the menu is dismissed by a click or Escape. In headless
-    // contexts (widget smoke tests, CI without a window server) there
-    // is no user input and no outer message pump, so the call would
-    // block indefinitely. Require a visible ancestor window before
-    // showing the popup — that is both what the API semantically needs
-    // and a clean gate for test environments that never mount widgets.
     HWND owner = GetParent(w->hwnd);
     if (!owner || !IsWindowVisible(owner)) return;
     POINT pt;

@@ -4,9 +4,15 @@
 //
 // Runs headless — creates widgets but never pumps the message loop.
 // Suitable for CI on every platform.
+//
+// Sets AETHER_UI_HEADLESS=1 at startup (see main()). Every backend's
+// modal API (menu_popup, alert, file_open, sheet_present, …) must
+// honor this flag and no-op, otherwise the test hangs on CI waiting
+// for user input that will never come.
 
 #include "test_framework.h"
 #include "../aether_ui_backend.h"
+#include <stdlib.h>  // setenv
 
 int ae_test_pass = 0;
 int ae_test_fail = 0;
@@ -245,6 +251,18 @@ static void test_grid(void) {
 }
 
 int main(void) {
+    // Announce that we're running headless so every backend skips
+    // modal UI (menu popups, file dialogs, alerts, sheets). Without
+    // this, TrackPopupMenu on Win32 / popUpMenuPositioningItem on
+    // macOS / modal GtkAlertDialog on GTK can spin their own message
+    // loop and block indefinitely — the tests have no user to click
+    // anything and no outer runloop to dismiss.
+    // The "0" overwrite flag preserves any external setting.
+    setenv("AETHER_UI_HEADLESS", "1", 0);
+    // Prevent stdout block-buffering when redirected to a CI log file
+    // so progress is observable on hangs.
+    setvbuf(stdout, NULL, _IOLBF, 0);
+
     printf("Running Aether UI backend tests...\n\n");
     test_state_roundtrip();
     test_basic_widgets();
