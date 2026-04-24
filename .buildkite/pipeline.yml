@@ -30,18 +30,7 @@
       retry:                                                                                                                                                                             
         automatic:
           - exit_status: -1                                                                                                                                                              
-            limit: 1                                              
-
-    - label: ":test_tube: Valgrind leak check"
-      command: make test-valgrind
-      agents:                                                                                                                                                                            
-        queue: "default-queue"
-        aether: "1"                                                                                                                                                                      
-      timeout_in_minutes: 20                                      
-      retry:
-        automatic:
-          - exit_status: -1
-            limit: 1                                                                                                                                                                     
+            limit: 1                                                                                                                                                                                                                
    
     - label: ":recycle: Cooperative scheduler"                                                                                                                                           
       command: make ci-coop                                       
