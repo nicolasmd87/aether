@@ -47,6 +47,12 @@ extern fs_readlink_raw(path: string) -> string
 extern fs_is_symlink(path: string) -> int
 extern fs_unlink_raw(path: string) -> int
 
+// Non-atomic binary write: fopen("wb") + fwrite(len bytes) + fclose.
+// Binary-safe because length is explicit. Cheaper than fs_write_atomic_raw
+// when a partial file on crash is acceptable — scratch writes, caches,
+// and anywhere the destination isn't load-bearing for another process.
+extern fs_write_binary_raw(path: string, data: string, length: int) -> int
+
 // Durable write: write-to-tmp + fsync + rename over destination.
 // Binary-safe — takes an explicit length so embedded NULs survive.
 extern fs_write_atomic_raw(path: string, data: string, length: int) -> int
@@ -251,6 +257,28 @@ glob_multi(patterns: ptr) -> {
         return null, "glob failed"
     }
     return list, ""
+}
+
+// Non-atomic binary write: open, write exactly `length` bytes,
+// close. Binary-safe — embedded NULs in `data` survive because
+// the length is explicit (unlike `fs.write` which also works for
+// AetherString inputs but trusts `string.length(content)` to
+// report the right count).
+//
+// When you want the write to be crash-safe, use `fs.write_atomic`
+// instead (stage + fsync + rename). `write_binary` skips that
+// machinery for cheaper writes to scratch paths, caches, or any
+// destination where a partial file on crash is acceptable.
+//
+// Returns "" on success, error on failure (open / write / close).
+// On failure, whatever bytes were written stay on disk — caller
+// removes the partial file if needed.
+write_binary(path: string, data: string, length: int) -> string {
+    ok = fs_write_binary_raw(path, data, length)
+    if ok == 0 {
+        return "binary write failed"
+    }
+    return ""
 }
 
 // Durable write: stage `data` into a sibling tmp file, fsync, then
