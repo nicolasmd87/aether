@@ -2122,13 +2122,19 @@ void aether_ui_menu_bar_attach(int app_handle, int bar_handle) {
 
 void aether_ui_menu_popup(int menu_handle, int anchor_widget) {
     if (menu_handle < 1 || menu_handle > mac_menu_count) return;
-    NSView* anchor = (NSView*)aether_ui_get_widget(anchor_widget);
+    NSView* anchor = (__bridge NSView*)aether_ui_get_widget(anchor_widget);
     NSMenu* m = mac_menus[menu_handle - 1].menu;
     NSPoint loc = [NSEvent mouseLocation];
-    if (anchor && anchor.window) {
-        loc = [anchor.window convertPointFromScreen:loc];
+    // `inView:` requires the view to be attached to a window; otherwise
+    // Cocoa throws NSInternalInconsistencyException. When the anchor has
+    // no window (headless tests, widget constructed but not mounted),
+    // fall back to screen-space positioning with `inView:nil`, which
+    // popUpMenuPositioningItem explicitly documents as supported.
+    NSView* viewArg = (anchor && anchor.window) ? anchor : nil;
+    if (viewArg) {
+        loc = [viewArg.window convertPointFromScreen:loc];
     }
-    [m popUpMenuPositioningItem:nil atLocation:loc inView:anchor];
+    [m popUpMenuPositioningItem:nil atLocation:loc inView:viewArg];
 }
 
 // ---------------------------------------------------------------------------
@@ -2143,11 +2149,12 @@ int aether_ui_grid_create(int cols, int row_spacing, int col_spacing) {
 
 void aether_ui_grid_place(int grid_handle, int child_handle,
                           int row, int col, int row_span, int col_span) {
-    NSGridView* grid = (NSGridView*)aether_ui_get_widget(grid_handle);
-    NSView* child = (NSView*)aether_ui_get_widget(child_handle);
+    NSGridView* grid = (__bridge NSGridView*)aether_ui_get_widget(grid_handle);
+    NSView* child = (__bridge NSView*)aether_ui_get_widget(child_handle);
     if (!grid || !child) return;
-    // Extend rows/cols if needed.
-    while (grid.numberOfRows <= row) [grid addRow:@[]];
+    // Extend rows/cols if needed. NSGridView's row-append selector is
+    // `addRowWithViews:` — `addRow:` does not exist.
+    while (grid.numberOfRows <= row) [grid addRowWithViews:@[]];
     NSGridCell* cell = [grid cellAtColumnIndex:col rowIndex:row];
     [cell setContentView:child];
     if (row_span > 1 || col_span > 1) {
