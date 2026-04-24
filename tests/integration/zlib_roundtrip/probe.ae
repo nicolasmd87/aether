@@ -1,0 +1,174 @@
+// Regression: std.zlib.deflate / inflate round-trip preserves every
+// byte, including binary payloads with embedded NULs. The NUL case
+// exercises the AetherString-unwrap path inside aether_zlib.c —
+// without it the compressed stream would contain the struct header
+// (magic 0xAE57C0DE + refcount + length + capacity + data-ptr)
+// rather than the payload, and decompression would either fail
+// outright or produce garbage.
+
+import std.zlib
+import std.fs
+import std.string
+import std.io
+
+extern zlib_probe_write_binary(path: string) -> int
+
+main() {
+    print("=== std.zlib round-trip ===\n\n")
+
+    // Capability probe: if the toolchain was built without zlib (the
+    // Windows CI matrix today — MSYS2 and mingw-w64 don't auto-detect
+    // it), the wrappers return "zlib unavailable" for every call. The
+    // test's assertions can't meaningfully run without a compression
+    // backend, so skip gracefully rather than crashing the matrix.
+    // See CONTRIBUTING.md §"Coding for portability" pattern #2.
+    if zlib.available() == 0 {
+        println("SKIP zlib_roundtrip: zlib unavailable (likely Windows CI without zlib-devel)")
+        print("\n=== std.zlib tests skipped (no backend) ===\n")
+        return
+    }
+
+    // ---- Test 1: text payload round-trips unchanged ----
+    print("Test 1: text round-trip\n")
+    msg = "Hello, zlib world! This is a test string that should compress down to fewer bytes. Repetition repetition repetition repetition repetition."
+    n_in = string.length(msg)
+    c1, nc1, cerr1 = zlib.deflate(msg, n_in, -1)
+    if cerr1 != "" {
+        println("  FAIL: deflate errored: ${cerr1}")
+        exit(1)
+    }
+    if nc1 >= n_in {
+        // Repetitive text must compress below the original.
+        println("  FAIL: expected compression, got ${nc1} from ${n_in}")
+        exit(1)
+    }
+    u1, nu1, uerr1 = zlib.inflate(c1, nc1)
+    if uerr1 != "" {
+        println("  FAIL: inflate errored: ${uerr1}")
+        exit(1)
+    }
+    if nu1 != n_in {
+        println("  FAIL: round-trip length ${nu1}, expected ${n_in}")
+        exit(1)
+    }
+    if string.equals(u1, msg) != 1 {
+        print("  FAIL: round-trip content mismatch\n")
+        exit(1)
+    }
+    print("  PASS: ${n_in} -> ${nc1} -> ${nu1} bytes, content matches\n")
+
+    // ---- Test 2: length=0 deflate produces a valid empty stream ----
+    print("\nTest 2: deflate(empty) + inflate(...) -> 0 bytes\n")
+    c2, nc2, cerr2 = zlib.deflate("", 0, -1)
+    if cerr2 != "" {
+        println("  FAIL: empty deflate errored: ${cerr2}")
+        exit(1)
+    }
+    if nc2 <= 0 {
+        println("  FAIL: empty deflate should produce a non-empty stream, got ${nc2}")
+        exit(1)
+    }
+    u2, nu2, uerr2 = zlib.inflate(c2, nc2)
+    if uerr2 != "" {
+        println("  FAIL: empty-stream inflate errored: ${uerr2}")
+        exit(1)
+    }
+    if nu2 != 0 {
+        println("  FAIL: inflate of empty-stream should yield 0 bytes, got ${nu2}")
+        exit(1)
+    }
+    print("  PASS: empty-stream round-trips to 0 bytes\n")
+
+    // ---- Test 3: inflate of empty input errors cleanly ----
+    print("\nTest 3: inflate(empty buffer) errors\n")
+    _, _, uerr3 = zlib.inflate("", 0)
+    if uerr3 == "" {
+        print("  FAIL: expected error on empty input\n")
+        exit(1)
+    }
+    print("  PASS: empty input rejected (${uerr3})\n")
+
+    // ---- Test 4: inflate of garbage errors cleanly ----
+    print("\nTest 4: inflate(\"not a zlib stream\") errors\n")
+    _, _, uerr4 = zlib.inflate("not a zlib stream at all xxxxxxxxxxxxxxxxxx", 40)
+    if uerr4 == "" {
+        print("  FAIL: expected error on garbage input\n")
+        exit(1)
+    }
+    print("  PASS: corrupt input rejected (${uerr4})\n")
+
+    // ---- Test 5: binary payload with embedded NULs round-trips ----
+    print("\nTest 5: binary round-trip with embedded NULs\n")
+    tmp = io.getenv("TMPDIR")
+    if tmp == 0 { tmp = io.getenv("TEMP") }
+    if tmp == 0 { tmp = "/tmp" }
+    path = "${tmp}/aether_zlib_binary.bin"
+
+    ok = zlib_probe_write_binary(path)
+    if ok != 1 {
+        print("  FAIL: shim failed to write seed file\n")
+        exit(1)
+    }
+
+    data, nd, rerr = fs.read_binary(path)
+    if rerr != "" {
+        println("  FAIL: read_binary errored: ${rerr}")
+        exit(1)
+    }
+    if nd != 32 {
+        println("  FAIL: seed file should be 32 bytes, got ${nd}")
+        exit(1)
+    }
+
+    // Deflate at level 9 (max) — the payload is pathological for
+    // compression (every 4th byte is NUL) but the round-trip must
+    // still work.
+    cz, ncz, cerrz = zlib.deflate(data, nd, 9)
+    if cerrz != "" {
+        println("  FAIL: deflate errored: ${cerrz}")
+        exit(1)
+    }
+
+    uz, nuz, uerrz = zlib.inflate(cz, ncz)
+    if uerrz != "" {
+        println("  FAIL: inflate errored: ${uerrz}")
+        exit(1)
+    }
+    if nuz != 32 {
+        println("  FAIL: expected 32 decompressed bytes, got ${nuz}")
+        exit(1)
+    }
+
+    // Byte-by-byte match — NUL preservation is the point of the test.
+    i = 0
+    while i < 32 {
+        expected = 0
+        if i % 4 != 0 {
+            expected = i + 1
+        }
+        got = string.char_at(uz, i)
+        if got != expected {
+            println("  FAIL: byte[${i}] got ${got}, expected ${expected}")
+            exit(1)
+        }
+        i = i + 1
+    }
+    print("  PASS: 32 binary bytes round-trip (NULs preserved)\n")
+    fs.delete(path)
+
+    // ---- Test 6: level out of range is clamped to default ----
+    print("\nTest 6: out-of-range level is clamped to default\n")
+    c6, nc6, cerr6 = zlib.deflate(msg, n_in, 42)
+    if cerr6 != "" {
+        println("  FAIL: deflate errored on weird level: ${cerr6}")
+        exit(1)
+    }
+    u6, _, _ = zlib.inflate(c6, nc6)
+    if string.equals(u6, msg) != 1 {
+        print("  FAIL: round-trip content mismatch at clamped level\n")
+        exit(1)
+    }
+    print("  PASS: level 42 treated as default, round-trip OK\n")
+
+    print("\n=== All std.zlib tests passed ===\n")
+}

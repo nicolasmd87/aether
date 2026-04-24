@@ -606,6 +606,53 @@ Streaming, HMAC, key derivation, and symmetric ciphers are out of scope for v1 �
 
 ---
 
+## Compression (`std.zlib`)
+
+One-shot zlib deflate/inflate for in-memory byte buffers. Output is
+a length-aware AetherString plus explicit byte count (matching
+`fs.read_binary`'s shape), so binary payloads with embedded NULs
+round-trip intact.
+
+Under the hood `deflate` uses `compress2` with `compressBound`
+sizing; `inflate` uses streaming `inflate()` with a geometric-grow
+output buffer so callers don't need to know the decompressed size in
+advance.
+
+Auto-detects zlib via pkg-config (same pattern as OpenSSL). When
+absent, the wrappers return `("", 0, "zlib unavailable")` rather
+than crashing.
+
+```aether
+import std.zlib
+import std.fs
+import std.string
+
+main() {
+    // Compress a text payload at the default level (-1).
+    msg = "Hello, zlib. Repetition repetition repetition."
+    n_in = string.length(msg)
+    compressed, nc, cerr = zlib.deflate(msg, n_in, -1)
+
+    // Round-trip back to the original bytes. `inflate` doesn't need
+    // to be told the decompressed size — it grows as needed.
+    out, nu, uerr = zlib.inflate(compressed, nc)
+
+    // Binary payloads work the same way: fs.read_binary gives a
+    // length-aware AetherString; the extern unwraps it before
+    // feeding the bytes to zlib.
+    data, nd, _ = fs.read_binary("payload.bin")
+    blob, nb, _ = zlib.deflate(data, nd, 9)  // level 9 = best
+}
+```
+
+**Functions:**
+- `zlib.deflate(data, length, level)` → `(string, int, string)` - Compress the first `length` bytes of `data` at `level` (0..9, or -1 for default). Out-of-range levels are clamped to default. Returns `(bytes, byte_count, "")` on success, `("", 0, error)` on failure.
+- `zlib.inflate(data, length)` → `(string, int, string)` - Decompress a zlib stream (RFC 1950). Returns `(bytes, byte_count, "")` on success, `("", 0, error)` on corruption, truncation, or empty input.
+
+Streaming APIs and gzip-framed (RFC 1952) variants are out of scope for v1 — additive future work under the same module. See [stdlib-vs-contrib.md](stdlib-vs-contrib.md) for the "one obvious shape" criterion.
+
+---
+
 ## Networking
 
 ### HTTP (`std.http`)

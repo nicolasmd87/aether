@@ -248,8 +248,16 @@ jobs:
       with:
         msystem: MINGW64
         update: true
+        # zlib + openssl are baked into the Windows release binary so
+        # std.zlib, std.cryptography, and std.net TLS work
+        # out-of-the-box for downstream Windows users. Without them
+        # AETHER_HAS_ZLIB / AETHER_HAS_OPENSSL stay undefined and the
+        # shipped binary silently falls into the "unavailable" stubs.
         install: >-
           mingw-w64-x86_64-gcc
+          mingw-w64-x86_64-zlib
+          mingw-w64-x86_64-openssl
+          pkg-config
           make
           zip
           bc

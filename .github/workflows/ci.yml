@@ -105,7 +105,13 @@ jobs:
       with:
         msystem: MINGW64
         update: false
-        install: mingw-w64-x86_64-gcc make bc
+        # zlib + openssl are needed by std.zlib and std.cryptography
+        # (+ std.net TLS). Without them AETHER_HAS_ZLIB /
+        # AETHER_HAS_OPENSSL go undefined and the stdlib wrappers
+        # fall into their "unavailable" stub paths — which is a real
+        # cliff for users of the Windows binary release, not just a
+        # test-matrix skip.
+        install: mingw-w64-x86_64-gcc mingw-w64-x86_64-zlib mingw-w64-x86_64-openssl pkg-config make bc
 
     - name: Run CI suite
       run: make ci
