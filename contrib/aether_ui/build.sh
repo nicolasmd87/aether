@@ -3,8 +3,9 @@
 # Usage: ./build.sh <source.ae> [output_binary]
 #
 # Automatically selects the platform backend:
-#   macOS  → aether_ui_macos.m  (AppKit)
-#   Linux  → aether_ui_gtk4.c   (GTK4, requires libgtk-4-dev)
+#   macOS    → aether_ui_macos.m  (AppKit)
+#   Linux    → aether_ui_gtk4.c   (GTK4, requires libgtk-4-dev)
+#   Windows  → aether_ui_win32.c  (native Win32: USER32 + GDI+ + Common Controls)
 
 set -e
 
@@ -61,9 +62,29 @@ case "$OS" in
             -o "$OUTPUT" \
             -pthread -lm $(pkg-config --libs gtk4)
         ;;
+    MINGW*|MSYS*|CYGWIN*)
+        echo "Platform: Windows (native Win32)"
+        OUT_EXE="${OUTPUT}.exe"
+        # ensure output path ends with .exe; MinGW gcc requires it for linking
+        if [[ "$OUTPUT" != *.exe ]]; then
+            ACTUAL_OUT="$OUT_EXE"
+        else
+            ACTUAL_OUT="$OUTPUT"
+        fi
+        gcc -O2 -g -pipe \
+            $AETHER_INCLUDES \
+            "$C_FILE" "$SCRIPT_DIR/aether_ui_win32.c" \
+            "$SCRIPT_DIR/aether_ui_test_server.c" \
+            -L"$AETHER_ROOT/build" -laether \
+            -o "$ACTUAL_OUT" \
+            -luser32 -lgdi32 -lgdiplus -lcomctl32 -lcomdlg32 \
+            -lshell32 -lole32 -luuid -ldwmapi -luxtheme \
+            -lws2_32 -pthread -lm
+        OUTPUT="$ACTUAL_OUT"
+        ;;
     *)
         echo "Error: Unsupported platform '$OS'."
-        echo "Aether UI supports macOS (AppKit) and Linux (GTK4)."
+        echo "Aether UI supports macOS (AppKit), Linux (GTK4), and Windows (Win32)."
         exit 1
         ;;
 esac

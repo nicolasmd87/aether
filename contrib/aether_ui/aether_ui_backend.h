@@ -1,11 +1,30 @@
-#ifndef AETHER_UI_GTK4_H
-#define AETHER_UI_GTK4_H
+// Aether UI Backend ABI
+//
+// This header declares the cross-platform widget API that every Aether UI
+// backend must implement. The three backends are:
+//
+//   contrib/aether_ui/aether_ui_gtk4.c   — Linux, backed by GTK4
+//   contrib/aether_ui/aether_ui_macos.m  — macOS, backed by AppKit
+//   contrib/aether_ui/aether_ui_win32.c  — Windows, backed by USER32+GDI+
+//
+// The Aether DSL layer (contrib/aether_ui/module.ae) declares matching
+// `extern` functions and is platform-neutral. Build-time backend selection
+// happens in build.sh based on `uname -s`.
+//
+// Cross-platform test server (AetherUIDriver) lives in aether_ui_test_server.c
+// and is linked into every backend.
+
+#ifndef AETHER_UI_BACKEND_H
+#define AETHER_UI_BACKEND_H
 
 #include <stdint.h>
 
 // Widget registry
 int aether_ui_register_widget(void* widget);
 void* aether_ui_get_widget(int handle);
+// Reverse lookup: native-pointer → 1-based handle, 0 if not registered.
+// O(1) amortized on Win32 (hash-backed); may be linear on other backends.
+int aether_ui_handle_for_widget(void* widget);
 
 // App lifecycle
 int aether_ui_app_create(const char* title, int width, int height);
@@ -15,6 +34,8 @@ void aether_ui_app_run_raw(int app_handle);
 // Widget creation
 int aether_ui_text_create(const char* text);
 int aether_ui_button_create(const char* label, void* boxed_closure);
+int aether_ui_button_create_plain(const char* label);
+void aether_ui_set_onclick_ctx(void* ctx, void* boxed_closure);
 int aether_ui_vstack_create(int spacing);
 int aether_ui_hstack_create(int spacing);
 int aether_ui_spacer_create(void);
@@ -100,6 +121,26 @@ void aether_ui_sheet_dismiss_impl(int handle);
 
 int aether_ui_image_create(const char* filepath);
 void aether_ui_image_set_size(int handle, int width, int height);
+
+// Menus (Group 5b) — native menu bars and context menus.
+// Backend-implemented on Win32 (HMENU), GTK (GMenu), AppKit (NSMenu).
+int  aether_ui_menu_bar_create(void);
+int  aether_ui_menu_create(const char* label);
+void aether_ui_menu_add_item(int menu_handle, const char* label,
+                             void* boxed_closure);
+void aether_ui_menu_add_separator(int menu_handle);
+void aether_ui_menu_bar_add_menu(int bar_handle, int menu_handle);
+void aether_ui_menu_bar_attach(int app_handle, int bar_handle);
+// Context menu: popup a menu at cursor / widget bounds.
+void aether_ui_menu_popup(int menu_handle, int anchor_widget);
+
+// Grid layout (Group 3b) — 2D layout container.
+// Children are placed with aether_ui_grid_place() at (row, col) with
+// optional row/col spans. Unlike stacks, columns align across rows so
+// labels-on-left / fields-on-right forms actually line up.
+int  aether_ui_grid_create(int cols, int row_spacing, int col_spacing);
+void aether_ui_grid_place(int grid_handle, int child_handle,
+                          int row, int col, int row_span, int col_span);
 
 // Canvas drawing (Group 6)
 int aether_ui_canvas_create_impl(int width, int height);
