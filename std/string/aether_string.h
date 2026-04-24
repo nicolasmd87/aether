@@ -47,7 +47,19 @@ int string_starts_with(const void* str, const char* prefix);
 int string_ends_with(const void* str, const char* suffix);
 int string_contains(const void* str, const char* substring);
 int string_index_of(const void* str, const char* substring);
+// Like string_index_of but starts scanning at byte offset `start`.
+// Returns the absolute offset of the hit (not relative to `start`),
+// or -1. Same binary-safety split as string_index_of: the haystack
+// is data-aware (handles AetherString with embedded NULs), the
+// needle is strlen-based.
+int string_index_of_from(const void* str, const char* substring, int start);
 char* string_substring(const void* str, int start, int end);
+
+// Construct a 1-byte AetherString from a byte code (0..255).
+// Primary use: emitting known single-byte markers (\x01, \x02, etc.)
+// into packed-string record formats without routing through a
+// NUL-terminated literal. Always length 1, even for code=0.
+AetherString* string_from_char(int code);
 char* string_to_upper(const void* str);
 char* string_to_lower(const void* str);
 char* string_trim(const void* str);

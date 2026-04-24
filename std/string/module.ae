@@ -25,7 +25,18 @@ extern string_starts_with(str: string, prefix: string) -> int
 extern string_ends_with(str: string, suffix: string) -> int
 extern string_contains(str: string, substring: string) -> int
 extern string_index_of(str: string, substring: string) -> int
+// Like index_of but starts scanning at byte offset `start`. Returns
+// the absolute offset of the hit (not relative to `start`), or -1.
+// Saves the substring+index_of allocation dance in hot loops that
+// scan a packed string record-by-record.
+extern string_index_of_from(str: string, substring: string, start: int) -> int
 extern string_substring(str: string, start: int, end: int) -> string
+
+// Construct a 1-byte string from a byte code (0..255). Typical use
+// is emitting known single-byte separators (\x01, \x02) into packed
+// formats without routing through a NUL-terminated string literal.
+// Always length 1 — code=0 returns a 1-byte NUL string, not "".
+extern string_from_char(code: int) -> ptr
 extern string_to_upper(str: string) -> string
 extern string_to_lower(str: string) -> string
 extern string_trim(str: string) -> string
