@@ -1273,6 +1273,13 @@ contrib-aether-ui-check:
 				echo "      install with: sudo apt install libgtk-4-dev"; \
 				exit 0; \
 			fi; \
+			if ! pkg-config --atleast-version=4.10 gtk4 2>/dev/null; then \
+				echo "SKIP: gtk4 >= 4.10 required (installed: $$(pkg-config --modversion gtk4))"; \
+				echo "      The aether_ui backend uses GtkAlertDialog, GtkFileDialog,"; \
+				echo "      GtkUriLauncher, and G_APPLICATION_DEFAULT_FLAGS which require"; \
+				echo "      GTK 4.10+ (Ubuntu 24.04 or Fedora 39+)."; \
+				exit 0; \
+			fi; \
 			BACKEND="contrib/aether_ui/aether_ui_gtk4.c"; \
 			LINKS="$$(pkg-config --libs gtk4) -pthread -lm"; \
 			COMPILER="gcc -O0 -g $$(pkg-config --cflags gtk4)"; \
@@ -1325,8 +1332,8 @@ benchmark-aether-ui:
 			LINKS="-framework AppKit -framework Foundation -framework QuartzCore -pthread -lm"; \
 			COMPILER="clang -O2 -fobjc-arc" ;; \
 		Linux) \
-			if ! pkg-config --exists gtk4 2>/dev/null; then \
-				echo "SKIP: gtk4 dev libraries not installed" >&2; exit 0; \
+			if ! pkg-config --atleast-version=4.10 gtk4 2>/dev/null; then \
+				echo "SKIP: gtk4 >= 4.10 required" >&2; exit 0; \
 			fi; \
 			BACKEND="contrib/aether_ui/aether_ui_gtk4.c"; \
 			LINKS="$$(pkg-config --libs gtk4) -pthread -lm"; \
