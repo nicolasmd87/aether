@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`contrib/sqlite/` — SQLite bindings in contrib/** (`contrib/sqlite/module.ae`, `contrib/sqlite/aether_sqlite.c`, `contrib/sqlite/README.md`). Thin veneer over the system `libsqlite3`. v1 API: `sqlite.open(path) -> (db, err)`, `sqlite.close(db) -> err`, `sqlite.exec(db, sql) -> err` for DDL and no-row DML, `sqlite.query(db, sql) -> (rs, err)` for SELECT plus `sqlite.row_count`, `sqlite.col_count`, `sqlite.col_name`, `sqlite.cell`, `sqlite.free` for result-set inspection. Lands in `contrib/` per the rubric in `docs/stdlib-vs-contrib.md` — SQLite's C API is opinionated enough that anchoring one shape in `std/` would constrain future contributors, and the 4 MiB amalgamation makes it a noticeable weight tax for projects that don't use a database. Callers opt in via `aether.toml` `[build] link_flags = "-lsqlite3"` + `extra_sources = ["contrib/sqlite/aether_sqlite.c"]`; no toolchain-level auto-detection. Parameter binding (`?1`, `:name`) is deliberately out of scope for v1 — users needing it wait for an additive API or drop down to `sqlite3_prepare_v2` / `bind` / `step` directly. Rows are materialised up-front with a 100 000-row hard cap; streaming is a separate future API. Regression test: `tests/integration/sqlite_roundtrip/` (7 cases — open `:memory:`, CREATE TABLE, 3×INSERT, SELECT shape, column names, cell values, close). The test probes `pkg-config --exists sqlite3` (with a gcc-link fallback) and SKIPs gracefully when `libsqlite3` isn't installed on the CI runner — matches `CONTRIBUTING.md` §"Coding for portability" pattern #2.
+
 ## [0.88.0]
 
 ### Added
