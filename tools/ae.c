@@ -1098,13 +1098,32 @@ static void build_gcc_cmd(char* cmd, size_t size,
     }
     // Windows (MinGW): no -pthread (Win32 threads via aether_thread.h), no -lm (CRT).
     // -lws2_32 is required for Winsock2 (aether_http/net always compiled into runtime).
+    // -lcrypt32 -lgdi32 -luser32 -ladvapi32 -lbcrypt are required when OpenSSL
+    // is linked — static libssl/libcrypto pull in Win Crypto/GDI/Advapi
+    // symbols. Always included so the link succeeds regardless of whether
+    // the user's build ends up pulling OpenSSL in via std.net / std.cryptography.
+    // openssl_libs / zlib_libs are baked in at `ae` build time from pkg-config
+    // (same handling as the POSIX branch below); empty strings when the
+    // library wasn't detected, in which case the stdlib wrappers fall into
+    // their "unavailable" stubs at runtime.
     // -static links libwinpthread/libgcc into the binary so it runs without MinGW DLLs.
     // Quote s_gcc_bin in case the path contains spaces.
+#ifdef AETHER_OPENSSL_LIBS
+    const char* openssl_libs = AETHER_OPENSSL_LIBS;
+#else
+    const char* openssl_libs = "";
+#endif
+#ifdef AETHER_ZLIB_LIBS
+    const char* zlib_libs = AETHER_ZLIB_LIBS;
+#else
+    const char* zlib_libs = "";
+#endif
     char opt[600];
     if (user_cflags[0])
         snprintf(opt, sizeof(opt), "-static %s %s", optimize ? "-O2" : "-O0 -g", user_cflags);
     else
         snprintf(opt, sizeof(opt), "-static %s", optimize ? "-O2" : "-O0 -g");
+    const char* win_link_libs = "-lws2_32 -lcrypt32 -lgdi32 -luser32 -ladvapi32 -lbcrypt";
     char lib_dir[1024];
     if (tc.has_lib) {
         strncpy(lib_dir, tc.lib, sizeof(lib_dir) - 1);
@@ -1114,12 +1133,12 @@ static void build_gcc_cmd(char* cmd, size_t size,
         char* slash = (!bs) ? fs : (!fs) ? bs : (bs > fs ? bs : fs);
         if (slash) *slash = '\0';
         snprintf(cmd, size,
-            "\"%s\" %s %s \"%s\" %s -L\"%s\" -laether -o \"%s\" -lws2_32 %s",
-            s_gcc_bin, opt, tc.include_flags, c_file, extra, lib_dir, out_file, link_flags);
+            "\"%s\" %s %s \"%s\" %s -L\"%s\" -laether -o \"%s\" %s %s %s %s",
+            s_gcc_bin, opt, tc.include_flags, c_file, extra, lib_dir, out_file, openssl_libs, zlib_libs, win_link_libs, link_flags);
     } else {
         snprintf(cmd, size,
-            "\"%s\" %s %s \"%s\" %s %s -o \"%s\" -lws2_32 %s",
-            s_gcc_bin, opt, tc.include_flags, c_file, extra, tc.runtime_srcs, out_file, link_flags);
+            "\"%s\" %s %s \"%s\" %s %s -o \"%s\" %s %s %s %s",
+            s_gcc_bin, opt, tc.include_flags, c_file, extra, tc.runtime_srcs, out_file, openssl_libs, zlib_libs, win_link_libs, link_flags);
     }
 #else
     // POSIX (Linux/macOS): -pthread for POSIX threads, -lm for math
@@ -1169,6 +1188,15 @@ static void build_gcc_cmd(char* cmd, size_t size,
     const char* openssl_libs = "";
 #endif
 
+    // Same story for zlib — used by std.zlib.deflate/inflate. Empty
+    // when zlib wasn't detected; std.zlib wrappers then report
+    // "zlib unavailable" at runtime.
+#ifdef AETHER_ZLIB_LIBS
+    const char* zlib_libs = AETHER_ZLIB_LIBS;
+#else
+    const char* zlib_libs = "";
+#endif
+
     if (tc.has_lib) {
         char lib_dir[1024];
         strncpy(lib_dir, tc.lib, sizeof(lib_dir) - 1);
@@ -1177,12 +1205,12 @@ static void build_gcc_cmd(char* cmd, size_t size,
         if (slash) *slash = '\0';
 
         snprintf(cmd, size,
-            "gcc %s %s \"%s\"%s %s -L%s -laether -o \"%s\" -pthread -lm %s %s",
-            opt, tc.include_flags, c_file, config_c, extra, lib_dir, out_file, openssl_libs, link_flags);
+            "gcc %s %s \"%s\"%s %s -L%s -laether -o \"%s\" -pthread -lm %s %s %s",
+            opt, tc.include_flags, c_file, config_c, extra, lib_dir, out_file, openssl_libs, zlib_libs, link_flags);
     } else {
         snprintf(cmd, size,
-            "gcc %s %s \"%s\"%s %s %s -o \"%s\" -pthread -lm %s %s",
-            opt, tc.include_flags, c_file, config_c, extra, tc.runtime_srcs, out_file, openssl_libs, link_flags);
+            "gcc %s %s \"%s\"%s %s %s -o \"%s\" -pthread -lm %s %s %s",
+            opt, tc.include_flags, c_file, config_c, extra, tc.runtime_srcs, out_file, openssl_libs, zlib_libs, link_flags);
     }
 #endif
 }

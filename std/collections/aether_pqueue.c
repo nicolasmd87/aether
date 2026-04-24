@@ -11,7 +11,7 @@
 #define LEFT_CHILD(i) (2 * (i) + 1)
 #define RIGHT_CHILD(i) (2 * (i) + 2)
 
-PriorityQueue* pqueue_create(size_t initial_capacity,
+PriorityQueue* aether_pqueue_create(size_t initial_capacity,
                             int (*compare)(const void*, const void*),
                             void (*element_free)(void*),
                             void* (*element_clone)(const void*)) {
@@ -40,7 +40,7 @@ PriorityQueue* pqueue_create(size_t initial_capacity,
     return pq;
 }
 
-void pqueue_free(PriorityQueue* pq) {
+void aether_pqueue_free(PriorityQueue* pq) {
     if (!pq) return;
     
     if (pq->data) {
@@ -56,7 +56,7 @@ void pqueue_free(PriorityQueue* pq) {
 }
 
 // Ensure capacity
-static bool pqueue_ensure_capacity(PriorityQueue* pq, size_t min_capacity) {
+static bool aether_pqueue_ensure_capacity(PriorityQueue* pq, size_t min_capacity) {
     if (pq->capacity >= min_capacity) {
         return true;
     }
@@ -77,20 +77,20 @@ static bool pqueue_ensure_capacity(PriorityQueue* pq, size_t min_capacity) {
 }
 
 // Swap elements
-static void pqueue_swap(PriorityQueue* pq, size_t i, size_t j) {
+static void aether_pqueue_swap(PriorityQueue* pq, size_t i, size_t j) {
     void* temp = pq->data[i];
     pq->data[i] = pq->data[j];
     pq->data[j] = temp;
 }
 
 // Heapify up (bubble up) - restore heap property upwards
-static void pqueue_heapify_up(PriorityQueue* pq, size_t index) {
+static void aether_pqueue_heapify_up(PriorityQueue* pq, size_t index) {
     while (index > 0) {
         size_t parent = PARENT(index);
         
         // If current element has higher priority than parent, swap
         if (pq->compare(pq->data[index], pq->data[parent]) < 0) {
-            pqueue_swap(pq, index, parent);
+            aether_pqueue_swap(pq, index, parent);
             index = parent;
         } else {
             break;
@@ -99,7 +99,7 @@ static void pqueue_heapify_up(PriorityQueue* pq, size_t index) {
 }
 
 // Heapify down (bubble down) - restore heap property downwards
-static void pqueue_heapify_down(PriorityQueue* pq, size_t index) {
+static void aether_pqueue_heapify_down(PriorityQueue* pq, size_t index) {
     while (true) {
         size_t smallest = index;
         size_t left = LEFT_CHILD(index);
@@ -119,15 +119,15 @@ static void pqueue_heapify_down(PriorityQueue* pq, size_t index) {
             break;
         }
         
-        pqueue_swap(pq, index, smallest);
+        aether_pqueue_swap(pq, index, smallest);
         index = smallest;
     }
 }
 
-bool pqueue_insert(PriorityQueue* pq, void* element) {
+bool aether_pqueue_insert(PriorityQueue* pq, void* element) {
     if (!pq) return false;
     
-    if (!pqueue_ensure_capacity(pq, pq->size + 1)) {
+    if (!aether_pqueue_ensure_capacity(pq, pq->size + 1)) {
         return false;
     }
     
@@ -136,12 +136,12 @@ bool pqueue_insert(PriorityQueue* pq, void* element) {
     pq->size++;
     
     // Restore heap property
-    pqueue_heapify_up(pq, pq->size - 1);
+    aether_pqueue_heapify_up(pq, pq->size - 1);
     
     return true;
 }
 
-void* pqueue_extract(PriorityQueue* pq) {
+void* aether_pqueue_extract(PriorityQueue* pq) {
     if (!pq || pq->size == 0) return NULL;
     
     void* result = pq->data[0];
@@ -152,26 +152,26 @@ void* pqueue_extract(PriorityQueue* pq) {
     
     // Restore heap property
     if (pq->size > 0) {
-        pqueue_heapify_down(pq, 0);
+        aether_pqueue_heapify_down(pq, 0);
     }
     
     return result;
 }
 
-void* pqueue_peek(PriorityQueue* pq) {
+void* aether_pqueue_peek(PriorityQueue* pq) {
     if (!pq || pq->size == 0) return NULL;
     return pq->data[0];
 }
 
-size_t pqueue_size(PriorityQueue* pq) {
+size_t aether_pqueue_size(PriorityQueue* pq) {
     return pq ? pq->size : 0;
 }
 
-bool pqueue_is_empty(PriorityQueue* pq) {
+bool aether_pqueue_is_empty(PriorityQueue* pq) {
     return pq ? (pq->size == 0) : true;
 }
 
-void pqueue_clear(PriorityQueue* pq) {
+void aether_pqueue_clear(PriorityQueue* pq) {
     if (!pq) return;
     
     if (pq->element_free) {
@@ -183,7 +183,7 @@ void pqueue_clear(PriorityQueue* pq) {
     pq->size = 0;
 }
 
-bool pqueue_contains(PriorityQueue* pq, const void* element,
+bool aether_pqueue_contains(PriorityQueue* pq, const void* element,
                     bool (*equals)(const void*, const void*)) {
     if (!pq || !equals) return false;
     
@@ -197,12 +197,12 @@ bool pqueue_contains(PriorityQueue* pq, const void* element,
 }
 
 // Build heap from array - O(n) using Floyd's algorithm
-PriorityQueue* pqueue_from_array(void** elements, size_t count,
+PriorityQueue* aether_pqueue_from_array(void** elements, size_t count,
                                 int (*compare)(const void*, const void*),
                                 void (*element_free)(void*),
                                 void* (*element_clone)(const void*)) {
     
-    PriorityQueue* pq = pqueue_create(count, compare, element_free, element_clone);
+    PriorityQueue* pq = aether_pqueue_create(count, compare, element_free, element_clone);
     if (!pq) return NULL;
     
     // Copy elements
@@ -213,21 +213,21 @@ PriorityQueue* pqueue_from_array(void** elements, size_t count,
     
     // Heapify from bottom up (Floyd's algorithm)
     for (int i = (int)count / 2 - 1; i >= 0; i--) {
-        pqueue_heapify_down(pq, (size_t)i);
+        aether_pqueue_heapify_down(pq, (size_t)i);
     }
     
     return pq;
 }
 
 // Common comparators
-int pqueue_compare_int_min(const void* a, const void* b) {
+int aether_pqueue_compare_int_min(const void* a, const void* b) {
     long ia = (long)(intptr_t)a;
     long ib = (long)(intptr_t)b;
     return (ia < ib) ? -1 : (ia > ib) ? 1 : 0;
 }
 
-int pqueue_compare_int_max(const void* a, const void* b) {
+int aether_pqueue_compare_int_max(const void* a, const void* b) {
     // Invert comparison for max-heap
-    return -pqueue_compare_int_min(a, b);
+    return -aether_pqueue_compare_int_min(a, b);
 }
 
