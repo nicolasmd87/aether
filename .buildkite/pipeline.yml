@@ -1,0 +1,32 @@
+# Buildkite pipeline — runs alongside GitHub Actions, not instead of.
+#
+# Today: one step — Linux GCC `make ci`. This is the cheapest leg to
+# validate the Buildkite → self-hosted-agent round-trip, and if the
+# tick is green we've proven the whole plumbing works end-to-end
+# without any platform-coverage loss (GHA still runs the full matrix
+# in parallel; this is a duplicate, on purpose, until we trust it).
+#
+# Tomorrow, after this goes green reliably: promote the slower
+# Linux-only legs (Valgrind, ASan, contrib/host) off GHA onto this
+# agent to claw back actions-minutes. Windows + macOS legs stay on
+# GHA — the self-hosted agent is x86_64 Linux only.
+#
+# Agent targeting: `agents: { aether: "1" }` routes to the Aether
+# buildkite-agent container. A separate tsyne agent on the same
+# machine carries different tags and won't pick this up.
+
+steps:
+  - label: ":hammer: Linux / GCC `make ci`"
+    command: make ci
+    agents:
+      aether: "1"
+    # ccache / build/obj are local-disk-backed in the agent's volumes,
+    # so incremental rebuilds between runs are fast. No explicit cache
+    # plugin needed; the agent-level build directory persists.
+    timeout_in_minutes: 30
+    retry:
+      automatic:
+        # Flaky network during apt / gh fetch is the only retryable
+        # class. Anything else should fail loud.
+        - exit_status: -1  # agent lost
+          limit: 1
