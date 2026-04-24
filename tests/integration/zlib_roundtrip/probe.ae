@@ -16,6 +16,18 @@ extern zlib_probe_write_binary(path: string) -> int
 main() {
     print("=== std.zlib round-trip ===\n\n")
 
+    // Capability probe: if the toolchain was built without zlib (the
+    // Windows CI matrix today — MSYS2 and mingw-w64 don't auto-detect
+    // it), the wrappers return "zlib unavailable" for every call. The
+    // test's assertions can't meaningfully run without a compression
+    // backend, so skip gracefully rather than crashing the matrix.
+    // See CONTRIBUTING.md §"Coding for portability" pattern #2.
+    if zlib.available() == 0 {
+        println("SKIP zlib_roundtrip: zlib unavailable (likely Windows CI without zlib-devel)")
+        print("\n=== std.zlib tests skipped (no backend) ===\n")
+        return
+    }
+
     // ---- Test 1: text payload round-trips unchanged ----
     print("Test 1: text round-trip\n")
     msg = "Hello, zlib world! This is a test string that should compress down to fewer bytes. Repetition repetition repetition repetition repetition."

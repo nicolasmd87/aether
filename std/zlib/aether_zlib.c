@@ -41,6 +41,14 @@ static void free_inflate_tls(void) {
     tls_inflate_len = 0;
 }
 
+int zlib_backend_available(void) {
+#ifdef AETHER_HAS_ZLIB
+    return 1;
+#else
+    return 0;
+#endif
+}
+
 #ifdef AETHER_HAS_ZLIB
 
 int zlib_try_deflate(const char* data, int length, int level) {

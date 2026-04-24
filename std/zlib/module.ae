@@ -20,6 +20,13 @@
 // undefined), the wrappers return ("", 0, "zlib unavailable")
 // rather than crashing.
 
+// Probe: returns 1 when the toolchain was built with zlib detected,
+// 0 otherwise. Lets callers / tests distinguish "no backend" from
+// "backend returned an error at runtime". C-side name is
+// `zlib_backend_available` to avoid colliding with the Aether-side
+// `zlib.available()` wrapper's mangled name.
+extern zlib_backend_available() -> int
+
 // Split-accessor boundary: try_ performs the op and stashes the
 // result in a TLS buffer; get_ returns a borrowed pointer and
 // length; release_ frees early (otherwise the buffer is freed on
@@ -43,7 +50,14 @@ extern string_new_with_length(data: string, length: int) -> ptr
 // for the library default). Returns (bytes, byte_count, "") on
 // success, ("", 0, error) on failure. The returned string is
 // length-aware: string.length(bytes) == byte_count.
+// Alias for the capability probe. Use when skipping a test or
+// choosing a fallback path.
+available() -> int { return zlib_backend_available() }
+
 deflate(data: string, length: int, level: int) -> {
+    if zlib_backend_available() == 0 {
+        return "", 0, "zlib unavailable"
+    }
     ok = zlib_try_deflate(data, length, level)
     if ok == 0 {
         return "", 0, "zlib deflate failed"
@@ -61,6 +75,9 @@ deflate(data: string, length: int, level: int) -> {
 // geometrically — callers don't need to know the decompressed size
 // in advance.
 inflate(data: string, length: int) -> {
+    if zlib_backend_available() == 0 {
+        return "", 0, "zlib unavailable"
+    }
     ok = zlib_try_inflate(data, length)
     if ok == 0 {
         return "", 0, "zlib inflate failed"

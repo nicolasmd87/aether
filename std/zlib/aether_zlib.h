@@ -24,6 +24,16 @@
 #ifndef AETHER_ZLIB_H
 #define AETHER_ZLIB_H
 
+/* Returns 1 when the toolchain was built with AETHER_HAS_ZLIB set
+ * (zlib detected at build time), 0 otherwise. Callers use this to
+ * distinguish "no backend available" from "backend returned error
+ * at runtime", because the two failure modes warrant different
+ * user-facing messages — and in tests, different SKIP vs. FAIL
+ * decisions. Named `zlib_backend_available` rather than
+ * `zlib_available` so it doesn't collide with the Aether-side
+ * `zlib.available()` wrapper's mangled name (`zlib_available`). */
+int zlib_backend_available(void);
+
 /* Deflate: compress `length` bytes of `data` at `level` (0..9; -1
  * for default). Returns 1 on success, 0 on failure. On success the
  * result is in the TLS buffer exposed by zlib_get_deflate_bytes /
