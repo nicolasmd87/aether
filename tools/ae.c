@@ -980,12 +980,21 @@ static const char* get_cflags(void) {
 // Get extra_sources for the [[bin]] entry whose path matches ae_file.
 // Writes space-separated C source paths into out[out_size].
 // Only handles single-line arrays: extra_sources = ["a.c", "b.c"]
-static void get_extra_sources_for_bin(const char* ae_file, char* out, size_t out_size) {
+//
+// Returns 0 on clean fill, 1 if the `out` buffer was too small and at
+// least one filename was silently truncated. Callers should warn in
+// that case — the caller's subsequent `build_gcc_cmd` will hand the
+// linker a mangled partial path ("ae/.../handler_copy_generat" was
+// the real-world symptom that prompted this signature change) and
+// the error message won't point at extra_sources as the culprit.
+static int get_extra_sources_for_bin(const char* ae_file, char* out, size_t out_size) {
     out[0] = '\0';
-    if (!ae_file || !path_exists("aether.toml")) return;
+    if (!ae_file || !path_exists("aether.toml")) return 0;
 
     FILE* f = fopen("aether.toml", "r");
-    if (!f) return;
+    if (!f) return 0;
+
+    int truncated = 0;
 
     // 1 KiB was too small for projects with many extra_sources on one
     // logical line: `extra_sources = ["a.c", "b.c", ..., "zz.c"]`. fgets
@@ -1062,7 +1071,17 @@ static void get_extra_sources_for_bin(const char* ae_file, char* out, size_t out
                     char* end = strchr(eq, '"');
                     if (!end) break;
                     *end = '\0';
-                    if (out[0]) strncat(out, " ", out_size - strlen(out) - 1);
+                    // Detect truncation before strncat silently drops
+                    // trailing chars. Need 1 (sep space) + strlen(piece)
+                    // + 1 (NUL) under the remaining budget.
+                    size_t cur = strlen(out);
+                    size_t piece = strlen(eq);
+                    size_t need = (out[0] ? 1 : 0) + piece + 1;
+                    if (cur + need > out_size) {
+                        truncated = 1;
+                        break;
+                    }
+                    if (out[0]) strncat(out, " ", out_size - cur - 1);
                     strncat(out, eq, out_size - strlen(out) - 1);
                     eq = end + 1;
                 } else {
@@ -1073,6 +1092,7 @@ static void get_extra_sources_for_bin(const char* ae_file, char* out, size_t out
         }
     }
     fclose(f);
+    return truncated;
 }
 
 // --------------------------------------------------------------------------
@@ -1132,13 +1152,23 @@ static void build_gcc_cmd(char* cmd, size_t size,
         char* fs = strrchr(lib_dir, '/');
         char* slash = (!bs) ? fs : (!fs) ? bs : (bs > fs ? bs : fs);
         if (slash) *slash = '\0';
-        snprintf(cmd, size,
+        int w = snprintf(cmd, size,
             "\"%s\" %s %s \"%s\" %s -L\"%s\" -laether -o \"%s\" %s %s %s %s",
             s_gcc_bin, opt, tc.include_flags, c_file, extra, lib_dir, out_file, openssl_libs, zlib_libs, win_link_libs, link_flags);
+        if (w >= (int)size) {
+            fprintf(stderr,
+                "Warning: gcc link command truncated at %d bytes (buffer %zu).\n",
+                w, size);
+        }
     } else {
-        snprintf(cmd, size,
+        int w = snprintf(cmd, size,
             "\"%s\" %s %s \"%s\" %s %s -o \"%s\" %s %s %s %s",
             s_gcc_bin, opt, tc.include_flags, c_file, extra, tc.runtime_srcs, out_file, openssl_libs, zlib_libs, win_link_libs, link_flags);
+        if (w >= (int)size) {
+            fprintf(stderr,
+                "Warning: gcc link command truncated at %d bytes (buffer %zu).\n",
+                w, size);
+        }
     }
 #else
     // POSIX (Linux/macOS): -pthread for POSIX threads, -lm for math
@@ -1204,13 +1234,27 @@ static void build_gcc_cmd(char* cmd, size_t size,
         char* slash = strrchr(lib_dir, '/');
         if (slash) *slash = '\0';
 
-        snprintf(cmd, size,
+        int w = snprintf(cmd, size,
             "gcc %s %s \"%s\"%s %s -L%s -laether -o \"%s\" -pthread -lm %s %s %s",
             opt, tc.include_flags, c_file, config_c, extra, lib_dir, out_file, openssl_libs, zlib_libs, link_flags);
+        if (w >= (int)size) {
+            fprintf(stderr,
+                "Warning: gcc link command truncated at %d bytes (buffer %zu) — "
+                "your extra_sources plus includes won't fit; rebuild `ae` with "
+                "a larger cmd buffer or split into multiple [[bin]] entries.\n",
+                w, size);
+        }
     } else {
-        snprintf(cmd, size,
+        int w = snprintf(cmd, size,
             "gcc %s %s \"%s\"%s %s %s -o \"%s\" -pthread -lm %s %s %s",
             opt, tc.include_flags, c_file, config_c, extra, tc.runtime_srcs, out_file, openssl_libs, zlib_libs, link_flags);
+        if (w >= (int)size) {
+            fprintf(stderr,
+                "Warning: gcc link command truncated at %d bytes (buffer %zu) — "
+                "your extra_sources plus includes won't fit; rebuild `ae` with "
+                "a larger cmd buffer or split into multiple [[bin]] entries.\n",
+                w, size);
+        }
     }
 #endif
 }
@@ -1302,7 +1346,10 @@ static int build_wasm_cmd(char* cmd, size_t size,
 
 static int cmd_run(int argc, char** argv) {
     const char* file = NULL;
-    char extra_files[2048] = "";
+    /* 8 KiB matches toml_extra below + the fgets line buffer in
+     * get_extra_sources_for_bin. Needs to fit --extra CLI args plus
+     * the full TOML extra_sources concatenated. */
+    char extra_files[8192] = "";
 
     for (int i = 0; i < argc; i++) {
         if (strcmp(argv[i], "--extra") == 0 && i + 1 < argc) {
@@ -1415,9 +1462,17 @@ static int cmd_run(int argc, char** argv) {
     }
 
     // Step 2: Compile .c to executable with runtime (-O0 for fast dev builds)
-    // Merge extra_sources from aether.toml [[bin]] with any --extra CLI args
-    char toml_extra[2048] = "";
-    get_extra_sources_for_bin(file, toml_extra, sizeof(toml_extra));
+    // Merge extra_sources from aether.toml [[bin]] with any --extra CLI args.
+    // 8 KiB matches the fgets line buffer in get_extra_sources_for_bin;
+    // overflow warns below rather than silently mangling the link command.
+    char toml_extra[8192] = "";
+    if (get_extra_sources_for_bin(file, toml_extra, sizeof(toml_extra))) {
+        fprintf(stderr,
+            "Warning: aether.toml [[bin]] extra_sources for '%s' "
+            "exceeded 8 KiB; tail entries were dropped. Split the "
+            "array into fewer, larger shims or report as a toolchain "
+            "bug.\n", file);
+    }
     if (toml_extra[0]) {
         if (extra_files[0]) strncat(extra_files, " ", sizeof(extra_files) - strlen(extra_files) - 1);
         strncat(extra_files, toml_extra, sizeof(extra_files) - strlen(extra_files) - 1);
@@ -3130,7 +3185,10 @@ int cmd_build_namespace(int argc, char** argv) {
 static int cmd_build(int argc, char** argv) {
     const char* file = NULL;
     const char* output_name = NULL;
-    char extra_files[2048] = "";
+    /* 8 KiB matches toml_extra below + the fgets line buffer in
+     * get_extra_sources_for_bin. Needs to fit --extra CLI args plus
+     * the full TOML extra_sources concatenated. */
+    char extra_files[8192] = "";
 
     const char* target = NULL;
 
@@ -3347,10 +3405,20 @@ static int cmd_build(int argc, char** argv) {
             return 1;
         }
     } else {
-        // Merge extra_sources from aether.toml [[bin]] with any --extra CLI args
+        // Merge extra_sources from aether.toml [[bin]] with any --extra CLI args.
+        // Buffer sized to match the TOML-line fgets buffer in
+        // get_extra_sources_for_bin (also 8 KiB). Projects hitting even
+        // this limit should split into multiple [[bin]] entries or
+        // consolidate shims — see the truncation warning below.
         {
-            char toml_extra[2048] = "";
-            get_extra_sources_for_bin(file, toml_extra, sizeof(toml_extra));
+            char toml_extra[8192] = "";
+            if (get_extra_sources_for_bin(file, toml_extra, sizeof(toml_extra))) {
+                fprintf(stderr,
+                    "Warning: aether.toml [[bin]] extra_sources for '%s' "
+                    "exceeded 8 KiB; tail entries were dropped. Split the "
+                    "array into fewer, larger shims or report as a toolchain "
+                    "bug.\n", file);
+            }
             if (toml_extra[0]) {
                 if (extra_files[0]) strncat(extra_files, " ", sizeof(extra_files) - strlen(extra_files) - 1);
                 strncat(extra_files, toml_extra, sizeof(extra_files) - strlen(extra_files) - 1);
