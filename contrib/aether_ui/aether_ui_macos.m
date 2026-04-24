@@ -12,7 +12,7 @@
 
 #import <Cocoa/Cocoa.h>
 #import <QuartzCore/QuartzCore.h>
-#include "aether_ui_gtk4.h"  // same API surface
+#include "aether_ui_backend.h"  // cross-platform backend ABI
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -31,6 +31,20 @@ typedef struct {
     void (*fn)(void);
     void* env;
 } AeClosure;
+
+// ---------------------------------------------------------------------------
+// AETHER_UI_HEADLESS contract — set by CI, widget smoke tests, or any
+// caller that wants to exercise the backend without a user sitting at
+// the keyboard. Every API that would otherwise run a modal message
+// loop (alert, sheet, file/save dialog, popup menu) returns immediately
+// when this flag is set. Without this, those APIs can spin their own
+// tracking loop and block the process forever — there is no user input
+// on CI and no outer runloop to dismiss the modal.
+// ---------------------------------------------------------------------------
+static int aeui_is_headless(void) {
+    const char* v = getenv("AETHER_UI_HEADLESS");
+    return v && v[0] && v[0] != '0';
+}
 
 // ---------------------------------------------------------------------------
 // Widget type tags — mirror of widget_type_name() in the GTK4 backend.
@@ -194,8 +208,16 @@ static void update_text_bindings(int state_handle) {
             [self.window setContentView:root];
         }
     }
-    [self.window makeKeyAndOrderFront:nil];
-    [NSApp activateIgnoringOtherApps:YES];
+    // Honor AETHER_UI_HEADLESS for CI and unattended scenarios. The window
+    // still exists and receives events (so the test server keeps working),
+    // but it is never ordered onto the visible desktop. Matches the
+    // SW_HIDE / gtk_widget_realize semantics in the other backends.
+    const char* headless = getenv("AETHER_UI_HEADLESS");
+    int is_headless = headless && headless[0] && headless[0] != '0';
+    if (!is_headless) {
+        [self.window makeKeyAndOrderFront:nil];
+        [NSApp activateIgnoringOtherApps:YES];
+    }
 }
 
 - (BOOL)applicationShouldTerminateAfterLastWindowClosed:(NSApplication*)sender {
@@ -932,6 +954,7 @@ void aether_ui_set_tooltip_ctx(void* ctx, const char* text) {
 // ---------------------------------------------------------------------------
 
 void aether_ui_alert_impl(const char* title, const char* message) {
+    if (aeui_is_headless()) return;  // runModal would block forever on CI
     NSAlert* alert = [[NSAlert alloc] init];
     [alert setMessageText:[NSString stringWithUTF8String:title ? title : ""]];
     [alert setInformativeText:[NSString stringWithUTF8String:message ? message : ""]];
@@ -940,6 +963,7 @@ void aether_ui_alert_impl(const char* title, const char* message) {
 }
 
 char* aether_ui_file_open(const char* title) {
+    if (aeui_is_headless()) return strdup("");  // runModal would block forever
     NSOpenPanel* panel = [NSOpenPanel openPanel];
     if (title) [panel setTitle:[NSString stringWithUTF8String:title]];
     [panel setCanChooseFiles:YES];
@@ -1079,6 +1103,7 @@ void aether_ui_sheet_set_body_impl(int handle, int root_handle) {
 }
 
 void aether_ui_sheet_present_impl(int handle) {
+    if (aeui_is_headless()) return;  // sheet tracking needs an interactive runloop
     if (!sheet_windows || handle < 1 || handle > (int)[sheet_windows count]) return;
     NSWindow* sheet = sheet_windows[handle - 1];
     if (primary_window) {
@@ -2022,6 +2047,156 @@ void aether_ui_enable_test_server_impl(int port, int root_handle) {
     pthread_t tid;
     pthread_create(&tid, NULL, test_server_thread, (void*)(intptr_t)port);
     pthread_detach(tid);
+}
+
+// ---------------------------------------------------------------------------
+// Menus (NSMenu / NSMenuItem).
+// Minimal native implementation — the app menu is mutated via NSApp's
+// mainMenu; context menus use -[NSMenu popUpMenuPositioningItem:].
+// ---------------------------------------------------------------------------
+
+typedef struct {
+    NSMenu*     menu;
+    NSString*   label;
+    int         is_bar;
+} MacMenuEntry;
+
+static MacMenuEntry* mac_menus = NULL;
+static int           mac_menu_count = 0;
+static int           mac_menu_capacity = 0;
+
+static int register_mac_menu(NSMenu* menu, NSString* label, int is_bar) {
+    if (mac_menu_count >= mac_menu_capacity) {
+        mac_menu_capacity = mac_menu_capacity == 0 ? 8 : mac_menu_capacity * 2;
+        mac_menus = (MacMenuEntry*)realloc(mac_menus,
+            sizeof(MacMenuEntry) * mac_menu_capacity);
+    }
+    mac_menus[mac_menu_count].menu = menu;
+    mac_menus[mac_menu_count].label = [label copy];
+    mac_menus[mac_menu_count].is_bar = is_bar;
+    mac_menu_count++;
+    return mac_menu_count;
+}
+
+// Target/action plumbing for menu items. Each menu item stores its boxed
+// closure pointer; the shared target invokes it on click.
+@interface AetherMenuTarget : NSObject
+- (void)fire:(id)sender;
+@end
+@implementation AetherMenuTarget
+- (void)fire:(id)sender {
+    AeClosure* c = (AeClosure*)(intptr_t)[[sender representedObject] longLongValue];
+    if (c && c->fn) ((void(*)(void*))c->fn)(c->env);
+}
+@end
+static AetherMenuTarget* g_menu_target = nil;
+
+int aether_ui_menu_bar_create(void) {
+    if (!g_menu_target) g_menu_target = [[AetherMenuTarget alloc] init];
+    return register_mac_menu([[NSMenu alloc] initWithTitle:@""], @"", 1);
+}
+
+int aether_ui_menu_create(const char* label) {
+    if (!g_menu_target) g_menu_target = [[AetherMenuTarget alloc] init];
+    NSString* ns_label = [NSString stringWithUTF8String:(label ? label : "Menu")];
+    return register_mac_menu([[NSMenu alloc] initWithTitle:ns_label], ns_label, 0);
+}
+
+void aether_ui_menu_add_item(int menu_handle, const char* label,
+                             void* boxed_closure) {
+    if (menu_handle < 1 || menu_handle > mac_menu_count) return;
+    NSMenu* m = mac_menus[menu_handle - 1].menu;
+    NSMenuItem* item = [[NSMenuItem alloc]
+        initWithTitle:[NSString stringWithUTF8String:(label ? label : "")]
+        action:@selector(fire:) keyEquivalent:@""];
+    [item setTarget:g_menu_target];
+    [item setRepresentedObject:[NSNumber numberWithLongLong:(intptr_t)boxed_closure]];
+    [m addItem:item];
+}
+
+void aether_ui_menu_add_separator(int menu_handle) {
+    if (menu_handle < 1 || menu_handle > mac_menu_count) return;
+    [mac_menus[menu_handle - 1].menu addItem:[NSMenuItem separatorItem]];
+}
+
+void aether_ui_menu_bar_add_menu(int bar_handle, int menu_handle) {
+    if (bar_handle < 1 || bar_handle > mac_menu_count) return;
+    if (menu_handle < 1 || menu_handle > mac_menu_count) return;
+    NSMenu* bar = mac_menus[bar_handle - 1].menu;
+    NSMenu* sub = mac_menus[menu_handle - 1].menu;
+    NSString* sub_label = mac_menus[menu_handle - 1].label;
+    NSMenuItem* host = [[NSMenuItem alloc] initWithTitle:sub_label
+                                                  action:nil keyEquivalent:@""];
+    [host setSubmenu:sub];
+    [bar addItem:host];
+}
+
+void aether_ui_menu_bar_attach(int app_handle, int bar_handle) {
+    (void)app_handle;
+    if (bar_handle < 1 || bar_handle > mac_menu_count) return;
+    [NSApp setMainMenu:mac_menus[bar_handle - 1].menu];
+}
+
+void aether_ui_menu_popup(int menu_handle, int anchor_widget) {
+    if (menu_handle < 1 || menu_handle > mac_menu_count) return;
+    // popUpMenuPositioningItem tracks the menu in its own loop until
+    // dismissed. With no NSApp run-loop active (widget smoke tests,
+    // any headless caller) the loop can fail to dismiss and block the
+    // caller. Respect AETHER_UI_HEADLESS unconditionally.
+    if (aeui_is_headless()) return;
+    NSView* anchor = (__bridge NSView*)aether_ui_get_widget(anchor_widget);
+    NSMenu* m = mac_menus[menu_handle - 1].menu;
+    NSPoint loc = [NSEvent mouseLocation];
+    // `inView:` requires the view to be attached to a window; otherwise
+    // Cocoa throws NSInternalInconsistencyException. When the anchor
+    // has no window, fall back to screen-space positioning with
+    // `inView:nil`, which popUpMenuPositioningItem explicitly documents
+    // as supported.
+    NSView* viewArg = (anchor && anchor.window) ? anchor : nil;
+    if (viewArg) {
+        loc = [viewArg.window convertPointFromScreen:loc];
+    }
+    [m popUpMenuPositioningItem:nil atLocation:loc inView:viewArg];
+}
+
+// ---------------------------------------------------------------------------
+// Grid layout (NSGridView).
+// ---------------------------------------------------------------------------
+int aether_ui_grid_create(int cols, int row_spacing, int col_spacing) {
+    NSGridView* grid = [NSGridView gridViewWithNumberOfColumns:cols rows:0];
+    grid.rowSpacing = row_spacing;
+    grid.columnSpacing = col_spacing;
+    return aether_ui_register_widget((__bridge_retained void*)grid);
+}
+
+void aether_ui_grid_place(int grid_handle, int child_handle,
+                          int row, int col, int row_span, int col_span) {
+    NSGridView* grid = (__bridge NSGridView*)aether_ui_get_widget(grid_handle);
+    NSView* child = (__bridge NSView*)aether_ui_get_widget(child_handle);
+    if (!grid || !child) return;
+    // Extend rows/cols if needed. NSGridView's row-append selector is
+    // `addRowWithViews:` — `addRow:` does not exist.
+    while (grid.numberOfRows <= row) [grid addRowWithViews:@[]];
+    NSGridCell* cell = [grid cellAtColumnIndex:col rowIndex:row];
+    [cell setContentView:child];
+    if (row_span > 1 || col_span > 1) {
+        [grid mergeCellsInHorizontalRange:NSMakeRange(col, col_span)
+                             verticalRange:NSMakeRange(row, row_span)];
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Reverse lookup — aether_ui_handle_for_widget.
+// Backend-specific: this is a linear scan over the widget registry. The
+// hash-backed O(1) version ships in the Win32 backend; porting to AppKit
+// is straightforward future work (NSView* maps cleanly to the same hash).
+// ---------------------------------------------------------------------------
+int aether_ui_handle_for_widget(void* widget) {
+    if (!widget) return 0;
+    for (int i = 0; i < widget_count; i++) {
+        if (widgets[i] == widget) return i + 1;
+    }
+    return 0;
 }
 
 #endif // __APPLE__

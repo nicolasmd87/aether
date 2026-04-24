@@ -4,7 +4,7 @@
 // This file is compiled separately and linked with Aether programs via:
 //   ae build app.ae --extra contrib/aether_ui/aether_ui_gtk4.c $(pkg-config --cflags --libs gtk4)
 
-#include "aether_ui_gtk4.h"
+#include "aether_ui_backend.h"
 #include <gtk/gtk.h>
 #include <stdlib.h>
 #include <string.h>
@@ -30,6 +30,18 @@ static void ensure_gtk_init(void) {
         gtk_init();
         gtk_initialized = 1;
     }
+}
+
+// ---------------------------------------------------------------------------
+// AETHER_UI_HEADLESS contract — set by CI, widget smoke tests, or any
+// caller that wants to exercise the backend without a user. Every API
+// that would otherwise show a modal dialog (alert, file_open, …)
+// returns without UI when this flag is set. Without this, modal
+// dialogs can block waiting for interaction that never comes.
+// ---------------------------------------------------------------------------
+static int aeui_is_headless(void) {
+    const char* v = getenv("AETHER_UI_HEADLESS");
+    return v && v[0] && v[0] != '0';
 }
 
 // ---------------------------------------------------------------------------
@@ -160,7 +172,17 @@ static void on_activate(GtkApplication* gtk_app, gpointer user_data) {
         }
     }
 
-    gtk_window_present(GTK_WINDOW(window));
+    // Honor AETHER_UI_HEADLESS for CI and unattended scenarios. The window
+    // is realized, the event loop still pumps, and the test server still
+    // responds — but the window is never presented. Matches the Win32
+    // backend's SW_HIDE semantics.
+    const char* headless = getenv("AETHER_UI_HEADLESS");
+    int is_headless = headless && headless[0] && headless[0] != '0';
+    if (is_headless) {
+        gtk_widget_realize(window);
+    } else {
+        gtk_window_present(GTK_WINDOW(window));
+    }
 }
 
 int aether_ui_app_create(const char* title, int width, int height) {
@@ -916,6 +938,7 @@ void aether_ui_set_margin(int handle, int top, int right, int bottom, int left) 
 
 // Alert dialog — modal message box with OK button.
 void aether_ui_alert_impl(const char* title, const char* message) {
+    if (aeui_is_headless()) return;  // modal dialog would block on CI
     ensure_gtk_init();
     GtkAlertDialog* dialog = gtk_alert_dialog_new("%s", message ? message : "");
     if (title) gtk_alert_dialog_set_detail(dialog, title);
@@ -1980,4 +2003,98 @@ void aether_ui_widget_add_child_ctx(void* parent_ctx, int child_handle) {
 void aether_ui_widget_set_hidden(int handle, int hidden) {
     GtkWidget* w = aether_ui_get_widget(handle);
     if (w) gtk_widget_set_visible(w, !hidden);
+}
+
+// ---------------------------------------------------------------------------
+// Menus.
+// GTK4 removed traditional GtkMenu in favor of GMenuModel + GtkPopoverMenu.
+// Full native wiring (GMenu / GActionGroup) is follow-up work; for now
+// these stubs maintain the cross-platform ABI so the test suite links and
+// the DSL can be written once against a stable API. Menu items won't
+// actually fire on GTK4 yet — track via the stub_actions list when it's
+// worth wiring up.
+// ---------------------------------------------------------------------------
+
+typedef struct {
+    int   is_bar;
+    char* label;
+} GtkMenuEntry;
+
+static GtkMenuEntry* gtk_menus = NULL;
+static int           gtk_menu_count = 0;
+static int           gtk_menu_capacity = 0;
+
+static int gtk_register_menu(int is_bar, const char* label) {
+    if (gtk_menu_count >= gtk_menu_capacity) {
+        gtk_menu_capacity = gtk_menu_capacity == 0 ? 8 : gtk_menu_capacity * 2;
+        gtk_menus = (GtkMenuEntry*)realloc(gtk_menus,
+                                           sizeof(GtkMenuEntry) * gtk_menu_capacity);
+    }
+    gtk_menus[gtk_menu_count].is_bar = is_bar;
+    gtk_menus[gtk_menu_count].label = label ? strdup(label) : NULL;
+    gtk_menu_count++;
+    return gtk_menu_count;
+}
+
+int aether_ui_menu_bar_create(void) {
+    return gtk_register_menu(1, NULL);
+}
+
+int aether_ui_menu_create(const char* label) {
+    return gtk_register_menu(0, label);
+}
+
+void aether_ui_menu_add_item(int menu_handle, const char* label,
+                             void* boxed_closure) {
+    (void)menu_handle; (void)label; (void)boxed_closure;
+}
+
+void aether_ui_menu_add_separator(int menu_handle) { (void)menu_handle; }
+
+void aether_ui_menu_bar_add_menu(int bar_handle, int menu_handle) {
+    (void)bar_handle; (void)menu_handle;
+}
+
+void aether_ui_menu_bar_attach(int app_handle, int bar_handle) {
+    (void)app_handle; (void)bar_handle;
+}
+
+void aether_ui_menu_popup(int menu_handle, int anchor_widget) {
+    (void)menu_handle; (void)anchor_widget;
+}
+
+// ---------------------------------------------------------------------------
+// Grid layout (GtkGrid).
+// ---------------------------------------------------------------------------
+int aether_ui_grid_create(int cols, int row_spacing, int col_spacing) {
+    (void)cols; // GtkGrid sizes to content rather than using a fixed col count.
+    GtkWidget* grid = gtk_grid_new();
+    gtk_grid_set_row_spacing(GTK_GRID(grid), row_spacing);
+    gtk_grid_set_column_spacing(GTK_GRID(grid), col_spacing);
+    return aether_ui_register_widget(grid);
+}
+
+void aether_ui_grid_place(int grid_handle, int child_handle,
+                          int row, int col, int row_span, int col_span) {
+    GtkWidget* grid = aether_ui_get_widget(grid_handle);
+    GtkWidget* child = aether_ui_get_widget(child_handle);
+    if (!grid || !child || !GTK_IS_GRID(grid)) return;
+    // If the child already has a parent, unparent first.
+    GtkWidget* cur_parent = gtk_widget_get_parent(child);
+    if (cur_parent) gtk_widget_unparent(child);
+    gtk_grid_attach(GTK_GRID(grid), child, col, row, col_span, row_span);
+}
+
+// ---------------------------------------------------------------------------
+// Reverse lookup — aether_ui_handle_for_widget.
+// Linear scan over the widget registry. The hash-backed O(1) version
+// ships in the Win32 backend; porting the hash to GTK4 is straightforward
+// follow-up (GtkWidget* maps cleanly to the same hash).
+// ---------------------------------------------------------------------------
+int aether_ui_handle_for_widget(void* widget) {
+    if (!widget) return 0;
+    for (int i = 0; i < widget_count; i++) {
+        if (widgets[i] == widget) return i + 1;
+    }
+    return 0;
 }

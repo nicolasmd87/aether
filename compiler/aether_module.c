@@ -815,6 +815,38 @@ static int collect_module_const_names(ASTNode* mod_ast, const char** names, int 
     return count;
 }
 
+// Does the module declare an extern C function with this exact name?
+//
+// This is the check that prevents the namespace-prefix/extern collision
+// bug: if a module named `contrib.aether_ui` has both
+//     extern aether_ui_app_create(...) -> int       // raw C name
+//     app_create(...) { return aether_ui_app_create(...) }  // wrapper
+// then merging the wrapper with the `aether_ui_` prefix produces a C
+// symbol that is identical to the extern's name. Both then live in the
+// same translation unit: the extern is a forward declaration, the
+// wrapper is the definition. The wrapper's body calls the extern by
+// name, but C resolves the call to the nearest definition — itself —
+// and the process infinite-recurses until the stack blows (rc=139).
+//
+// The fix is to detect this collision at merge time and skip emitting
+// the wrapper. Qualified calls `aether_ui.app_create(...)` from outside
+// the module are already mangled by codegen to `aether_ui_app_create`
+// (see normalize_func_name in codegen_func.c), which is exactly the
+// extern's name — so with the wrapper gone, those calls resolve
+// directly to the extern. Net effect: zero change for callers, no
+// recursive stub in the generated C.
+static int module_has_extern_named(ASTNode* mod_ast, const char* name) {
+    if (!mod_ast || !name) return 0;
+    for (int i = 0; i < mod_ast->child_count; i++) {
+        ASTNode* decl = unwrap_export(mod_ast->children[i]);
+        if (decl && decl->type == AST_EXTERN_FUNCTION && decl->value &&
+            strcmp(decl->value, name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 // Check if a name is in a string array
 static int name_in_list(const char* name, const char** list, int count) {
     for (int i = 0; i < count; i++) {
@@ -981,6 +1013,12 @@ void module_merge_into_program(ASTNode* program) {
                 // Build prefixed name: "double_it" -> "mymath_double_it"
                 char prefixed[256];
                 snprintf(prefixed, sizeof(prefixed), "%s_%s", ns, decl->value);
+
+                // Collision with an extern declared in the same module.
+                // See the comment on module_has_extern_named above for
+                // why this check is necessary. Skipping the wrapper
+                // makes qualified calls resolve directly to the extern.
+                if (module_has_extern_named(mod_ast, prefixed)) continue;
 
                 // Skip if already merged (e.g. from a prior non-selective import)
                 int already_merged = 0;

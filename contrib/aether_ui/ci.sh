@@ -15,9 +15,12 @@
 #   macOS    — runs directly (AppKit).
 #   Linux    — runs directly if $DISPLAY or $WAYLAND_DISPLAY is set; otherwise
 #              auto-wraps with xvfb-run when available. Falls back to build-only.
-#   Windows  — no Windows backend exists yet; Phase 1 skipped, runtime phases
-#              skipped, script exits 0 with a notice so CI stays green until a
-#              backend lands.
+#   Windows  — native Win32 backend. Aether-level examples are skipped (the
+#              DSL has a separate module-resolution issue on MINGW that
+#              blocks `ae build`). The C-level backend test suite
+#              (tests/test_widgets.c) and the HTTP driver test
+#              (tests/test_driver.sh) run instead — invoked via
+#              `make contrib-aether-ui-check`.
 #
 # Exits non-zero only when an implemented platform fails. Leaves no
 # background processes.
@@ -51,8 +54,9 @@ esac
 echo "=== aether_ui CI on $OS ($PLATFORM) ==="
 
 if [ "$PLATFORM" = "windows" ]; then
-    echo "NOTICE: aether_ui has no Windows backend yet — skipping all phases."
-    echo "        When a Win32/WinUI backend lands, extend build.sh + this script."
+    echo "NOTICE: Windows backend uses a separate test flow."
+    echo "        Run: make contrib-aether-ui-check"
+    echo "        (headless widget suite + HTTP driver integration test)"
     exit 0
 fi
 if [ "$PLATFORM" = "unknown" ]; then
