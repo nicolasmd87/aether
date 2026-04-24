@@ -48,6 +48,8 @@ session for a real one.
 | GET    | `/widgets?text=<text>`             |                     | filter by text (URL-encoded)  |
 | GET    | `/widgets?type=<t>&text=<x>`       |                     | both filters AND-ed           |
 | GET    | `/widget/{id}`                     |                     | state of a single widget      |
+| GET    | `/widget/{id}/children`            |                     | direct children (array)       |
+| GET    | `/screenshot`                      |                     | PNG bytes of the root window  |
 | POST   | `/widget/{id}/click`               |                     | simulate a button click       |
 | POST   | `/widget/{id}/set_text?v=<text>`   |                     | set text / textfield value    |
 | POST   | `/widget/{id}/toggle`              |                     | flip a checkbox / toggle      |
@@ -233,12 +235,6 @@ means registering its handlers in one place per backend.
 
 ## Known limitations
 
-- **No screenshot endpoint in the shared server.** The GTK4 backend has
-  a `/screenshot` endpoint using `gtk_snapshot` + `GdkPaintable` that
-  ships PNG bytes. It's not part of the cross-platform server yet; it
-  will move to a per-backend `screenshot` hook in a follow-up.
-- **No `/widget/{id}/children` in the shared server.** Same: present on
-  GTK4 today, not yet in the shared path.
 - **Mutation is synchronous** — `dispatch_action` blocks the HTTP
   thread until the UI thread finishes the action. Long-running
   callbacks inside a button's on-click will block the HTTP response
@@ -249,6 +245,11 @@ means registering its handlers in one place per backend.
   `127.0.0.1` (loopback), so it's unreachable from the network, but
   any local process on the machine can drive the app while the server
   is up. Don't enable `AETHER_UI_TEST_PORT` in production builds.
+- **Screenshots require a visible-or-DWM-composed window.** The Win32
+  backend captures with `BitBlt` from the window's DC, then encodes
+  via GDI+. Works even in `AETHER_UI_HEADLESS=1` mode on modern
+  Windows because DWM composes hidden windows, but expect blank
+  captures on unsupported setups (Windows Server Core without GUI).
 
 ## Also see
 

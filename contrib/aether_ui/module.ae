@@ -134,6 +134,20 @@ extern aether_ui_sheet_dismiss_impl(handle: int)
 extern aether_ui_image_create(filepath: string) -> int
 extern aether_ui_image_set_size(handle: int, width: int, height: int)
 
+// Menus
+extern aether_ui_menu_bar_create() -> int
+extern aether_ui_menu_create(label: string) -> int
+extern aether_ui_menu_add_item(menu_handle: int, label: string, boxed_closure: ptr)
+extern aether_ui_menu_add_separator(menu_handle: int)
+extern aether_ui_menu_bar_add_menu(bar_handle: int, menu_handle: int)
+extern aether_ui_menu_bar_attach(app_handle: int, bar_handle: int)
+extern aether_ui_menu_popup(menu_handle: int, anchor_widget: int)
+
+// Grid layout — 2D container with (row, col) placement.
+extern aether_ui_grid_create(cols: int, row_spacing: int, col_spacing: int) -> int
+extern aether_ui_grid_place(grid_handle: int, child_handle: int,
+                            row: int, col: int, row_span: int, col_span: int)
+
 // Group 6: Canvas, events, animation
 extern aether_ui_canvas_create_impl(width: int, height: int) -> int
 extern aether_ui_canvas_get_widget(canvas_id: int) -> int
@@ -176,6 +190,18 @@ root_hstack(spacing: int) {
 // Create app and run the event loop with the given root widget.
 app_run(title: string, width: int, height: int, root_handle: int) {
     app_handle = aether_ui_app_create(title, width, height)
+    aether_ui_app_set_body(app_handle, root_handle)
+    aether_ui_app_run_raw(app_handle)
+}
+
+// Split-form app lifecycle: create returns a handle, then caller can
+// attach a menu bar or other app-level wiring before calling start.
+app_create(title: string, width: int, height: int) {
+    return aether_ui_app_create(title, width, height)
+}
+
+// Finalize + run. Mirrors app_run for apps that need the split path.
+app_start(app_handle: int, root_handle: int) {
     aether_ui_app_set_body(app_handle, root_handle)
     aether_ui_app_run_raw(app_handle)
 }
@@ -692,4 +718,67 @@ seal_widget(handle: int) {
 // cannot see into or interact with anything inside the containment zone.
 seal_subtree(handle: int) {
     aether_ui_seal_subtree_impl(handle)
+}
+
+// --- Menus ---
+
+// Create a top-level menu bar (to attach to an app window).
+menu_bar() {
+    return aether_ui_menu_bar_create()
+}
+
+// Create a submenu with the given label. Add items with menu_item,
+// then attach it to a bar with menu_bar_add.
+menu(label: string) {
+    return aether_ui_menu_create(label)
+}
+
+// Add a selectable item to a menu.
+menu_item(menu_handle: int, label: string, on_press: fn) {
+    boxed = box_closure(on_press)
+    aether_ui_menu_add_item(menu_handle, label, boxed)
+}
+
+// Add a horizontal separator between menu items.
+menu_separator(menu_handle: int) {
+    aether_ui_menu_add_separator(menu_handle)
+}
+
+// Attach a submenu to a menu bar.
+menu_bar_add(bar_handle: int, menu_handle: int) {
+    aether_ui_menu_bar_add_menu(bar_handle, menu_handle)
+}
+
+// Attach a menu bar to an app window. Call before app_run.
+attach_menu_bar(app_handle: int, bar_handle: int) {
+    aether_ui_menu_bar_attach(app_handle, bar_handle)
+}
+
+// Pop up a context menu at the cursor position, anchored to a widget
+// (used to determine the owner window for keyboard focus).
+menu_popup(menu_handle: int, anchor_widget: int) {
+    aether_ui_menu_popup(menu_handle, anchor_widget)
+}
+
+// --- Grid layout ---
+
+// Top-level grid (no _ctx parent — for use outside trailing blocks).
+root_grid(cols: int, row_spacing: int, col_spacing: int) {
+    return aether_ui_grid_create(cols, row_spacing, col_spacing)
+}
+
+// Grid container as a child of another widget (trailing-block).
+grid(_ctx: ptr, cols: int, row_spacing: int, col_spacing: int) {
+    handle = aether_ui_grid_create(cols, row_spacing, col_spacing)
+    if _ctx != 0 {
+        aether_ui_widget_add_child_ctx(_ctx, handle)
+    }
+    return handle
+}
+
+// Place a previously-created widget into a grid cell. row/col are
+// 0-indexed; row_span and col_span are 1-based (1 = fill one cell).
+grid_place(grid_handle: int, child_handle: int,
+           row: int, col: int, row_span: int, col_span: int) {
+    aether_ui_grid_place(grid_handle, child_handle, row, col, row_span, col_span)
 }

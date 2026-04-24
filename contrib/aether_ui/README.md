@@ -102,6 +102,8 @@ main() {
 | TextArea    | `aether_ui.textarea("hint") callback \|val\| { }`     | GtkTextView        | NSTextView              | EDIT (ES_MULTILINE)        |
 | ProgressBar | `aether_ui.progressbar(0.75)`                         | GtkProgressBar     | NSProgressIndicator     | PROGRESS (comctl32)        |
 | ScrollView  | `aether_ui.scrollview() { children }`                 | GtkScrolledWindow  | NSScrollView            | AetherUIStack + WS_VSCROLL |
+| Grid        | `aether_ui.root_grid(cols, rspace, cspace)` + `grid_place(...)` | GtkGrid   | NSGridView              | AetherUIGrid (custom)      |
+| Menu bar    | `aether_ui.menu_bar()` + `menu()` + `menu_item()`     | GMenu / GActionMap | NSMenu                  | HMENU (CreateMenu/SetMenu) |
 
 ## Reactive state
 

@@ -200,6 +200,50 @@ static void test_seal_subtree(void) {
     AE_CASE(1, "seal subtree did not crash");
 }
 
+static void test_menu(void) {
+    AE_TEST(menu);
+    int bar = aether_ui_menu_bar_create();
+    AE_CASE(bar >= 1, "menu_bar_create");
+    int file_menu = aether_ui_menu_create("File");
+    AE_CASE(file_menu >= 1, "menu_create File");
+    aether_ui_menu_add_item(file_menu, "Open...", (void*)0);
+    aether_ui_menu_add_item(file_menu, "Save",    (void*)0);
+    aether_ui_menu_add_separator(file_menu);
+    aether_ui_menu_add_item(file_menu, "Quit",    (void*)0);
+    aether_ui_menu_bar_add_menu(bar, file_menu);
+    AE_CASE(1, "menu populated + attached to bar");
+
+    // Context menu via popup (can't actually trigger interactively;
+    // just verify it doesn't crash when given a real anchor widget).
+    int ctx_menu = aether_ui_menu_create("Ctx");
+    aether_ui_menu_add_item(ctx_menu, "Copy", (void*)0);
+    int anchor = aether_ui_button_create_plain("anchor");
+    aether_ui_menu_popup(ctx_menu, anchor);
+    AE_CASE(1, "menu_popup did not crash");
+}
+
+static void test_grid(void) {
+    AE_TEST(grid);
+    int g = aether_ui_grid_create(2, 4, 4);
+    AE_CASE(g >= 1, "grid_create returns handle");
+
+    // Standard login-form pattern: label / field on each row.
+    int l1 = aether_ui_text_create("Username:");
+    int f1 = aether_ui_textfield_create("", (void*)0);
+    int l2 = aether_ui_text_create("Password:");
+    int f2 = aether_ui_securefield_create("", (void*)0);
+    aether_ui_grid_place(g, l1, 0, 0, 1, 1);
+    aether_ui_grid_place(g, f1, 0, 1, 1, 1);
+    aether_ui_grid_place(g, l2, 1, 0, 1, 1);
+    aether_ui_grid_place(g, f2, 1, 1, 1, 1);
+    AE_CASE(1, "grid 2x2 placement does not crash");
+
+    // Spanning cell
+    int btn = aether_ui_button_create_plain("Sign In");
+    aether_ui_grid_place(g, btn, 2, 0, 1, 2); // row 2, both cols
+    AE_CASE(1, "grid col_span=2 placement does not crash");
+}
+
 int main(void) {
     printf("Running Aether UI backend tests...\n\n");
     test_state_roundtrip();
@@ -214,6 +258,8 @@ int main(void) {
     test_unicode_widgets();
     test_deep_nesting();
     test_seal_subtree();
+    test_menu();
+    test_grid();
     printf("\n%d passed, %d failed\n", ae_test_pass, ae_test_fail);
     return ae_test_fail > 0 ? 1 : 0;
 }

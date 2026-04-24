@@ -288,6 +288,54 @@ static void handle_request(aether_sock_t client_fd, const AetherDriverHooks* h) 
         pos += sprintf(body + pos, "]");
         send_http(client_fd, 200, "OK", "application/json", body);
         free(body);
+    } else if (method == 0 && strncmp(path, "/widget/", 8) == 0
+               && strstr(path, "/children")) {
+        int id = extract_id_from_path(path, "/widget/");
+        if (!h->widget_children) {
+            send_http(client_fd, 501, "Not Implemented", "text/plain",
+                      "/children not supported by this backend");
+        } else {
+            int kids[256];
+            int n = h->widget_children(id, kids, 256);
+            if (n < 0) {
+                send_http(client_fd, 404, "Not Found", "text/plain",
+                          "widget not found");
+            } else {
+                char* body = (char*)malloc((size_t)n * 512 + 64);
+                int pos = 0;
+                pos += sprintf(body + pos, "[");
+                for (int i = 0; i < n; i++) {
+                    if (i > 0) pos += sprintf(body + pos, ",");
+                    pos += widget_to_json(h, kids[i], body + pos, 512);
+                }
+                pos += sprintf(body + pos, "]");
+                send_http(client_fd, 200, "OK", "application/json", body);
+                free(body);
+            }
+        }
+    } else if (method == 0 && strcmp(path, "/screenshot") == 0) {
+        if (!h->screenshot_png) {
+            send_http(client_fd, 501, "Not Implemented", "text/plain",
+                      "/screenshot not supported by this backend");
+        } else {
+            unsigned char* data = NULL;
+            size_t len = 0;
+            if (h->screenshot_png(&data, &len) == 0 && data && len > 0) {
+                char header[256];
+                int hlen = snprintf(header, sizeof(header),
+                    "HTTP/1.1 200 OK\r\n"
+                    "Content-Type: image/png\r\n"
+                    "Content-Length: %zu\r\n"
+                    "Access-Control-Allow-Origin: *\r\n"
+                    "Connection: close\r\n\r\n", len);
+                aether_socket_send(client_fd, header, hlen);
+                aether_socket_send(client_fd, (const char*)data, (int)len);
+                free(data);
+            } else {
+                send_http(client_fd, 500, "Error", "text/plain",
+                          "screenshot capture failed");
+            }
+        }
     } else if (method == 0 && strncmp(path, "/widget/", 8) == 0) {
         int id = extract_id_from_path(path, "/widget/");
         if (id > 0) {

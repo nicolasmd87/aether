@@ -131,6 +131,7 @@ typedef enum {
     WK_CANVAS,
     WK_WINDOW,
     WK_SHEET,
+    WK_GRID,
 } WidgetKind;
 
 typedef struct {
@@ -203,6 +204,66 @@ static Widget** widgets = NULL;
 static int widget_count = 0;
 static int widget_capacity = 0;
 
+// Open-addressed reverse map HWND → 1-based handle.
+//
+// Before this, handle_for_hwnd() was an O(n) linear scan called from every
+// WM_COMMAND, every stack layout, and every /widgets JSON emit — so a
+// 500-widget app paid ~500 pointer compares per button click. Replacing it
+// with a flat probe table keeps lookup O(1) amortized with predictable
+// memory (8 bytes per live widget + load-factor slack).
+//
+// Keys are HWND (64-bit on x64); we use a 32-bit multiplicative Fibonacci
+// hash and linear probing. Never shrinks — widgets are never unregistered
+// in the current lifecycle, so stale tombstones aren't needed.
+typedef struct { HWND hwnd; int handle; } WidgetHashEntry;
+static WidgetHashEntry* widget_hash = NULL;
+static int widget_hash_mask = 0;  // capacity - 1; capacity is always power of 2
+static int widget_hash_count = 0;
+
+static uint32_t hash_hwnd(HWND h) {
+    // Fibonacci hash: multiply by the golden ratio constant, keep high bits.
+    uint64_t k = (uint64_t)(uintptr_t)h;
+    return (uint32_t)((k * 0x9E3779B97F4A7C15ULL) >> 32);
+}
+
+static void widget_hash_grow(int new_cap_pow2) {
+    WidgetHashEntry* old = widget_hash;
+    int old_cap = widget_hash_mask + 1;
+    widget_hash = (WidgetHashEntry*)calloc((size_t)new_cap_pow2,
+                                            sizeof(WidgetHashEntry));
+    widget_hash_mask = new_cap_pow2 - 1;
+    widget_hash_count = 0;
+    if (old) {
+        for (int i = 0; i < old_cap; i++) {
+            if (old[i].hwnd) {
+                uint32_t slot = hash_hwnd(old[i].hwnd) & widget_hash_mask;
+                while (widget_hash[slot].hwnd) slot = (slot + 1) & widget_hash_mask;
+                widget_hash[slot] = old[i];
+                widget_hash_count++;
+            }
+        }
+        free(old);
+    }
+}
+
+static void widget_hash_insert(HWND h, int handle) {
+    if (!h) return;
+    // Keep load factor < 0.5 for good probe distance. The `!widget_hash`
+    // guard handles the initial empty-state correctly — otherwise the
+    // `count * 2 >= mask + 1` arithmetic evaluates 0 >= 1 (false) and
+    // the slot write dereferences a NULL table.
+    if (!widget_hash || widget_hash_count * 2 >= (widget_hash_mask + 1)) {
+        int new_cap = widget_hash ? (widget_hash_mask + 1) * 2 : 64;
+        widget_hash_grow(new_cap);
+    }
+    uint32_t slot = hash_hwnd(h) & widget_hash_mask;
+    while (widget_hash[slot].hwnd && widget_hash[slot].hwnd != h)
+        slot = (slot + 1) & widget_hash_mask;
+    if (!widget_hash[slot].hwnd) widget_hash_count++;
+    widget_hash[slot].hwnd = h;
+    widget_hash[slot].handle = handle;
+}
+
 static Widget* widget_at(int handle) {
     if (handle < 1 || handle > widget_count) return NULL;
     return widgets[handle - 1];
@@ -218,6 +279,7 @@ int aether_ui_register_widget(void* hwnd) {
     w->opacity = -1.0;
     w->font_size = 0.0;
     widgets[widget_count++] = w;
+    widget_hash_insert((HWND)hwnd, widget_count);
     return widget_count; // 1-based
 }
 
@@ -232,10 +294,14 @@ void* aether_ui_get_widget(int handle) {
     return w ? (void*)w->hwnd : NULL;
 }
 
+// O(1) average reverse lookup via the HWND hash. Falls back to linear scan
+// for HWNDs that were never registered (the hash would miss anyway).
 static int handle_for_hwnd(HWND h) {
-    if (!h) return 0;
-    for (int i = 0; i < widget_count; i++) {
-        if (widgets[i] && widgets[i]->hwnd == h) return i + 1;
+    if (!h || !widget_hash) return 0;
+    uint32_t slot = hash_hwnd(h) & widget_hash_mask;
+    while (widget_hash[slot].hwnd) {
+        if (widget_hash[slot].hwnd == h) return widget_hash[slot].handle;
+        slot = (slot + 1) & widget_hash_mask;
     }
     return 0;
 }
@@ -646,6 +712,15 @@ static LRESULT CALLBACK spacer_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM l
 
 // Canvas drawing backend lives farther down; the window proc forwards to it.
 static LRESULT CALLBACK canvas_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
+static LRESULT CALLBACK grid_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp);
+static int menu_dispatch_command(UINT id);
+
+// Menu command IDs start here to avoid collision with button control IDs.
+#define AE_MENU_ID_BASE 0x8000
+
+// Window class name for grid containers; the class is registered in
+// register_window_classes() alongside STACK / DIVIDER / SPACER / CANVAS.
+static const wchar_t* GRID_CLASS = L"AetherUIGrid";
 
 static LRESULT CALLBACK app_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     switch (msg) {
@@ -676,7 +751,16 @@ static LRESULT CALLBACK app_wnd_proc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) 
         case WM_DESTROY:
             PostQuitMessage(0);
             return 0;
-        case WM_COMMAND:
+        case WM_COMMAND: {
+            // WM_COMMAND with a menu ID (no control HWND) → look up the
+            // registered closure. Otherwise forward to the stack proc,
+            // which handles WM_COMMAND from child controls.
+            WORD id = LOWORD(wp);
+            if (lp == 0 && HIWORD(wp) == 0 && id >= AE_MENU_ID_BASE) {
+                if (menu_dispatch_command(id)) return 0;
+            }
+            return stack_wnd_proc(hwnd, msg, wp, lp);
+        }
         case WM_HSCROLL:
         case WM_VSCROLL:
         case WM_CTLCOLORSTATIC:
@@ -739,6 +823,16 @@ static void register_window_classes(HINSTANCE inst) {
     wc.lpszClassName = CANVAS_CLASS;
     RegisterClassExW(&wc);
 
+    memset(&wc, 0, sizeof(wc));
+    wc.cbSize = sizeof(WNDCLASSEXW);
+    wc.style = CS_HREDRAW | CS_VREDRAW;
+    wc.lpfnWndProc = grid_wnd_proc;
+    wc.hInstance = inst;
+    wc.hCursor = LoadCursorW(NULL, IDC_ARROW);
+    wc.hbrBackground = (HBRUSH)(COLOR_WINDOW + 1);
+    wc.lpszClassName = GRID_CLASS;
+    RegisterClassExW(&wc);
+
     win_classes_registered = 1;
 }
 
@@ -797,6 +891,7 @@ typedef struct {
     int height;
     int root_handle;
     HWND hwnd;
+    HMENU pending_menu;  // menu bar to SetMenu() on this app's window
 } AppEntry;
 
 static AppEntry* apps = NULL;
@@ -815,6 +910,7 @@ int aether_ui_app_create(const char* title, int width, int height) {
     e->height = height;
     e->root_handle = 0;
     e->hwnd = NULL;
+    e->pending_menu = NULL;
     app_count++;
     return app_count;
 }
@@ -885,6 +981,12 @@ void aether_ui_app_run_raw(int app_handle) {
                          cr.right - cr.left, cr.bottom - cr.top,
                          SWP_NOZORDER | SWP_SHOWWINDOW);
         }
+    }
+
+    // Attach the menu bar (if one was registered via aether_ui_menu_bar_attach).
+    // We defer this until here so the window exists.
+    if (e->pending_menu) {
+        SetMenu(e->hwnd, e->pending_menu);
     }
 
     // Honor AETHER_UI_HEADLESS for CI and unattended scenarios. The window
@@ -1765,6 +1867,256 @@ void aether_ui_image_set_size(int handle, int width, int height) {
 }
 
 // ---------------------------------------------------------------------------
+// Menu bar + context menus.
+//
+// Win32 menus (HMENU) are not HWNDs, so they live in a parallel registry.
+// Each menu item is a small command ID (starting at AE_MENU_ID_BASE) that
+// we dispatch from app_wnd_proc's WM_COMMAND: the ID looks up the
+// registered closure and invokes it. Menu bars attach to the app window
+// via SetMenu(); context menus use TrackPopupMenu().
+// ---------------------------------------------------------------------------
+
+typedef struct {
+    HMENU    hmenu;
+    int      is_menu_bar;   // 1 = menu bar (top-level); 0 = popup/submenu
+    int      attached;      // 1 once this menu has been added to a parent bar
+    wchar_t* label;         // display text for submenus (NULL for menu bars)
+} MenuEntry;
+
+static MenuEntry* menus = NULL;
+static int        menu_count = 0;
+static int        menu_capacity = 0;
+
+typedef struct {
+    UINT       id;
+    AeClosure* closure;
+} MenuCommand;
+
+static MenuCommand* menu_commands = NULL;
+static int          menu_command_count = 0;
+static int          menu_command_capacity = 0;
+static UINT         next_menu_id = AE_MENU_ID_BASE;
+
+static int register_menu(HMENU hmenu, int is_bar, const wchar_t* label) {
+    if (menu_count >= menu_capacity) {
+        menu_capacity = menu_capacity == 0 ? 8 : menu_capacity * 2;
+        menus = (MenuEntry*)realloc(menus, sizeof(MenuEntry) * menu_capacity);
+    }
+    menus[menu_count].hmenu = hmenu;
+    menus[menu_count].is_menu_bar = is_bar;
+    menus[menu_count].attached = 0;
+    menus[menu_count].label = label ? _wcsdup(label) : NULL;
+    menu_count++;
+    return menu_count; // 1-based
+}
+
+static MenuEntry* menu_at(int handle) {
+    if (handle < 1 || handle > menu_count) return NULL;
+    return &menus[handle - 1];
+}
+
+// Called from the app window's WM_COMMAND when LOWORD(wParam) is a menu ID.
+// Returns 1 if handled.
+static int menu_dispatch_command(UINT id) {
+    for (int i = 0; i < menu_command_count; i++) {
+        if (menu_commands[i].id == id) {
+            invoke_closure(menu_commands[i].closure);
+            return 1;
+        }
+    }
+    return 0;
+}
+
+int aether_ui_menu_bar_create(void) {
+    ensure_win_init();
+    HMENU hmenu = CreateMenu();
+    return register_menu(hmenu, 1, NULL);
+}
+
+int aether_ui_menu_create(const char* label) {
+    ensure_win_init();
+    HMENU hmenu = CreatePopupMenu();
+    return register_menu(hmenu, 0, utf8_to_wide(label ? label : "Menu"));
+}
+
+void aether_ui_menu_add_item(int menu_handle, const char* label,
+                             void* boxed_closure) {
+    MenuEntry* m = menu_at(menu_handle);
+    if (!m) return;
+    UINT id = next_menu_id++;
+    AppendMenuW(m->hmenu, MF_STRING, id, utf8_to_wide(label));
+    if (menu_command_count >= menu_command_capacity) {
+        menu_command_capacity = menu_command_capacity == 0
+                                ? 32 : menu_command_capacity * 2;
+        menu_commands = (MenuCommand*)realloc(menu_commands,
+            sizeof(MenuCommand) * menu_command_capacity);
+    }
+    menu_commands[menu_command_count].id = id;
+    menu_commands[menu_command_count].closure = (AeClosure*)boxed_closure;
+    menu_command_count++;
+}
+
+void aether_ui_menu_add_separator(int menu_handle) {
+    MenuEntry* m = menu_at(menu_handle);
+    if (m) AppendMenuW(m->hmenu, MF_SEPARATOR, 0, NULL);
+}
+
+void aether_ui_menu_bar_add_menu(int bar_handle, int menu_handle) {
+    MenuEntry* bar = menu_at(bar_handle);
+    MenuEntry* sub = menu_at(menu_handle);
+    if (!bar || !sub) return;
+    const wchar_t* label = sub->label ? sub->label : L"Menu";
+    AppendMenuW(bar->hmenu, MF_POPUP, (UINT_PTR)sub->hmenu, label);
+    sub->attached = 1;
+}
+
+void aether_ui_menu_bar_attach(int app_handle, int bar_handle) {
+    if (app_handle < 1 || app_handle > app_count) return;
+    MenuEntry* bar = menu_at(bar_handle);
+    if (!bar) return;
+    AppEntry* e = &apps[app_handle - 1];
+    // aether_ui_app_run_raw hasn't created the window yet in the common flow,
+    // so stash the menu bar and attach it at show-time.
+    e->pending_menu = bar->hmenu;
+}
+
+void aether_ui_menu_popup(int menu_handle, int anchor_widget) {
+    MenuEntry* m = menu_at(menu_handle);
+    Widget* w = widget_at(anchor_widget);
+    if (!m || !w) return;
+    POINT pt;
+    GetCursorPos(&pt);
+    TrackPopupMenu(m->hmenu, TPM_LEFTALIGN | TPM_TOPALIGN | TPM_LEFTBUTTON,
+                   pt.x, pt.y, 0, GetParent(w->hwnd), NULL);
+}
+
+// ---------------------------------------------------------------------------
+// Grid layout.
+//
+// A 2D container where children claim (row, col) cells with optional row
+// and column spans. Columns are equal-width by default; rows size to their
+// tallest child. Matches GtkGrid / NSGridView semantics.
+// ---------------------------------------------------------------------------
+
+typedef struct {
+    HWND hwnd;
+    int  cols;
+    int  row_spacing;
+    int  col_spacing;
+    struct {
+        HWND hwnd;
+        int  row, col, row_span, col_span;
+    } items[64];
+    int item_count;
+} GridEntry;
+
+static GridEntry** grids = NULL;
+static int         grid_count = 0;
+static int         grid_capacity = 0;
+
+static GridEntry* grid_for_hwnd(HWND hwnd) {
+    for (int i = 0; i < grid_count; i++) {
+        if (grids[i] && grids[i]->hwnd == hwnd) return grids[i];
+    }
+    return NULL;
+}
+
+static void grid_do_layout(HWND hwnd) {
+    GridEntry* g = grid_for_hwnd(hwnd);
+    if (!g || g->item_count == 0) return;
+
+    RECT client;
+    GetClientRect(hwnd, &client);
+    int total_w = client.right - client.left;
+    int total_h = client.bottom - client.top;
+
+    // Determine row count from max row index.
+    int rows = 0;
+    for (int i = 0; i < g->item_count; i++) {
+        int r = g->items[i].row + g->items[i].row_span;
+        if (r > rows) rows = r;
+    }
+    if (rows == 0) return;
+
+    int col_w = (total_w - g->col_spacing * (g->cols - 1)) / g->cols;
+    int row_h = (total_h - g->row_spacing * (rows - 1)) / rows;
+    if (col_w < 0) col_w = 0;
+    if (row_h < 0) row_h = 0;
+
+    for (int i = 0; i < g->item_count; i++) {
+        int x = g->items[i].col * (col_w + g->col_spacing);
+        int y = g->items[i].row * (row_h + g->row_spacing);
+        int w = col_w * g->items[i].col_span
+                + g->col_spacing * (g->items[i].col_span - 1);
+        int h = row_h * g->items[i].row_span
+                + g->row_spacing * (g->items[i].row_span - 1);
+        SetWindowPos(g->items[i].hwnd, NULL, x, y, w, h,
+                     SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+}
+
+static LRESULT CALLBACK grid_wnd_proc(HWND hwnd, UINT msg,
+                                       WPARAM wp, LPARAM lp) {
+    switch (msg) {
+        case WM_SIZE:
+            grid_do_layout(hwnd);
+            return 0;
+        case WM_ERASEBKGND:
+            return stack_wnd_proc(hwnd, msg, wp, lp);
+        case WM_COMMAND:
+        case WM_HSCROLL:
+        case WM_VSCROLL:
+        case WM_CTLCOLORSTATIC:
+        case WM_CTLCOLOREDIT:
+        case WM_CTLCOLORBTN:
+            return stack_wnd_proc(hwnd, msg, wp, lp);
+    }
+    return DefWindowProcW(hwnd, msg, wp, lp);
+}
+
+int aether_ui_grid_create(int cols, int row_spacing, int col_spacing) {
+    ensure_win_init();
+    if (cols < 1) cols = 1;
+    HWND hwnd = CreateWindowExW(0, GRID_CLASS, L"",
+        WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN,
+        0, 0, 0, 0, widget_holder, NULL, GetModuleHandleW(NULL), NULL);
+    if (!hwnd) return 0;
+    if (grid_count >= grid_capacity) {
+        grid_capacity = grid_capacity == 0 ? 4 : grid_capacity * 2;
+        grids = (GridEntry**)realloc(grids, sizeof(GridEntry*) * grid_capacity);
+    }
+    GridEntry* g = (GridEntry*)calloc(1, sizeof(GridEntry));
+    g->hwnd = hwnd;
+    g->cols = cols;
+    g->row_spacing = row_spacing;
+    g->col_spacing = col_spacing;
+    grids[grid_count++] = g;
+    return register_widget_typed(hwnd, WK_GRID);
+}
+
+void aether_ui_grid_place(int grid_handle, int child_handle,
+                          int row, int col, int row_span, int col_span) {
+    Widget* g = widget_at(grid_handle);
+    Widget* c = widget_at(child_handle);
+    if (!g || !c || g->kind != WK_GRID) return;
+    GridEntry* ge = grid_for_hwnd(g->hwnd);
+    if (!ge || ge->item_count >= 64) return;
+    if (row_span < 1) row_span = 1;
+    if (col_span < 1) col_span = 1;
+    // Reparent the child to the grid.
+    SetParent(c->hwnd, g->hwnd);
+    LONG_PTR st = GetWindowLongPtrW(c->hwnd, GWL_STYLE);
+    SetWindowLongPtrW(c->hwnd, GWL_STYLE, st | WS_CHILD | WS_VISIBLE);
+    ge->items[ge->item_count].hwnd = c->hwnd;
+    ge->items[ge->item_count].row = row;
+    ge->items[ge->item_count].col = col;
+    ge->items[ge->item_count].row_span = row_span;
+    ge->items[ge->item_count].col_span = col_span;
+    ge->item_count++;
+    grid_do_layout(g->hwnd);
+}
+
+// ---------------------------------------------------------------------------
 // Canvas backend — GDI+ flat-API path, minimal for first pass.
 //
 // Paths are recorded as a command stream; WM_PAINT replays them onto an
@@ -1846,7 +2198,14 @@ int aether_ui_canvas_get_widget(int canvas_id) {
     return handle_for_hwnd(canvases[canvas_id - 1].hwnd);
 }
 
+// begin_path starts a fresh command stream — drop any previously-recorded
+// commands so a redraw-per-frame loop doesn't accumulate unboundedly.
+// Previously this was an append-only op, which meant an animated canvas
+// leaked ~16 bytes/cmd * 60Hz forever (hundreds of MB/hr on busy scenes).
 void aether_ui_canvas_begin_path_impl(int canvas_id) {
+    if (canvas_id >= 1 && canvas_id <= canvas_count) {
+        canvases[canvas_id - 1].cmd_count = 0;
+    }
     CanvasCmd c = {0}; c.k = CV_BEGIN;
     canvas_add_cmd(canvas_id, c);
 }
@@ -2221,6 +2580,88 @@ static void hook_dispatch_action(AetherDriverActionCtx* ctx) {
     SendMessageW(driver_host_hwnd, AE_WM_DRIVER, 0, (LPARAM)ctx);
 }
 
+// List direct children of a widget. Returns the number written; -1 if
+// the widget itself wasn't found.
+static int hook_widget_children(int handle, int* out, int max) {
+    Widget* w = widget_at(handle);
+    if (!w) return -1;
+    int n = 0;
+    for (HWND c = GetWindow(w->hwnd, GW_CHILD); c && n < max;
+         c = GetWindow(c, GW_HWNDNEXT)) {
+        int ch = handle_for_hwnd(c);
+        if (ch > 0) {
+            if (out) out[n] = ch;
+            n++;
+        }
+    }
+    return n;
+}
+
+// Screenshot the app's first window to a PNG in memory.
+// Uses BitBlt + GDI+ (via the same flat-API binding we use for images).
+__declspec(dllimport) int __stdcall GdipCreateBitmapFromHBITMAP(
+    HBITMAP hbm, HPALETTE pal, void** bitmap);
+__declspec(dllimport) int __stdcall GdipSaveImageToStream(
+    void* image, void* stream, const GUID* clsid, const void* params);
+__declspec(dllimport) int __stdcall GdipGetImageEncodersSize(
+    unsigned int* num_encoders, unsigned int* size);
+__declspec(dllimport) int __stdcall GdipGetImageEncoders(
+    unsigned int num_encoders, unsigned int size, void* encoders);
+
+static int hook_screenshot_png(unsigned char** out_data, size_t* out_len) {
+    if (app_count == 0) return -1;
+    HWND hwnd = apps[0].hwnd;
+    if (!hwnd) return -1;
+    RECT r;
+    if (!GetClientRect(hwnd, &r)) return -1;
+    int w = r.right - r.left, h = r.bottom - r.top;
+    if (w <= 0 || h <= 0) return -1;
+
+    HDC src = GetDC(hwnd);
+    HDC mem = CreateCompatibleDC(src);
+    HBITMAP bmp = CreateCompatibleBitmap(src, w, h);
+    HGDIOBJ old = SelectObject(mem, bmp);
+    BitBlt(mem, 0, 0, w, h, src, 0, 0, SRCCOPY);
+    SelectObject(mem, old);
+
+    ensure_gdiplus();
+    void* gdi_bitmap = NULL;
+    int rc = -1;
+    if (gdiplus_started
+        && GdipCreateBitmapFromHBITMAP(bmp, NULL, &gdi_bitmap) == 0
+        && gdi_bitmap) {
+        // Serialize to an IStream, then copy its bytes out.
+        IStream* stream = NULL;
+        if (CreateStreamOnHGlobal(NULL, TRUE, &stream) == S_OK && stream) {
+            // PNG codec CLSID {557CF406-1A04-11D3-9A73-0000F81EF32E}
+            GUID png_clsid = {0x557cf406, 0x1a04, 0x11d3,
+                              {0x9a, 0x73, 0x00, 0x00, 0xf8, 0x1e, 0xf3, 0x2e}};
+            if (GdipSaveImageToStream(gdi_bitmap, stream,
+                                       &png_clsid, NULL) == 0) {
+                HGLOBAL hg;
+                if (GetHGlobalFromStream(stream, &hg) == S_OK) {
+                    size_t sz = GlobalSize(hg);
+                    void* src_ptr = GlobalLock(hg);
+                    if (src_ptr && sz > 0) {
+                        *out_data = (unsigned char*)malloc(sz);
+                        memcpy(*out_data, src_ptr, sz);
+                        *out_len = sz;
+                        rc = 0;
+                    }
+                    GlobalUnlock(hg);
+                }
+            }
+            stream->lpVtbl->Release(stream);
+        }
+        GdipDisposeImage(gdi_bitmap);
+    }
+
+    DeleteObject(bmp);
+    DeleteDC(mem);
+    ReleaseDC(hwnd, src);
+    return rc;
+}
+
 static const AetherDriverHooks win32_driver_hooks = {
     .widget_count         = hook_widget_count,
     .widget_type          = hook_widget_type,
@@ -2231,6 +2672,8 @@ static const AetherDriverHooks win32_driver_hooks = {
     .slider_value         = hook_slider_value,
     .progressbar_fraction = hook_progressbar_fraction,
     .dispatch_action      = hook_dispatch_action,
+    .widget_children      = hook_widget_children,
+    .screenshot_png       = hook_screenshot_png,
 };
 
 void aether_ui_enable_test_server_impl(int port, int root_handle) {

@@ -15,6 +15,8 @@
 #ifndef AETHER_UI_TEST_SERVER_H
 #define AETHER_UI_TEST_SERVER_H
 
+#include <stddef.h>  /* for size_t */
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -58,6 +60,17 @@ typedef struct {
     // Marshal the action onto the UI thread and block until it completes.
     // The server reads ctx->result after return.
     void (*dispatch_action)(AetherDriverActionCtx* ctx);
+
+    // Optional: list the direct children of a widget (1-based handles).
+    // Return value is the number of children written into `out_handles`;
+    // pass NULL for out_handles to query the count only. Hooks that leave
+    // this NULL cause GET /widget/{id}/children to return 501.
+    int (*widget_children)(int handle, int* out_handles, int max);
+
+    // Optional: capture the application's root window to a PNG byte buffer.
+    // On success, set *out_data (caller-freed with free()) and *out_len,
+    // return 0. On failure, return non-zero. NULL hook → 501.
+    int (*screenshot_png)(unsigned char** out_data, size_t* out_len);
 } AetherDriverHooks;
 
 // Spawn the accept-loop thread. Returns immediately. The server stays up

@@ -80,6 +80,15 @@ runtime.
 
 ## Widget internals
 
+### Widget registry
+
+1-based flat array of `Widget*` entries, mirroring the GTK4 backend's
+pattern but storing `HWND` payloads. Reverse lookup (`HWND → handle`)
+uses an **O(1)** open-addressed hash table (Fibonacci multiplicative
+hash, linear probing, load factor < 0.5). Replaces an O(n) linear scan
+that was called from every `WM_COMMAND`, every stack/grid layout pass,
+and every `/widgets` JSON emit — measurable win as widget count grows.
+
 ### Layout containers
 
 VStack / HStack / ZStack are implemented by a **custom window class**
@@ -123,6 +132,48 @@ used instead of POSIX sockets; the rest is identical cross-platform.
 
 See [`docs/aether-ui-testing.md`](aether-ui-testing.md) for the HTTP API
 reference and test-suite examples.
+
+### Menus (menu bar + context)
+
+Native Win32 menus via `HMENU` (`CreateMenu`, `CreatePopupMenu`,
+`AppendMenuW`, `SetMenu`, `TrackPopupMenu`). The Aether DSL is:
+
+```aether
+app = aether_ui.app_create("App", 600, 400)
+
+bar = aether_ui.menu_bar()
+file = aether_ui.menu("File")
+aether_ui.menu_item(file, "Open...") callback { /* ... */ }
+aether_ui.menu_separator(file)
+aether_ui.menu_item(file, "Quit") callback { exit(0) }
+aether_ui.menu_bar_add(bar, file)
+
+aether_ui.attach_menu_bar(app, bar)
+aether_ui.app_start(app, root_widget)
+```
+
+Menu command IDs start at `AE_MENU_ID_BASE = 0x8000` to avoid colliding
+with button control IDs. `WM_COMMAND` on the app window dispatches by
+ID to the registered closure.
+
+### Grid layout
+
+Two-dimensional container complementing stacks. Children are placed at
+`(row, col)` with optional row/col spans; columns align across rows so
+forms line up exactly. Columns are equal-width; rows size to the
+tallest cell.
+
+```aether
+form = aether_ui.root_grid(2, 6, 8)  // 2 cols, 6px row gap, 8px col gap
+aether_ui.grid_place(form, label_u, 0, 0, 1, 1)
+aether_ui.grid_place(form, field_u, 0, 1, 1, 1)
+aether_ui.grid_place(form, button,  1, 0, 1, 2)  // spans both columns
+```
+
+Backed by a custom `AetherUIGrid` window class whose `WM_SIZE` handler
+lays out every placed child via `SetWindowPos`. See
+[`example_grid.ae`](../contrib/aether_ui/example_grid.ae) for a full
+login-form example.
 
 ### Keyboard navigation
 

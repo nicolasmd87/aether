@@ -119,6 +119,26 @@ void aether_ui_sheet_dismiss_impl(int handle);
 int aether_ui_image_create(const char* filepath);
 void aether_ui_image_set_size(int handle, int width, int height);
 
+// Menus (Group 5b) — native menu bars and context menus.
+// Backend-implemented on Win32 (HMENU), GTK (GMenu), AppKit (NSMenu).
+int  aether_ui_menu_bar_create(void);
+int  aether_ui_menu_create(const char* label);
+void aether_ui_menu_add_item(int menu_handle, const char* label,
+                             void* boxed_closure);
+void aether_ui_menu_add_separator(int menu_handle);
+void aether_ui_menu_bar_add_menu(int bar_handle, int menu_handle);
+void aether_ui_menu_bar_attach(int app_handle, int bar_handle);
+// Context menu: popup a menu at cursor / widget bounds.
+void aether_ui_menu_popup(int menu_handle, int anchor_widget);
+
+// Grid layout (Group 3b) — 2D layout container.
+// Children are placed with aether_ui_grid_place() at (row, col) with
+// optional row/col spans. Unlike stacks, columns align across rows so
+// labels-on-left / fields-on-right forms actually line up.
+int  aether_ui_grid_create(int cols, int row_spacing, int col_spacing);
+void aether_ui_grid_place(int grid_handle, int child_handle,
+                          int row, int col, int row_span, int col_span);
+
 // Canvas drawing (Group 6)
 int aether_ui_canvas_create_impl(int width, int height);
 int aether_ui_canvas_get_widget(int canvas_id);

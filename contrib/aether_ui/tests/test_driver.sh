@@ -147,6 +147,33 @@ if [ -n "$BAN_ID" ]; then
                       || fail "banner set_text rc" "$RC"
 fi
 
+# /widget/{id}/children — should list direct children of the root stack.
+ROOT_ID=$(CURL -s "http://127.0.0.1:$PORT/widgets?type=vstack" \
+    | grep -o '"id":[0-9]*' | head -1 | cut -d: -f2)
+if [ -n "$ROOT_ID" ]; then
+    BODY=$(CURL -s "http://127.0.0.1:$PORT/widget/$ROOT_ID/children")
+    # The root vstack has the banner + heading + button + textfield + toggle +
+    # slider — at least 5 children. Verify we got an array with multiple ids.
+    KID_COUNT=$(echo "$BODY" | grep -o '"id":[0-9]*' | wc -l)
+    [ "$KID_COUNT" -ge 3 ] && pass "/children returned $KID_COUNT kids" \
+                           || fail "/children count" "$KID_COUNT"
+fi
+
+# /screenshot — should return a valid PNG (starts with the PNG magic bytes).
+SS_FILE=$(mktemp -u /tmp/aether_ui_ss_XXXXXX.png)
+if CURL -s -o "$SS_FILE" "http://127.0.0.1:$PORT/screenshot"; then
+    MAGIC=$(head -c 4 "$SS_FILE" | od -An -tx1 | tr -d ' ')
+    if [ "$MAGIC" = "89504e47" ]; then
+        SIZE=$(wc -c < "$SS_FILE")
+        pass "/screenshot returned PNG ($SIZE bytes)"
+    else
+        fail "/screenshot magic bytes" "$MAGIC"
+    fi
+    rm -f "$SS_FILE"
+else
+    fail "/screenshot request" "curl failed"
+fi
+
 echo
 if [ "$FAIL" -eq 0 ]; then
     echo "driver tests: all passed"
