@@ -306,6 +306,11 @@ static int handle_for_hwnd(HWND h) {
     return 0;
 }
 
+// Public wrapper matching the backend ABI.
+int aether_ui_handle_for_widget(void* widget) {
+    return handle_for_hwnd((HWND)widget);
+}
+
 // ---------------------------------------------------------------------------
 // Reactive state — ported verbatim from the GTK4 backend (platform-neutral).
 // ---------------------------------------------------------------------------

@@ -22,6 +22,9 @@
 // Widget registry
 int aether_ui_register_widget(void* widget);
 void* aether_ui_get_widget(int handle);
+// Reverse lookup: native-pointer → 1-based handle, 0 if not registered.
+// O(1) amortized on Win32 (hash-backed); may be linear on other backends.
+int aether_ui_handle_for_widget(void* widget);
 
 // App lifecycle
 int aether_ui_app_create(const char* title, int width, int height);

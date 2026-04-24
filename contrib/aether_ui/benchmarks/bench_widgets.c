@@ -1,9 +1,10 @@
 // Aether UI backend benchmarks.
 //
 // Measures per-operation latency for the hot paths — widget creation,
-// reactive-state propagation, layout, and canvas replay. Results are
-// emitted as `name,count,total_ms,mean_us` CSV on stdout so the CI can
-// snapshot them into docs/aether-ui-benchmarks.md.
+// reactive-state propagation, layout, canvas replay, and reverse
+// handle lookup. Results are emitted as `name,count,total_ms,mean_us`
+// CSV on stdout so the CI can snapshot them into
+// docs/aether-ui-benchmarks.md.
 //
 // All benchmarks run headless (no message pump) so they measure pure
 // backend overhead without display compositor interaction.
@@ -55,8 +56,6 @@ static void bench_widget_create(void) {
 }
 
 static void bench_state_propagation(void) {
-    // Create 200 text bindings onto a single state and measure how long
-    // updating the state once takes — worst-case reactive fan-out.
     int state = aether_ui_state_create(0.0);
     for (int i = 0; i < 200; i++) {
         int t = aether_ui_text_create("x");
@@ -69,8 +68,6 @@ static void bench_state_propagation(void) {
 }
 
 static void bench_deep_layout(void) {
-    // Build a 10-level VStack of 20 children each (= 200 widgets) and
-    // measure repeated add_child_ctx calls, which trigger layout passes.
     int root = aether_ui_vstack_create(2);
     const int N = 400;
     double t0 = now_ms();
@@ -114,6 +111,42 @@ static void bench_utf8_roundtrip(void) {
     emit("textfield_utf8_roundtrip", N, now_ms() - t0);
 }
 
+// Reverse-lookup benchmark: exercises aether_ui_handle_for_widget(),
+// the hot path fired from every WM_COMMAND dispatch, every stack/grid
+// layout pass, and every /widgets JSON emit in the test driver.
+//
+// The benchmark runs at multiple pool sizes. With the O(1) hash backing
+// this function, mean_us should stay ~flat as the pool grows. The
+// pre-hash linear scan would have shown roughly linear growth (e.g.
+// 2500ns at pool=5000 vs 50ns at pool=100).
+static void bench_reverse_lookup_at_size(int widget_count) {
+    void** handles = (void**)malloc(sizeof(void*) * (size_t)widget_count);
+    for (int i = 0; i < widget_count; i++) {
+        int h = aether_ui_text_create("row");
+        handles[i] = aether_ui_get_widget(h);
+    }
+    const int ITER = 500000;
+    volatile int sink = 0;
+    char buf[64];
+    double t0 = now_ms();
+    for (int i = 0; i < ITER; i++) {
+        sink += aether_ui_handle_for_widget(
+            handles[(i * 2654435761u) % widget_count]);
+    }
+    double elapsed = now_ms() - t0;
+    snprintf(buf, sizeof(buf), "handle_for_widget_pool_%d", widget_count);
+    emit(buf, ITER, elapsed);
+    (void)sink;
+    free(handles);
+}
+
+static void bench_reverse_lookup(void) {
+    bench_reverse_lookup_at_size(100);
+    bench_reverse_lookup_at_size(1000);
+    bench_reverse_lookup_at_size(5000);
+    bench_reverse_lookup_at_size(20000);
+}
+
 int main(void) {
     printf("name,count,total_ms,mean_us\n");
     bench_widget_create();
@@ -121,5 +154,6 @@ int main(void) {
     bench_deep_layout();
     bench_canvas();
     bench_utf8_roundtrip();
+    bench_reverse_lookup();
     return 0;
 }

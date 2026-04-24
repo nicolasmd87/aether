@@ -1341,7 +1341,7 @@ benchmark-aether-ui:
 	esac; \
 	mkdir -p build; \
 	$$COMPILER -Icontrib/aether_ui \
-		contrib/aether_ui/benchmarks/bench_widgets.c "$$BACKEND" \
+		contrib/aether_ui/benchmarks/bench_widgets.c $$BACKEND \
 		-o "build/bench_aether_ui$$EXE_SUFFIX" $$LINKS 1>&2 \
 		|| { echo "bench build failed" >&2; exit 1; }; \
 	"./build/bench_aether_ui$$EXE_SUFFIX"
