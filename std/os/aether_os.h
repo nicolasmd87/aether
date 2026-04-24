@@ -46,4 +46,22 @@ int os_run(const char* prog, void* argv, void* env);
 // (or a future os_run_capture_with_status() if demand arises).
 char* os_run_capture_raw(const char* prog, void* argv, void* env);
 
+// Current UTC time as an ISO-8601 timestamp: "YYYY-MM-DDThh:mm:ssZ"
+// (20 chars + NUL). Returns a heap-allocated string the caller must
+// free. On clock / format failure returns an empty string (never NULL).
+// Thread-safe via gmtime_r / gmtime_s.
+//
+// The `_raw` suffix matches the os_exec_raw / os_run_capture_raw
+// pattern: Aether callers go through the `now_utc_iso8601()` wrapper
+// in module.ae; the raw name keeps the extern from colliding with
+// that wrapper's mangled C symbol.
+//
+// Shape is deliberately the one thing downstream code needs for
+// "time this event happened" fields (Subversion's rev-blob date,
+// JSON response timestamps, log-line prefixes). Sub-second precision,
+// timezone offsets, and strftime-style format flags are out of scope
+// for v1; additive variants (now_utc_iso8601_ms_raw, format_time) can
+// land without disturbing this one.
+char* os_now_utc_iso8601_raw(void);
+
 #endif

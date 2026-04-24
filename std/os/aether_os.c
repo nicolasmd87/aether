@@ -18,12 +18,14 @@ int os_execv(const char* p, void* a) { (void)p; (void)a; return -1; }
 char* os_which(const char* n) { (void)n; return NULL; }
 int os_run(const char* p, void* a, void* e) { (void)p; (void)a; (void)e; return -1; }
 char* os_run_capture_raw(const char* p, void* a, void* e) { (void)p; (void)a; (void)e; return NULL; }
+char* os_now_utc_iso8601_raw(void) { return NULL; }
 #else
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <time.h>
 #ifndef _WIN32
 #include <unistd.h>
 #endif
@@ -129,6 +131,33 @@ char* os_getenv(const char* name) {
     char* val = getenv(name);
     if (!val) return NULL;
     return strdup(val);
+}
+
+/* Format the current UTC time as an ISO-8601 timestamp string:
+ * "YYYY-MM-DDThh:mm:ssZ" (20 chars + NUL). Returns a malloc'd
+ * strdup. Uses gmtime_r for thread safety. On any clock / format
+ * failure returns an empty string — callers that care about the
+ * distinction should check for "" vs a valid timestamp shape.
+ *
+ * Sub-second precision, timezone offsets, and format flags are
+ * out of scope for v1 — keep it to the one shape callers wanting
+ * a "timestamp this event happened" field reach for. Additive
+ * variants (`now_utc_iso8601_ms`, `format_time`) can land without
+ * breaking this one. */
+char* os_now_utc_iso8601_raw(void) {
+    time_t now = time(NULL);
+    struct tm tm_buf;
+#ifdef _WIN32
+    if (gmtime_s(&tm_buf, &now) != 0) return strdup("");
+#else
+    if (!gmtime_r(&now, &tm_buf)) return strdup("");
+#endif
+    char buf[32];
+    /* "YYYY-MM-DDThh:mm:ssZ" — 20 bytes + NUL, fits buf easily. */
+    if (strftime(buf, sizeof buf, "%Y-%m-%dT%H:%M:%SZ", &tm_buf) == 0) {
+        return strdup("");
+    }
+    return strdup(buf);
 }
 
 int os_execv(const char* prog, void* argv_list) {

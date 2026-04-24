@@ -91,3 +91,21 @@ argv0() -> {
     }
     return string_concat(raw, "")
 }
+
+// Current UTC time as an ISO-8601 timestamp: "YYYY-MM-DDThh:mm:ssZ"
+// (20 chars). Thread-safe (gmtime_r on POSIX, gmtime_s on Windows).
+// On clock / format failure returns an empty string — never null.
+//
+// Typical use: "when did this event happen" fields where a sortable,
+// human-readable UTC timestamp is wanted (rev-blob date fields, JSON
+// response timestamps, log-line prefixes). Sub-second precision and
+// timezone offsets are out of scope; additive variants can land later.
+extern os_now_utc_iso8601_raw() -> string
+
+now_utc_iso8601() -> string {
+    s = os_now_utc_iso8601_raw()
+    if s == null {
+        return ""
+    }
+    return string_concat(s, "")
+}
