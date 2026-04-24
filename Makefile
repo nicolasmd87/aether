@@ -144,15 +144,20 @@ endif
 BUILD_DIR = build
 OBJ_DIR = $(BUILD_DIR)/obj
 
-# Windows-specific: -static avoids libwinpthread/libgcc DLL dependencies
+# Windows-specific: -static avoids libwinpthread/libgcc DLL dependencies.
+# MinGW OpenSSL 3 static libs pull in Windows Crypto API + GDI/Advapi
+# symbols (CertFreeCertificateContext, CertOpenSystemStoreW, etc.) that
+# aren't auto-linked — we add the import libs explicitly so std.net TLS
+# and std.cryptography work in Windows release binaries.
+WIN_LINK_LIBS = -static -lws2_32 -lcrypt32 -lgdi32 -luser32 -ladvapi32 -lbcrypt
 ifdef WINDOWS_NATIVE
-    LDFLAGS += -static -lws2_32
+    LDFLAGS += $(WIN_LINK_LIBS)
 else ifneq ($(findstring MINGW,$(DETECTED_OS)),)
-    LDFLAGS += -static -lws2_32
+    LDFLAGS += $(WIN_LINK_LIBS)
 else ifneq ($(findstring MSYS,$(DETECTED_OS)),)
-    LDFLAGS += -static -lws2_32
+    LDFLAGS += $(WIN_LINK_LIBS)
 else ifneq ($(findstring CYGWIN,$(DETECTED_OS)),)
-    LDFLAGS += -static -lws2_32
+    LDFLAGS += $(WIN_LINK_LIBS)
 endif
 
 COMPILER_SRC = compiler/aetherc.c compiler/parser/lexer.c compiler/parser/parser.c compiler/ast.c compiler/analysis/typechecker.c compiler/codegen/codegen.c compiler/codegen/codegen_expr.c compiler/codegen/codegen_stmt.c compiler/codegen/codegen_actor.c compiler/codegen/codegen_func.c compiler/aether_error.c compiler/aether_module.c compiler/analysis/type_inference.c compiler/codegen/optimizer.c compiler/aether_diagnostics.c runtime/actors/aether_message_registry.c
