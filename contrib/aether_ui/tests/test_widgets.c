@@ -12,7 +12,21 @@
 
 #include "test_framework.h"
 #include "../aether_ui_backend.h"
-#include <stdlib.h>  // setenv
+#include <stdlib.h>  // getenv, setenv / _putenv
+#include <stdio.h>
+
+// Portable "set this env var if it isn't already set" — setenv() exists
+// on POSIX but MinGW's CRT doesn't declare it, so Windows uses _putenv.
+// Guarded on getenv() so an external caller can still force-disable
+// headless mode by exporting AETHER_UI_HEADLESS=0 before running.
+static void aeui_ensure_headless(void) {
+    if (getenv("AETHER_UI_HEADLESS")) return;
+#ifdef _WIN32
+    _putenv("AETHER_UI_HEADLESS=1");
+#else
+    setenv("AETHER_UI_HEADLESS", "1", 0);
+#endif
+}
 
 int ae_test_pass = 0;
 int ae_test_fail = 0;
@@ -257,8 +271,7 @@ int main(void) {
     // macOS / modal GtkAlertDialog on GTK can spin their own message
     // loop and block indefinitely — the tests have no user to click
     // anything and no outer runloop to dismiss.
-    // The "0" overwrite flag preserves any external setting.
-    setenv("AETHER_UI_HEADLESS", "1", 0);
+    aeui_ensure_headless();
     // Prevent stdout block-buffering when redirected to a CI log file
     // so progress is observable on hangs.
     setvbuf(stdout, NULL, _IOLBF, 0);
