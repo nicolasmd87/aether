@@ -1,0 +1,40 @@
+// std.cryptography - Cryptographic hash primitives
+// Import with: import std.cryptography
+//
+// v1 exposes one-shot SHA-1 and SHA-256 digests. Pure functions —
+// bytes in, lowercase-hex digest out. Binary-safe via an explicit
+// byte length (embedded NULs are fine; pass 0 to hash an empty
+// buffer). No streaming API, no HMAC, no KDFs, no symmetric
+// ciphers — see docs/stdlib-vs-contrib.md for the "one obvious
+// shape" criterion.
+//
+// When the Aether toolchain was built without OpenSSL, the Go-style
+// wrappers below return ("", "openssl unavailable") rather than
+// crashing. Callers that need hashing should check the error slot.
+
+extern cryptography_sha1_hex_raw(data: string, length: int) -> string
+extern cryptography_sha256_hex_raw(data: string, length: int) -> string
+
+// Compute the SHA-1 hex digest of the first `length` bytes of `data`.
+// Returns (digest, "") on success, ("", error) when OpenSSL is
+// unavailable or the hash context could not be created.
+// SHA-1 is included for interop with legacy formats (Git object IDs,
+// Subversion rep-stores, HMAC-SHA1 fixtures). Prefer SHA-256 for new
+// work.
+sha1_hex(data: string, length: int) -> {
+    out = cryptography_sha1_hex_raw(data, length)
+    if out == 0 {
+        return "", "openssl unavailable"
+    }
+    return out, ""
+}
+
+// Compute the SHA-256 hex digest of the first `length` bytes of `data`.
+// Returns (digest, "") on success, ("", error) on failure.
+sha256_hex(data: string, length: int) -> {
+    out = cryptography_sha256_hex_raw(data, length)
+    if out == 0 {
+        return "", "openssl unavailable"
+    }
+    return out, ""
+}

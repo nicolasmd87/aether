@@ -1,0 +1,162 @@
+// Regression: fs.write_binary preserves embedded NUL bytes.
+//
+// Complements fs.read_binary (v0.82.0) which already preserves them
+// on the read path. Together they form a complete binary-safe I/O
+// pair for pristine stores, rep-stores, and any other content-
+// addressable or variable-length binary payload.
+//
+// Strategy: the shim seeds a 10-byte file (with NUL at offset 3),
+// the probe reads it through fs.read_binary (length-aware), writes
+// it back out via fs.write_binary to a new path, and verifies every
+// byte of the second file. If write_binary strlen-truncated, the
+// round-trip file would be 3 bytes instead of 10.
+
+import std.fs
+import std.string
+import std.io
+
+extern wb_probe_write_seed(path: string) -> int
+
+main() {
+    print("=== fs.write_binary with embedded NULs ===\n\n")
+
+    tmp = io.getenv("TMPDIR")
+    if tmp == 0 { tmp = io.getenv("TEMP") }
+    if tmp == 0 { tmp = "/tmp" }
+    seed_path = "${tmp}/aether_wb_seed.bin"
+    out_path  = "${tmp}/aether_wb_out.bin"
+
+    // ---- Test 1: shim seeds a 10-byte file with NUL at offset 3 ----
+    print("Test 1: seed 10-byte file via C shim\n")
+    ok = wb_probe_write_seed(seed_path)
+    if ok != 1 {
+        print("  FAIL: shim failed to write seed file\n")
+        exit(1)
+    }
+    print("  PASS: seed file written\n")
+
+    // ---- Test 2: fs.read_binary gives a length-aware AetherString ----
+    print("\nTest 2: fs.read_binary yields length-aware 10-byte string\n")
+    data, n, rerr = fs.read_binary(seed_path)
+    if rerr != "" {
+        println("  FAIL: read_binary errored: ${rerr}")
+        exit(1)
+    }
+    if n != 10 {
+        println("  FAIL: expected length 10, got ${n}")
+        exit(1)
+    }
+    if string.length(data) != 10 {
+        println("  FAIL: AetherString length should be 10, got ${string.length(data)}")
+        exit(1)
+    }
+    print("  PASS: 10-byte length-aware string\n")
+
+    // ---- Test 3: fs.write_binary writes the full 10 bytes ----
+    print("\nTest 3: fs.write_binary with explicit length = 10\n")
+    werr = fs.write_binary(out_path, data, 10)
+    if werr != "" {
+        println("  FAIL: write_binary errored: ${werr}")
+        exit(1)
+    }
+    print("  PASS: write succeeded\n")
+
+    // ---- Test 4: read the written file back and check length ----
+    print("\nTest 4: round-trip length is 10\n")
+    rt_data, rt_n, rt_err = fs.read_binary(out_path)
+    if rt_err != "" {
+        println("  FAIL: round-trip read errored: ${rt_err}")
+        exit(1)
+    }
+    if rt_n != 10 {
+        println("  FAIL: expected 10 bytes, got ${rt_n} (strlen-truncation?)")
+        exit(1)
+    }
+    print("  PASS: 10 bytes round-tripped\n")
+
+    // ---- Test 5: every byte preserved, including the NUL ----
+    print("\nTest 5: byte-by-byte match including NUL at offset 3\n")
+    // Expected: 01 02 03 00 05 06 07 08 09 0A
+    if string.char_at(rt_data, 0) != 1  { print("  FAIL [0]\n"); exit(1) }
+    if string.char_at(rt_data, 1) != 2  { print("  FAIL [1]\n"); exit(1) }
+    if string.char_at(rt_data, 2) != 3  { print("  FAIL [2]\n"); exit(1) }
+    if string.char_at(rt_data, 3) != 0  { print("  FAIL [3] — NUL lost\n"); exit(1) }
+    if string.char_at(rt_data, 4) != 5  { print("  FAIL [4]\n"); exit(1) }
+    if string.char_at(rt_data, 5) != 6  { print("  FAIL [5]\n"); exit(1) }
+    if string.char_at(rt_data, 6) != 7  { print("  FAIL [6]\n"); exit(1) }
+    if string.char_at(rt_data, 7) != 8  { print("  FAIL [7]\n"); exit(1) }
+    if string.char_at(rt_data, 8) != 9  { print("  FAIL [8]\n"); exit(1) }
+    if string.char_at(rt_data, 9) != 10 { print("  FAIL [9]\n"); exit(1) }
+    print("  PASS: all 10 bytes round-trip, NUL at [3] preserved\n")
+
+    // ---- Test 6: write_binary with length 0 is legal (empty file) ----
+    print("\nTest 6: write_binary with length 0\n")
+    empty_path = "${tmp}/aether_wb_empty.bin"
+    err6 = fs.write_binary(empty_path, "", 0)
+    if err6 != "" {
+        println("  FAIL: empty write errored: ${err6}")
+        exit(1)
+    }
+    _, n6, _ = fs.read_binary(empty_path)
+    if n6 != 0 {
+        println("  FAIL: empty file length should be 0, got ${n6}")
+        exit(1)
+    }
+    print("  PASS: length-0 write produces empty file\n")
+    fs.delete(empty_path)
+
+    // ---- Test 7: write_binary to a missing parent dir errors ----
+    print("\nTest 7: write_binary to a non-existent parent errors\n")
+    bad_path = "${tmp}/aether_wb_no_such_dir_xyz/file.bin"
+    err7 = fs.write_binary(bad_path, data, 10)
+    if err7 == "" {
+        print("  FAIL: expected error, got success\n")
+        exit(1)
+    }
+    print("  PASS: missing parent reported\n")
+
+    // ---- Test 8: write_binary overwrites an existing file ----
+    print("\nTest 8: write_binary truncates and overwrites\n")
+    fs.write(out_path, "much longer existing content that should be replaced")
+    err8 = fs.write_binary(out_path, data, 10)
+    if err8 != "" {
+        println("  FAIL: overwrite errored: ${err8}")
+        exit(1)
+    }
+    _, n8, _ = fs.read_binary(out_path)
+    if n8 != 10 {
+        println("  FAIL: overwrite didn't truncate, got ${n8} bytes")
+        exit(1)
+    }
+    print("  PASS: overwrite truncated to exact length\n")
+
+    // ---- Test 9: fs.write_atomic preserves NULs on AetherString input ----
+    // This covers a pre-existing parallel bug in fs_write_atomic_raw:
+    // it took `const char*` and never unwrapped an AetherString, so it
+    // would have written the 40-byte struct header to disk instead of
+    // the payload if anyone had called it with read_binary's output.
+    // Existing callers passed string literals (plain char*) which
+    // masked the bug. Fixed alongside write_binary.
+    print("\nTest 9: fs.write_atomic round-trip preserves NULs\n")
+    atomic_path = "${tmp}/aether_wb_atomic.bin"
+    err9 = fs.write_atomic(atomic_path, data, 10)
+    if err9 != "" {
+        println("  FAIL: write_atomic errored: ${err9}")
+        exit(1)
+    }
+    at_data, at_n, _ = fs.read_binary(atomic_path)
+    if at_n != 10 {
+        println("  FAIL: atomic round-trip length ${at_n}, expected 10")
+        exit(1)
+    }
+    if string.char_at(at_data, 0) != 1 { print("  FAIL: atomic [0]\n"); exit(1) }
+    if string.char_at(at_data, 3) != 0 { print("  FAIL: atomic [3] NUL lost\n"); exit(1) }
+    if string.char_at(at_data, 9) != 10 { print("  FAIL: atomic [9]\n"); exit(1) }
+    print("  PASS: write_atomic also preserves NULs on AetherString input\n")
+    fs.delete(atomic_path)
+
+    fs.delete(seed_path)
+    fs.delete(out_path)
+
+    print("\n=== fs.write_binary NUL-preservation tests passed ===\n")
+}
