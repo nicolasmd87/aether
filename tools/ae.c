@@ -979,7 +979,21 @@ static const char* get_cflags(void) {
 
 // Get extra_sources for the [[bin]] entry whose path matches ae_file.
 // Writes space-separated C source paths into out[out_size].
-// Only handles single-line arrays: extra_sources = ["a.c", "b.c"]
+//
+// Handles both single-line and multi-line array forms:
+//
+//     extra_sources = ["a.c", "b.c", "c.c"]
+//
+//     extra_sources = [
+//         "a.c",
+//         "b.c",
+//         "c.c"
+//     ]
+//
+// Continuation lines are the only way to stay readable past ~30
+// filenames; before multi-line was supported, downstream projects
+// would squash everything onto one line and hit the assembly
+// buffer limit (v0.85 / the "tail entries dropped" fix).
 //
 // Returns 0 on clean fill, 1 if the `out` buffer was too small and at
 // least one filename was silently truncated. Callers should warn in
@@ -1057,36 +1071,81 @@ static int get_extra_sources_for_bin(const char* ae_file, char* out, size_t out_
             continue;
         }
 
-        // extra_sources = ["a.c", "b.c"] in a matched [[bin]]
+        // extra_sources = ["a.c", "b.c"] in a matched [[bin]]. Accepts
+        // both single-line arrays and multi-line arrays:
+        //
+        //   extra_sources = [
+        //       "a.c",
+        //       "b.c",
+        //       "c.c"
+        //   ]
+        //
+        // The parser is permissive: it ignores whitespace and commas
+        // and keeps scanning lines until it finds the closing `]`. A
+        // closing `]` in a quoted string would trip this, but that's
+        // not a legitimate filename character anyway.
         if (matched && strncmp(s, "extra_sources", 13) == 0 && strchr(s, '=')) {
             char* eq = strchr(s, '=') + 1;
             while (*eq == ' ') eq++;
             if (*eq != '[') continue;
             eq++; // skip '['
-            while (*eq && *eq != ']') {
-                while (*eq == ' ' || *eq == ',') eq++;
-                if (*eq == ']' || !*eq) break;
-                if (*eq == '"') {
-                    eq++;
-                    char* end = strchr(eq, '"');
-                    if (!end) break;
-                    *end = '\0';
-                    // Detect truncation before strncat silently drops
-                    // trailing chars. Need 1 (sep space) + strlen(piece)
-                    // + 1 (NUL) under the remaining budget.
-                    size_t cur = strlen(out);
-                    size_t piece = strlen(eq);
-                    size_t need = (out[0] ? 1 : 0) + piece + 1;
-                    if (cur + need > out_size) {
-                        truncated = 1;
-                        break;
+
+            // Line-by-line loop. `frag` is the remaining unparsed
+            // portion of the current line. We walk entries until we
+            // hit the closing `]`; when we reach end-of-fragment
+            // without finding it, we fgets the next line and keep
+            // going. Continuation lines get the same whitespace +
+            // comment strip as the outer loop.
+            char* frag = eq;
+            int closed = 0;
+            int overflowed = 0;
+            while (!closed) {
+                // Consume entries in `frag` until `]` or end.
+                while (*frag && *frag != ']') {
+                    while (*frag == ' ' || *frag == ',' || *frag == '\t') frag++;
+                    if (*frag == ']' || !*frag) break;
+                    if (*frag == '"') {
+                        frag++;
+                        char* end = strchr(frag, '"');
+                        if (!end) break;   // malformed — bail out
+                        *end = '\0';
+                        size_t cur = strlen(out);
+                        size_t piece = strlen(frag);
+                        size_t need = (out[0] ? 1 : 0) + piece + 1;
+                        if (cur + need > out_size) {
+                            truncated = 1;
+                            overflowed = 1;
+                            break;
+                        }
+                        if (out[0]) strncat(out, " ", out_size - cur - 1);
+                        strncat(out, frag, out_size - strlen(out) - 1);
+                        frag = end + 1;
+                    } else {
+                        frag++;
                     }
-                    if (out[0]) strncat(out, " ", out_size - cur - 1);
-                    strncat(out, eq, out_size - strlen(out) - 1);
-                    eq = end + 1;
-                } else {
-                    eq++;
                 }
+                if (*frag == ']' || overflowed) {
+                    closed = 1;
+                    break;
+                }
+                // Continuation: pull the next line.
+                if (!fgets(line, sizeof(line), f)) {
+                    // Malformed TOML — unterminated array at EOF.
+                    // Treat as end; don't block the build here.
+                    closed = 1;
+                    break;
+                }
+                char* t = line;
+                while (*t == ' ' || *t == '\t') t++;
+                size_t tln = strlen(t);
+                while (tln > 0 && (t[tln-1] == '\n' || t[tln-1] == '\r' || t[tln-1] == ' ')) {
+                    t[--tln] = '\0';
+                }
+                if (!*t || *t == '#') {
+                    frag = t;   // empty line / comment — frag is "" so we fgets again next iter
+                    continue;
+                }
+                frag = t;
             }
             break;
         }

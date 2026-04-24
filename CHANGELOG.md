@@ -13,6 +13,24 @@ next version number before tagging the release.
 
 ### Added
 
+- **`aether.toml` `extra_sources` now accepts multi-line arrays** (`tools/ae.c`, `get_extra_sources_for_bin`). Both forms parse the same way now:
+
+  ```toml
+  extra_sources = ["a.c", "b.c", "c.c"]
+  ```
+
+  and
+
+  ```toml
+  extra_sources = [
+      "a.c",
+      "b.c",
+      "c.c"
+  ]
+  ```
+
+  Previously the parser only handled single-line arrays — projects with enough shims would either squash everything onto one ever-growing line (and eventually hit the assembly-side buffer limit, see earlier fix this release) or edit-and-re-squash for every new shim. The continuation-line handling is permissive: ignores whitespace and commas, strips `#` comments, and keeps reading until the closing `]`. Empty lines and mid-array comment lines are tolerated. Malformed arrays (unterminated `[` at EOF) fall through without blocking the build. Regression test: `tests/integration/toml_extra_sources_multiline/` builds 12 shims each on its own continuation line (17-line TOML total) and asserts every shim links + runs. Complements the single-line `test_long_line.sh` (30 shims / 1.3 KiB) and `test_assembly_buf.sh` (60 shims / 2.7 KiB); all three share the same probe shape.
+
 - **`std.os` — `now_utc_iso8601()`** (`std/os/aether_os.c`, `std/os/aether_os.h`, `std/os/module.ae`). Current UTC time as a 20-char ISO-8601 timestamp string `"YYYY-MM-DDThh:mm:ssZ"`. Thread-safe (`gmtime_r` on POSIX, `gmtime_s` on Windows). Returns `""` on clock / format failure — never null. The C side is named `os_now_utc_iso8601_raw` (matching the `os_exec_raw` / `os_run_capture_raw` pattern); the Aether-side wrapper `os.now_utc_iso8601()` lives in `module.ae` and does the null-detach via `string_concat`. The raw-suffix dance is load-bearing: Aether mangles a bare `now_utc_iso8601` wrapper in `std.os` to the C symbol `os_now_utc_iso8601`, which would infinitely recurse if the extern had the same name (caught in testing — the first draft crashed on first call). Shape is deliberately "the one thing downstream code needs" — rev-blob date fields, JSON response timestamps, log-line prefixes. Sub-second precision, timezone offsets, and strftime-style format flags are out of scope for v1; additive variants (`now_utc_iso8601_ms`, `format_time`) can land without disturbing this one. Regression test: `tests/regression/test_os_now_utc_iso8601.ae` — 4 cases that can't assert an exact value (time marches on) but do check length=20, punctuation in the right slots (`-`, `-`, `T`, `:`, `:`, `Z`), every digit slot contains a digit, and plausible numeric ranges for year / month / day / hour / minute / second.
 
 - **`std.string` — `from_char` + `index_of_from`** (`std/string/aether_string.c`, `std/string/aether_string.h`, `std/string/module.ae`). Two additions aimed at code walking packed-string record formats. `string.from_char(code) -> string` produces a 1-byte AetherString from a byte code (0..255) via `string_new_with_length` — fills the gap where callers want to emit a known single-byte marker (`\x01`, `\x02`) without routing through a NUL-terminated literal. Length is always 1, including for code=0 (which would otherwise produce an empty string through `string_new`). Codes above 255 are masked to the low byte (`code & 0xff`). `string.index_of_from(s, needle, start) -> int` is `index_of` with a starting offset — returns the *absolute* offset of the hit (not relative to `start`), or -1 on miss. Negative `start` clamps to 0; `start` past the length returns -1. Saves the `substring(s, start, length) + index_of(tail, needle) + start` allocation dance that packed-record walkers were doing per step. While I was there I also fixed `string_index_of`'s needle parameter to be data-aware — previously it ran `strlen` on the needle, which worked for `char*` literals but read garbage past the header when callers passed an `AetherString*` (e.g. `from_char(2)` as a separator). Both functions now call `str_len` / `str_data` on both haystack and needle, matching the binary-safety promise the rest of `std.string` makes. Regression test: `tests/regression/test_string_from_char_and_index_of_from.ae` — 9 cases covering 1-byte builds with code=0 / code masking, `index_of_from` scanning past an earlier hit, start clamping, and round-trip through `from_char` + `index_of` on a packed string.
