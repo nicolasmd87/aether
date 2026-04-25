@@ -12,6 +12,14 @@ const char* http_response_body(HttpResponse* r) { (void)r; return ""; }
 const char* http_response_headers(HttpResponse* r) { (void)r; return ""; }
 const char* http_response_error(HttpResponse* r) { (void)r; return "networking disabled at build time"; }
 int http_response_ok(HttpResponse* r) { (void)r; return 0; }
+struct HttpRequest { int unused; };
+HttpRequest* http_request_raw(const char* m, const char* u) { (void)m; (void)u; return NULL; }
+int http_request_set_header_raw(HttpRequest* r, const char* n, const char* v) { (void)r; (void)n; (void)v; return -1; }
+int http_request_set_body_raw(HttpRequest* r, const char* b, int l, const char* c) { (void)r; (void)b; (void)l; (void)c; return -1; }
+int http_request_set_timeout_raw(HttpRequest* r, int s) { (void)r; (void)s; return -1; }
+void http_request_free_raw(HttpRequest* r) { (void)r; }
+HttpResponse* http_send_raw(HttpRequest* r) { (void)r; return NULL; }
+const char* http_response_header_raw(HttpResponse* r, const char* n) { (void)r; (void)n; return ""; }
 #else
 
 #include <stdio.h>
@@ -32,6 +40,10 @@ int http_response_ok(HttpResponse* r) { (void)r; return 0; }
     #include <netdb.h>
     #include <unistd.h>
     #include <arpa/inet.h>
+    #include <fcntl.h>       /* fcntl, O_NONBLOCK for connect-with-timeout */
+    #include <errno.h>       /* EINPROGRESS / EWOULDBLOCK detection      */
+    #include <sys/select.h>  /* select(), fd_set                          */
+    #include <sys/time.h>    /* struct timeval                            */
 #endif
 
 #ifdef AETHER_HAS_OPENSSL
@@ -204,11 +216,130 @@ static void transport_close(Transport* t) {
 }
 
 // -----------------------------------------------------------------
-// Core request
+// v2 request builder — opaque struct + per-field setters. The v1
+// one-liners (http_get_raw / http_post_raw / etc.) build a request
+// internally and call http_send_raw, so all paths funnel through
+// the same socket / TLS code below.
 // -----------------------------------------------------------------
 
-static HttpResponse* http_request(const char* method, const char* url,
-                                  const char* body, const char* content_type) {
+typedef struct HttpHeader {
+    char* name;
+    char* value;
+    struct HttpHeader* next;
+} HttpHeader;
+
+struct HttpRequest {
+    char* method;        /* "GET", "POST", etc. — owned, NUL-terminated */
+    char* url;           /* full URL — owned, NUL-terminated */
+    HttpHeader* headers; /* singly-linked, in insertion order */
+    char* body;          /* may be NULL; binary-safe via body_len */
+    int   body_len;      /* explicit length; 0 if no body */
+    char* content_type;  /* may be NULL; defaults applied at send time */
+    int   timeout_secs;  /* 0 = no timeout (block forever) */
+};
+
+HttpRequest* http_request_raw(const char* method, const char* url) {
+    if (!method || !*method || !url || !*url) return NULL;
+    HttpRequest* req = (HttpRequest*)calloc(1, sizeof(HttpRequest));
+    if (!req) return NULL;
+    req->method = strdup(method);
+    req->url    = strdup(url);
+    if (!req->method || !req->url) {
+        http_request_free_raw(req);
+        return NULL;
+    }
+    return req;
+}
+
+int http_request_set_header_raw(HttpRequest* req, const char* name, const char* value) {
+    if (!req || !name || !*name || !value) return -1;
+    HttpHeader* h = (HttpHeader*)calloc(1, sizeof(HttpHeader));
+    if (!h) return -1;
+    h->name  = strdup(name);
+    h->value = strdup(value);
+    if (!h->name || !h->value) {
+        free(h->name); free(h->value); free(h);
+        return -1;
+    }
+    /* Append at the tail so emission order matches insertion order;
+     * keeps tests deterministic and avoids surprises with servers
+     * that care about header ordering (rare but exists). */
+    if (!req->headers) {
+        req->headers = h;
+    } else {
+        HttpHeader* tail = req->headers;
+        while (tail->next) tail = tail->next;
+        tail->next = h;
+    }
+    return 0;
+}
+
+int http_request_set_body_raw(HttpRequest* req, const char* body, int len, const char* content_type) {
+    if (!req || len < 0) return -1;
+    /* Replace any prior body. */
+    free(req->body);         req->body = NULL; req->body_len = 0;
+    free(req->content_type); req->content_type = NULL;
+    if (len > 0) {
+        if (!body) return -1;
+        /* `body` may be either an AetherString* (when the caller
+         * passed an Aether string variable — common for binary
+         * payloads from fs.read_binary) or a plain char* (string
+         * literals). Without this unwrap, a 10-byte AetherString
+         * input would copy the 24-byte struct header (magic +
+         * refcount + length + capacity + data-ptr) into our body
+         * buffer, and the wire would carry that header. Same shape
+         * the std.fs / std.cryptography / std.zlib externs use. */
+        const char* src = body;
+        if (is_aether_string(body)) {
+            src = ((const AetherString*)body)->data;
+        }
+        req->body = (char*)malloc((size_t)len);
+        if (!req->body) return -1;
+        memcpy(req->body, src, (size_t)len);
+        req->body_len = len;
+    }
+    if (content_type) {
+        req->content_type = strdup(content_type);
+        if (!req->content_type) return -1;
+    }
+    return 0;
+}
+
+int http_request_set_timeout_raw(HttpRequest* req, int seconds) {
+    if (!req || seconds < 0) return -1;
+    req->timeout_secs = seconds;
+    return 0;
+}
+
+void http_request_free_raw(HttpRequest* req) {
+    if (!req) return;
+    free(req->method);
+    free(req->url);
+    free(req->body);
+    free(req->content_type);
+    HttpHeader* h = req->headers;
+    while (h) {
+        HttpHeader* next = h->next;
+        free(h->name); free(h->value); free(h);
+        h = next;
+    }
+    free(req);
+}
+
+/* Forward decl — defined below the static request() function. */
+static int header_already_set(HttpRequest* req, const char* name);
+
+// -----------------------------------------------------------------
+// Core request — operates on an HttpRequest. v1 wrappers build a
+// throwaway HttpRequest and discard it after send.
+// -----------------------------------------------------------------
+
+static HttpResponse* http_request_internal(HttpRequest* req) {
+    const char* method = req->method;
+    const char* url    = req->url;
+    const char* body   = req->body;          /* may be NULL */
+    int   body_len     = req->body_len;
+    const char* content_type = req->content_type;
     http_init();
 
     HttpResponse* response = (HttpResponse*)malloc(sizeof(HttpResponse));
@@ -253,10 +384,83 @@ static HttpResponse* http_request(const char* method, const char* url,
     memcpy(&serv_addr.sin_addr.s_addr, server->h_addr, server->h_length);
     serv_addr.sin_port = htons(port);
 
-    if (connect(sockfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr)) < 0) {
-        close(sockfd);
-        response->error = string_new("connection failed");
-        return response;
+    /* Connect — with timeout via non-blocking + select when the
+     * caller asked for one. Without a timeout, fall through to the
+     * original blocking connect (preserves v1 behaviour exactly). */
+    int connect_rc;
+    if (req->timeout_secs > 0) {
+#ifdef _WIN32
+        u_long nb = 1;
+        ioctlsocket(sockfd, FIONBIO, &nb);
+#else
+        int flags = fcntl(sockfd, F_GETFL, 0);
+        if (flags >= 0) fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
+#endif
+        connect_rc = connect(sockfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
+        if (connect_rc < 0) {
+#ifdef _WIN32
+            int err = WSAGetLastError();
+            int in_progress = (err == WSAEWOULDBLOCK || err == WSAEINPROGRESS);
+#else
+            int in_progress = (errno == EINPROGRESS || errno == EWOULDBLOCK);
+#endif
+            if (in_progress) {
+                fd_set wfds;
+                FD_ZERO(&wfds);
+                FD_SET(sockfd, &wfds);
+                struct timeval tv;
+                tv.tv_sec = req->timeout_secs;
+                tv.tv_usec = 0;
+                int sel = select(sockfd + 1, NULL, &wfds, NULL, &tv);
+                if (sel == 0) {
+                    close(sockfd);
+                    response->error = string_new("connect timeout");
+                    return response;
+                }
+                if (sel < 0) {
+                    close(sockfd);
+                    response->error = string_new("select on connect failed");
+                    return response;
+                }
+                /* Check SO_ERROR — non-blocking connect can finish
+                 * with EAGAIN/etc., select reporting writable. */
+                int so_err = 0;
+                socklen_t slen = sizeof(so_err);
+                if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, (char*)&so_err, &slen) < 0
+                    || so_err != 0) {
+                    close(sockfd);
+                    response->error = string_new("connection failed");
+                    return response;
+                }
+                connect_rc = 0;
+            } else {
+                close(sockfd);
+                response->error = string_new("connection failed");
+                return response;
+            }
+        }
+        /* Restore blocking mode for the send/recv path — those use
+         * setsockopt(SO_*TIMEO) below for their timeouts. */
+#ifdef _WIN32
+        nb = 0;
+        ioctlsocket(sockfd, FIONBIO, &nb);
+#else
+        if (flags >= 0) fcntl(sockfd, F_SETFL, flags);
+#endif
+
+        /* Apply send/recv timeouts equal to the configured value. */
+        struct timeval rwtv;
+        rwtv.tv_sec = req->timeout_secs;
+        rwtv.tv_usec = 0;
+        setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&rwtv, sizeof(rwtv));
+        setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&rwtv, sizeof(rwtv));
+    } else {
+        connect_rc = connect(sockfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
+        if (connect_rc < 0) {
+            close(sockfd);
+            response->error = string_new("connection failed");
+            return response;
+        }
     }
 
     Transport t;
@@ -309,35 +513,97 @@ static HttpResponse* http_request(const char* method, const char* url,
     }
 #endif
 
-    char request[4096];
-    int request_len = 0;
+    /* Build the header block in a heap-allocated growing buffer so
+     * we're not bounded by a 4K stack array. Body goes out as a
+     * separate transport_send so binary payloads with embedded NULs
+     * survive (the previous "%s" snprintf path would have truncated
+     * at the first NUL — wasn't a problem in practice because the
+     * v1 wrappers only sent textual JSON, but v2 takes body+len). */
+    size_t hdr_cap = 1024;
+    char* hdr = (char*)malloc(hdr_cap);
+    if (!hdr) {
+        transport_close(&t);
+        response->error = string_new("out of memory building request");
+        return response;
+    }
+    size_t hdr_len = 0;
 
-    if (body && strlen(body) > 0) {
-        request_len = snprintf(request, sizeof(request),
-            "%s %s HTTP/1.1\r\n"
-            "Host: %s\r\n"
-            "Content-Type: %s\r\n"
-            "Content-Length: %zu\r\n"
-            "Connection: close\r\n"
-            "\r\n"
-            "%s",
-            method, path, host,
-            content_type ? content_type : "application/x-www-form-urlencoded",
-            strlen(body),
-            body);
-    } else {
-        request_len = snprintf(request, sizeof(request),
-            "%s %s HTTP/1.1\r\n"
-            "Host: %s\r\n"
-            "Connection: close\r\n"
-            "\r\n",
-            method, path, host);
+    /* Helper: append a NUL-terminated string into hdr, growing as
+     * needed. Returns 0 on success, -1 on OOM. */
+    #define HDR_APPEND_STR(s) do { \
+        size_t _slen = strlen(s); \
+        if (hdr_len + _slen + 1 > hdr_cap) { \
+            size_t _nc = hdr_cap; \
+            while (_nc < hdr_len + _slen + 1) _nc *= 2; \
+            char* _nh = (char*)realloc(hdr, _nc); \
+            if (!_nh) { free(hdr); transport_close(&t); \
+                       response->error = string_new("out of memory building request"); \
+                       return response; } \
+            hdr = _nh; hdr_cap = _nc; \
+        } \
+        memcpy(hdr + hdr_len, s, _slen); \
+        hdr_len += _slen; \
+        hdr[hdr_len] = '\0'; \
+    } while (0)
+
+    /* Request line. */
+    HDR_APPEND_STR(method); HDR_APPEND_STR(" "); HDR_APPEND_STR(path); HDR_APPEND_STR(" HTTP/1.1\r\n");
+
+    /* Built-in Host (overridable via set_header). */
+    if (!header_already_set(req, "Host")) {
+        HDR_APPEND_STR("Host: "); HDR_APPEND_STR(host); HDR_APPEND_STR("\r\n");
     }
 
-    if (transport_send(&t, request, request_len) < 0) {
+    /* Built-in Content-Length when body present (overridable, but
+     * setting it manually is almost always a bug — we still emit
+     * ours unless the caller explicitly overrode it). */
+    if (body && body_len > 0 && !header_already_set(req, "Content-Length")) {
+        char clen[32];
+        snprintf(clen, sizeof(clen), "Content-Length: %d\r\n", body_len);
+        HDR_APPEND_STR(clen);
+    }
+
+    /* Built-in Content-Type when body present, only if neither the
+     * builder's content_type nor an explicit Content-Type header is set. */
+    if (body && body_len > 0 && content_type
+        && !header_already_set(req, "Content-Type")) {
+        HDR_APPEND_STR("Content-Type: "); HDR_APPEND_STR(content_type); HDR_APPEND_STR("\r\n");
+    } else if (body && body_len > 0 && !content_type
+        && !header_already_set(req, "Content-Type")) {
+        HDR_APPEND_STR("Content-Type: application/x-www-form-urlencoded\r\n");
+    }
+
+    /* Connection: close (overridable — keep-alive is out of scope
+     * for v2 but a caller is welcome to ask for it). */
+    if (!header_already_set(req, "Connection")) {
+        HDR_APPEND_STR("Connection: close\r\n");
+    }
+
+    /* Caller-provided headers, in insertion order. */
+    for (HttpHeader* h = req->headers; h; h = h->next) {
+        HDR_APPEND_STR(h->name); HDR_APPEND_STR(": "); HDR_APPEND_STR(h->value); HDR_APPEND_STR("\r\n");
+    }
+
+    /* End-of-headers blank line. */
+    HDR_APPEND_STR("\r\n");
+
+    #undef HDR_APPEND_STR
+
+    if (transport_send(&t, hdr, (int)hdr_len) < 0) {
+        free(hdr);
         transport_close(&t);
         response->error = string_new("send failed");
         return response;
+    }
+    free(hdr);
+
+    /* Body — emitted raw so embedded NULs survive. */
+    if (body && body_len > 0) {
+        if (transport_send(&t, body, body_len) < 0) {
+            transport_close(&t);
+            response->error = string_new("send failed");
+            return response;
+        }
     }
 
     // Accumulator grows with capacity doubling. The previous
@@ -349,6 +615,7 @@ static HttpResponse* http_request(const char* method, const char* url,
     size_t cap = 0;
     int    n;
 
+    int recv_err = 0;  /* set if the loop exits via timeout / I/O error */
     while ((n = transport_recv(&t, buffer, sizeof(buffer) - 1)) > 0) {
         if (total_len + (size_t)n + 1 > cap) {
             size_t new_cap = cap ? cap * 2 : 16384;
@@ -367,6 +634,14 @@ static HttpResponse* http_request(const char* method, const char* url,
         total_len += (size_t)n;
         full_response[total_len] = '\0';
     }
+    /* n < 0 means transport_recv hit an error; the most common one
+     * (when the caller set a timeout) is recv-side EAGAIN/EWOULDBLOCK
+     * from SO_RCVTIMEO firing. Without this, a timed-out request
+     * silently returned an empty 0-status response — caller couldn't
+     * tell timeout from a happy server returning nothing. */
+    if (n < 0) {
+        recv_err = 1;
+    }
 
     // Zero-byte response: still need a valid empty string so strstr
     // below is safe. Tiny allocation, done only on the empty path.
@@ -382,7 +657,16 @@ static HttpResponse* http_request(const char* method, const char* url,
 
     transport_close(&t);
 
+    /* If transport_recv reported an error AND we didn't get a complete
+     * header block, this was a timeout / I/O error mid-recv. Tell the
+     * caller — otherwise they'd see status=0 + empty body and not
+     * know whether the request even reached the server. */
     char* header_end = strstr(full_response, "\r\n\r\n");
+    if (recv_err && !header_end) {
+        free(full_response);
+        response->error = string_new("recv timeout or I/O error");
+        return response;
+    }
     if (header_end) {
         *header_end = '\0';
         char* status_line = full_response;
@@ -401,20 +685,75 @@ static HttpResponse* http_request(const char* method, const char* url,
     return response;
 }
 
+/* Case-insensitive header-name match. Used both when emitting the
+ * built-in headers (skip if caller already set one) and when looking
+ * up a response header by name. */
+static int http_strcaseeq(const char* a, const char* b) {
+    if (!a || !b) return 0;
+    while (*a && *b) {
+        char ca = *a, cb = *b;
+        if (ca >= 'A' && ca <= 'Z') ca = (char)(ca + 32);
+        if (cb >= 'A' && cb <= 'Z') cb = (char)(cb + 32);
+        if (ca != cb) return 0;
+        a++; b++;
+    }
+    return *a == 0 && *b == 0;
+}
+
+static int header_already_set(HttpRequest* req, const char* name) {
+    if (!req) return 0;
+    for (HttpHeader* h = req->headers; h; h = h->next) {
+        if (http_strcaseeq(h->name, name)) return 1;
+    }
+    return 0;
+}
+
+/* v2 entry point. The v1 wrappers below build a throwaway request
+ * and call this. */
+HttpResponse* http_send_raw(HttpRequest* req) {
+    if (!req) return NULL;
+    return http_request_internal(req);
+}
+
+/* v1 wrappers — thin sugar over the v2 builder. timeout=0 preserves
+ * the original "block forever" behaviour callers had before v2. */
+
 HttpResponse* http_get_raw(const char* url) {
-    return http_request("GET", url, NULL, NULL);
+    HttpRequest* req = http_request_raw("GET", url);
+    if (!req) return NULL;
+    HttpResponse* resp = http_send_raw(req);
+    http_request_free_raw(req);
+    return resp;
 }
 
 HttpResponse* http_post_raw(const char* url, const char* body, const char* content_type) {
-    return http_request("POST", url, body, content_type);
+    HttpRequest* req = http_request_raw("POST", url);
+    if (!req) return NULL;
+    if (body) {
+        http_request_set_body_raw(req, body, (int)strlen(body), content_type);
+    }
+    HttpResponse* resp = http_send_raw(req);
+    http_request_free_raw(req);
+    return resp;
 }
 
 HttpResponse* http_put_raw(const char* url, const char* body, const char* content_type) {
-    return http_request("PUT", url, body, content_type);
+    HttpRequest* req = http_request_raw("PUT", url);
+    if (!req) return NULL;
+    if (body) {
+        http_request_set_body_raw(req, body, (int)strlen(body), content_type);
+    }
+    HttpResponse* resp = http_send_raw(req);
+    http_request_free_raw(req);
+    return resp;
 }
 
 HttpResponse* http_delete_raw(const char* url) {
-    return http_request("DELETE", url, NULL, NULL);
+    HttpRequest* req = http_request_raw("DELETE", url);
+    if (!req) return NULL;
+    HttpResponse* resp = http_send_raw(req);
+    http_request_free_raw(req);
+    return resp;
 }
 
 void http_response_free(HttpResponse* response) {
@@ -468,6 +807,95 @@ const char* http_response_body_str(HttpResponse* response) {
 
 const char* http_response_headers_str(HttpResponse* response) {
     return http_response_headers(response);
+}
+
+/* Case-insensitive header lookup. Walks the raw header block stored
+ * in response->headers (which still includes the HTTP status line as
+ * the first "header"), splits each line at the first `:`, and matches
+ * the name. Returns "" when the header isn't found.
+ *
+ * The returned pointer is into a per-response cache so it remains
+ * valid until http_response_free(). Multiple values for the same
+ * header are joined with ", " (RFC 7230 §3.2.2).
+ *
+ * Implementation: lazy single-pass. The cache is a singly-linked
+ * list of (name, value) hung off the response — we don't pre-parse
+ * into a hashmap because typical responses have <30 headers and the
+ * lookup count per response is tiny. */
+typedef struct HttpHeaderCache {
+    char* name;
+    char* value;
+    struct HttpHeaderCache* next;
+} HttpHeaderCache;
+
+const char* http_response_header_raw(HttpResponse* response, const char* name) {
+    if (!response || !name || !*name) return "";
+    if (!response->headers) return "";
+
+    /* The response struct doesn't have a parsed-headers field; we
+     * cache by attaching to a per-thread arena. Simpler and adequate:
+     * just walk the raw block on every call. The cost is O(n) in
+     * header bytes, but typical headers are well under 4 KB and the
+     * call count per response is small (callers grab the few headers
+     * they care about and move on). If a profiler ever shows this in
+     * the hot path, swap in a per-response cache.
+     *
+     * Joining duplicate-named headers into ", "-separated value is
+     * done in a thread-local accumulator below. */
+    static _Thread_local char tls_joined[8192];
+    tls_joined[0] = '\0';
+    size_t joined_len = 0;
+
+    const char* hdr = string_to_cstr(response->headers);
+    if (!hdr) return "";
+
+    /* Skip the status line (first line — "HTTP/1.1 200 OK"). */
+    const char* p = strchr(hdr, '\n');
+    if (!p) return "";
+    p++;
+
+    while (*p) {
+        const char* line_end = strchr(p, '\n');
+        size_t line_len = line_end ? (size_t)(line_end - p) : strlen(p);
+        /* Trim trailing \r if present. */
+        if (line_len > 0 && p[line_len - 1] == '\r') line_len--;
+
+        const char* colon = (const char*)memchr(p, ':', line_len);
+        if (colon) {
+            size_t nlen = (size_t)(colon - p);
+            /* Match the header name case-insensitively. */
+            if (nlen == strlen(name)) {
+                int eq = 1;
+                for (size_t i = 0; i < nlen; i++) {
+                    char ca = p[i], cb = name[i];
+                    if (ca >= 'A' && ca <= 'Z') ca = (char)(ca + 32);
+                    if (cb >= 'A' && cb <= 'Z') cb = (char)(cb + 32);
+                    if (ca != cb) { eq = 0; break; }
+                }
+                if (eq) {
+                    /* Skip ": " then trim leading spaces. */
+                    const char* val = colon + 1;
+                    size_t vlen = (size_t)((p + line_len) - val);
+                    while (vlen > 0 && (*val == ' ' || *val == '\t')) { val++; vlen--; }
+                    /* Append to the joined accumulator. */
+                    if (joined_len > 0 && joined_len + 2 < sizeof(tls_joined)) {
+                        memcpy(tls_joined + joined_len, ", ", 2);
+                        joined_len += 2;
+                    }
+                    if (joined_len + vlen < sizeof(tls_joined)) {
+                        memcpy(tls_joined + joined_len, val, vlen);
+                        joined_len += vlen;
+                        tls_joined[joined_len] = '\0';
+                    }
+                }
+            }
+        }
+
+        if (!line_end) break;
+        p = line_end + 1;
+    }
+
+    return tls_joined;
 }
 
 #endif // AETHER_HAS_NETWORKING

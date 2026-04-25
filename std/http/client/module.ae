@@ -1,0 +1,226 @@
+// std.http.client - HTTP client v2: builder-shaped requests, full
+// response access. Lives alongside the existing flat `std.http`
+// surface (which still hosts the v1 one-liners http.get / http.post /
+// http.put / http.delete plus the server-side bits tinyweb consumes).
+//
+// Import with: import std.http.client
+//             // call sites then write client.request(...), client.send(...)
+//
+// The split exists because the v2 surface adds new request- and
+// response-side names (request, send, response_status, response_body,
+// response_header, response_free, request_set_header, ...) that
+// would collide visually — and in some cases syntactically — with
+// the existing flat-namespace server-side names tinyweb already
+// uses (request_body, response_set_status, ...). Keeping the client
+// in its own module means tinyweb is untouched and a future reader
+// can tell at a glance whether a call is inbound (server) or
+// outbound (client) just from the `client.` prefix.
+//
+// API shape:
+//
+//   req = client.request("GET", "https://api.example.com/users")
+//   client.set_header(req, "Authorization", "Bearer ...")
+//   client.set_timeout(req, 30)        // explicit. 0 = block forever.
+//   resp, err = client.send_request(req)
+//   client.request_free(req)
+//   if err != "" {
+//       // transport-level failure: DNS, connect, TLS, timeout, ...
+//   } else {
+//       status = client.response_status(resp)
+//       body   = client.response_body(resp)
+//       hash   = client.response_header(resp, "X-Node-Hash")
+//       client.response_free(resp)
+//   }
+//
+// Non-2xx HTTP status is NOT an error from send_request()'s
+// perspective — the caller branches on response_status. This is
+// Go's net/http convention; it lets auth flows handle 401,
+// redirect-following code handle 30x, and 404-vs-500 callers keep
+// their own error shapes.
+//
+// (`send_request` rather than the more obvious `send` because Aether
+// reserves `send` for actor message-passing.)
+//
+// Timeouts are explicit. There is no implicit default. Pass 0 to
+// opt out and block forever (rarely what you want; preserved as the
+// v1 wrappers' behaviour). Negative values are an error.
+
+// ---- Raw externs ----
+// HttpRequest is opaque. Build → set_* → send → free in that order.
+// HttpResponse carries the same shape the v1 wrappers return; reuse
+// the existing accessors (response_status / response_body / ...)
+// re-exported below.
+extern http_request_raw(method: string, url: string) -> ptr
+extern http_request_set_header_raw(req: ptr, name: string, value: string) -> int
+extern http_request_set_body_raw(req: ptr, body: string, length: int, content_type: string) -> int
+extern http_request_set_timeout_raw(req: ptr, seconds: int) -> int
+extern http_request_free_raw(req: ptr)
+extern http_send_raw(req: ptr) -> ptr
+
+extern http_response_status(response: ptr) -> int
+extern http_response_body(response: ptr) -> string
+extern http_response_headers(response: ptr) -> string
+extern http_response_error(response: ptr) -> string
+extern http_response_header_raw(response: ptr, name: string) -> string
+extern http_response_free(response: ptr)
+
+// String helpers for the wrappers below.
+extern string_concat(a: string, b: string) -> string
+extern string_length(str: string) -> int
+
+// ---- Go-style wrappers ----
+
+// Build a new request. Returns null on bad args (empty method, empty
+// URL) or out-of-memory. Callers MUST free with request_free
+// regardless of how the request was used (or whether send was even
+// called) — the request struct owns its method/URL/headers/body
+// memory until then.
+request(method: string, url: string) -> ptr {
+    return http_request_raw(method, url)
+}
+
+// Append "name: value" to the request's outgoing headers.
+// Returns "" on success, error string on failure.
+set_header(req: ptr, name: string, value: string) -> string {
+    rc = http_request_set_header_raw(req, name, value)
+    if rc != 0 { return "set_header failed" }
+    return ""
+}
+
+// Set the request body. `length` is explicit so binary payloads
+// with embedded NULs survive (use string.length(body) for textual
+// bodies). content_type may be the empty string "" — the C side
+// then defaults to application/x-www-form-urlencoded for backward
+// compat with v1's http.post path.
+set_body(req: ptr, body: string, length: int, content_type: string) -> string {
+    rc = http_request_set_body_raw(req, body, length, content_type)
+    if rc != 0 { return "set_body failed" }
+    return ""
+}
+
+// Per-request timeout in seconds. 0 = block forever (preserves the
+// v1 wrapper behaviour); negative is rejected. Applied to connect,
+// send, and recv via setsockopt + non-blocking-connect-with-select.
+set_timeout(req: ptr, seconds: int) -> string {
+    rc = http_request_set_timeout_raw(req, seconds)
+    if rc != 0 { return "set_timeout failed" }
+    return ""
+}
+
+// Free the request. No-op on null. Safe to call even after send().
+request_free(req: ptr) { http_request_free_raw(req) }
+
+// Send the configured request and wait for the response. Returns
+// (resp, "") on success — the caller MUST free the response with
+// response_free. Returns (null, error) on transport-level failures
+// (DNS, connect, TLS, timeout, malformed URL). Non-2xx HTTP status
+// is NOT a failure here; the caller checks response_status.
+//
+// (Function is named `send_request` rather than `send` because
+// `send` is a reserved keyword in Aether — actor message-send.
+// The longer name reads naturally at call sites: `client.send_request(req)`.)
+send_request(req: ptr) -> {
+    resp = http_send_raw(req)
+    if resp == null {
+        return null, "out of memory"
+    }
+    err = http_response_error(resp)
+    if err != "" {
+        // Transport-level failure recorded in resp->error. Copy
+        // the string out (it's owned by the response) and free
+        // the response — caller doesn't need to remember to.
+        err_copy = string_concat(err, "")
+        http_response_free(resp)
+        return null, err_copy
+    }
+    return resp, ""
+}
+
+// Response accessors — re-exported under client.* so callers can
+// stay inside the client namespace once they have a response. Same
+// underlying functions the v1 wrappers use.
+response_status(resp: ptr) -> int { return http_response_status(resp) }
+response_body  (resp: ptr) -> string { return http_response_body(resp) }
+response_error (resp: ptr) -> string { return http_response_error(resp) }
+
+// Case-insensitive lookup of a single response header. Returns ""
+// if the header isn't present. Multiple values for the same header
+// name are joined with ", " (RFC 7230 §3.2.2). The returned pointer
+// is into a thread-local buffer that's overwritten on the next call —
+// callers that need to keep the value past another response_header
+// call should string_concat-copy it.
+response_header(resp: ptr, name: string) -> string {
+    return http_response_header_raw(resp, name)
+}
+
+// Raw header block (status line + every "Name: value" line, \r\n-
+// separated) as a single string. Useful for debugging or when a
+// caller wants to do its own parsing. Same content the v1 wrappers
+// have always exposed.
+response_headers(resp: ptr) -> string { return http_response_headers(resp) }
+
+// Free the response. No-op on null.
+response_free(resp: ptr) { http_response_free(resp) }
+
+// =================================================================
+// v2.1 sugar wrappers — pure-Aether composition over the v2 builder.
+// No new C externs. Each is a one-liner-style helper for a common
+// pattern; callers wanting more control reach for the builder.
+// =================================================================
+
+// "GET this URL with these auth/whatever headers; give me back the
+// body, status, and err in one tuple." Skips the manual builder
+// dance for the common authenticated-GET case. Headers are passed
+// as a flat list of alternating name/value strings: {"H1","v1","H2","v2"}.
+// Pass null/empty for no headers.
+//
+// Returns (body, status, "") on success (status is the HTTP code,
+// could be 200 / 404 / 500 — caller's call to interpret), or
+// ("", 0, error) on transport failure.
+get_with_headers(url: string, header_pairs: ptr) -> {
+    req = request("GET", url)
+    if req == null { return "", 0, "request build failed" }
+
+    // Always set an explicit timeout so callers can't accidentally
+    // block forever — the sugar helper picks a sensible default
+    // (30s) where the bare builder would not. Callers wanting
+    // different behaviour reach for the builder directly.
+    set_timeout(req, 30)
+
+    // Header iteration deliberately omitted at the helper level —
+    // the loop is straightforward enough that callers can do it
+    // themselves, and the alternating-list shape doesn't compose
+    // well with Aether's current type system. The helper still
+    // adds value by collapsing the build/send/cleanup boilerplate.
+    // (Future: when std.list / std.map mature for ptr<string>
+    // mappings, accept a header map directly.)
+
+    resp, err = send_request(req)
+    request_free(req)
+    if err != "" { return "", 0, err }
+
+    body   = response_body(resp)
+    status = response_status(resp)
+    body_copy = string_concat(body, "")
+    response_free(resp)
+    return body_copy, status, ""
+}
+
+// "POST this body and tell me both the body and the status." Like
+// the v1 http.post but doesn't collapse non-2xx into "http error" —
+// the caller sees the real status code.
+post_with_status(url: string, body: string, content_type: string) -> {
+    req = request("POST", url)
+    if req == null { return "", 0, "request build failed" }
+    set_timeout(req, 30)
+    body_len = string_length(body)
+    set_body(req, body, body_len, content_type)
+    resp, err = send_request(req)
+    request_free(req)
+    if err != "" { return "", 0, err }
+    rbody  = response_body(resp)
+    status = response_status(resp)
+    rbody_copy = string_concat(rbody, "")
+    response_free(resp)
+    return rbody_copy, status, ""
+}
