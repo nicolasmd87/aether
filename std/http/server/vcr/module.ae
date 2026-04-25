@@ -128,6 +128,11 @@ extern vcr_clear_redactions()
 // that attaches to the next interaction recorded.
 extern vcr_add_note(title: string, body: string) -> int
 
+// Step 10 externs — strict request matching + last-error surface.
+extern vcr_record_interaction_full(method: string, path: string, status: int, content_type: string, body: string, req_headers: string, req_body: string) -> int
+extern vcr_last_error() -> string
+extern vcr_clear_last_error()
+
 // String concat for the recheck error path — used by flush_or_check
 // to pin the return type to string. Same shape stdlib wrappers
 // elsewhere use to dodge tuple-inference confusion.
@@ -287,4 +292,56 @@ note(title: string, body: string) -> string {
     ok = vcr_add_note(title, body)
     if ok == 0 { return vcr_load_err() }
     return ""
+}
+
+// ---- Strict request matching (Servirtium roadmap step 10) ------------
+//
+// Step-7-era recorder captured method/path/status/body and the
+// dispatcher matched on (method, path) only. Step 10 adds opt-in
+// matching against request headers + request body — when a tape
+// entry has non-empty request_headers / request_body code blocks,
+// the dispatcher hard-fails any incoming request that diverges
+// from them and the failure detail is exposed via vcr.last_error()
+// so a test's tearDown can confirm the right thing went wrong.
+//
+// Header normalization: headers are sorted by name (case-insensitive)
+// and Host is stripped before comparison — Host is always test-host-
+// controlled and would cause false positives on every record/replay.
+// Both sides reduce to a "Name: Value\n..." canonical blob; the
+// recorder is responsible for emitting the blob in canonical form
+// (the dispatcher only normalizes the live incoming side).
+//
+// Failure shape (from the spec's broken_recordings/ examples):
+//   Missing/extra header → "<name> request header (en|ex)countered
+//                          but not (expected|encountered)"
+//   Wrong header value   → "<name> request header value differed ..."
+//   Wrong body           → "request body different to expectation ..."
+//
+// Use case: step-10 hostile-tape tests confirm the framework
+// fails when a tape lies about what the server saw.
+
+// Capture an interaction with full request shape — headers + body
+// in addition to method/path/status/content_type/response_body.
+// `req_headers` should be canonical-form: "Name: Value\n..."
+// sorted by name, Host stripped. Pass "" for either req field
+// to opt that field out of mismatch detection (tape entry won't
+// constrain it on later replay).
+record_full(method: string, path: string, status: int, content_type: string, body: string, req_headers: string, req_body: string) -> string {
+    ok = vcr_record_interaction_full(method, path, status, content_type, body, req_headers, req_body)
+    if ok == 0 { return "vcr.record_full failed" }
+    return ""
+}
+
+// Most-recent playback mismatch diagnostic. Empty string when no
+// mismatch has been flagged since the last load() / clear_last_error().
+// Read this from a test's tearDown to confirm the framework
+// detected the divergence the test was set up to provoke.
+last_error() -> string {
+    return vcr_last_error()
+}
+
+// Drop the last-error slot — call between subtests so a flagged
+// mismatch doesn't bleed forward.
+clear_last_error() {
+    vcr_clear_last_error()
 }

@@ -59,6 +59,24 @@ extern void        http_response_set_status(void* res, int code);
 extern void        http_response_set_header(void* res, const char* name, const char* value);
 extern void        http_response_set_body  (void* res, const char* body);
 
+/* Step 10: header iteration + body access. We need to walk the
+ * full set of request headers (not just look one up by name) to
+ * detect "extra" headers the tape didn't expect. The HttpRequest
+ * struct's prefix layout is stable across the v2 server — we
+ * mirror just the fields we touch. Keep this in sync with
+ * std/net/aether_http_server.h's HttpRequest definition. */
+typedef struct VcrHttpRequestPrefix {
+    char*  method;
+    char*  path;
+    char*  query_string;
+    char*  http_version;
+    char** header_keys;
+    char** header_values;
+    int    header_count;
+    char*  body;
+    /* (rest of struct ignored — body_length, params, ...) */
+} VcrHttpRequestPrefix;
+
 /* And the routing extern — used by vcr_register_routes(). v0.1
  * used http_server_get exclusively (replay-of-GET-only); v0.2
  * uses add_route which takes the method as a string and so handles
@@ -78,6 +96,15 @@ typedef struct Interaction {
      * ignores it. NULL when no note was attached to this interaction. */
     char* note_title;
     char* note_body;
+    /* Step 10: request match fields. The parser fills these from the
+     * `### Request headers ...` / `### Request body ...` code blocks.
+     * Empty string ("") means the tape didn't constrain that field
+     * — dispatcher skips comparison and matches on (method, path) only.
+     * Non-empty → dispatcher must match the incoming request against
+     * this exactly (after normalization), or fail with a diagnostic
+     * the test reads via vcr.last_error(). */
+    char* req_headers;  /* canonical-form: "Name: Value\n..." sorted by name */
+    char* req_body;     /* request body bytes, "" if absent / empty */
 } Interaction;
 
 static Interaction* g_tape       = NULL;
@@ -92,6 +119,13 @@ static char*        g_tape_err   = NULL;
 static char* g_pending_note_title = NULL;
 static char* g_pending_note_body  = NULL;
 
+/* Step 10: last playback mismatch diagnostic. The dispatcher
+ * populates this when an incoming request doesn't match the
+ * next-in-line tape entry (extra header, different body, etc).
+ * The test's tearDown reads it via vcr.last_error(). NULL or ""
+ * means "no error since last clear". */
+static char* g_last_error = NULL;
+
 static void tape_free_storage(void) {
     if (g_tape) {
         for (int i = 0; i < g_tape_n; i++) {
@@ -101,6 +135,8 @@ static void tape_free_storage(void) {
             free(g_tape[i].content_type);
             free(g_tape[i].note_title);
             free(g_tape[i].note_body);
+            free(g_tape[i].req_headers);
+            free(g_tape[i].req_body);
         }
         free(g_tape);
         g_tape = NULL;
@@ -112,6 +148,12 @@ static void tape_free_storage(void) {
     g_tape_err = NULL;
     free(g_pending_note_title); g_pending_note_title = NULL;
     free(g_pending_note_body);  g_pending_note_body  = NULL;
+    free(g_last_error);         g_last_error         = NULL;
+}
+
+static void last_err_set(const char* msg) {
+    free(g_last_error);
+    g_last_error = msg ? strdup(msg) : NULL;
 }
 
 static void tape_set_err(const char* msg) {
@@ -120,7 +162,8 @@ static void tape_set_err(const char* msg) {
 }
 
 static int tape_append(const char* method, const char* path,
-                       int status, const char* body, const char* content_type) {
+                       int status, const char* body, const char* content_type,
+                       const char* req_headers, const char* req_body) {
     if (g_tape_n >= g_tape_cap) {
         int new_cap = g_tape_cap ? g_tape_cap * 2 : 8;
         Interaction* bigger = (Interaction*)realloc(g_tape, sizeof(Interaction) * (size_t)new_cap);
@@ -134,14 +177,18 @@ static int tape_append(const char* method, const char* path,
     e->status       = status;
     e->body         = strdup(body ? body : "");
     e->content_type = content_type ? strdup(content_type) : NULL;
+    e->req_headers  = strdup(req_headers ? req_headers : "");
+    e->req_body     = strdup(req_body ? req_body : "");
     /* Drain the pending-note slot — ownership transfers to this
      * interaction, so the note attaches to exactly one capture. */
     e->note_title   = g_pending_note_title;
     e->note_body    = g_pending_note_body;
     g_pending_note_title = NULL;
     g_pending_note_body  = NULL;
-    if (!e->method || !e->path || !e->body || (content_type && !e->content_type)) {
+    if (!e->method || !e->path || !e->body || (content_type && !e->content_type)
+        || !e->req_headers || !e->req_body) {
         free(e->method); free(e->path); free(e->body); free(e->content_type);
+        free(e->req_headers); free(e->req_body);
         free(e->note_title); free(e->note_body);
         return -1;
     }
@@ -278,6 +325,11 @@ static int parse_response_body_header(const char* line, int* out_status, char** 
     return *out_content_type ? 0 : -1;
 }
 
+/* Step 10: forward decl — the parser canonicalizes the
+ * request_headers blob at load time so the dispatcher can do a
+ * flat strcmp later. Body lives near the dispatcher. */
+static char* normalize_recorded_headers(const char* raw);
+
 /* Parse one interaction chunk — text starting just after
  * "## Interaction N: " and ending at the start of the next
  * "## Interaction " (or end of file). */
@@ -301,13 +353,16 @@ static int parse_interaction(const char* chunk_start, const char* chunk_end) {
 
     /* Rest of the chunk is sections separated by "\n### ". The
      * response body section carries both the status (in its header
-     * line) and the body (in its code block). v0.1 only needs those
-     * two — request headers/body and response headers are parsed-and-
-     * dropped because matching is method+path only and response
-     * header echo is v0.2. */
+     * line) and the body (in its code block). Step 10 also captures
+     * the request_headers / request_body sections so the dispatcher
+     * can fail loud on a request that diverges from what the tape
+     * was recorded against. Empty code blocks → empty strings →
+     * matching opt-out for that field. */
     int status = 0;
     char* content_type = NULL;
     char* body = NULL;
+    char* req_headers = NULL;
+    char* req_body = NULL;
 
     const char* p = nl + 1;
     while (p < chunk_end) {
@@ -333,9 +388,19 @@ static int parse_interaction(const char* chunk_start, const char* chunk_end) {
         const char* next_sect = strstr(sect_nl, "\n### ");
         const char* sect_body_end = next_sect && next_sect < chunk_end ? next_sect : chunk_end;
 
-        /* Only the response-body section is interesting in v0.1. */
-        if (sect_name_len > 25
-            && memcmp(sect_name_start, "Response body recorded for", 26) == 0) {
+        if (sect_name_len > 24
+            && memcmp(sect_name_start, "Request headers recorded", 24) == 0) {
+            char* raw_hdrs = extract_code_block(sect_nl + 1, sect_body_end);
+            if (!raw_hdrs) raw_hdrs = strdup("");
+            req_headers = normalize_recorded_headers(raw_hdrs);
+            free(raw_hdrs);
+            if (!req_headers) { tape_set_err("OOM normalizing request headers"); goto fail; }
+        } else if (sect_name_len > 21
+                   && memcmp(sect_name_start, "Request body recorded", 21) == 0) {
+            req_body = extract_code_block(sect_nl + 1, sect_body_end);
+            if (!req_body) req_body = strdup("");
+        } else if (sect_name_len > 25
+                   && memcmp(sect_name_start, "Response body recorded for", 26) == 0) {
             /* The header line carries (status: content/type). */
             char* line = slice_dup(sect_name_start, sect_nl);
             if (!line) { tape_set_err("OOM"); goto fail; }
@@ -353,6 +418,8 @@ static int parse_interaction(const char* chunk_start, const char* chunk_end) {
                 goto fail;
             }
         }
+        /* Response headers section is intentionally still parse-and-drop:
+         * the response header echo is a separate roadmap step. */
 
         p = sect_body_end;
     }
@@ -361,25 +428,31 @@ static int parse_interaction(const char* chunk_start, const char* chunk_end) {
         tape_set_err("interaction has no Response body section");
         goto fail;
     }
-    /* body could legitimately be empty string — that's fine. */
+    /* Empty fields are legal — they encode "no constraint" for
+     * the dispatcher. */
     if (!body) body = strdup("");
+    if (!req_headers) req_headers = strdup("");
+    if (!req_body) req_body = strdup("");
 
-    if (tape_append(method, path, status, body, content_type) != 0) {
+    if (tape_append(method, path, status, body, content_type, req_headers, req_body) != 0) {
         tape_set_err("OOM appending interaction");
         goto fail;
     }
 
     free(method); free(path); free(body); free(content_type);
+    free(req_headers); free(req_body);
     return 0;
 
 fail:
     free(method); free(path); free(body); free(content_type);
+    free(req_headers); free(req_body);
     return -1;
 }
 
 /* ---- Forward decl ---------------------------------------------------- */
 
 void vcr_dispatch(void* req, void* res, void* ud);
+
 
 /* ---- Aether-side externs -------------------------------------------- */
 
@@ -485,10 +558,31 @@ void vcr_register_routes(void* server) {
  * exclusive per-run.
  * -------------------------------------------------------------------- */
 
+int vcr_record_interaction_full(const char* method, const char* path,
+                                int status, const char* content_type, const char* body,
+                                const char* req_headers, const char* req_body);
+
 int vcr_record_interaction(const char* method, const char* path,
                            int status, const char* content_type, const char* body) {
+    /* Step-7-era recorder: only response bytes, no request capture.
+     * Forwards to the step-10 entry point with empty req_headers /
+     * req_body — empty means "no constraint" so on later replay the
+     * dispatcher matches on (method, path) only, identical to the
+     * pre-step-10 behavior. */
+    return vcr_record_interaction_full(method, path, status, content_type, body, "", "");
+}
+
+/* Step 10 record entry point: like vcr_record_interaction but also
+ * captures the request headers (canonical-form: "Name: Value\n..."
+ * sorted by name, Host stripped) and request body. Pass "" for
+ * either to opt that field out of mismatch detection. */
+int vcr_record_interaction_full(const char* method, const char* path,
+                                int status, const char* content_type, const char* body,
+                                const char* req_headers, const char* req_body) {
     if (!method || !path) { tape_set_err("null method or path"); return 0; }
-    if (tape_append(method, path, status, body, content_type) != 0) {
+    if (tape_append(method, path, status, body, content_type,
+                    req_headers ? req_headers : "",
+                    req_body    ? req_body    : "") != 0) {
         tape_set_err("OOM appending captured interaction");
         return 0;
     }
@@ -709,16 +803,18 @@ static void emit_tape_to_fp(FILE* fp) {
             fputc('\n', fp);
         }
 
-        /* v0.1 doesn't capture request headers/body during recording —
-         * the request shape is path-only and matching is method+path
-         * only on replay. We still emit the section markers so the
-         * tape stays a valid Servirtium document and is parseable by
-         * other implementations. Empty code blocks are legal. */
+        /* Request headers / body. Step-7-era recorder leaves these as
+         * empty strings → empty code blocks (still valid Servirtium
+         * markdown, dispatcher matches on method+path only). The
+         * step-10 recorder fills them with a normalized form
+         * ("Name: Value\n..." sorted, Host stripped) and the
+         * dispatcher hard-fails any incoming request that doesn't
+         * match. */
         fputs("### Request headers recorded for playback:\n\n", fp);
-        emit_code_block(fp, "");
+        emit_code_block(fp, e->req_headers ? e->req_headers : "");
 
         fputs("### Request body recorded for playback ():\n\n", fp);
-        emit_code_block(fp, "");
+        emit_code_block(fp, e->req_body ? e->req_body : "");
 
         fputs("### Response headers recorded for playback:\n\n", fp);
         if (e->content_type) {
@@ -868,9 +964,208 @@ int vcr_flush_or_check_raw(const char* path) {
     return 0;
 }
 
+/* ---- Step 10: request normalization + match ----
+ *
+ * Goal: detect when an incoming request differs from what the
+ * tape was recorded against (extra header, missing header, wrong
+ * value, different body), and fail loudly with a diagnostic the
+ * test reads via vcr.last_error().
+ *
+ * Both sides — the recorded blob in `e->req_headers` and the
+ * incoming request's headers — are reduced to a common canonical
+ * form before comparison: each header rendered as "Name: Value"
+ * on its own line, sorted ascending by lowercased name, with
+ * Host stripped (Host is always test-host-controlled and would
+ * cause false positives on every record-vs-replay diff).
+ *
+ * The recording side is responsible for emitting the canonical
+ * form into the tape; the dispatcher only normalizes the live
+ * incoming side. Tapes hand-edited by humans aren't guaranteed
+ * canonical — the spec's broken_recordings/ examples have one
+ * header so order doesn't matter, but adding multi-header tests
+ * would need the loaded blob normalized too. v0.1 leaves that
+ * for future work; today's hand-edited tapes are short enough
+ * to keep canonical by inspection.
+ */
+
+static int icmp(const char* a, const char* b) {
+    while (*a && *b) {
+        char ca = (*a >= 'A' && *a <= 'Z') ? *a + 32 : *a;
+        char cb = (*b >= 'A' && *b <= 'Z') ? *b + 32 : *b;
+        if (ca != cb) return ca - cb;
+        a++; b++;
+    }
+    return (unsigned char)*a - (unsigned char)*b;
+}
+
+/* qsort comparator over an array of "Name: Value" lines (no
+ * trailing newline). Sort key is the name (everything before
+ * the first ':'), case-insensitive. */
+static int line_cmp(const void* lhs, const void* rhs) {
+    const char* a = *(const char* const*)lhs;
+    const char* b = *(const char* const*)rhs;
+    return icmp(a, b);
+}
+
+/* Normalize a multi-line "Name: Value\n..." blob (as it appears in
+ * a tape's request-headers code block) into the same canonical
+ * form normalize_live_headers() produces: per-line "Name: Value",
+ * sorted ascending by name (case-insensitive), Host stripped.
+ *
+ * Called on `req_headers` at parse time so the dispatcher can do
+ * a flat strcmp later. Returns malloc'd blob the caller frees,
+ * or NULL on OOM. Empty input → empty output. */
+static char* normalize_recorded_headers(const char* raw) {
+    if (!raw || !*raw) return strdup("");
+
+    /* First pass: count lines so we can size the array. */
+    int line_cap = 0;
+    for (const char* p = raw; *p; p++) if (*p == '\n') line_cap++;
+    line_cap += 2;  /* room for last line + slack */
+
+    char** lines = (char**)calloc((size_t)line_cap, sizeof(char*));
+    if (!lines) return NULL;
+    int n_lines = 0;
+
+    const char* p = raw;
+    while (*p) {
+        const char* end = strchr(p, '\n');
+        if (!end) end = p + strlen(p);
+        /* Trim trailing CR. */
+        const char* line_end = end;
+        if (line_end > p && line_end[-1] == '\r') line_end--;
+        size_t len = (size_t)(line_end - p);
+        if (len > 0) {
+            /* Skip Host header. */
+            int is_host = 0;
+            if (len >= 4) {
+                /* Host[: ] — match "Host" up to ':'. */
+                int hi = 0;
+                while (hi < (int)len && p[hi] != ':') hi++;
+                if (hi == 4) {
+                    char nm[5];
+                    for (int k = 0; k < 4; k++) nm[k] = p[k];
+                    nm[4] = '\0';
+                    if (icmp(nm, "Host") == 0) is_host = 1;
+                }
+            }
+            if (!is_host) {
+                char* dup = (char*)malloc(len + 1);
+                if (!dup) {
+                    for (int k = 0; k < n_lines; k++) free(lines[k]);
+                    free(lines);
+                    return NULL;
+                }
+                memcpy(dup, p, len);
+                dup[len] = '\0';
+                lines[n_lines++] = dup;
+            }
+        }
+        if (!*end) break;
+        p = end + 1;
+    }
+
+    qsort(lines, (size_t)n_lines, sizeof(char*), line_cmp);
+
+    size_t total = 0;
+    for (int i = 0; i < n_lines; i++) total += strlen(lines[i]) + 1;
+    char* out = (char*)malloc(total + 1);
+    if (!out) {
+        for (int i = 0; i < n_lines; i++) free(lines[i]);
+        free(lines);
+        return NULL;
+    }
+    char* dst = out;
+    for (int i = 0; i < n_lines; i++) {
+        size_t l = strlen(lines[i]);
+        memcpy(dst, lines[i], l);
+        dst[l] = '\n';
+        dst += l + 1;
+        free(lines[i]);
+    }
+    *dst = '\0';
+    free(lines);
+    return out;
+}
+
+/* Build the canonical "Name: Value\n..." blob from an
+ * HttpRequest's parallel keys/values arrays. Drops Host.
+ * Returns malloc'd string the caller frees, or NULL on OOM. */
+static char* normalize_live_headers(const VcrHttpRequestPrefix* r) {
+    if (r->header_count <= 0) return strdup("");
+
+    /* Collect non-Host lines into a heap array. */
+    char** lines = (char**)calloc((size_t)r->header_count, sizeof(char*));
+    if (!lines) return NULL;
+    int n_lines = 0;
+    for (int i = 0; i < r->header_count; i++) {
+        const char* key = r->header_keys[i];
+        const char* val = r->header_values[i] ? r->header_values[i] : "";
+        if (!key) continue;
+        if (icmp(key, "Host") == 0) continue;
+        size_t len = strlen(key) + 2 + strlen(val) + 1;
+        char* line = (char*)malloc(len);
+        if (!line) {
+            for (int j = 0; j < n_lines; j++) free(lines[j]);
+            free(lines);
+            return NULL;
+        }
+        snprintf(line, len, "%s: %s", key, val);
+        lines[n_lines++] = line;
+    }
+
+    qsort(lines, (size_t)n_lines, sizeof(char*), line_cmp);
+
+    /* Concatenate. */
+    size_t total = 0;
+    for (int i = 0; i < n_lines; i++) total += strlen(lines[i]) + 1; /* line + \n */
+    char* out = (char*)malloc(total + 1);
+    if (!out) {
+        for (int i = 0; i < n_lines; i++) free(lines[i]);
+        free(lines);
+        return NULL;
+    }
+    char* dst = out;
+    for (int i = 0; i < n_lines; i++) {
+        size_t l = strlen(lines[i]);
+        memcpy(dst, lines[i], l);
+        dst[l] = '\n';
+        dst += l + 1;
+        free(lines[i]);
+    }
+    *dst = '\0';
+    free(lines);
+    return out;
+}
+
+/* True if `s` is empty or contains only whitespace. Used to
+ * decide whether a captured field constrains matching at all
+ * — the spec encodes "no constraint" as an empty code block. */
+static int is_blank(const char* s) {
+    if (!s) return 1;
+    while (*s) {
+        if (*s != ' ' && *s != '\t' && *s != '\n' && *s != '\r') return 0;
+        s++;
+    }
+    return 1;
+}
+
+/* Pull the first header name out of `recorded` ("Name: ...\n..."),
+ * up to MAX-1 chars, NUL-terminate. Used in diagnostics so we
+ * can name a specific offending header in the error string. */
+static void first_header_name(const char* recorded, char* out, size_t max) {
+    size_t i = 0;
+    while (recorded[i] && recorded[i] != ':' && recorded[i] != '\n' && i + 1 < max) {
+        out[i] = recorded[i];
+        i++;
+    }
+    out[i] = '\0';
+}
+
 void vcr_dispatch(void* req, void* res, void* ud) {
     (void)ud;
     if (g_tape_cursor >= g_tape_n) {
+        last_err_set("tape exhausted — SUT made more requests than the tape contains");
         http_response_set_status(res, 599);
         http_response_set_body(res,
             "tape exhausted — SUT made more requests than the tape contains");
@@ -878,10 +1173,9 @@ void vcr_dispatch(void* req, void* res, void* ud) {
     }
     Interaction* e = &g_tape[g_tape_cursor];
 
-    /* Strict (method, path) match. Mismatch → 599 with diagnostic
-     * body so the failure surfaces at the test's assertion layer
-     * rather than as a silent miss. Cursor doesn't advance on
-     * mismatch — repeat calls produce the same diagnostic. */
+    /* (method, path) match — same as before step 10, just now
+     * recorded into g_last_error too. Mismatch returns without
+     * advancing cursor. */
     const char* got_method = http_request_method(req);
     const char* got_path   = http_request_path(req);
     if (!got_method || strcmp(got_method, e->method) != 0
@@ -893,9 +1187,143 @@ void vcr_dispatch(void* req, void* res, void* ud) {
             e->method, e->path,
             got_method ? got_method : "(null)",
             got_path   ? got_path   : "(null)");
+        last_err_set(msg);
         http_response_set_status(res, 599);
         http_response_set_body(res, msg);
         return;
+    }
+
+    /* Step 10: request-headers comparison. Only enforced when the
+     * tape captured a non-blank request_headers block — empty means
+     * the tape doesn't constrain headers (today's recorder default,
+     * pre-step-10 tapes). */
+    const VcrHttpRequestPrefix* live_req = (const VcrHttpRequestPrefix*)req;
+    if (!is_blank(e->req_headers)) {
+        char* live = normalize_live_headers(live_req);
+        if (!live) {
+            last_err_set("OOM normalizing live request headers");
+            http_response_set_status(res, 599);
+            http_response_set_body(res, "OOM normalizing live request headers");
+            return;
+        }
+        if (strcmp(live, e->req_headers) != 0) {
+            /* Identify the offending header. Walk the recorded blob
+             * line by line: if a recorded line isn't in `live`, the
+             * recording expected a header the SUT didn't send →
+             * "<name> request header was expected but not encountered".
+             * If we find no missing-from-live recorded line, walk live
+             * for an unexpected one → "<name> request header
+             * encountered but not expected". For same-name different-
+             * value, → "<name> request header value differed". */
+            char hdr_name[128];
+            char msg[2048];
+            int found_diag = 0;
+
+            /* First sweep: recorded lines not present verbatim in live. */
+            const char* p = e->req_headers;
+            while (*p && !found_diag) {
+                const char* eol = strchr(p, '\n');
+                if (!eol) eol = p + strlen(p);
+                size_t llen = (size_t)(eol - p);
+                if (llen > 0) {
+                    /* Reconstruct "<line>\n" so we match a full recorded line
+                     * inside the live blob (live ends every line with \n). */
+                    char one[512];
+                    if (llen < sizeof(one) - 2) {
+                        memcpy(one, p, llen);
+                        one[llen] = '\n';
+                        one[llen + 1] = '\0';
+                        if (!strstr(live, one)) {
+                            /* This recorded header is missing from live.
+                             * Check whether the same NAME appears with a
+                             * different value (value-differed) vs missing
+                             * outright. */
+                            const char* colon = (const char*)memchr(p, ':', llen);
+                            if (colon) {
+                                size_t nlen = (size_t)(colon - p);
+                                if (nlen + 2 < sizeof(one)) {
+                                    memcpy(one, p, nlen);
+                                    one[nlen] = ':';
+                                    one[nlen + 1] = '\0';
+                                    /* Live blob always renders "Name: ..." */
+                                    char* maybe = strstr(live, one);
+                                    if (maybe && (maybe == live || maybe[-1] == '\n')) {
+                                        first_header_name(p, hdr_name, sizeof(hdr_name));
+                                        snprintf(msg, sizeof(msg),
+                                            "interaction %d: '%s' request header value differed",
+                                            g_tape_cursor, hdr_name);
+                                        found_diag = 1;
+                                        break;
+                                    }
+                                }
+                            }
+                            first_header_name(p, hdr_name, sizeof(hdr_name));
+                            snprintf(msg, sizeof(msg),
+                                "interaction %d: '%s' request header was expected but not encountered",
+                                g_tape_cursor, hdr_name);
+                            found_diag = 1;
+                        }
+                    }
+                }
+                if (!*eol) break;
+                p = eol + 1;
+            }
+
+            /* Second sweep: live lines not in recorded → unexpected. */
+            if (!found_diag) {
+                const char* lp = live;
+                while (*lp && !found_diag) {
+                    const char* eol = strchr(lp, '\n');
+                    if (!eol) eol = lp + strlen(lp);
+                    size_t llen = (size_t)(eol - lp);
+                    if (llen > 0 && llen < 510) {
+                        char one[512];
+                        memcpy(one, lp, llen);
+                        one[llen] = '\n';
+                        one[llen + 1] = '\0';
+                        if (!strstr(e->req_headers, one)) {
+                            first_header_name(lp, hdr_name, sizeof(hdr_name));
+                            snprintf(msg, sizeof(msg),
+                                "interaction %d: '%s' request header encountered but not expected",
+                                g_tape_cursor, hdr_name);
+                            found_diag = 1;
+                        }
+                    }
+                    if (!*eol) break;
+                    lp = eol + 1;
+                }
+            }
+
+            if (!found_diag) {
+                snprintf(msg, sizeof(msg),
+                    "interaction %d: request headers differ — recorded:\n%s\nlive:\n%s",
+                    g_tape_cursor, e->req_headers, live);
+            }
+            last_err_set(msg);
+            free(live);
+            http_response_set_status(res, 599);
+            http_response_set_body(res, msg);
+            return;
+        }
+        free(live);
+    }
+
+    /* Step 10: request-body comparison. Same opt-in semantics. */
+    if (!is_blank(e->req_body)) {
+        const char* live_body = live_req->body ? live_req->body : "";
+        if (strcmp(live_body, e->req_body) != 0) {
+            char msg[2048];
+            snprintf(msg, sizeof(msg),
+                "interaction %d: request body different to expectation — "
+                "recorded=%zu bytes, live=%zu bytes",
+                g_tape_cursor,
+                strlen(e->req_body),
+                strlen(live_body));
+            last_err_set(msg);
+            http_response_set_status(res, 599);
+            http_response_set_body(res, msg);
+            return;
+        }
     }
 
     http_response_set_status(res, e->status);
@@ -905,4 +1333,19 @@ void vcr_dispatch(void* req, void* res, void* ud) {
     http_response_set_body(res, e->body);
 
     g_tape_cursor++;
+}
+
+/* Step 10: surface the most recent dispatch mismatch. The test's
+ * tearDown hook calls vcr.last_error() to confirm the right thing
+ * happened (or empty, if no mismatch occurred this run).
+ * Returns "" when nothing has been flagged. */
+const char* vcr_last_error(void) {
+    return g_last_error ? g_last_error : "";
+}
+
+/* Clear the last-error slot. Call between subtests in the same
+ * process so a flagged mismatch doesn't bleed across them. */
+void vcr_clear_last_error(void) {
+    free(g_last_error);
+    g_last_error = NULL;
 }
