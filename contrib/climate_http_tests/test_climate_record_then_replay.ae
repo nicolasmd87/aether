@@ -19,22 +19,30 @@
 // we recorded ourselves rather than one written by hand.
 //
 // Lifecycle of the recorded tape file:
-//   - Not committed to the repo by default (the hand-written
-//     climate_5_endpoints.tape is the canonical fixture)
-//   - Each developer's first local run produces their own copy
-//   - Subsequent local runs replay
-//   - CI runs always start fresh (no tape carried into the
-//     workspace), so CI runs always exercise the recorder path
+//   - Committed at contrib/climate_http_tests/tapes/climate_5_endpoints.tape
+//     (the canonical fixture, byte-identical to what the recorder
+//     produces against the GitHub-Pages mirror as of 2026-04-25).
+//   - CI runs always replay against the committed tape (exercises
+//     the replay path end-to-end without needing outbound HTTPS).
+//   - Local dev: same default. Delete the file + re-run to exercise
+//     the recorder path against the live mirror; set AETHER_VCR_RECORD=1
+//     to drive the re-record byte-diff check (step 4).
 //
-// If the recorded tape disagrees with the hand-written one, that's
-// either a recorder bug or an upstream change — both worth knowing
-// about.
+// If the recorder writes a tape that diverges from the committed
+// one, that's either a recorder bug or an upstream change — both
+// worth knowing about. flush_or_check() surfaces the diff offset.
 
 import contrib.climate_http_tests.get_ave_annual_rainfall_from
 import std.http.server.vcr
 import std.http
 import std.http.client
-import std.fs.file_exists
+import std.fs
+
+// std.fs.file_exists is exposed only via per-symbol import, which
+// in v0.90 hides the namespace `fs` from the rest of the file.
+// Declare the extern directly so we keep the `fs.read` / `fs.write`
+// surface that the vcr module's parser/emitter transitively needs.
+extern file_exists(path: string) -> int
 import std.string
 import std.io
 
@@ -44,7 +52,7 @@ extern http_server_start_raw(server: ptr) -> int
 const PORT = 18100
 const VCR_BASE = "http://127.0.0.1:18100"
 const UPSTREAM_BASE = "https://servirtium.github.io/worldbank-climate-recordings"
-const TAPE_PATH = "/tmp/climate_recorded.tape"
+const TAPE_PATH = "contrib/climate_http_tests/tapes/climate_5_endpoints.tape"
 
 // ---- Server-actor + scheduler-helper boilerplate (same as step 2). ----
 

@@ -181,6 +181,42 @@ changes.
 
 ---
 
+## 7. Per-symbol import hides the namespace
+
+**Symptom**: `import std.fs.file_exists` makes `file_exists()` callable
+as a bare identifier, but breaks `fs.read` / `fs.write` access from
+the same file — the `fs` namespace becomes invisible. Adding a
+matching `import std.fs` afterwards doesn't help (per-symbol import
+shadows the namespace either way).
+
+**Repro**:
+```ae
+import std.fs.file_exists
+import std.fs   // doesn't restore the namespace
+
+main() {
+    if file_exists("foo") == 1 { ... }   // OK
+    contents, err = fs.read("bar")       // E0301: Undefined function 'fs.read'
+}
+```
+
+**Workaround**: drop the per-symbol import; declare the extern by
+hand alongside the namespace import:
+```ae
+import std.fs
+extern file_exists(path: string) -> int   // bypasses the namespace shadow
+```
+
+**Why it matters**: the per-symbol import form is documented and used
+elsewhere; the namespace shadow is non-obvious. Hit during the
+climate-record-then-replay port to a committed-tape model.
+
+**Fix direction**: the namespace and per-symbol forms should compose
+— importing `std.fs.file_exists` should add `file_exists` to the
+local scope without removing the `fs.*` namespace.
+
+---
+
 ## Summary
 
 These are all tractable. None block the C → Aether port. The two most

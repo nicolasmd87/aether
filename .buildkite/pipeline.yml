@@ -161,23 +161,22 @@
       #   - test_climate_via_vcr.ae        — replay-only, hand-written
       #                                       tape, fully offline
       #   - test_climate_record_then_replay.ae — auto record/replay;
-      #                                       falls back to replay when
-      #                                       AETHER_SKIP_NETWORK is set
-      #                                       and a tape is present
+      #                                       picks up the committed
+      #                                       tape and replays
       #
-      # CI runs only the offline-safe replay test. The record path
-      # would need outbound HTTPS to servirtium.github.io; cleanest to
-      # leave that to local dev runs and have CI just confirm the
-      # replay path stays green. Companion to the test_vcr_*
-      # integration tests already in tests/integration/ (which
-      # already run via make test-ae); this label gives the
-      # contrib-shaped fixture its own broken-out tick in the BK UI.
+      # The committed tape lives at contrib/climate_http_tests/tapes/
+      # climate_5_endpoints.tape — byte-identical to what the recorder
+      # produces against servirtium.github.io as of 2026-04-25. CI
+      # exercises the replay path; local devs can rm the tape (or set
+      # AETHER_VCR_RECORD=1) to drive the recorder against the live
+      # mirror.
       #
-      # Binds port 18099 (test_climate_via_vcr.ae const PORT). No
+      # Binds ports 18099 (via_vcr) + 18100 (record_then_replay). No
       # collision with tinyweb (8080) or aether_ui (9222).
       command: |
         make compiler ae stdlib && \
-        ./build/ae run contrib/climate_http_tests/test_climate_via_vcr.ae
+        ./build/ae run contrib/climate_http_tests/test_climate_via_vcr.ae && \
+        ./build/ae run contrib/climate_http_tests/test_climate_record_then_replay.ae
       agents:
         queue: "default-queue"
         aether: "1"

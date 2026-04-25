@@ -9,7 +9,7 @@
 // so a developer working offline / on a flaky network / against a
 // since-changed upstream still gets meaningful test signal.
 //
-// Tape lives at tests/integration/tapes/climate_5_endpoints.tape and
+// Tape lives at contrib/climate_http_tests/tapes/climate_5_endpoints.tape and
 // was captured verbatim from the GitHub-Pages mirror once. The five
 // interactions are consumed in the order the test makes them.
 //
@@ -68,7 +68,7 @@ close_enough(got: float, want: float) -> int {
 main() {
     println("=== contrib.climate_http_tests via VCR ===\n")
 
-    raw = vcr.load("tests/integration/tapes/climate_5_endpoints.tape", PORT)
+    raw = vcr.load("contrib/climate_http_tests/tapes/climate_5_endpoints.tape", PORT)
     if raw == null {
         println("FAIL: tape failed to load")
         exit(1)
