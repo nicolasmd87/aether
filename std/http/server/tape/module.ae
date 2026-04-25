@@ -1,0 +1,129 @@
+// std.http.server.tape — replay-driven HTTP server for testing.
+// Import with: import std.http.server.tape
+//
+// v0.1 — GET-only, replay-only, strict (method, path) matching.
+//
+// A tape is a hand-written file describing a sequence of HTTP
+// exchanges. Each entry records the request the SUT (system under
+// test) is expected to send and the response the test wants the
+// server to return. The replayer binds a port, accepts connections,
+// matches each incoming request against the next-in-line tape entry,
+// and writes back the recorded response bytes.
+//
+// Tape format (one or more `--- exchange N ---`-headed blocks):
+//
+//   --- exchange 1 ---
+//   > GET /ok HTTP/1.1
+//   > Host: 127.0.0.1:18091
+//   >
+//   < HTTP/1.1 200 OK
+//   < Content-Type: text/plain
+//   < Content-Length: 7
+//   <
+//   < ok-body
+//
+// Lines starting with `> ` are the request the SUT is sending;
+// lines starting with `< ` are the response the replayer should
+// emit. The blank `>` and `<` lines mark end-of-headers.
+//
+// Matching is strict on (method, path) only — incoming headers and
+// body are ignored. Out-of-order or unmatched-method-or-path requests
+// fail the replay (the dispatcher returns 599 with a body explaining
+// what didn't match, so the failure surfaces at the test layer
+// rather than as a silent miss). Entries are consumed in order; if
+// the SUT sends the same request twice the tape needs two entries.
+//
+// Usage (caller owns the actor wiring — Aether's import system
+// doesn't merge actor declarations across modules in v0.1, so the
+// server-actor + scheduler-helper pattern lives in the test):
+//
+//   import std.http.server.tape
+//   import std.http
+//   import std.http.client
+//
+//   extern http_server_start_raw(server: ptr) -> int
+//
+//   message StartTape { raw: ptr }
+//   message Noop {}
+//   actor TapeActor { state s = 0
+//       receive { StartTape(raw) -> { s = raw; http_server_start_raw(raw) } } }
+//   actor SchedHelper { state x = 0
+//       receive { Noop() -> { x = 1 } } }
+//
+//   main() {
+//       raw = tape.bind("tests/integration/tapes/my.tape", 18091)
+//       if raw == null { exit(1) }
+//
+//       spawn(SchedHelper())
+//       a = spawn(TapeActor())
+//       a ! StartTape { raw: raw }
+//       sleep(500)
+//
+//       // SUT now drives http://127.0.0.1:18091
+//       body, err = http.get("http://127.0.0.1:18091/ok")
+//       // assert body == "ok-body"
+//
+//       tape.stop(raw)
+//   }
+//
+// What's deliberately out of scope for v0.1 (additive future work):
+//   - POST / PUT / DELETE / PATCH (only GET)
+//   - Body-aware matching (only method + path)
+//   - Header-aware matching
+//   - Recording mode (tapes are hand-written today)
+//   - Loose / fuzzy matching, regex paths
+//   - Multi-tape replay (one tape per replayer instance)
+//   - Self-contained actor wiring (caller does spawn + send today)
+
+import std.http
+
+// ---- Externs into the C-side parser + dispatcher ----
+
+extern tape_load(tape_path: string) -> int           // 1 ok, 0 fail
+extern tape_load_err() -> string                      // populated when tape_load returns 0
+extern tape_count() -> int
+extern tape_dispatch(req: ptr, res: ptr, ud: ptr)    // server handler — matches next entry, emits response
+extern tape_register_routes(server: ptr)              // walks tape and calls server_get for each unique path
+
+// ---- Aether-side surface ----
+
+// Load a tape, create + bind a server on `port`, register the
+// dispatcher as a catch-all GET handler, and return the raw server
+// pointer. Caller spawns its own server-actor and sends StartTape
+// (or equivalent) — the actor pattern can't be encapsulated inside
+// this module today because Aether's module merger doesn't
+// transitively merge actor declarations.
+//
+// Returns null on tape parse failure or port-bind failure; the
+// reason is printed via println before the null return.
+bind(tape_path: string, port: int) -> ptr {
+    ok = tape_load(tape_path)
+    if ok == 0 {
+        e = tape_load_err()
+        println("tape.bind: ${e}")
+        return null
+    }
+
+    raw = http.server_create(port)
+    if raw == 0 {
+        println("tape.bind: server_create on port ${port} returned 0")
+        return null
+    }
+
+    // v0.1: only GET. Each unique path in the tape gets registered
+    // with the routing layer; the dispatcher then matches on
+    // (method, path) and emits the recorded response.
+    tape_register_routes(raw)
+
+    return raw
+}
+
+// Stop the replay server. Future versions will also assert "every
+// tape entry got consumed" so an over-prescribed tape fails loudly.
+stop(server: ptr) {
+    http.server_stop(server)
+}
+
+// How many entries the loaded tape has. Useful for sanity-checking
+// in test setup.
+count() -> int { return tape_count() }
