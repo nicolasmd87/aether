@@ -211,432 +211,15 @@ static int tape_append(const char* method, const char* path,
 
 /* ---- Helpers --------------------------------------------------------- */
 
-/* Read a whole file into a heap buffer (NUL-terminated). Returns
- * NULL on I/O failure with g_tape_err populated. */
-static char* slurp(const char* path) {
-    FILE* fp = fopen(path, "rb");
-    if (!fp) {
-        char msg[1024];
-        snprintf(msg, sizeof(msg), "cannot open tape file: %s", path);
-        tape_set_err(msg);
-        return NULL;
-    }
-    fseek(fp, 0, SEEK_END);
-    long n = ftell(fp);
-    fseek(fp, 0, SEEK_SET);
-    if (n < 0) { fclose(fp); tape_set_err("ftell failed"); return NULL; }
-    char* buf = (char*)malloc((size_t)n + 1);
-    if (!buf) { fclose(fp); tape_set_err("OOM slurping tape"); return NULL; }
-    size_t rd = fread(buf, 1, (size_t)n, fp);
-    fclose(fp);
-    buf[rd] = '\0';
-    return buf;
-}
+/* slurp / slice_dup / rtrim deleted in the C→Aether parser port —
+ * the Aether parser uses fs.read + string.substring + an Aether
+ * rtrim() helper, none of which need C. See module.ae's
+ * parse_tape_file. */
 
-/* Allocate a copy of [start, end) — used for slicing substrings out
- * of the slurped tape buffer. */
-static char* slice_dup(const char* start, const char* end) {
-    if (!start || !end || end < start) return NULL;
-    size_t n = (size_t)(end - start);
-    char* s = (char*)malloc(n + 1);
-    if (!s) return NULL;
-    memcpy(s, start, n);
-    s[n] = '\0';
-    return s;
-}
-
-/* Trim trailing whitespace (newlines, CRs, spaces, tabs) in place. */
-static void rtrim(char* s) {
-    if (!s) return;
-    size_t n = strlen(s);
-    while (n > 0 && (s[n-1] == '\n' || s[n-1] == '\r' || s[n-1] == ' ' || s[n-1] == '\t')) {
-        s[--n] = '\0';
-    }
-}
-
-/* Find the contents of the (first) fenced code block within [start, end).
- * Returns a freshly-allocated string containing the block's body
- * (without the surrounding ``` lines), or NULL if none found. Trailing
- * newline trimmed. */
-/* Step 12: indented-code-block extractor. Markdown's alternative
- * form: each content line starts with at least 4 spaces (or 1 tab).
- * Block ends at the first line that is neither blank nor 4-space-
- * indented. Output strips the leading 4 spaces from each line.
- * Returns NULL if no indented block is detected here. */
-static char* extract_indented_block(const char* start, const char* end) {
-    /* Find first non-blank line. */
-    const char* p = start;
-    const char* block_start = NULL;
-    while (p < end) {
-        const char* nl = (const char*)memchr(p, '\n', (size_t)(end - p));
-        const char* line_end = nl ? nl : end;
-        /* Blank or whitespace-only? skip. */
-        const char* q = p;
-        while (q < line_end && (*q == ' ' || *q == '\t')) q++;
-        if (q == line_end) {
-            if (!nl) break;
-            p = nl + 1;
-            continue;
-        }
-        /* First non-blank line — must start with 4 spaces / tab to
-         * qualify as an indented code block. Otherwise no match. */
-        if ((line_end - p) >= 4 && p[0] == ' ' && p[1] == ' '
-            && p[2] == ' ' && p[3] == ' ') {
-            block_start = p;
-        } else if ((line_end - p) >= 1 && p[0] == '\t') {
-            block_start = p;
-        } else {
-            return NULL;
-        }
-        break;
-    }
-    if (!block_start) return NULL;
-
-    /* Walk forward, accumulating indented lines (with leading 4
-     * spaces / 1 tab stripped) until we hit a non-blank non-indented
-     * line or end. Trailing blank lines inside the block are kept
-     * verbatim until the dedented terminator. */
-    /* Two passes: size + copy. Simpler than realloc-grow. */
-    size_t out_cap = 0;
-    p = block_start;
-    while (p < end) {
-        const char* nl = (const char*)memchr(p, '\n', (size_t)(end - p));
-        const char* line_end = nl ? nl : end;
-        const char* q = p;
-        while (q < line_end && (*q == ' ' || *q == '\t')) q++;
-        int blank = (q == line_end);
-        int indented = ((line_end - p) >= 4 && p[0] == ' ' && p[1] == ' '
-                        && p[2] == ' ' && p[3] == ' ')
-                    || ((line_end - p) >= 1 && p[0] == '\t');
-        if (!blank && !indented) break;
-        if (indented) {
-            int strip = (p[0] == '\t') ? 1 : 4;
-            out_cap += (size_t)(line_end - p - strip) + 1;
-        } else {
-            out_cap += 1;  /* blank line → just \n */
-        }
-        if (!nl) break;
-        p = nl + 1;
-    }
-
-    char* out = (char*)malloc(out_cap + 1);
-    if (!out) return NULL;
-    char* dst = out;
-    p = block_start;
-    while (p < end) {
-        const char* nl = (const char*)memchr(p, '\n', (size_t)(end - p));
-        const char* line_end = nl ? nl : end;
-        const char* q = p;
-        while (q < line_end && (*q == ' ' || *q == '\t')) q++;
-        int blank = (q == line_end);
-        int indented = ((line_end - p) >= 4 && p[0] == ' ' && p[1] == ' '
-                        && p[2] == ' ' && p[3] == ' ')
-                    || ((line_end - p) >= 1 && p[0] == '\t');
-        if (!blank && !indented) break;
-        if (indented) {
-            int strip = (p[0] == '\t') ? 1 : 4;
-            size_t take = (size_t)(line_end - p - strip);
-            memcpy(dst, p + strip, take);
-            dst += take;
-            *dst++ = '\n';
-        } else {
-            *dst++ = '\n';
-        }
-        if (!nl) break;
-        p = nl + 1;
-    }
-    /* Trim trailing newline so output matches the fenced form, which
-     * also lacks the trailing \n before the close fence. */
-    if (dst > out && dst[-1] == '\n') dst--;
-    *dst = '\0';
-    return out;
-}
-
-static char* extract_code_block(const char* start, const char* end) {
-    /* Look for "```\n" (open fence). */
-    const char* open = start;
-    while (open < end) {
-        const char* nl = (const char*)memchr(open, '\n', (size_t)(end - open));
-        if (!nl) break;
-        /* Check whether the line starts with ``` (ignoring trailing
-         * language tag like ```xml — we don't care about the tag). */
-        if ((nl - open) >= 3 && open[0] == '`' && open[1] == '`' && open[2] == '`') {
-            const char* body_start = nl + 1;
-            /* Find the close fence: line beginning with ```. */
-            const char* p = body_start;
-            while (p < end) {
-                if ((end - p) >= 3 && p[0] == '`' && p[1] == '`' && p[2] == '`') {
-                    /* Body ends just before this line. The line
-                     * itself starts at the previous \n + 1; back
-                     * up to find that \n. */
-                    const char* body_end = p;
-                    /* Strip the newline immediately before the close fence. */
-                    if (body_end > body_start && body_end[-1] == '\n') body_end--;
-                    return slice_dup(body_start, body_end);
-                }
-                const char* next = (const char*)memchr(p, '\n', (size_t)(end - p));
-                if (!next) break;
-                p = next + 1;
-            }
-            return NULL;  /* unclosed fence */
-        }
-        /* Step 12: also accept a non-empty non-fence-prefixed line
-         * that happens to be 4-space-indented — markdown's alternative
-         * code block form. As soon as we see a non-blank line that
-         * isn't a fence, hand off to the indented-block extractor.
-         * If the first non-blank line isn't indented either, the
-         * section has no code block at all. */
-        const char* q = open;
-        while (q < nl && (*q == ' ' || *q == '\t')) q++;
-        if (q != nl) {
-            return extract_indented_block(open, end);
-        }
-        open = nl + 1;
-    }
-    return NULL;
-}
-
-/* Parse the interaction header line ("GET /path") into method + path.
- * Either the first space terminates the path, or the line ends.
- * Step 12: also tolerates markdown-emphasized verbs — *GET*, _GET_,
- * **GET**, __GET__ all reduce to GET. Playback adapts to whichever
- * form the on-disk tape uses without an explicit toggle.
- * Returns 0 on success, -1 on malformed input. */
-static int parse_interaction_header(const char* line_start, const char* line_end,
-                                    char** out_method, char** out_path) {
-    *out_method = NULL;
-    *out_path = NULL;
-    /* The interaction header is the chunk after "## Interaction N: "
-     * and up to the newline. Format: "METHOD path". */
-    const char* sp = (const char*)memchr(line_start, ' ', (size_t)(line_end - line_start));
-    if (!sp) return -1;
-    /* Strip emphasis markers around the method token. Asterisks and
-     * underscores are the two markdown-supported emphasis forms;
-     * doubling either marks strong emphasis. We just peel both ends
-     * off symmetrically — wide compatibility with whatever any
-     * Servirtium implementation emits. */
-    const char* m_start = line_start;
-    const char* m_end   = sp;
-    while (m_start < m_end
-           && (*m_start == '*' || *m_start == '_')
-           && (m_end[-1] == '*' || m_end[-1] == '_')) {
-        m_start++;
-        m_end--;
-    }
-    *out_method = slice_dup(m_start, m_end);
-    /* path runs from sp+1 to line_end (rtrim handled by caller via
-     * rtrim() on the result). */
-    *out_path = slice_dup(sp + 1, line_end);
-    if (!*out_method || !*out_path) {
-        free(*out_method); free(*out_path);
-        *out_method = *out_path = NULL;
-        return -1;
-    }
-    rtrim(*out_method);
-    rtrim(*out_path);
-    return 0;
-}
-
-/* Parse the response-body section header: "Response body recorded
- * for playback (200: text/plain):". Extracts status and content_type
- * by string-search. Returns 0 on success, -1 on malformed.
- * content_type is allocated; method is borrowed (NULL on absence). */
-static int parse_response_body_header(const char* line, int* out_status, char** out_content_type) {
-    *out_status = 0;
-    *out_content_type = NULL;
-    /* Find the (...): segment. */
-    const char* open_paren = strchr(line, '(');
-    const char* close_paren = open_paren ? strchr(open_paren, ')') : NULL;
-    if (!open_paren || !close_paren) return -1;
-    /* Inside parens: "STATUS: content/type" */
-    const char* colon = (const char*)memchr(open_paren + 1, ':', (size_t)(close_paren - open_paren - 1));
-    if (!colon) return -1;
-    *out_status = atoi(open_paren + 1);
-    /* Skip ": " then take up to close_paren. */
-    const char* ct_start = colon + 1;
-    while (ct_start < close_paren && (*ct_start == ' ' || *ct_start == '\t')) ct_start++;
-    *out_content_type = slice_dup(ct_start, close_paren);
-    return *out_content_type ? 0 : -1;
-}
-
-/* Step 10: forward decl — the parser canonicalizes the
- * request_headers blob at load time so the dispatcher can do a
- * flat strcmp later. Body lives near the dispatcher. */
-static char* normalize_recorded_headers(const char* raw);
-
-/* Parse one interaction chunk — text starting just after
- * "## Interaction N: " and ending at the start of the next
- * "## Interaction " (or end of file). */
-static int parse_interaction(const char* chunk_start, const char* chunk_end) {
-    /* The first line of the chunk is the rest of the interaction
-     * header line: "0: GET /path\n...". Skip past the "N: " prefix. */
-    const char* nl = (const char*)memchr(chunk_start, '\n', (size_t)(chunk_end - chunk_start));
-    if (!nl) { tape_set_err("interaction missing header line"); return -1; }
-    /* Skip the digits + colon + space. */
-    const char* mp_start = chunk_start;
-    while (mp_start < nl && *mp_start >= '0' && *mp_start <= '9') mp_start++;
-    if (mp_start < nl && *mp_start == ':') mp_start++;
-    while (mp_start < nl && *mp_start == ' ') mp_start++;
-
-    char* method = NULL;
-    char* path = NULL;
-    if (parse_interaction_header(mp_start, nl, &method, &path) != 0) {
-        tape_set_err("malformed interaction header");
-        return -1;
-    }
-
-    /* Rest of the chunk is sections separated by "\n### ". The
-     * response body section carries both the status (in its header
-     * line) and the body (in its code block). Step 10 also captures
-     * the request_headers / request_body sections so the dispatcher
-     * can fail loud on a request that diverges from what the tape
-     * was recorded against. Empty code blocks → empty strings →
-     * matching opt-out for that field. */
-    int status = 0;
-    char* content_type = NULL;
-    char* body = NULL;
-    char* req_headers = NULL;
-    char* req_body = NULL;
-
-    const char* p = nl + 1;
-    while (p < chunk_end) {
-        /* Find next "\n### " (or "### " right at the start of p). */
-        const char* sect = NULL;
-        if ((chunk_end - p) >= 4 && memcmp(p, "### ", 4) == 0) {
-            sect = p;
-        } else {
-            sect = strstr(p, "\n### ");
-            if (sect) sect++;  /* skip the leading \n */
-        }
-        if (!sect || sect >= chunk_end) break;
-
-        /* Section name runs from sect (which starts at "### ...") to
-         * the first \n. */
-        const char* sect_nl = (const char*)memchr(sect, '\n', (size_t)(chunk_end - sect));
-        if (!sect_nl) break;
-        const char* sect_name_start = sect + 4;  /* skip "### " */
-        size_t sect_name_len = (size_t)(sect_nl - sect_name_start);
-
-        /* Determine the section's body extent — up to the next "\n### "
-         * or chunk_end. */
-        const char* next_sect = strstr(sect_nl, "\n### ");
-        const char* sect_body_end = next_sect && next_sect < chunk_end ? next_sect : chunk_end;
-
-        if (sect_name_len > 24
-            && memcmp(sect_name_start, "Request headers recorded", 24) == 0) {
-            char* raw_hdrs = extract_code_block(sect_nl + 1, sect_body_end);
-            if (!raw_hdrs) raw_hdrs = strdup("");
-            req_headers = normalize_recorded_headers(raw_hdrs);
-            free(raw_hdrs);
-            if (!req_headers) { tape_set_err("OOM normalizing request headers"); goto fail; }
-        } else if (sect_name_len > 21
-                   && memcmp(sect_name_start, "Request body recorded", 21) == 0) {
-            req_body = extract_code_block(sect_nl + 1, sect_body_end);
-            if (!req_body) req_body = strdup("");
-        } else if (sect_name_len > 25
-                   && memcmp(sect_name_start, "Response body recorded for", 26) == 0) {
-            /* The header line carries (status: content/type). */
-            char* line = slice_dup(sect_name_start, sect_nl);
-            if (!line) { tape_set_err("OOM"); goto fail; }
-            if (parse_response_body_header(line, &status, &content_type) != 0) {
-                free(line);
-                tape_set_err("malformed response body header");
-                goto fail;
-            }
-            free(line);
-            /* Body is the contents of the fenced code block in the
-             * remainder of this section. */
-            body = extract_code_block(sect_nl + 1, sect_body_end);
-            if (!body) {
-                tape_set_err("response body section has no fenced code block");
-                goto fail;
-            }
-        }
-        /* Response headers section is intentionally still parse-and-drop:
-         * the response header echo is a separate roadmap step. */
-
-        p = sect_body_end;
-    }
-
-    if (status == 0) {
-        tape_set_err("interaction has no Response body section");
-        goto fail;
-    }
-    /* Empty fields are legal — they encode "no constraint" for
-     * the dispatcher. */
-    if (!body) body = strdup("");
-    if (!req_headers) req_headers = strdup("");
-    if (!req_body) req_body = strdup("");
-
-    if (tape_append(method, path, status, body, content_type, req_headers, req_body) != 0) {
-        tape_set_err("OOM appending interaction");
-        goto fail;
-    }
-
-    free(method); free(path); free(body); free(content_type);
-    free(req_headers); free(req_body);
-    return 0;
-
-fail:
-    free(method); free(path); free(body); free(content_type);
-    free(req_headers); free(req_body);
-    return -1;
-}
-
-/* ---- Forward decl ---------------------------------------------------- */
-
+/* Forward decl for the dispatcher — referenced by vcr_register_routes
+ * below and by the static-mount route registration. Body lives further
+ * down (after the request-normalization helpers). */
 void vcr_dispatch(void* req, void* res, void* ud);
-
-
-/* ---- Aether-side externs -------------------------------------------- */
-
-int vcr_load_tape(const char* path) {
-    if (!path) { tape_set_err("null tape path"); return 0; }
-    tape_free_storage();
-    g_tape_err = strdup("");
-
-    char* buf = slurp(path);
-    if (!buf) return 0;  /* g_tape_err already set */
-
-    /* Split on "\n## Interaction " to get N chunks. The first chunk
-     * (before any "## Interaction ") is the file's preamble (could be
-     * a top-level title, a description, anything) — we discard it. */
-    const char* p = buf;
-    const char* DELIM = "\n## Interaction ";
-    const size_t DELIM_LEN = strlen(DELIM);
-
-    /* Special case: tape starts with "## Interaction " on the very
-     * first line (no preceding newline). Look for that explicitly. */
-    if (strncmp(buf, "## Interaction ", 15) == 0) {
-        p = buf + 15;
-    } else {
-        const char* first = strstr(buf, DELIM);
-        if (!first) {
-            tape_set_err("tape contains no '## Interaction ' headers");
-            free(buf);
-            return 0;
-        }
-        p = first + DELIM_LEN;
-    }
-
-    while (p < buf + strlen(buf)) {
-        const char* next = strstr(p, DELIM);
-        const char* chunk_end = next ? next : (buf + strlen(buf));
-        if (parse_interaction(p, chunk_end) != 0) {
-            free(buf);
-            return 0;  /* g_tape_err already set */
-        }
-        if (!next) break;
-        p = next + DELIM_LEN;
-    }
-
-    free(buf);
-    if (g_tape_n == 0) {
-        tape_set_err("tape parsed but yielded zero interactions");
-        return 0;
-    }
-    return 1;
-}
 
 const char* vcr_load_err(void) {
     return g_tape_err ? g_tape_err : "";
@@ -1071,86 +654,6 @@ static int line_cmp(const void* lhs, const void* rhs) {
     return icmp(a, b);
 }
 
-/* Normalize a multi-line "Name: Value\n..." blob (as it appears in
- * a tape's request-headers code block) into the same canonical
- * form normalize_live_headers() produces: per-line "Name: Value",
- * sorted ascending by name (case-insensitive), Host stripped.
- *
- * Called on `req_headers` at parse time so the dispatcher can do
- * a flat strcmp later. Returns malloc'd blob the caller frees,
- * or NULL on OOM. Empty input → empty output. */
-static char* normalize_recorded_headers(const char* raw) {
-    if (!raw || !*raw) return strdup("");
-
-    /* First pass: count lines so we can size the array. */
-    int line_cap = 0;
-    for (const char* p = raw; *p; p++) if (*p == '\n') line_cap++;
-    line_cap += 2;  /* room for last line + slack */
-
-    char** lines = (char**)calloc((size_t)line_cap, sizeof(char*));
-    if (!lines) return NULL;
-    int n_lines = 0;
-
-    const char* p = raw;
-    while (*p) {
-        const char* end = strchr(p, '\n');
-        if (!end) end = p + strlen(p);
-        /* Trim trailing CR. */
-        const char* line_end = end;
-        if (line_end > p && line_end[-1] == '\r') line_end--;
-        size_t len = (size_t)(line_end - p);
-        if (len > 0) {
-            /* Skip Host header. */
-            int is_host = 0;
-            if (len >= 4) {
-                /* Host[: ] — match "Host" up to ':'. */
-                int hi = 0;
-                while (hi < (int)len && p[hi] != ':') hi++;
-                if (hi == 4) {
-                    char nm[5];
-                    for (int k = 0; k < 4; k++) nm[k] = p[k];
-                    nm[4] = '\0';
-                    if (icmp(nm, "Host") == 0) is_host = 1;
-                }
-            }
-            if (!is_host) {
-                char* dup = (char*)malloc(len + 1);
-                if (!dup) {
-                    for (int k = 0; k < n_lines; k++) free(lines[k]);
-                    free(lines);
-                    return NULL;
-                }
-                memcpy(dup, p, len);
-                dup[len] = '\0';
-                lines[n_lines++] = dup;
-            }
-        }
-        if (!*end) break;
-        p = end + 1;
-    }
-
-    qsort(lines, (size_t)n_lines, sizeof(char*), line_cmp);
-
-    size_t total = 0;
-    for (int i = 0; i < n_lines; i++) total += strlen(lines[i]) + 1;
-    char* out = (char*)malloc(total + 1);
-    if (!out) {
-        for (int i = 0; i < n_lines; i++) free(lines[i]);
-        free(lines);
-        return NULL;
-    }
-    char* dst = out;
-    for (int i = 0; i < n_lines; i++) {
-        size_t l = strlen(lines[i]);
-        memcpy(dst, lines[i], l);
-        dst[l] = '\n';
-        dst += l + 1;
-        free(lines[i]);
-    }
-    *dst = '\0';
-    free(lines);
-    return out;
-}
 
 /* Build the canonical "Name: Value\n..." blob from an
  * HttpRequest's parallel keys/values arrays. Drops Host.
@@ -1473,6 +976,61 @@ const char* vcr_get_note_body(int i) {
  * which markdown form to emit. */
 int vcr_get_indent_code_blocks(void)   { return g_indent_code_blocks; }
 int vcr_get_emphasize_http_verbs(void) { return g_emphasize_http_verbs; }
+
+/* ---- Tape setters (Aether-side parser populates the tape via these) ----
+ *
+ * The parser is being ported to Aether. These setters let the Aether
+ * code build up the in-memory tape without crossing the struct
+ * boundary. Single all-fields setter avoids per-field setters
+ * (which would need a "current interaction" cursor). Empty strings
+ * for absent fields — the existing tape_append takes "" the same
+ * way and the dispatcher skips matching when fields are empty.
+ *
+ * vcr_aether_clear_tape resets storage so the parser can rebuild
+ * cleanly; it's the equivalent of what vcr_load_tape does at the
+ * top of its body before parsing. */
+void vcr_aether_clear_tape(void) {
+    tape_free_storage();
+    /* vcr_load_tape sets g_tape_err to "" so vcr_load_err returns
+     * an empty string when called between a successful load and
+     * the next parse failure. Mirror that behavior here. */
+    g_tape_err = strdup("");
+}
+
+int vcr_aether_append_interaction(const char* method, const char* path,
+                                  int status, const char* content_type,
+                                  const char* body,
+                                  const char* req_headers, const char* req_body,
+                                  const char* note_title, const char* note_body) {
+    /* The pending-note slot (used by record-mode) must NOT be
+     * drained by the parser — loaded tapes carry their own per-
+     * interaction notes. We stage the note pair into the slot
+     * directly so tape_append's drain logic places it on the
+     * about-to-be-appended interaction. */
+    if (note_title && *note_title) {
+        free(g_pending_note_title);
+        free(g_pending_note_body);
+        g_pending_note_title = strdup(note_title);
+        g_pending_note_body  = strdup(note_body ? note_body : "");
+    }
+    /* Empty content_type → store NULL so the dispatcher's existing
+     * "if (e->content_type)" branch behaves correctly. */
+    const char* ct = (content_type && *content_type) ? content_type : NULL;
+    if (tape_append(method, path, status, body, ct,
+                    req_headers ? req_headers : "",
+                    req_body    ? req_body    : "") != 0) {
+        tape_set_err("OOM appending parsed interaction");
+        return 0;
+    }
+    return 1;
+}
+
+/* Set the load error string. Aether parser calls this when it
+ * detects a malformed tape so vcr.load_err() surfaces a useful
+ * diagnostic. */
+void vcr_aether_set_load_err(const char* msg) {
+    tape_set_err(msg ? msg : "");
+}
 
 /* Redaction iteration — the Aether emitter applies redactions
  * before writing path / response-body fields. */

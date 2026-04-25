@@ -107,8 +107,10 @@ import std.string
 
 // ---- Externs into the C-side parser + dispatcher ----
 
-extern vcr_load_tape(tape_path: string) -> int       // 1 ok, 0 fail
-extern vcr_load_err() -> string                       // populated when vcr_load_tape returns 0
+// vcr_load_tape removed in the C→Aether parser port. The Aether
+// parse_tape_file now reads + parses, calling vcr_aether_*
+// setters to populate the C-side tape storage.
+extern vcr_load_err() -> string                       // populated by vcr_aether_set_load_err on parse failure
 extern vcr_tape_length() -> int
 extern vcr_dispatch(req: ptr, res: ptr, ud: ptr)     // server handler — matches next entry, emits response
 extern vcr_register_routes(server: ptr)               // walks tape and calls server_get for each unique path
@@ -167,6 +169,15 @@ extern vcr_get_redaction_field(i: int) -> int
 extern vcr_get_redaction_pattern(i: int) -> string
 extern vcr_get_redaction_replacement(i: int) -> string
 
+// Setters used by the Aether-side parser to populate the tape.
+// Inverse of the get_* accessors. Single all-fields setter rather
+// than per-field setters so we don't need a "current interaction"
+// cursor — each call appends one new interaction with everything
+// pre-filled.
+extern vcr_aether_clear_tape()
+extern vcr_aether_append_interaction(method: string, path: string, status: int, content_type: string, body: string, req_headers: string, req_body: string, note_title: string, note_body: string) -> int
+extern vcr_aether_set_load_err(msg: string)
+
 // Direct concat extern — interpolation recycles a backing buffer
 // and corrupts when the same `out` variable is rebuilt many times
 // in sequence (the kind of pattern a markdown-emitter hammers).
@@ -192,10 +203,12 @@ extern string_concat(a: string, b: string) -> string
 // Returns null on tape parse failure or port-bind failure; the
 // reason is printed via println before the null return.
 load(tape_path: string, port: int) -> ptr {
-    ok = vcr_load_tape(tape_path)
-    if ok == 0 {
-        e = vcr_load_err()
-        println("vcr.load: ${e}")
+    // Aether-side parser. The pre-port C parser (still shipped as
+    // vcr_load_tape) is unused by this surface but retained as a
+    // fallback for the duration of the C→Aether migration.
+    perr = parse_tape_file(tape_path)
+    if perr != "" {
+        println("vcr.load: ${perr}")
         return null
     }
 
@@ -205,9 +218,9 @@ load(tape_path: string, port: int) -> ptr {
         return null
     }
 
-    // v0.1: only GET. Each unique path in the tape gets registered
-    // with the routing layer; the dispatcher then matches on
-    // (method, path) and emits the recorded response.
+    // Each unique path in the tape gets registered with the routing
+    // layer; the dispatcher then matches on (method, path) and emits
+    // the recorded response.
     vcr_register_routes(raw)
 
     return raw
@@ -674,4 +687,467 @@ emit_tape() -> string {
         i = i + 1
     }
     return out
+}
+
+// ---- Aether-side tape parser ---------------------------------------
+//
+// Ported from the C-side parse_interaction / parse_interaction_header /
+// parse_response_body_header / extract_code_block / extract_indented_block
+// / normalize_recorded_headers / vcr_load_tape. All pure string slicing
+// + dispatch — nothing here needs C, it just happened to start there.
+// Storage stays in C (see Interaction struct + g_tape); this code calls
+// the vcr_aether_append_interaction setter to populate it.
+//
+// The parser must accept tapes recorded by any Servirtium implementation
+// (Java, Kotlin, Python, Go, ...) — interop is the entire point of the
+// canonical markdown format. Both fenced (```) and indented (4-space)
+// code blocks are handled; emphasized HTTP verbs (*GET*, _GET_) are
+// unwrapped; method+path matching is strict but headers/body matching
+// is opt-in (empty fields = "no constraint").
+
+// Find the next occurrence of `needle` in `haystack` starting at
+// `from`, but only if it's at the start of a line (i.e. preceded
+// by '\n' or it's at index 0). Returns -1 if not found.
+find_at_line_start(haystack: string, needle: string, from: int) -> int {
+    cursor = from
+    h_len = string.length(haystack)
+    while cursor <= h_len {
+        idx = string.index_of_from(haystack, needle, cursor)
+        if idx < 0 { return -1 }
+        if idx == 0 { return idx }
+        prev = string.char_at(haystack, idx - 1)
+        if prev == 10 { return idx }  // 10 == '\n'
+        cursor = idx + 1
+    }
+    return -1
+}
+
+// Trim trailing whitespace (spaces, tabs, CR, LF) from `s`.
+rtrim(s: string) -> string {
+    n = string.length(s)
+    while n > 0 {
+        c = string.char_at(s, n - 1)
+        if c != 32 && c != 9 && c != 10 && c != 13 { return string.substring(s, 0, n) }
+        n = n - 1
+    }
+    return ""
+}
+
+// Extract the body of a fenced or indented code block starting at
+// `from` and ending no later than `to`. Returns ("", -1) if no block
+// could be parsed; otherwise (body, end_index) where end_index is
+// the position just past the close fence (or just past the last
+// indented line for the indented form).
+//
+// Mirrors the C extract_code_block which falls through to
+// extract_indented_block when no triple-backtick fence is found
+// at the next non-blank line.
+extract_code_block_at(src: string, from: int, to: int) -> {
+    src_len = to
+    cursor = from
+
+    // Skip blank lines (lines containing only whitespace).
+    while cursor < src_len {
+        nl_idx = string.index_of_from(src, "\n", cursor)
+        line_end = src_len
+        if nl_idx >= 0 {
+            if nl_idx < src_len { line_end = nl_idx } else { line_end = src_len }
+        }
+        line = string.substring(src, cursor, line_end)
+        trimmed = rtrim(line)
+        // Empty? skip.
+        if string.length(trimmed) == 0 {
+            if nl_idx < 0 { return "", -1 }
+            cursor = nl_idx + 1
+            continue
+        }
+        // Triple-backtick fence?
+        if string.starts_with(trimmed, "```") == 1 {
+            // Body starts on the next line; close fence is the next
+            // line that starts with "```".
+            if nl_idx < 0 { return "", -1 }
+            body_start = nl_idx + 1
+            close_idx = find_at_line_start(src, "```", body_start)
+            if close_idx < 0 || close_idx >= src_len { return "", -1 }
+            // Trim a single trailing \n before the close fence to
+            // match the C behavior (the body's own trailing \n is
+            // consumed by the close-fence line break).
+            body_end = close_idx
+            if body_end > body_start {
+                last = string.char_at(src, body_end - 1)
+                if last == 10 { body_end = body_end - 1 }
+            }
+            body = string.substring(src, body_start, body_end)
+            // Find end of the close-fence line.
+            close_line_end = string.index_of_from(src, "\n", close_idx)
+            if close_line_end < 0 { close_line_end = src_len }
+            else { close_line_end = close_line_end + 1 }
+            return body, close_line_end
+        }
+        // Not a fence — try indented form. First non-blank line must
+        // start with 4 spaces or a tab to qualify.
+        first_char = string.char_at(src, cursor)
+        if first_char == 9 {
+            return extract_indented_at(src, cursor, src_len)
+        }
+        if cursor + 4 <= src_len {
+            c0 = string.char_at(src, cursor)
+            c1 = string.char_at(src, cursor + 1)
+            c2 = string.char_at(src, cursor + 2)
+            c3 = string.char_at(src, cursor + 3)
+            if c0 == 32 && c1 == 32 && c2 == 32 && c3 == 32 {
+                return extract_indented_at(src, cursor, src_len)
+            }
+        }
+        // Neither form — section has no code block.
+        return "", -1
+    }
+    return "", -1
+}
+
+// Extract an indented code block starting at `from`. Body lines
+// are 4-space-indented (or 1-tab); blank lines are kept verbatim;
+// block ends at the first non-blank non-indented line.
+extract_indented_at(src: string, from: int, to: int) -> {
+    out = string.copy("")
+    cursor = from
+    end_pos = from
+    while cursor < to {
+        nl_idx = string.index_of_from(src, "\n", cursor)
+        line_end = to
+        if nl_idx >= 0 && nl_idx < to { line_end = nl_idx }
+        // Determine indented / blank / dedented.
+        indented = 0
+        is_blank = 0
+        // Check blank: only ws between cursor and line_end.
+        ws_only = 1
+        scan = cursor
+        while scan < line_end {
+            c = string.char_at(src, scan)
+            if c != 32 && c != 9 { ws_only = 0; scan = line_end ; break }
+            scan = scan + 1
+        }
+        if ws_only == 1 { is_blank = 1 }
+        // Check indented.
+        if line_end - cursor >= 1 {
+            first = string.char_at(src, cursor)
+            if first == 9 { indented = 1 }
+        }
+        if line_end - cursor >= 4 && indented == 0 {
+            c0 = string.char_at(src, cursor)
+            c1 = string.char_at(src, cursor + 1)
+            c2 = string.char_at(src, cursor + 2)
+            c3 = string.char_at(src, cursor + 3)
+            if c0 == 32 && c1 == 32 && c2 == 32 && c3 == 32 { indented = 1 }
+        }
+        if is_blank == 0 && indented == 0 { break }
+        if indented == 1 {
+            // Strip leading 4 spaces or 1 tab.
+            strip_n = 4
+            if string.char_at(src, cursor) == 9 { strip_n = 1 }
+            line = string.substring(src, cursor + strip_n, line_end)
+            out = string_concat(out, line)
+            out = string_concat(out, "\n")
+        } else {
+            // Blank line.
+            out = string_concat(out, "\n")
+        }
+        if nl_idx < 0 { end_pos = to ; break }
+        end_pos = nl_idx + 1
+        cursor = nl_idx + 1
+    }
+    // Trim trailing \n to match the fenced form.
+    out_len = string.length(out)
+    if out_len > 0 && string.char_at(out, out_len - 1) == 10 {
+        out = string.substring(out, 0, out_len - 1)
+    }
+    return out, end_pos
+}
+
+// Parse the interaction-header "tail" — the chunk after "## Interaction N: ".
+// Returns (method, path, ok). Method has any wrapping * / _ stripped.
+parse_interaction_header_aether(line: string) -> {
+    line_t = rtrim(line)
+    sp_idx = string.index_of(line_t, " ")
+    if sp_idx < 0 { return "", "", 0 }
+    raw_method = string.substring(line_t, 0, sp_idx)
+    path = string.substring(line_t, sp_idx + 1, string.length(line_t))
+    // Strip emphasis markers from method.
+    ml = string.length(raw_method)
+    while ml >= 2 {
+        first = string.char_at(raw_method, 0)
+        last  = string.char_at(raw_method, ml - 1)
+        f_emph = first == 42 || first == 95   // * or _
+        l_emph = last  == 42 || last  == 95
+        if f_emph != 1 || l_emph != 1 { break }
+        raw_method = string.substring(raw_method, 1, ml - 1)
+        ml = ml - 2
+    }
+    return raw_method, path, 1
+}
+
+// Parse "(N: content/type)" out of "Response body recorded for playback (200: text/plain)".
+// Returns (status, content_type, ok).
+parse_response_body_header_aether(line: string) -> {
+    open_idx = string.index_of(line, "(")
+    if open_idx < 0 { return 0, "", 0 }
+    close_idx = string.index_of_from(line, ")", open_idx)
+    if close_idx < 0 { return 0, "", 0 }
+    inside = string.substring(line, open_idx + 1, close_idx)
+    colon_idx = string.index_of(inside, ":")
+    if colon_idx < 0 { return 0, "", 0 }
+    status_str = string.substring(inside, 0, colon_idx)
+    status, serr = string.to_int(status_str)
+    if serr != "" { return 0, "", 0 }
+    ct = string.substring(inside, colon_idx + 1, string.length(inside))
+    // Trim leading whitespace from ct.
+    ctl = string.length(ct)
+    pos = 0
+    while pos < ctl {
+        c = string.char_at(ct, pos)
+        if c != 32 && c != 9 { break }
+        pos = pos + 1
+    }
+    ct = string.substring(ct, pos, ctl)
+    return status, ct, 1
+}
+
+// Lowercase ASCII compare. -1 / 0 / 1.
+icmp_aether(a: string, b: string) -> int {
+    al = string.length(a)
+    bl = string.length(b)
+    i = 0
+    minl = al
+    if bl < minl { minl = bl }
+    while i < minl {
+        ca = string.char_at(a, i)
+        cb = string.char_at(b, i)
+        if ca >= 65 && ca <= 90 { ca = ca + 32 }
+        if cb >= 65 && cb <= 90 { cb = cb + 32 }
+        if ca != cb {
+            if ca < cb { return -1 }
+            return 1
+        }
+        i = i + 1
+    }
+    if al < bl { return -1 }
+    if al > bl { return 1 }
+    return 0
+}
+
+// Insertion sort lines in a "Name: Value\n..." blob, case-insensitively.
+// The line count is always tiny (<20 in practice for HTTP headers) so
+// the O(n²) cost is irrelevant; insertion sort is the simplest thing.
+//
+// Algorithm: extract lines into a parallel pair of arrays (heap-
+// allocated) of (string-content, sort-key); insertion-sort by key;
+// rejoin with \n. We avoid std.list because boxing strings as ptrs
+// adds friction with no benefit at this size.
+sort_lines(blob: string) -> string {
+    if string.length(blob) == 0 { return blob }
+    // Step 1: split into lines + drop empties. We rebuild as a
+    // \n-joined string after sort, so just collect into a single
+    // sorted-as-we-go output (insertion sort directly on the
+    // accumulated form).
+    out = string.copy("")
+    cursor = 0
+    blob_len = string.length(blob)
+    while cursor < blob_len {
+        nl_idx = string.index_of_from(blob, "\n", cursor)
+        line_end = blob_len
+        if nl_idx >= 0 { line_end = nl_idx }
+        line = string.substring(blob, cursor, line_end)
+        if string.length(line) > 0 {
+            // Insert `line` into `out` (which is already \n-terminated
+            // sorted lines) at the right position.
+            ins_pos = 0
+            o_len = string.length(out)
+            while ins_pos < o_len {
+                nl2 = string.index_of_from(out, "\n", ins_pos)
+                exists_end = o_len
+                if nl2 >= 0 { exists_end = nl2 }
+                exists = string.substring(out, ins_pos, exists_end)
+                if icmp_aether(exists, line) > 0 { break }
+                if nl2 < 0 { ins_pos = o_len ; break }
+                ins_pos = nl2 + 1
+            }
+            // Build new out: prefix + line + "\n" + suffix.
+            prefix = string.substring(out, 0, ins_pos)
+            suffix = string.substring(out, ins_pos, o_len)
+            out = string_concat(prefix, line)
+            out = string_concat(out, "\n")
+            out = string_concat(out, suffix)
+        }
+        if nl_idx < 0 { break }
+        cursor = nl_idx + 1
+    }
+    return out
+}
+
+// Strip Host header from a "Name: Value\n..." blob, then sort.
+// Mirrors the C normalize_recorded_headers used at parse time.
+normalize_recorded_headers(raw: string) -> string {
+    if string.length(raw) == 0 { return string.copy("") }
+    // Walk lines; drop Host:; collect rest into a blob.
+    out = string.copy("")
+    cursor = 0
+    rl = string.length(raw)
+    while cursor < rl {
+        nl_idx = string.index_of_from(raw, "\n", cursor)
+        line_end = rl
+        if nl_idx >= 0 { line_end = nl_idx }
+        line = string.substring(raw, cursor, line_end)
+        // Trim trailing CR.
+        line_t_len = string.length(line)
+        if line_t_len > 0 && string.char_at(line, line_t_len - 1) == 13 {
+            line = string.substring(line, 0, line_t_len - 1)
+        }
+        // Drop empty lines and Host: ...
+        keep = 1
+        if string.length(line) == 0 { keep = 0 }
+        if keep == 1 {
+            colon_idx = string.index_of(line, ":")
+            if colon_idx > 0 {
+                name = string.substring(line, 0, colon_idx)
+                if icmp_aether(name, "Host") == 0 { keep = 0 }
+            }
+        }
+        if keep == 1 {
+            out = string_concat(out, line)
+            out = string_concat(out, "\n")
+        }
+        if nl_idx < 0 { break }
+        cursor = nl_idx + 1
+    }
+    return sort_lines(out)
+}
+
+// Parse one interaction chunk — text starting just after "## Interaction N: "
+// and ending at the start of the next "## Interaction " (or end of file).
+// On success, calls vcr_aether_append_interaction. Returns "" on
+// success, error string otherwise.
+parse_one_interaction(chunk: string) -> string {
+    chunk_len = string.length(chunk)
+    nl_idx = string.index_of(chunk, "\n")
+    if nl_idx < 0 { return "interaction missing header line" }
+
+    // Skip the leading "N: " digits + colon + space.
+    cursor = 0
+    while cursor < nl_idx {
+        c = string.char_at(chunk, cursor)
+        if c < 48 || c > 57 { break }   // 0-9
+        cursor = cursor + 1
+    }
+    if cursor < nl_idx && string.char_at(chunk, cursor) == 58 { cursor = cursor + 1 }
+    while cursor < nl_idx && string.char_at(chunk, cursor) == 32 { cursor = cursor + 1 }
+
+    header_line = string.substring(chunk, cursor, nl_idx)
+    method, path, hok = parse_interaction_header_aether(header_line)
+    if hok != 1 { return "malformed interaction header" }
+
+    // Walk ### sections.
+    status = 0
+    ctype = ""
+    body = ""
+    req_h = ""
+    req_b = ""
+
+    // Cursor for section walk starts at first byte after the heading line.
+    p = nl_idx + 1
+    while p < chunk_len {
+        // Find the next "### " at line start (or right at p).
+        sect_idx = -1
+        if p + 4 <= chunk_len {
+            head = string.substring(chunk, p, p + 4)
+            if head == "### " { sect_idx = p }
+        }
+        if sect_idx < 0 {
+            sect_idx = find_at_line_start(chunk, "### ", p)
+        }
+        if sect_idx < 0 { break }
+        if sect_idx >= chunk_len { break }
+
+        // Section header line: from sect_idx+4 to next \n.
+        sect_nl = string.index_of_from(chunk, "\n", sect_idx)
+        if sect_nl < 0 { break }
+        sect_name_start = sect_idx + 4
+        sect_name = string.substring(chunk, sect_name_start, sect_nl)
+
+        // Find next "### " at line start to bound this section's body.
+        next_sect = find_at_line_start(chunk, "### ", sect_nl + 1)
+        sect_body_end = chunk_len
+        if next_sect >= 0 && next_sect < chunk_len { sect_body_end = next_sect }
+
+        // Dispatch on section name prefix.
+        if string.starts_with(sect_name, "Request headers recorded") == 1 {
+            block, _ = extract_code_block_at(chunk, sect_nl + 1, sect_body_end)
+            if string.length(block) > 0 {
+                req_h = normalize_recorded_headers(block)
+            }
+        } else if string.starts_with(sect_name, "Request body recorded") == 1 {
+            block, _ = extract_code_block_at(chunk, sect_nl + 1, sect_body_end)
+            req_b = string.copy(block)
+        } else if string.starts_with(sect_name, "Response body recorded") == 1 {
+            st, ct, ok = parse_response_body_header_aether(sect_name)
+            if ok != 1 { return "malformed response body header" }
+            status = st
+            ctype = string.copy(ct)
+            block, _ = extract_code_block_at(chunk, sect_nl + 1, sect_body_end)
+            body = string.copy(block)
+        }
+        // Response headers section is parse-and-drop (we already
+        // extract content_type from the response-body header line).
+
+        p = sect_body_end
+    }
+
+    if status == 0 { return "interaction has no Response body section" }
+
+    // Append. note_title="" → setter doesn't stage a note.
+    ok = vcr_aether_append_interaction(method, path, status, ctype, body, req_h, req_b, "", "")
+    if ok == 0 { return "OOM appending parsed interaction" }
+    return ""
+}
+
+// Top-level parser — reads the tape file via fs.read, splits into
+// interaction chunks, dispatches each. Returns "" on success or an
+// error message.
+parse_tape_file(tape_path: string) -> string {
+    contents, rerr = fs.read(tape_path)
+    if rerr != "" { return rerr }
+    vcr_aether_clear_tape()
+
+    delim = "\n## Interaction "
+    cursor = 0
+    n = string.length(contents)
+
+    // Special case: file starts with "## Interaction " on the first line.
+    first_chunk_start = -1
+    if n >= 15 && string.starts_with(contents, "## Interaction ") == 1 {
+        first_chunk_start = 15
+    } else {
+        d = string.index_of(contents, delim)
+        if d < 0 { return "tape contains no '## Interaction ' headers" }
+        first_chunk_start = d + string.length(delim)
+    }
+
+    cursor = first_chunk_start
+    while cursor < n {
+        next_idx = string.index_of_from(contents, delim, cursor)
+        chunk_end = n
+        if next_idx >= 0 { chunk_end = next_idx }
+        chunk = string.substring(contents, cursor, chunk_end)
+        err = parse_one_interaction(chunk)
+        if err != "" {
+            vcr_aether_set_load_err(err)
+            return err
+        }
+        if next_idx < 0 { break }
+        cursor = next_idx + string.length(delim)
+    }
+
+    if vcr_get_tape_count() == 0 {
+        return "tape parsed but yielded zero interactions"
+    }
+    return ""
 }
