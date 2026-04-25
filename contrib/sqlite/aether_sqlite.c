@@ -1,6 +1,6 @@
 /* contrib/sqlite — thin SQLite veneer for Aether.
  *
- * v1 exposes four functions:
+ * v1 surface (still present, unchanged):
  *   sqlite_open_raw(path)            -> sqlite3*
  *   sqlite_close_raw(db)             -> int (1 on success)
  *   sqlite_exec_raw(db, sql)         -> const char*  (NULL on success, error text on failure)
@@ -11,20 +11,42 @@
  *   sqlite_rs_cell(rs, row, col)     -> const char*  ("" if NULL in the DB)
  *   sqlite_rs_free(rs)               -> void
  *
+ * v2 surface (additive — prepared statements + parameter binding):
+ *   sqlite_prepare_raw(db, sql)              -> sqlite3_stmt*  (NULL on parse error)
+ *   sqlite_bind_int_raw(stmt, idx, v)        -> int rc
+ *   sqlite_bind_text_raw(stmt, idx, text)    -> int rc         (uses SQLITE_TRANSIENT)
+ *   sqlite_bind_blob_raw(stmt, idx, data, n) -> int rc         (uses SQLITE_TRANSIENT)
+ *   sqlite_bind_i64_raw(stmt, idx, hi, lo)   -> int rc         (split for Aether int width)
+ *   sqlite_bind_null_raw(stmt, idx)          -> int rc
+ *   sqlite_step_raw(stmt)                    -> int rc         (100=ROW, 101=DONE)
+ *   sqlite_column_int_raw(stmt, col)         -> int
+ *   sqlite_column_i64_hi_raw(stmt, col)      -> int            (top 32 bits, sign-preserving)
+ *   sqlite_column_i64_lo_raw(stmt, col)      -> int            (bottom 32 bits, unsigned)
+ *   sqlite_column_text_raw(stmt, col)        -> const char*    (always non-NULL; "" for SQL NULL)
+ *   sqlite_try_column_blob(stmt, col)        -> int            (1 on success, 0 on NULL/OOB)
+ *   sqlite_get_blob_bytes()                  -> const char*    (TLS slot from last try_)
+ *   sqlite_get_blob_length()                 -> int
+ *   sqlite_release_blob()                    -> void           (free early; otherwise next try_ frees)
+ *   sqlite_reset_raw(stmt)                   -> int rc
+ *   sqlite_finalize_raw(stmt)                -> int rc
+ *   sqlite_changes_raw(db)                   -> int
+ *   sqlite_errmsg_raw(db)                    -> const char*    (always non-NULL)
+ *
  * This is deliberately a C-only dependency — user programs link
  * -lsqlite3 via aether.toml's `[build] link_flags`. Bundling the
  * 4 MiB amalgamation in contrib/ would defeat the point of having
  * moved sqlite to contrib/ in the first place (see
  * docs/stdlib-vs-contrib.md).
  *
- * Parameter binding is deliberately out of scope for v1 — users
- * who need it should either wait for a future API add, or use the
- * extern interface with sqlite3_prepare_v2 / sqlite3_bind_* / step
- * directly. The string-concat path is fine for DDL and for
- * trusted-input INSERT/SELECT.
+ * Streaming row iteration is still out of scope for this version —
+ * tracked as v3 in sqlite-improvement-plan.md. The v2 primitives
+ * here (`prepare` + `step` + `column_*` + `finalize`) are sufficient
+ * to write the streaming loop in pure Aether; a sugar helper for it
+ * is additive future work.
  */
 
 #include <sqlite3.h>
+#include <stdint.h>   /* uint32_t / int32_t for sqlite_bind_i64_raw split */
 #include <stdlib.h>
 #include <string.h>
 
@@ -206,4 +228,204 @@ void sqlite_rs_free(void* rs_opaque) {
         free(rs->cells);
     }
     free(rs);
+}
+
+/* =================================================================
+ * v2: prepared statements + parameter binding
+ * ================================================================= */
+
+/* sqlite3_prepare_v2 returns NULL stmt on parse error. The caller's
+ * Aether wrapper reads sqlite_errmsg_raw(db) for the message — the
+ * error is recorded on the db handle, not the (NULL) statement. */
+void* sqlite_prepare_raw(void* db, const char* sql) {
+    const char* s = sq_str(sql);
+    if (!db || !s) return NULL;
+    sqlite3_stmt* stmt = NULL;
+    int rc = sqlite3_prepare_v2((sqlite3*)db, s, -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        if (stmt) sqlite3_finalize(stmt);
+        return NULL;
+    }
+    return (void*)stmt;
+}
+
+int sqlite_bind_int_raw(void* stmt, int idx, int v) {
+    if (!stmt) return SQLITE_MISUSE;
+    return sqlite3_bind_int((sqlite3_stmt*)stmt, idx, v);
+}
+
+/* SQLITE_TRANSIENT tells SQLite to copy the data immediately — the
+ * caller can free its buffer right after the bind returns. The plan
+ * doc calls this out explicitly: load-bearing for short-lived strings
+ * inside loops. */
+int sqlite_bind_text_raw(void* stmt, int idx, const char* text) {
+    if (!stmt) return SQLITE_MISUSE;
+    if (!text) return sqlite3_bind_null((sqlite3_stmt*)stmt, idx);
+    const char* unwrapped;
+    int len;
+    if (is_aether_string(text)) {
+        const AetherString* as = (const AetherString*)text;
+        unwrapped = as->data;
+        len = (int)as->length;
+    } else {
+        unwrapped = text;
+        len = -1;  /* SQLite measures via strlen */
+    }
+    return sqlite3_bind_text((sqlite3_stmt*)stmt, idx, unwrapped, len, SQLITE_TRANSIENT);
+}
+
+/* Blob bind: explicit length (binary-safe, embedded NULs OK). data
+ * may be an AetherString or a plain char*; the AetherString path
+ * lets callers feed in fs.read_binary output directly. */
+int sqlite_bind_blob_raw(void* stmt, int idx, const char* data, int len) {
+    if (!stmt) return SQLITE_MISUSE;
+    if (len < 0) return SQLITE_MISUSE;
+    if (len == 0) {
+        return sqlite3_bind_zeroblob((sqlite3_stmt*)stmt, idx, 0);
+    }
+    const char* bytes;
+    if (is_aether_string(data)) {
+        bytes = ((const AetherString*)data)->data;
+    } else {
+        bytes = data;
+    }
+    if (!bytes) return SQLITE_MISUSE;
+    return sqlite3_bind_blob((sqlite3_stmt*)stmt, idx, bytes, len, SQLITE_TRANSIENT);
+}
+
+/* 64-bit int bind: split as (hi, lo) because Aether's `int` width
+ * isn't guaranteed 64-bit (32-bit on MSVC; the std.string.from_long
+ * pair already uses this idiom). hi is signed (carries the sign
+ * bit), lo is treated as unsigned 32-bit when reassembling. */
+int sqlite_bind_i64_raw(void* stmt, int idx, int hi, int lo) {
+    if (!stmt) return SQLITE_MISUSE;
+    sqlite3_int64 v = ((sqlite3_int64)(int32_t)hi << 32)
+                    | ((sqlite3_int64)(uint32_t)lo);
+    return sqlite3_bind_int64((sqlite3_stmt*)stmt, idx, v);
+}
+
+int sqlite_bind_null_raw(void* stmt, int idx) {
+    if (!stmt) return SQLITE_MISUSE;
+    return sqlite3_bind_null((sqlite3_stmt*)stmt, idx);
+}
+
+/* step returns the SQLite rc directly: 100=SQLITE_ROW, 101=SQLITE_DONE
+ * are the success cases; anything else is a real error and the
+ * caller's Aether wrapper reads sqlite_errmsg_raw(db) for detail. */
+int sqlite_step_raw(void* stmt) {
+    if (!stmt) return SQLITE_MISUSE;
+    return sqlite3_step((sqlite3_stmt*)stmt);
+}
+
+/* Column accessors. Only valid after step() returned SQLITE_ROW.
+ * SQLite's column functions are forgiving — out-of-range col returns
+ * 0/NULL — so we mirror that with safe defaults rather than asserting. */
+
+int sqlite_column_int_raw(void* stmt, int col) {
+    if (!stmt) return 0;
+    return sqlite3_column_int((sqlite3_stmt*)stmt, col);
+}
+
+/* 64-bit column: split into (hi, lo) to match the bind side. Two
+ * separate externs because Aether can't return two ints from one
+ * call — the alternative would be a TLS pair, which is overkill
+ * for two small ints. */
+int sqlite_column_i64_hi_raw(void* stmt, int col) {
+    if (!stmt) return 0;
+    sqlite3_int64 v = sqlite3_column_int64((sqlite3_stmt*)stmt, col);
+    return (int)(int32_t)(v >> 32);
+}
+
+int sqlite_column_i64_lo_raw(void* stmt, int col) {
+    if (!stmt) return 0;
+    sqlite3_int64 v = sqlite3_column_int64((sqlite3_stmt*)stmt, col);
+    return (int)(int32_t)(v & 0xFFFFFFFFu);
+}
+
+/* sqlite3_column_text returns NULL for NULL columns; we map that to
+ * "" so callers don't have to NULL-check every cell read. The pointer
+ * is valid until the next step()/reset()/finalize(); callers that
+ * want to keep the value across those should string_concat-copy it
+ * (matches the v1 cell pattern). */
+const char* sqlite_column_text_raw(void* stmt, int col) {
+    if (!stmt) return "";
+    const unsigned char* t = sqlite3_column_text((sqlite3_stmt*)stmt, col);
+    return t ? (const char*)t : "";
+}
+
+/* -- Blob column: split-accessor TLS pattern (mirrors std.fs and
+ *    std.zlib). try_ copies the blob bytes into a TLS slot; get_*
+ *    read it borrowed; release_ frees early.
+ *
+ *    We copy rather than expose sqlite3_column_blob's pointer
+ *    directly because that pointer is invalidated by the next
+ *    step()/reset()/finalize(), and the Aether wrapper's
+ *    string_new_with_length copy may not happen before then in
+ *    every code path. The copy ensures callers get a stable buffer
+ *    until they explicitly reset or call try_ again. */
+static _Thread_local unsigned char* tls_blob_buf = NULL;
+static _Thread_local int            tls_blob_len = 0;
+
+static void free_blob_tls(void) {
+    if (tls_blob_buf) { free(tls_blob_buf); tls_blob_buf = NULL; }
+    tls_blob_len = 0;
+}
+
+int sqlite_try_column_blob(void* stmt, int col) {
+    free_blob_tls();
+    if (!stmt) return 0;
+    int n = sqlite3_column_bytes((sqlite3_stmt*)stmt, col);
+    if (n < 0) return 0;
+    /* SQL NULL blob — sqlite3_column_blob returns NULL; report 0
+     * so callers can distinguish "no row" / "NULL cell" from a
+     * legitimate empty blob. */
+    const void* p = sqlite3_column_blob((sqlite3_stmt*)stmt, col);
+    if (!p && n == 0) {
+        /* Could be a real empty blob OR a SQL NULL — sqlite's
+         * convention says NULL cells return 0 from column_bytes.
+         * We treat both as "produce an empty TLS slot, return 1"
+         * so callers see length 0 either way. NULL-vs-empty
+         * disambiguation needs sqlite3_column_type, which can be
+         * added later if a caller actually needs it. */
+        tls_blob_buf = NULL;
+        tls_blob_len = 0;
+        return 1;
+    }
+    tls_blob_buf = (unsigned char*)malloc((size_t)n > 0 ? (size_t)n : 1);
+    if (!tls_blob_buf) return 0;
+    if (p && n > 0) memcpy(tls_blob_buf, p, (size_t)n);
+    tls_blob_len = n;
+    return 1;
+}
+
+const char* sqlite_get_blob_bytes(void) {
+    return (const char*)(tls_blob_buf ? tls_blob_buf : (unsigned char*)"");
+}
+
+int sqlite_get_blob_length(void) { return tls_blob_len; }
+
+void sqlite_release_blob(void) { free_blob_tls(); }
+
+/* reset rebinds the statement to its initial state — bindings are
+ * preserved (sqlite3_clear_bindings clears them, which we don't
+ * call). Caller can rebind selectively and step again. */
+int sqlite_reset_raw(void* stmt) {
+    if (!stmt) return SQLITE_MISUSE;
+    return sqlite3_reset((sqlite3_stmt*)stmt);
+}
+
+int sqlite_finalize_raw(void* stmt) {
+    if (!stmt) return SQLITE_OK;
+    return sqlite3_finalize((sqlite3_stmt*)stmt);
+}
+
+int sqlite_changes_raw(void* db) {
+    if (!db) return 0;
+    return sqlite3_changes((sqlite3*)db);
+}
+
+const char* sqlite_errmsg_raw(void* db) {
+    if (!db) return "null db";
+    const char* m = sqlite3_errmsg((sqlite3*)db);
+    return m ? m : "";
 }

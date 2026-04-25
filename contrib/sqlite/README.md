@@ -37,7 +37,7 @@ main() {
 }
 ```
 
-## Scope
+## v1 — convenience surface for trusted-input SQL
 
 - `sqlite.open(path) -> (db, err)`
 - `sqlite.close(db) -> err`
@@ -50,29 +50,58 @@ by SQLite's internal text conversion — callers parse them back with
 `string.to_int` / `string.to_float` from `std.string` if they need
 typed values.
 
-## What's deliberately out of scope for v1
+## v2 — prepared statements + parameter binding
 
-- **Parameter binding** (`?1`, `:name`, etc.). The API would have
-  to commit to one shape (positional vs named vs Go-style
-  `sqlx`-ish), and that's the decision `contrib/` exists to defer.
-  Callers concatenating untrusted input should escape it themselves
-  or wait for the next iteration.
-- **Streaming results.** Rows are materialised up-front into a flat
-  buffer with a hard cap of 100 000 rows per query. Large-result
-  workloads should use the raw externs (`sqlite3_prepare_v2` /
-  `sqlite3_step`) directly until a streaming API lands.
-- **BLOB columns.** v1 exposes only text cells. BLOBs containing
-  embedded NULs will be truncated by the `strdup` in the C shim.
-  The shim is binary-safe for its own input path (the AetherString
-  unwrap helper is wired up), but the output path uses NUL-terminated
-  strings because Aether lacks a nullable-byte-buffer type for
-  result cells right now.
-- **Transactions as first-class operations.** Use `sqlite.exec(db,
-  "BEGIN")` / `"COMMIT"` / `"ROLLBACK"` — this is idiomatic in the
-  SQLite C API too.
-- **Prepared-statement caching, pragmas, attach/detach, backup API.**
-  All callable via the raw externs if you need them. Additive future
-  work in the same module.
+For SQL that takes user input (and so for *any* SQL where string
+concatenation is a SQL-injection risk) use the prepared-statement
+surface. Parameters are bound by 1-based index, matching SQLite's
+`?N` syntax.
+
+```aether
+import contrib.sqlite
+
+main() {
+    db, _ = sqlite.open(":memory:")
+    defer sqlite.close(db)
+
+    sqlite.exec(db, "CREATE TABLE users (id INTEGER PRIMARY KEY, name TEXT)")
+
+    // INSERT with bound parameters.
+    ins, _ = sqlite.prepare(db, "INSERT INTO users (id, name) VALUES (?, ?)")
+    sqlite.bind_int (ins, 1, 1)
+    sqlite.bind_text(ins, 2, "Alice")
+    sqlite.step(ins, db)
+    sqlite.finalize(ins)
+
+    // SELECT with bound WHERE.
+    sel, _ = sqlite.prepare(db, "SELECT name FROM users WHERE id = ?")
+    sqlite.bind_int(sel, 1, 1)
+    rc, _ = sqlite.step(sel, db)
+    if rc == sqlite.SQLITE_ROW {
+        name = sqlite.column_text(sel, 0)
+        println("got: ${name}")
+    }
+    sqlite.finalize(sel)
+}
+```
+
+**Key points:**
+
+- `bind_text` uses `SQLITE_TRANSIENT` — SQLite copies the string immediately, so callers can drop their buffers right after the bind. Load-bearing inside loops with short-lived strings.
+- `bind_blob(stmt, idx, data, len)` is binary-safe via the explicit length. AetherString-aware on the input side; embedded NULs survive.
+- `bind_i64(stmt, idx, hi, lo)` splits 64-bit integers because Aether's `int` width isn't guaranteed 64-bit (it's 32-bit on MSVC). Reassemble with `((int64_t)hi << 32) | (uint32_t)lo`. Symmetric `column_i64(stmt, col) -> (hi, lo)` for the read side.
+- `column_blob(stmt, col)` returns `(bytes, length, err)` — a length-aware AetherString plus byte count, same shape as `std.fs.read_binary`. Embedded NULs survive both directions.
+- `step` returns `(rc, err)` where `rc` is one of the exported constants `SQLITE_ROW` (100 — row available, read columns), `SQLITE_DONE` (101 — no more rows / DML completed), or any other code (error; `err` carries `errmsg(db)` text).
+- Streaming the row loop is a pure-Aether `while sqlite.step(stmt, db) == SQLITE_ROW { … }` on top of these primitives. No new C externs needed.
+- `finalize(stmt)` MUST be called before `close(db)`, otherwise close fails with "unable to close due to unfinalized statements".
+
+## Still out of scope (v3 candidates)
+
+- **Streaming row helper as DSL sugar.** The pure-Aether `while step()` loop covers the use case; a `for_each_row(stmt) { … }` block sugar can land later.
+- **Transactions as first-class.** `sqlite.exec(db, "BEGIN")` / `"COMMIT"` / `"ROLLBACK"` is idiomatic SQLite C API too.
+- **Pragmas as named primitives.** `set_pragma(db, "journal_mode", "WAL")` is just `exec` underneath.
+- **Migrations helper.** Generic enough to belong here, opinionated enough that real users (e.g. the subversion port's `wc/db_schema.ae` migration with PRAGMA introspection) hand-roll their own.
+- **User-defined aggregate functions** via `sqlite3_create_function`. Niche; v4 candidate at most.
 
 ## Build
 

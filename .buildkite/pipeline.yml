@@ -1,11 +1,12 @@
 # Buildkite pipeline — runs alongside GitHub Actions, not instead of.                                                                                                                  
   #                                            
-  # Self-hosted x86_64 Linux agent (podman container on a NUC),                                                                                                                          
-  # registered in the Default cluster with tags `queue=default-queue,                                                                                                                    
-  # aether=1`. Base image ships gcc, clang, valgrind, openssl, zlib,                                                                                                                     
-  # sqlite, plus the contrib/host dev libs (lua, python, ruby, perl,                                                                                                                     
-  # duktape, tcl, go). Rebuilding the image is a Dockerfile edit on                                                                                                                      
-  # the NUC; don't need it for any step below.                                                                                                                                           
+  # Self-hosted x86_64 Linux agent (podman container on a NUC),
+  # registered in the Default cluster with tags `queue=default-queue,
+  # aether=1`. Base image ships gcc, clang, valgrind, openssl, zlib,
+  # sqlite, gtk4 (>=4.10) + xvfb (for contrib/aether_ui headless tests),
+  # plus the contrib/host dev libs (lua, python, ruby, perl,
+  # duktape, tcl, go). Rebuilding the image is a Dockerfile edit on
+  # the NUC; don't need it for any step below.
   #                                                                                                                                                                                      
   # Windows + macOS stay on GHA — the self-hosted agent is Linux only.
                                                                                                                                                                                          
@@ -55,11 +56,50 @@
             limit: 1
 
     # ---- contrib/ per-package steps ----
-    # contrib/host is already covered above; contrib/aether_ui is
-    # covered by `make ci` step [10/10] (contrib-aether-ui-check).
-    # Steps below cover the remaining contrib packages. Kept as
-    # separate labels so a failure in one contrib doesn't mask
-    # another and the BK UI shows which contrib regressed.
+    # contrib/host is already covered above. contrib/aether_ui,
+    # contrib/aeocha, contrib/tinyweb, contrib/sqlite each get their
+    # own broken-out step below. They're also exercised inside
+    # `make ci` (contrib-aether-ui-check, the test-ae sweep, etc.)
+    # but a per-contrib label means a regression in one shows up in
+    # the BK UI as its own red tick rather than buried in the
+    # `Linux / GCC make ci` waterfall — much easier to triage.
+
+    - label: ":art: contrib/aether_ui (GTK4 + Xvfb)"
+      # contrib/aether_ui's full pipeline: builds every example
+      # against the GTK4 backend, smoke-launches the non-driver
+      # examples (1.5s render-and-kill — catches widget-wiring
+      # regressions), then drives example_calculator and
+      # example_testable through the AetherUIDriver HTTP test server.
+      #
+      # ci.sh auto-wraps with `xvfb-run` when neither $DISPLAY nor
+      # $WAYLAND_DISPLAY is set, which is the case inside the
+      # buildkite-agent container. Requires gtk4 >= 4.10 (the
+      # backend uses GtkAlertDialog/FileDialog/UriLauncher) and
+      # xvfb in the image; both confirmed present.
+      #
+      # Requires `make compiler ae stdlib` so `./build/ae` exists
+      # for the example builds. The widget-level C tests
+      # (test_widgets.c) are run separately by `make ci` step [10/10]
+      # under both Linux/GCC and Linux/Clang — no point repeating.
+      #
+      # AetherUIDriver binds port 9222 by default, distinct from
+      # tinyweb's 8080 so no inter-step collision; ci.sh launches
+      # multiple example apps that each bind 9222 in sequence with
+      # clean shutdown between, so concurrency_group below prevents
+      # a parallel aether_ui job from racing on the same port.
+      command: |
+        make compiler ae stdlib && \
+        bash contrib/aether_ui/ci.sh
+      agents:
+        queue: "default-queue"
+        aether: "1"
+      concurrency: 1
+      concurrency_group: "aether-ui-port-9222"
+      timeout_in_minutes: 15
+      retry:
+        automatic:
+          - exit_status: -1
+            limit: 1
 
     - label: ":test_tube: contrib/aeocha self-test"
       command: |
