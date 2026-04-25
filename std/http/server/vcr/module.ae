@@ -15,21 +15,41 @@
 // against the next-in-line tape entry, and writes back the recorded
 // response bytes.
 //
-// Tape format (one or more `--- exchange N ---`-headed blocks):
+// Tape format: Servirtium markdown (https://servirtium.dev). One
+// interaction per `## Interaction N:` heading-2 block. Each
+// interaction has four `### ...` sections; the response body
+// section's heading carries the status and content-type.
 //
-//   --- exchange 1 ---
-//   > GET /ok HTTP/1.1
-//   > Host: 127.0.0.1:18091
-//   >
-//   < HTTP/1.1 200 OK
-//   < Content-Type: text/plain
-//   < Content-Length: 7
-//   <
-//   < ok-body
+//   ## Interaction 0: GET /ok
 //
-// Lines starting with `> ` are the request the SUT is sending;
-// lines starting with `< ` are the response the VCR should emit.
-// The blank `>` and `<` lines mark end-of-headers.
+//   ### Request headers recorded for playback:
+//
+//   ```
+//   Host: 127.0.0.1:18091
+//   ```
+//
+//   ### Request body recorded for playback ():
+//
+//   ```
+//   ```
+//
+//   ### Response headers recorded for playback:
+//
+//   ```
+//   Content-Type: text/plain
+//   ```
+//
+//   ### Response body recorded for playback (200: text/plain):
+//
+//   ```
+//   ok-body
+//   ```
+//
+// v0.1 only consults the response body section (status, content-type,
+// body); the other three sections are accepted-and-ignored. Format
+// compatibility with other Servirtium implementations (Java, Python,
+// Kotlin, Go, ...) is the design goal — tapes recorded by any of
+// them should be replayable by us.
 //
 // Matching is strict on (method, path) only — incoming headers and
 // body are ignored. Out-of-order or unmatched-method-or-path

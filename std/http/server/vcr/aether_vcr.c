@@ -1,23 +1,47 @@
 /* std.http.server.vcr — replay-driven HTTP server for testing.
  *
- * The metaphor: a VCR is the device, a tape is the medium. v0.1
- * exposes only replay; the recorder lands later. C-side surface
- * (matches std/http/server/vcr/module.ae's externs):
+ * Tape format: Servirtium markdown (https://servirtium.dev). One
+ * tape file holds N "interactions"; each interaction is a request +
+ * response pair. The parser strategy is split-on-delimiter, the same
+ * strategy other Servirtium implementations chose without it being
+ * documented (the Java implementation's lock-step parsing is widely
+ * regarded as a mistake — the markdown grammar splits cleanly).
+ *
+ * Three delimiters do all the work:
+ *
+ *   "\n## Interaction "   – between interactions
+ *   "\n### "              – between sections within an interaction
+ *   "\n```\n"             – fenced code block boundaries
+ *
+ * Within each section we look for the (single) fenced code block
+ * and capture its contents verbatim. No state machine, no header
+ * accumulator, no quote-counting.
+ *
+ * Section names in canonical Servirtium order:
+ *
+ *   ### Request headers recorded for playback:
+ *   ### Request body recorded for playback (mime/type):
+ *   ### Response headers recorded for playback:
+ *   ### Response body recorded for playback (status: mime/type):
+ *
+ * Status code lives in the response-body section header (e.g.
+ * "200: text/plain"), not in a status-line in the response-headers
+ * block. v0.1 only reads the status from there; response headers
+ * the tape lists are not echoed in the emitted response (they will
+ * be in v0.2; the test matrix doesn't need them yet).
+ *
+ * v0.1 surface (matches std/http/server/vcr/module.ae's externs):
  *
  *   vcr_load_tape(path)        -> 1 on success, 0 on parse / I/O failure
  *   vcr_load_err()             -> error string (when vcr_load_tape returned 0)
- *   vcr_tape_length()          -> number of entries the loaded tape contains
+ *   vcr_tape_length()          -> number of interactions the loaded tape has
  *   vcr_register_routes(srv)   -> walks tape and calls server_get for each
  *                                  unique path so the routing layer dispatches
  *                                  to vcr_dispatch.
  *   vcr_dispatch(req, res, ud) -> registered handler. Matches the next tape
- *                                  entry against (method, path) and emits
- *                                  the recorded response. Mismatch → 599
- *                                  with diagnostic body.
- *
- * Tape format — one or more `--- exchange N ---`-headed blocks, each
- * with `> ` request lines and `< ` response lines. See module.ae for
- * the documented shape and the worked example.
+ *                                  interaction against (method, path) and
+ *                                  emits the recorded response. Mismatch →
+ *                                  599 with diagnostic body.
  *
  * Storage: a single global tape (one per process — adequate for v0.1
  * since each test runs as its own process). Loading a second tape
@@ -27,7 +51,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
 
 /* --- These come from std.http.server's request/response surface. --- */
 extern const char* http_request_method(void* req);
@@ -36,26 +59,24 @@ extern void        http_response_set_status(void* res, int code);
 extern void        http_response_set_header(void* res, const char* name, const char* value);
 extern void        http_response_set_body  (void* res, const char* body);
 
-/* And the routing extern — used by vcr_register_routes() below to
- * register each unique tape-path under its own handler. We forward
- * declare here so we don't need a header dependency on std/net. */
+/* And the routing extern — used by vcr_register_routes(). */
 extern void http_server_get(void* server, const char* path, void* handler, void* user_data);
 
 /* ---- Tape storage --------------------------------------------------- */
 
-typedef struct TapeEntry {
-    char* method;       /* e.g. "GET" — owned, NUL-terminated */
-    char* path;         /* e.g. "/ok" — owned, NUL-terminated */
-    int   status;       /* e.g. 200 */
+typedef struct Interaction {
+    char* method;       /* "GET" — owned, NUL-terminated */
+    char* path;         /* "/path/to/resource" — owned */
+    int   status;       /* 200, 404, ... */
     char* body;         /* response body — owned, NUL-terminated; "" if empty */
-    char* content_type; /* may be NULL (then no Content-Type emitted) */
-} TapeEntry;
+    char* content_type; /* may be NULL */
+} Interaction;
 
-static TapeEntry* g_tape       = NULL;
-static int        g_tape_n     = 0;     /* number of entries */
-static int        g_tape_cap   = 0;     /* allocated capacity  */
-static int        g_tape_cursor = 0;    /* next entry to consume */
-static char*      g_tape_err   = NULL;  /* "" on success, error text otherwise */
+static Interaction* g_tape       = NULL;
+static int          g_tape_n     = 0;
+static int          g_tape_cap   = 0;
+static int          g_tape_cursor = 0;
+static char*        g_tape_err   = NULL;
 
 static void tape_free_storage(void) {
     if (g_tape) {
@@ -80,51 +101,16 @@ static void tape_set_err(const char* msg) {
     g_tape_err = msg ? strdup(msg) : NULL;
 }
 
-/* Parse the request line ("GET /ok HTTP/1.1") into method + path.
- * Both stored as new strdup'd strings; caller frees. Returns 0 on
- * success, -1 on malformed line. */
-static int parse_request_line(const char* line, char** out_method, char** out_path) {
-    *out_method = NULL;
-    *out_path = NULL;
-    /* Find the first space — that's the end of the method. */
-    const char* sp1 = strchr(line, ' ');
-    if (!sp1) return -1;
-    /* And the second — that's the end of the path. */
-    const char* sp2 = strchr(sp1 + 1, ' ');
-    if (!sp2) return -1;
-    size_t mlen = (size_t)(sp1 - line);
-    size_t plen = (size_t)(sp2 - (sp1 + 1));
-    *out_method = (char*)malloc(mlen + 1);
-    *out_path   = (char*)malloc(plen + 1);
-    if (!*out_method || !*out_path) {
-        free(*out_method); free(*out_path);
-        *out_method = *out_path = NULL;
-        return -1;
-    }
-    memcpy(*out_method, line, mlen); (*out_method)[mlen] = '\0';
-    memcpy(*out_path, sp1 + 1, plen); (*out_path)[plen] = '\0';
-    return 0;
-}
-
-/* Parse the response status line ("HTTP/1.1 200 OK") into the int
- * status code. Returns -1 on malformed input. */
-static int parse_status_line(const char* line) {
-    const char* sp = strchr(line, ' ');
-    if (!sp) return -1;
-    return atoi(sp + 1);
-}
-
-/* Append a parsed entry to the tape. Returns 0 on success, -1 OOM. */
 static int tape_append(const char* method, const char* path,
                        int status, const char* body, const char* content_type) {
     if (g_tape_n >= g_tape_cap) {
         int new_cap = g_tape_cap ? g_tape_cap * 2 : 8;
-        TapeEntry* bigger = (TapeEntry*)realloc(g_tape, sizeof(TapeEntry) * (size_t)new_cap);
+        Interaction* bigger = (Interaction*)realloc(g_tape, sizeof(Interaction) * (size_t)new_cap);
         if (!bigger) return -1;
         g_tape = bigger;
         g_tape_cap = new_cap;
     }
-    TapeEntry* e = &g_tape[g_tape_n];
+    Interaction* e = &g_tape[g_tape_n];
     e->method       = strdup(method);
     e->path         = strdup(path);
     e->status       = status;
@@ -138,117 +124,223 @@ static int tape_append(const char* method, const char* path,
     return 0;
 }
 
-/* Strip a trailing \r if present (handles tape files saved with
- * Windows line endings). Modifies in place. */
-static void rstrip_cr(char* s) {
-    size_t n = strlen(s);
-    if (n > 0 && s[n - 1] == '\r') s[n - 1] = '\0';
+/* ---- Helpers --------------------------------------------------------- */
+
+/* Read a whole file into a heap buffer (NUL-terminated). Returns
+ * NULL on I/O failure with g_tape_err populated. */
+static char* slurp(const char* path) {
+    FILE* fp = fopen(path, "rb");
+    if (!fp) {
+        char msg[1024];
+        snprintf(msg, sizeof(msg), "cannot open tape file: %s", path);
+        tape_set_err(msg);
+        return NULL;
+    }
+    fseek(fp, 0, SEEK_END);
+    long n = ftell(fp);
+    fseek(fp, 0, SEEK_SET);
+    if (n < 0) { fclose(fp); tape_set_err("ftell failed"); return NULL; }
+    char* buf = (char*)malloc((size_t)n + 1);
+    if (!buf) { fclose(fp); tape_set_err("OOM slurping tape"); return NULL; }
+    size_t rd = fread(buf, 1, (size_t)n, fp);
+    fclose(fp);
+    buf[rd] = '\0';
+    return buf;
 }
 
-/* Parse one request/response pair from the file, starting at the
- * line *after* an `--- exchange N ---` header. Stops on EOF or on
- * the next `--- exchange ` line (which is pushed back via fseek so
- * the caller's loop sees it). Returns 0 on success, -1 on parse
- * failure (with g_tape_err populated). */
-static int parse_one_exchange(FILE* fp) {
-    char line[8192];
+/* Allocate a copy of [start, end) — used for slicing substrings out
+ * of the slurped tape buffer. */
+static char* slice_dup(const char* start, const char* end) {
+    if (!start || !end || end < start) return NULL;
+    size_t n = (size_t)(end - start);
+    char* s = (char*)malloc(n + 1);
+    if (!s) return NULL;
+    memcpy(s, start, n);
+    s[n] = '\0';
+    return s;
+}
+
+/* Trim trailing whitespace (newlines, CRs, spaces, tabs) in place. */
+static void rtrim(char* s) {
+    if (!s) return;
+    size_t n = strlen(s);
+    while (n > 0 && (s[n-1] == '\n' || s[n-1] == '\r' || s[n-1] == ' ' || s[n-1] == '\t')) {
+        s[--n] = '\0';
+    }
+}
+
+/* Find the contents of the (first) fenced code block within [start, end).
+ * Returns a freshly-allocated string containing the block's body
+ * (without the surrounding ``` lines), or NULL if none found. Trailing
+ * newline trimmed. */
+static char* extract_code_block(const char* start, const char* end) {
+    /* Look for "```\n" (open fence). */
+    const char* open = start;
+    while (open < end) {
+        const char* nl = (const char*)memchr(open, '\n', (size_t)(end - open));
+        if (!nl) break;
+        /* Check whether the line starts with ``` (ignoring trailing
+         * language tag like ```xml — we don't care about the tag). */
+        if ((nl - open) >= 3 && open[0] == '`' && open[1] == '`' && open[2] == '`') {
+            const char* body_start = nl + 1;
+            /* Find the close fence: line beginning with ```. */
+            const char* p = body_start;
+            while (p < end) {
+                if ((end - p) >= 3 && p[0] == '`' && p[1] == '`' && p[2] == '`') {
+                    /* Body ends just before this line. The line
+                     * itself starts at the previous \n + 1; back
+                     * up to find that \n. */
+                    const char* body_end = p;
+                    /* Strip the newline immediately before the close fence. */
+                    if (body_end > body_start && body_end[-1] == '\n') body_end--;
+                    return slice_dup(body_start, body_end);
+                }
+                const char* next = (const char*)memchr(p, '\n', (size_t)(end - p));
+                if (!next) break;
+                p = next + 1;
+            }
+            return NULL;  /* unclosed fence */
+        }
+        open = nl + 1;
+    }
+    return NULL;
+}
+
+/* Parse the interaction header line ("GET /path") into method + path.
+ * Either the first space terminates the path, or the line ends.
+ * Returns 0 on success, -1 on malformed input. */
+static int parse_interaction_header(const char* line_start, const char* line_end,
+                                    char** out_method, char** out_path) {
+    *out_method = NULL;
+    *out_path = NULL;
+    /* The interaction header is the chunk after "## Interaction N: "
+     * and up to the newline. Format: "METHOD path". */
+    const char* sp = (const char*)memchr(line_start, ' ', (size_t)(line_end - line_start));
+    if (!sp) return -1;
+    *out_method = slice_dup(line_start, sp);
+    /* path runs from sp+1 to line_end (rtrim handled by caller via
+     * rtrim() on the result). */
+    *out_path = slice_dup(sp + 1, line_end);
+    if (!*out_method || !*out_path) {
+        free(*out_method); free(*out_path);
+        *out_method = *out_path = NULL;
+        return -1;
+    }
+    rtrim(*out_method);
+    rtrim(*out_path);
+    return 0;
+}
+
+/* Parse the response-body section header: "Response body recorded
+ * for playback (200: text/plain):". Extracts status and content_type
+ * by string-search. Returns 0 on success, -1 on malformed.
+ * content_type is allocated; method is borrowed (NULL on absence). */
+static int parse_response_body_header(const char* line, int* out_status, char** out_content_type) {
+    *out_status = 0;
+    *out_content_type = NULL;
+    /* Find the (...): segment. */
+    const char* open_paren = strchr(line, '(');
+    const char* close_paren = open_paren ? strchr(open_paren, ')') : NULL;
+    if (!open_paren || !close_paren) return -1;
+    /* Inside parens: "STATUS: content/type" */
+    const char* colon = (const char*)memchr(open_paren + 1, ':', (size_t)(close_paren - open_paren - 1));
+    if (!colon) return -1;
+    *out_status = atoi(open_paren + 1);
+    /* Skip ": " then take up to close_paren. */
+    const char* ct_start = colon + 1;
+    while (ct_start < close_paren && (*ct_start == ' ' || *ct_start == '\t')) ct_start++;
+    *out_content_type = slice_dup(ct_start, close_paren);
+    return *out_content_type ? 0 : -1;
+}
+
+/* Parse one interaction chunk — text starting just after
+ * "## Interaction N: " and ending at the start of the next
+ * "## Interaction " (or end of file). */
+static int parse_interaction(const char* chunk_start, const char* chunk_end) {
+    /* The first line of the chunk is the rest of the interaction
+     * header line: "0: GET /path\n...". Skip past the "N: " prefix. */
+    const char* nl = (const char*)memchr(chunk_start, '\n', (size_t)(chunk_end - chunk_start));
+    if (!nl) { tape_set_err("interaction missing header line"); return -1; }
+    /* Skip the digits + colon + space. */
+    const char* mp_start = chunk_start;
+    while (mp_start < nl && *mp_start >= '0' && *mp_start <= '9') mp_start++;
+    if (mp_start < nl && *mp_start == ':') mp_start++;
+    while (mp_start < nl && *mp_start == ' ') mp_start++;
+
     char* method = NULL;
-    char* path   = NULL;
-    int   status = 0;
-    /* Response body is accumulated into a growing buffer because it
-     * can span many lines. Header lines `< X: y` are ignored except
-     * for Content-Type, which becomes part of the entry. */
-    size_t body_cap = 256, body_len = 0;
-    char*  body = (char*)malloc(body_cap);
-    char*  content_type = NULL;
-    if (!body) { tape_set_err("OOM allocating body buffer"); return -1; }
-    body[0] = '\0';
-
-    enum { PHASE_REQ_HEADERS, PHASE_RESP_HEADERS, PHASE_RESP_BODY } phase = PHASE_REQ_HEADERS;
-
-    long pos_before;
-    while ((pos_before = ftell(fp)), fgets(line, sizeof(line), fp) != NULL) {
-        rstrip_cr(line);
-        size_t llen = strlen(line);
-        if (llen > 0 && line[llen - 1] == '\n') line[--llen] = '\0';
-
-        /* Hit the next exchange marker — rewind so the outer loop sees it. */
-        if (strncmp(line, "--- exchange", 12) == 0) {
-            fseek(fp, pos_before, SEEK_SET);
-            break;
-        }
-
-        if (phase == PHASE_REQ_HEADERS) {
-            /* `> METHOD path HTTP/1.1` — the request line, first `> ` */
-            if (strncmp(line, "> ", 2) == 0 && method == NULL) {
-                if (parse_request_line(line + 2, &method, &path) != 0) {
-                    tape_set_err("malformed request line");
-                    goto fail;
-                }
-            } else if (strcmp(line, ">") == 0) {
-                /* End of request headers — switch to response phase. */
-                phase = PHASE_RESP_HEADERS;
-            }
-            /* Other `> Header: value` lines are ignored in v0.1 (no
-             * header-aware matching). */
-        } else if (phase == PHASE_RESP_HEADERS) {
-            if (strncmp(line, "< ", 2) == 0 && status == 0) {
-                /* `< HTTP/1.1 200 OK` — status line. */
-                status = parse_status_line(line + 2);
-                if (status < 0) {
-                    tape_set_err("malformed status line");
-                    goto fail;
-                }
-            } else if (strncmp(line, "< Content-Type:", 15) == 0) {
-                /* Capture Content-Type so the replayer can emit it. */
-                const char* v = line + 15;
-                while (*v == ' ' || *v == '\t') v++;
-                free(content_type);
-                content_type = strdup(v);
-                if (!content_type) { tape_set_err("OOM"); goto fail; }
-            } else if (strcmp(line, "<") == 0) {
-                /* End of response headers — body follows. */
-                phase = PHASE_RESP_BODY;
-            }
-            /* Other `< Header: value` lines are ignored on emission
-             * for v0.1 (the test matrix only needs Content-Type
-             * and status). Header preservation is a v0.2 candidate. */
-        } else { /* PHASE_RESP_BODY */
-            const char* body_line = NULL;
-            if (strncmp(line, "< ", 2) == 0) {
-                body_line = line + 2;
-            } else if (strcmp(line, "<") == 0) {
-                body_line = "";
-            } else {
-                /* Unrecognised line in body section — treat as
-                 * end-of-exchange (probably leading whitespace
-                 * before next `--- exchange`). */
-                fseek(fp, pos_before, SEEK_SET);
-                break;
-            }
-            size_t add = strlen(body_line) + 1; /* +1 for newline */
-            if (body_len + add + 1 > body_cap) {
-                while (body_cap < body_len + add + 1) body_cap *= 2;
-                char* bigger = (char*)realloc(body, body_cap);
-                if (!bigger) { tape_set_err("OOM growing body"); goto fail; }
-                body = bigger;
-            }
-            if (body_len > 0) {
-                body[body_len++] = '\n';
-            }
-            memcpy(body + body_len, body_line, strlen(body_line));
-            body_len += strlen(body_line);
-            body[body_len] = '\0';
-        }
+    char* path = NULL;
+    if (parse_interaction_header(mp_start, nl, &method, &path) != 0) {
+        tape_set_err("malformed interaction header");
+        return -1;
     }
 
-    if (!method || !path || status == 0) {
-        tape_set_err("incomplete exchange (missing request line, response status, or both)");
+    /* Rest of the chunk is sections separated by "\n### ". The
+     * response body section carries both the status (in its header
+     * line) and the body (in its code block). v0.1 only needs those
+     * two — request headers/body and response headers are parsed-and-
+     * dropped because matching is method+path only and response
+     * header echo is v0.2. */
+    int status = 0;
+    char* content_type = NULL;
+    char* body = NULL;
+
+    const char* p = nl + 1;
+    while (p < chunk_end) {
+        /* Find next "\n### " (or "### " right at the start of p). */
+        const char* sect = NULL;
+        if ((chunk_end - p) >= 4 && memcmp(p, "### ", 4) == 0) {
+            sect = p;
+        } else {
+            sect = strstr(p, "\n### ");
+            if (sect) sect++;  /* skip the leading \n */
+        }
+        if (!sect || sect >= chunk_end) break;
+
+        /* Section name runs from sect (which starts at "### ...") to
+         * the first \n. */
+        const char* sect_nl = (const char*)memchr(sect, '\n', (size_t)(chunk_end - sect));
+        if (!sect_nl) break;
+        const char* sect_name_start = sect + 4;  /* skip "### " */
+        size_t sect_name_len = (size_t)(sect_nl - sect_name_start);
+
+        /* Determine the section's body extent — up to the next "\n### "
+         * or chunk_end. */
+        const char* next_sect = strstr(sect_nl, "\n### ");
+        const char* sect_body_end = next_sect && next_sect < chunk_end ? next_sect : chunk_end;
+
+        /* Only the response-body section is interesting in v0.1. */
+        if (sect_name_len > 25
+            && memcmp(sect_name_start, "Response body recorded for", 26) == 0) {
+            /* The header line carries (status: content/type). */
+            char* line = slice_dup(sect_name_start, sect_nl);
+            if (!line) { tape_set_err("OOM"); goto fail; }
+            if (parse_response_body_header(line, &status, &content_type) != 0) {
+                free(line);
+                tape_set_err("malformed response body header");
+                goto fail;
+            }
+            free(line);
+            /* Body is the contents of the fenced code block in the
+             * remainder of this section. */
+            body = extract_code_block(sect_nl + 1, sect_body_end);
+            if (!body) {
+                tape_set_err("response body section has no fenced code block");
+                goto fail;
+            }
+        }
+
+        p = sect_body_end;
+    }
+
+    if (status == 0) {
+        tape_set_err("interaction has no Response body section");
         goto fail;
     }
+    /* body could legitimately be empty string — that's fine. */
+    if (!body) body = strdup("");
 
     if (tape_append(method, path, status, body, content_type) != 0) {
-        tape_set_err("OOM appending entry");
+        tape_set_err("OOM appending interaction");
         goto fail;
     }
 
@@ -260,41 +352,55 @@ fail:
     return -1;
 }
 
-/* ---- Aether-side externs ------------------------------------------- */
+/* ---- Forward decl ---------------------------------------------------- */
+
+void vcr_dispatch(void* req, void* res, void* ud);
+
+/* ---- Aether-side externs -------------------------------------------- */
 
 int vcr_load_tape(const char* path) {
     if (!path) { tape_set_err("null tape path"); return 0; }
     tape_free_storage();
-    /* tape_set_err sets g_tape_err = NULL via its NULL guard, so we
-     * need to start fresh after free above. */
     g_tape_err = strdup("");
 
-    FILE* fp = fopen(path, "rb");
-    if (!fp) {
-        char msg[1024];
-        snprintf(msg, sizeof(msg), "cannot open tape file: %s", path);
-        tape_set_err(msg);
-        return 0;
-    }
+    char* buf = slurp(path);
+    if (!buf) return 0;  /* g_tape_err already set */
 
-    char line[8192];
-    while (fgets(line, sizeof(line), fp) != NULL) {
-        rstrip_cr(line);
-        size_t llen = strlen(line);
-        if (llen > 0 && line[llen - 1] == '\n') line[--llen] = '\0';
-        if (strncmp(line, "--- exchange", 12) == 0) {
-            if (parse_one_exchange(fp) != 0) {
-                fclose(fp);
-                return 0;  /* g_tape_err already set */
-            }
+    /* Split on "\n## Interaction " to get N chunks. The first chunk
+     * (before any "## Interaction ") is the file's preamble (could be
+     * a top-level title, a description, anything) — we discard it. */
+    const char* p = buf;
+    const char* DELIM = "\n## Interaction ";
+    const size_t DELIM_LEN = strlen(DELIM);
+
+    /* Special case: tape starts with "## Interaction " on the very
+     * first line (no preceding newline). Look for that explicitly. */
+    if (strncmp(buf, "## Interaction ", 15) == 0) {
+        p = buf + 15;
+    } else {
+        const char* first = strstr(buf, DELIM);
+        if (!first) {
+            tape_set_err("tape contains no '## Interaction ' headers");
+            free(buf);
+            return 0;
         }
-        /* Lines outside an exchange block are ignored — could be
-         * comments, blank lines, etc. */
+        p = first + DELIM_LEN;
     }
-    fclose(fp);
 
+    while (p < buf + strlen(buf)) {
+        const char* next = strstr(p, DELIM);
+        const char* chunk_end = next ? next : (buf + strlen(buf));
+        if (parse_interaction(p, chunk_end) != 0) {
+            free(buf);
+            return 0;  /* g_tape_err already set */
+        }
+        if (!next) break;
+        p = next + DELIM_LEN;
+    }
+
+    free(buf);
     if (g_tape_n == 0) {
-        tape_set_err("tape file contained no '--- exchange' blocks");
+        tape_set_err("tape parsed but yielded zero interactions");
         return 0;
     }
     return 1;
@@ -308,27 +414,14 @@ int vcr_tape_length(void) {
     return g_tape_n;
 }
 
-/* Forward decl — defined in the section below for the Aether-facing
- * surface. */
-void vcr_dispatch(void* req, void* res, void* ud);
-
-/* Register each unique tape path against vcr_dispatch. Called by
- * the Aether-side bind() after server_create + vcr_load_tape.
- *
- * Why per-path registration rather than a `/(.*)` catch-all: the
- * catch-all regex isn't reliably matching in std.http.server v0.90
- * (returns 404 for /ok against the pattern `/(.*)`), and the
- * framework's "no route → 404" behaviour is itself useful test
- * signal — a SUT that hits a path the tape doesn't anticipate
- * gets a real 404 from the server, separate from the dispatcher's
- * 599 "tape mismatch" diagnostic. */
+/* Walk the tape and call http_server_get for each unique path. Same
+ * dispatcher (vcr_dispatch) handles every route; it matches against
+ * the cursor and emits the recorded response. */
 void vcr_register_routes(void* server) {
     if (!server) return;
-    /* Dedup by path — multiple entries can share a path (the dispatcher
-     * advances through them in order). Each unique path needs only one
-     * registration with the routing layer.
-     *
-     * O(N²) over tape entries; fine for any plausible tape size. */
+    /* Dedup by path — multiple interactions can share a path
+     * (dispatcher advances through them in cursor order). O(N²),
+     * fine for any plausible tape size. */
     for (int i = 0; i < g_tape_n; i++) {
         int already = 0;
         for (int j = 0; j < i; j++) {
@@ -345,39 +438,34 @@ void vcr_register_routes(void* server) {
 
 void vcr_dispatch(void* req, void* res, void* ud) {
     (void)ud;
-    /* Pull the next entry. If we've exhausted the tape, fail loudly
-     * with 599 (an unassigned-by-IANA status, used here to signal
-     * "the test fixture itself failed" rather than a server error). */
     if (g_tape_cursor >= g_tape_n) {
         http_response_set_status(res, 599);
         http_response_set_body(res,
             "tape exhausted — SUT made more requests than the tape contains");
         return;
     }
-    TapeEntry* e = &g_tape[g_tape_cursor];
+    Interaction* e = &g_tape[g_tape_cursor];
 
-    /* Strict (method, path) match. Any drift fails the test loudly
-     * via a 599 response with a diagnostic body, rather than serving
-     * the wrong entry and letting the assertion misfire downstream. */
+    /* Strict (method, path) match. Mismatch → 599 with diagnostic
+     * body so the failure surfaces at the test's assertion layer
+     * rather than as a silent miss. Cursor doesn't advance on
+     * mismatch — repeat calls produce the same diagnostic. */
     const char* got_method = http_request_method(req);
     const char* got_path   = http_request_path(req);
     if (!got_method || strcmp(got_method, e->method) != 0
         || !got_path || strcmp(got_path, e->path) != 0) {
         char msg[2048];
         snprintf(msg, sizeof(msg),
-            "tape mismatch at entry %d: expected %s %s, got %s %s",
-            g_tape_cursor + 1,
+            "tape mismatch at interaction %d: expected %s %s, got %s %s",
+            g_tape_cursor,
             e->method, e->path,
             got_method ? got_method : "(null)",
             got_path   ? got_path   : "(null)");
         http_response_set_status(res, 599);
         http_response_set_body(res, msg);
-        /* Don't advance the cursor on mismatch — repeated calls
-         * surface the same diagnostic. */
         return;
     }
 
-    /* Emit the recorded response. */
     http_response_set_status(res, e->status);
     if (e->content_type) {
         http_response_set_header(res, "Content-Type", e->content_type);
