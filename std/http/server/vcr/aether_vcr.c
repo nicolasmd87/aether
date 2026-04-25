@@ -436,6 +436,100 @@ void vcr_register_routes(void* server) {
     }
 }
 
+/* ---- Record-mode externs ---------------------------------------------
+ *
+ * Record mode is driven from the Aether side. The recorder's HTTP
+ * handler calls std.http.client to forward the request to upstream,
+ * then calls vcr_record_interaction() with the method/path/status/
+ * content_type/body it just observed. On vcr.eject(), the Aether
+ * side calls vcr_flush_to_tape(path) which writes every captured
+ * interaction to disk in canonical Servirtium markdown — the same
+ * format the parser above reads, so a recorded tape is immediately
+ * replayable on the next test run.
+ *
+ * The capture list reuses g_tape as its backing storage. A test
+ * that loads a tape and then records into the same VCR instance
+ * would mix them — fine for v0.1 since record/replay are mutually
+ * exclusive per-run.
+ * -------------------------------------------------------------------- */
+
+int vcr_record_interaction(const char* method, const char* path,
+                           int status, const char* content_type, const char* body) {
+    if (!method || !path) { tape_set_err("null method or path"); return 0; }
+    if (tape_append(method, path, status, body, content_type) != 0) {
+        tape_set_err("OOM appending captured interaction");
+        return 0;
+    }
+    return 1;
+}
+
+/* Helper: emit a fenced code block. The body is written verbatim;
+ * if the body itself contains a "```" line the output won't round-trip
+ * cleanly, but that's a Servirtium-spec-wide problem (every
+ * implementation has the same constraint). v0.1 doesn't try to
+ * escape — production Servirtium tapes don't carry ``` in bodies
+ * in any of the climate-API or similar fixtures. */
+static void emit_code_block(FILE* fp, const char* body) {
+    fputs("```\n", fp);
+    if (body && *body) {
+        fputs(body, fp);
+        /* Ensure the body ends with a newline before the close fence. */
+        size_t n = strlen(body);
+        if (n > 0 && body[n - 1] != '\n') fputc('\n', fp);
+    }
+    fputs("```\n", fp);
+}
+
+int vcr_flush_to_tape(const char* path) {
+    if (!path) { tape_set_err("null tape output path"); return 0; }
+    FILE* fp = fopen(path, "wb");
+    if (!fp) {
+        char msg[1024];
+        snprintf(msg, sizeof(msg), "cannot open tape file for writing: %s", path);
+        tape_set_err(msg);
+        return 0;
+    }
+
+    for (int i = 0; i < g_tape_n; i++) {
+        Interaction* e = &g_tape[i];
+        fprintf(fp, "## Interaction %d: %s %s\n\n", i, e->method, e->path);
+
+        /* v0.1 doesn't capture request headers/body during recording —
+         * the request shape is path-only and matching is method+path
+         * only on replay. We still emit the section markers so the
+         * tape stays a valid Servirtium document and is parseable by
+         * other implementations. Empty code blocks are legal. */
+        fputs("### Request headers recorded for playback:\n\n", fp);
+        emit_code_block(fp, "");
+
+        fputs("### Request body recorded for playback ():\n\n", fp);
+        emit_code_block(fp, "");
+
+        fputs("### Response headers recorded for playback:\n\n", fp);
+        if (e->content_type) {
+            char hdr[512];
+            snprintf(hdr, sizeof(hdr), "Content-Type: %s", e->content_type);
+            emit_code_block(fp, hdr);
+        } else {
+            emit_code_block(fp, "");
+        }
+
+        /* Response body section — its header line carries the status
+         * and content-type, mirroring what the parser reads. */
+        fprintf(fp, "### Response body recorded for playback (%d: %s):\n\n",
+                e->status, e->content_type ? e->content_type : "text/plain");
+        emit_code_block(fp, e->body);
+
+        fputc('\n', fp);
+    }
+
+    if (fclose(fp) != 0) {
+        tape_set_err("close failed while writing tape");
+        return 0;
+    }
+    return 1;
+}
+
 void vcr_dispatch(void* req, void* res, void* ud) {
     (void)ud;
     if (g_tape_cursor >= g_tape_n) {

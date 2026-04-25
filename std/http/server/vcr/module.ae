@@ -111,6 +111,12 @@ extern vcr_tape_length() -> int
 extern vcr_dispatch(req: ptr, res: ptr, ud: ptr)     // server handler — matches next entry, emits response
 extern vcr_register_routes(server: ptr)               // walks tape and calls server_get for each unique path
 
+// Record-mode externs — append captured interactions, then flush
+// the lot to disk in canonical Servirtium markdown when the test
+// is done.
+extern vcr_record_interaction(method: string, path: string, status: int, content_type: string, body: string) -> int
+extern vcr_flush_to_tape(path: string) -> int
+
 // ---- Aether-side surface ----
 
 // Load a tape, create + bind a server on `port`, register the
@@ -151,6 +157,36 @@ eject(server: ptr) {
     http.server_stop(server)
 }
 
-// How many entries the loaded tape has. Useful for sanity-checking
-// in test setup.
+// How many entries the loaded tape has (or, in record mode, how
+// many interactions have been captured so far). Useful for
+// sanity-checking in test setup and after-record verification.
 tape_length() -> int { return vcr_tape_length() }
+
+// ---- Record mode -----------------------------------------------------
+//
+// The recorder is driven from test code: it registers its own
+// handler against the routing layer, that handler forwards the
+// request to upstream via std.http.client, captures the response,
+// echoes it back to the SUT, and calls record() to add it to the
+// in-memory capture list. When the test is done, the test calls
+// flush(tape_path) to write everything out in canonical Servirtium
+// markdown. The next run of the test can replay from the same tape
+// without internet involvement.
+//
+// Capture an interaction. Called by the test's recorder handler
+// after it's forwarded the request and read the upstream response.
+// Returns "" on success, error string otherwise.
+record(method: string, path: string, status: int, content_type: string, body: string) -> string {
+    ok = vcr_record_interaction(method, path, status, content_type, body)
+    if ok == 0 { return "vcr.record failed" }
+    return ""
+}
+
+// Write every captured interaction to `tape_path` in canonical
+// Servirtium markdown. Overwrites any existing file at that path.
+// Returns "" on success, error string otherwise.
+flush(tape_path: string) -> string {
+    ok = vcr_flush_to_tape(tape_path)
+    if ok == 0 { return "vcr.flush failed" }
+    return ""
+}
