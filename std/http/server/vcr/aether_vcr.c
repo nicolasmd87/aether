@@ -74,6 +74,10 @@ typedef struct Interaction {
     int   status;       /* 200, 404, ... */
     char* body;         /* response body — owned, NUL-terminated; "" if empty */
     char* content_type; /* may be NULL */
+    /* Optional [Note] block (Servirtium step 9). Record-only — playback
+     * ignores it. NULL when no note was attached to this interaction. */
+    char* note_title;
+    char* note_body;
 } Interaction;
 
 static Interaction* g_tape       = NULL;
@@ -82,6 +86,12 @@ static int          g_tape_cap   = 0;
 static int          g_tape_cursor = 0;
 static char*        g_tape_err   = NULL;
 
+/* Pending note staged via vcr_note() — attaches to the next
+ * vcr_record_interaction() call, then clears. NULL when nothing
+ * is staged. */
+static char* g_pending_note_title = NULL;
+static char* g_pending_note_body  = NULL;
+
 static void tape_free_storage(void) {
     if (g_tape) {
         for (int i = 0; i < g_tape_n; i++) {
@@ -89,6 +99,8 @@ static void tape_free_storage(void) {
             free(g_tape[i].path);
             free(g_tape[i].body);
             free(g_tape[i].content_type);
+            free(g_tape[i].note_title);
+            free(g_tape[i].note_body);
         }
         free(g_tape);
         g_tape = NULL;
@@ -98,6 +110,8 @@ static void tape_free_storage(void) {
     g_tape_cursor = 0;
     free(g_tape_err);
     g_tape_err = NULL;
+    free(g_pending_note_title); g_pending_note_title = NULL;
+    free(g_pending_note_body);  g_pending_note_body  = NULL;
 }
 
 static void tape_set_err(const char* msg) {
@@ -120,8 +134,15 @@ static int tape_append(const char* method, const char* path,
     e->status       = status;
     e->body         = strdup(body ? body : "");
     e->content_type = content_type ? strdup(content_type) : NULL;
+    /* Drain the pending-note slot — ownership transfers to this
+     * interaction, so the note attaches to exactly one capture. */
+    e->note_title   = g_pending_note_title;
+    e->note_body    = g_pending_note_body;
+    g_pending_note_title = NULL;
+    g_pending_note_body  = NULL;
     if (!e->method || !e->path || !e->body || (content_type && !e->content_type)) {
         free(e->method); free(e->path); free(e->body); free(e->content_type);
+        free(e->note_title); free(e->note_body);
         return -1;
     }
     g_tape_n++;
@@ -474,6 +495,31 @@ int vcr_record_interaction(const char* method, const char* path,
     return 1;
 }
 
+/* Step 9: Notes — record-only annotations the test author can attach
+ * to a specific interaction. Stages a (title, body) pair; the next
+ * vcr_record_interaction call drains the stage onto the new
+ * interaction. Calling vcr_add_note() twice in a row without an
+ * intervening record() replaces the staged note (last writer wins).
+ *
+ * Playback ignores notes — they're parser-tolerated but never
+ * surfaced. Notes survive across flush() but not across
+ * vcr_clear_tape() / load(). */
+int vcr_add_note(const char* title, const char* body) {
+    if (!title) { tape_set_err("vcr_add_note: null title"); return 0; }
+    char* t = strdup(title);
+    char* b = strdup(body ? body : "");
+    if (!t || !b) {
+        free(t); free(b);
+        tape_set_err("OOM staging note");
+        return 0;
+    }
+    free(g_pending_note_title);
+    free(g_pending_note_body);
+    g_pending_note_title = t;
+    g_pending_note_body  = b;
+    return 1;
+}
+
 /* ---- Step 8: redactions (Servirtium "mutation operations") -----------
  *
  * Pattern → replacement substitutions applied at flush time, against
@@ -647,6 +693,21 @@ static void emit_tape_to_fp(FILE* fp) {
         }
 
         fprintf(fp, "## Interaction %d: %s %s\n\n", i, e->method, path_out);
+
+        /* Optional [Note] block (Servirtium step 9) — sits between the
+         * interaction heading and the first ### section so the parser
+         * (which only walks ### sections) skips over it harmlessly,
+         * while a human reader sees it inline next to the interaction
+         * it annotates. */
+        if (e->note_title) {
+            fprintf(fp, "## [Note] %s:\n\n", e->note_title);
+            if (e->note_body && *e->note_body) {
+                fputs(e->note_body, fp);
+                size_t bn = strlen(e->note_body);
+                if (e->note_body[bn - 1] != '\n') fputc('\n', fp);
+            }
+            fputc('\n', fp);
+        }
 
         /* v0.1 doesn't capture request headers/body during recording —
          * the request shape is path-only and matching is method+path

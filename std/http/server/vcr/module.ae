@@ -124,6 +124,10 @@ extern vcr_flush_or_check_raw(path: string) -> int
 extern vcr_add_redaction(field: int, pattern: string, replacement: string) -> int
 extern vcr_clear_redactions()
 
+// Note extern (Servirtium step 9). Stages a (title, body) note
+// that attaches to the next interaction recorded.
+extern vcr_add_note(title: string, body: string) -> int
+
 // String concat for the recheck error path — used by flush_or_check
 // to pin the return type to string. Same shape stdlib wrappers
 // elsewhere use to dodge tuple-inference confusion.
@@ -260,4 +264,27 @@ redact(field: int, pattern: string, replacement: string) -> string {
 // next.
 clear_redactions() {
     vcr_clear_redactions()
+}
+
+// ---- Notes (Servirtium roadmap step 9) -------------------------------
+//
+// Record-only annotation. Stage a (title, body) note before driving
+// the SUT; the next recorded interaction picks it up and the on-disk
+// tape carries a `## [Note] <title>:` block between the interaction
+// heading and its ### sections. Playback ignores notes — they exist
+// purely as inline documentation for a human reading the tape.
+//
+//   vcr.note("Mary", "Mary had a little lamb...")
+//   ... recorder fires next interaction ...   <- note attaches here
+//   ... recorder fires another interaction ...  <- no note (already drained)
+//
+// Calling note() twice in a row replaces the staged note (last writer
+// wins). Notes do not survive vcr.load() — record/replay are mutually
+// exclusive per-run anyway.
+//
+// Returns "" on success, error string otherwise.
+note(title: string, body: string) -> string {
+    ok = vcr_add_note(title, body)
+    if ok == 0 { return vcr_load_err() }
+    return ""
 }
