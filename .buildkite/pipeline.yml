@@ -43,13 +43,91 @@
           - exit_status: -1
             limit: 1
 
-    - label: ":link: contrib/host bridges"                                                                                                                                               
+    - label: ":link: contrib/host bridges"
       command: make contrib-host-check
-      agents:                                                                                                                                                                            
-        queue: "default-queue"                                    
+      agents:
+        queue: "default-queue"
         aether: "1"
       timeout_in_minutes: 15
       retry:
         automatic:
-          - exit_status: -1                                                                                                                                                              
+          - exit_status: -1
+            limit: 1
+
+    # ---- contrib/ per-package steps ----
+    # contrib/host is already covered above; contrib/aether_ui is
+    # covered by `make ci` step [10/10] (contrib-aether-ui-check).
+    # Steps below cover the remaining contrib packages. Kept as
+    # separate labels so a failure in one contrib doesn't mask
+    # another and the BK UI shows which contrib regressed.
+
+    - label: ":test_tube: contrib/aeocha self-test"
+      command: |
+        make compiler ae stdlib && \
+        ./build/ae run contrib/aeocha/example_self_test.ae
+      agents:
+        queue: "default-queue"
+        aether: "1"
+      timeout_in_minutes: 10
+      retry:
+        automatic:
+          - exit_status: -1
+            limit: 1
+
+    - label: ":spider_web: contrib/tinyweb compile + test"
+      # All three test files bind port 8080. Buildkite serializes
+      # jobs sharing a `concurrency_group` to `concurrency: 1`, so
+      # parallel tinyweb jobs queue rather than collide on the
+      # port. Worst case one tinyweb job waits ~10min for the
+      # previous to finish; acceptable trade for actually exercising
+      # the runtime path.
+      #
+      # Whitelist of files (the others — example_app/auth/
+      # composition/sse/static/websocket.ae — reference `tinyweb.*`
+      # symbols that module.ae does not currently export; tracked in
+      # contrib/aeocha/TODO.md). example_inventory.ae is a DSL
+      # structure demo that exits cleanly without binding.
+      command: |
+        make compiler ae stdlib && \
+        for f in contrib/tinyweb/example_inventory.ae \
+                 contrib/tinyweb/test_inventory.ae \
+                 contrib/tinyweb/test_integration.ae \
+                 contrib/tinyweb/test_spec.ae; do \
+            printf "  %-50s " "$$f"; \
+            if ./build/ae run "$$f" >/tmp/tw_run.out 2>&1; then \
+                echo OK; \
+            else \
+                echo FAIL; \
+                tail -10 /tmp/tw_run.out; \
+                exit 1; \
+            fi; \
+        done
+      agents:
+        queue: "default-queue"
+        aether: "1"
+      concurrency: 1
+      concurrency_group: "tinyweb-port-8080"
+      timeout_in_minutes: 15
+      retry:
+        automatic:
+          - exit_status: -1
+            limit: 1
+
+    - label: ":package: contrib/sqlite roundtrip"
+      # The sqlite roundtrip is already exercised via `make ci` →
+      # `make test-ae` on the Linux/GCC and Linux/Clang steps. Broken
+      # out here as its own label so a sqlite-specific regression
+      # shows up in the BK UI without having to scan the full
+      # test-ae output. Requires libsqlite3-dev in the agent image
+      # (already present per the header comment).
+      command: |
+        make compiler ae stdlib && \
+        bash tests/integration/sqlite_roundtrip/test_sqlite_roundtrip.sh
+      agents:
+        queue: "default-queue"
+        aether: "1"
+      timeout_in_minutes: 10
+      retry:
+        automatic:
+          - exit_status: -1
             limit: 1

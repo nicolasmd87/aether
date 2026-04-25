@@ -1360,3 +1360,131 @@ and with no deserialization attack surface.
 A flag on `shared_map_new()` will switch values from null-terminated
 strings to length-prefixed byte arrays. Same API, same token guard,
 same freeze/revoke lifecycle. For binary data too large to base64.
+
+## How Aether compares to other capability / sandbox systems
+
+Aether's capability model runs at three levels and composes with
+bidirectional host-language interop. Useful to anchor against
+systems readers already know.
+
+### Three enforcement layers
+
+1. **Module boundary** — under `--emit=lib` the compiler rejects
+   imports of `std.fs`, `std.net`, `std.os` at build time; the host
+   opts each one in with `--with=fs[,net,os]`. See [`emit-lib.md`](emit-lib.md).
+2. **Scope boundary** — `hide <names>` and `seal except <allowlist>`
+   let any lexical block (closure, trailing-block DSL, actor
+   handler) decline to see selected enclosing names; reading,
+   assigning, or re-declaring a hidden name is a compile error, and
+   the denial travels with the block. See [`hide-and-seal.md`](hide-and-seal.md).
+3. **Runtime process boundary** — `libaether_sandbox.so` (LD_PRELOAD)
+   intercepts libc (`open*`, `connect` / `bind` / `accept`, `execve`
+   / `fork`, `mmap` / `mprotect`, `dlopen`, `getenv`) against a
+   builder-DSL grant list, inherited across `execve`. Covers
+   normal-libc code. Adversaries using `openat2` / `io_uring` /
+   `sendfile` / `execveat` / raw `syscall()` / `ptrace` bypass it
+   (enumerated in detail above under *Interception surface*).
+
+### Bidirectional host interop
+
+Aether plays either side of the embedding relationship, with the
+same permissions registry and LD_PRELOAD checker either way.
+
+- **Aether as guest** — a host-language app loads an Aether `.so`
+  built via `--emit=lib`, which carries a typed namespace manifest
+  (`aether_describe()`) used by `ae build --namespace` to generate
+  per-language SDKs. Shipped: Python (ctypes), Java (Panama, JDK
+  22+), Ruby (Fiddle). Go stubbed. Host-side is normal methods —
+  no JNI, SWIG, `MemorySegment`, or `ctypes.CDLL` boilerplate.
+  Callback model is Hohpe's *claim check*: script emits
+  `notify(event, id)`, host calls back through the typed downcall
+  API for detail. See [`embedded-namespaces-and-host-bindings.md`](embedded-namespaces-and-host-bindings.md)
+  (typed-SDK story) and [`aether-embedded-in-host-applications.md`](aether-embedded-in-host-applications.md)
+  (rationale + YAML/HCL/Pkl/Jsonnet/Starlark comparison).
+- **Aether as host** — an Aether `main()` executable embeds
+  `contrib.host.<lang>.run_sandboxed(perms, code)` for Lua, Python
+  (CPython), Perl, Ruby, Tcl, JavaScript in-process. Java, Go, and
+  aether-hosts-aether are separate-process (Aether is compiled, so
+  aether-hosts-aether uses fork+exec with LD_PRELOAD on the child).
+  `hide` / `seal except` are Aether compile-time constructs — they
+  do NOT travel into hosted non-Aether interpreters, which have
+  their own scoping; containment for those is grants + LD_PRELOAD
+  only. `hide` / `seal except` still shape the Aether-side
+  grant-assembly block and the hosting closure. See
+  `contrib/host/<lang>/README.md` and `contrib/host/TODO.md`.
+
+### What it's most like
+
+- **Pony object capabilities** — closest analogue in a systems
+  language. Aether's grants are coarser (stdlib category at the
+  module level, name at the scope level, libc entry point at the
+  runtime level); Pony attaches capability modes to individual
+  references.
+- **Java's removed SecurityManager** — same structural idea
+  (`java.policy` grants, `AccessController.doPrivileged`), same
+  layer (interpreter / VM-level check on sensitive operations).
+  Deprecated in JDK 17, removed in JDK 24 because the maintenance
+  cost outgrew the benefit in an ecosystem where most applications
+  trust their dependencies. Aether's equivalent survives because
+  the scope is narrower (the grant list is populated by a builder
+  DSL in the same codebase, not by a system-wide policy file
+  parsed from XML) and the enforcement point is libc, not the VM.
+- **A fraction of gVisor** — both intercept at a boundary
+  (gVisor's Sentry emulates syscalls; Aether's LD_PRELOAD wraps
+  libc). gVisor is kernel-level (process-scoped, every syscall)
+  and handles adversarial workloads. Aether is userspace-level
+  (libc-scoped, easily bypassed by raw `syscall()`) and handles
+  cooperative containment. gVisor gives you a hardened sandbox
+  for untrusted containers; Aether gives you a developer-ergonomic
+  permission surface for trusted-but-sandboxed plugins.
+
+### What it is NOT
+
+- **NOT Ruby / Smalltalk / Groovy's builder-style closures** —
+  those languages interpret the trailing block at runtime with
+  full access to the interpreter's reflection surface. Aether
+  compiles the closure to C; the sandbox grant list is the
+  compiled function's only handle to privileged operations.
+  `hide` / `seal except` are checked by the compiler, not by a
+  runtime SecurityManager.
+- **NOT a runtime wrapper** (WASI, gVisor, Firejail) — `--emit=lib`
+  changes what the compiler will emit at all, not what the runtime
+  will permit later.
+- **NOT a library flag** (Deno's `--allow-net`, Node's
+  experimental permission model) — those are process-wide
+  allowlists checked at API call sites. Aether's gate is at
+  compile time and at scope entry, plus an optional runtime check.
+- **NOT an annotation convention** (Rust crates, Go build tags) —
+  those require ecosystem buy-in and don't prevent a dependency
+  from pulling in what it needs. Aether rejects the import.
+
+### What's novel is the combination
+
+Most embeddable languages (Lua, Wren, Starlark, Hermes) give you
+the embedding but leave capability management to the host. Most
+capability-secure languages (Pony, E) don't ship polyglot SDK
+generators or in-process interpreter bridges. Aether bundles both
+directions (guest + host) behind one permissions model.
+
+### Cross-cutting gaps (contributor surface)
+
+Active work listed in [`../contrib/host/TODO.md`](../contrib/host/TODO.md)
+and [`next-steps.md`](next-steps.md) → *Host Language Bridges*:
+
+- Capturing stdout/stderr from hosted scripts — pipe rewire vs.
+  shared-map key vs. pass-through, design undecided.
+- Native shared-map bindings for Perl and Ruby — currently
+  tied-hash via `eval`, which swallows writes. Python, Lua, Tcl,
+  JS already have proper native C bindings.
+- `bytes` mode on the shared map — so callers don't have to
+  base64 binary payloads across the boundary.
+
+### Worked examples and tests
+
+- `examples/embedded-java/trading/` — direction 1 (Aether as
+  guest, Java host).
+- `examples/sandbox-spawn.ae`, `examples/sandbox-demo.ae` —
+  direction 2 (Aether as host).
+- `tests/integration/namespace_{python,ruby,java}/`,
+  `tests/integration/embedded_java_trading_e2e/` — per-SDK
+  regression tests for direction 1.

@@ -16,6 +16,7 @@ Aether is a compiled language that brings actor-based concurrency to systems pro
 - Type inference with optional annotations
 - Compiles to readable C for portability and C library interop
 - Lock-free message passing with adaptive optimizations
+- Three-layer capability model for sandboxing untrusted code and hosting other languages in-process — `--emit=lib` gates stdlib at compile time, `hide`/`seal except` gates scopes, LD_PRELOAD gates libc
 - Go-style result types: `a, err = func()` with `_` discard
 - Package management: `ae add host/user/repo[@version]` (GitHub, GitLab, Bitbucket, any git host)
 
@@ -43,6 +44,18 @@ The Aether runtime implements a native actor system with optimized message passi
 - **Message coalescing** for higher throughput
 - **Adaptive batching** dynamically adjusts batch sizes
 - **Direct send** for same-core actors bypasses queues
+
+### Capabilities & Sandboxing
+
+Aether is compiled, but comes with a capability system normally associated with interpreted / VM-hosted languages. Three enforcement layers:
+
+- **Compile-time module gate** — `--emit=lib` rejects `std.fs` / `std.net` / `std.os` imports by default; the host opts each in with `--with=fs,net,os`.
+- **Compile-time scope gate** — `hide <names>` and `seal except <allowlist>` on any lexical block (closure, trailing-block DSL, actor handler) block ambient names from leaking into contained code.
+- **Runtime process gate** — `libaether_sandbox.so` (LD_PRELOAD) intercepts libc (`open*`, `connect`/`bind`, `execve`, `mmap`, `dlopen`, `getenv`) against a builder-DSL grant list; inherited across `execve` to child processes.
+
+The same grant list + LD_PRELOAD also contains embedded interpreters — an Aether `main()` can host Lua, Python, Perl, Ruby, Tcl, and JavaScript in-process (`contrib.host.<lang>.run_sandboxed(perms, code)`) with the same permission model that scopes Aether's own libc calls. In the reverse direction, `--emit=lib` + `ae build --namespace` produce a `.so` plus a typed SDK (Python ctypes, Java Panama, Ruby Fiddle) so host-language apps can embed Aether without writing FFI by hand.
+
+Mashup of Pony object capabilities, Java's removed SecurityManager, and a fraction of gVisor — see [Containment Sandbox](docs/containment-sandbox.md) for the full comparison, threat model, and known bypass surface.
 
 ### Platform Portability
 - **Compile-time platform detection** via `AETHER_HAS_*` flags (threads, atomics, filesystem, networking, NUMA, SIMD, affinity)
@@ -269,6 +282,38 @@ main() {
 }
 ```
 
+## Closures and Builder DSL
+
+Aether closures take three shapes after a function call. They look similar but have different semantics — picking the right one is the language's main lever for separating DSL structure from runtime behaviour.
+
+| Mode | Syntax | Semantics |
+|------|--------|-----------|
+| **Immediate** | `func() { block }` | Runs inline at the call site — used for DSL structure |
+| **Closure** | `func() \|x\| { block }` | Real closure with explicit params, hoisted to a C function |
+| **Callback** | `func() callback { block }` | Real closure that captures enclosing scope — no params needed |
+
+```aether
+// Immediate — declarative structure, runs during construction
+panel("Settings") {
+    button("OK")
+    button("Cancel")
+}
+
+// Closure — explicit params, deferred invocation
+apply_twice(x: int, f: fn) { return call(f, call(f, x)) }
+doubler = |x: int| -> x * 2
+println(apply_twice(3, doubler))    // 12
+
+// Callback — captures from scope, runs when invoked
+counter = ref(0)
+btn("increment") callback { ref_set(counter, ref_get(counter) + 1) }
+btn("decrement") callback { ref_set(counter, ref_get(counter) - 1) }
+```
+
+The compiler distinguishes them at parse time, which is what makes the sandboxing story (above) work: `hide`/`seal except` checks happen against the hoisted form of `closure` and `callback` blocks, so a `seal except req, res` on a callback body genuinely prevents the body from reaching outer scope. Immediate blocks inherit the caller's lexical scope by design — they're structure, not callbacks.
+
+Inspired by Smalltalk blocks, Ruby's blocks/procs, Groovy closures, and Kotlin/SwiftUI's trailing-block DSLs. See [Closures and Builder DSL](docs/closures-and-builder-dsl.md) for the builder-context mechanism, ref cells, and full DSL pattern.
+
 ## Runtime Configuration
 
 When embedding the Aether runtime in a C application, configure optimizations at startup:
@@ -441,7 +486,7 @@ Aether draws inspiration from:
 - **Erlang/OTP** — Actor model, message passing semantics
 - **Go** — Pragmatic tooling, simple concurrency primitives
 - **Rust** — Systems programming practices, zero-cost abstractions
-- **Pony** — Actor-based type safety concepts
+- **Pony** — Actor-based type safety concepts and object-capability model
 
 ## License
 
