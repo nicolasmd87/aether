@@ -59,8 +59,12 @@ extern void        http_response_set_status(void* res, int code);
 extern void        http_response_set_header(void* res, const char* name, const char* value);
 extern void        http_response_set_body  (void* res, const char* body);
 
-/* And the routing extern — used by vcr_register_routes(). */
-extern void http_server_get(void* server, const char* path, void* handler, void* user_data);
+/* And the routing extern — used by vcr_register_routes(). v0.1
+ * used http_server_get exclusively (replay-of-GET-only); v0.2
+ * uses add_route which takes the method as a string and so handles
+ * GET / POST / PUT / DELETE / PATCH and any custom verb without
+ * per-verb dispatch in C. */
+extern void http_server_add_route(void* server, const char* method, const char* path, void* handler, void* user_data);
 
 /* ---- Tape storage --------------------------------------------------- */
 
@@ -414,24 +418,31 @@ int vcr_tape_length(void) {
     return g_tape_n;
 }
 
-/* Walk the tape and call http_server_get for each unique path. Same
- * dispatcher (vcr_dispatch) handles every route; it matches against
- * the cursor and emits the recorded response. */
+/* Walk the tape and register the same dispatcher (vcr_dispatch)
+ * against each unique (method, path) pair. The dispatcher itself
+ * still matches in cursor order and serves whatever's next; routing
+ * is just there so the framework knows to call us at all.
+ *
+ * Dedup is by (method, path), not just path — a tape that has both
+ * GET /foo and POST /foo needs both routes registered so the
+ * framework dispatches to us for either verb. (The dispatcher then
+ * still strict-matches the actual incoming request against the
+ * cursor's expected (method, path); the registration is purely
+ * "wake me up for this combination.") */
 void vcr_register_routes(void* server) {
     if (!server) return;
-    /* Dedup by path — multiple interactions can share a path
-     * (dispatcher advances through them in cursor order). O(N²),
-     * fine for any plausible tape size. */
     for (int i = 0; i < g_tape_n; i++) {
         int already = 0;
         for (int j = 0; j < i; j++) {
-            if (strcmp(g_tape[i].path, g_tape[j].path) == 0) {
+            if (strcmp(g_tape[i].method, g_tape[j].method) == 0
+                && strcmp(g_tape[i].path, g_tape[j].path) == 0) {
                 already = 1;
                 break;
             }
         }
         if (!already) {
-            http_server_get(server, g_tape[i].path, (void*)vcr_dispatch, NULL);
+            http_server_add_route(server, g_tape[i].method, g_tape[i].path,
+                                  (void*)vcr_dispatch, NULL);
         }
     }
 }
