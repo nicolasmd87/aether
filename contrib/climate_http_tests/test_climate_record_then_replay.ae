@@ -192,10 +192,28 @@ main() {
 
     println("=== contrib.climate_http_tests record-then-replay ===\n")
 
+    // Three modes, decided once up front:
+    //   - is_recording = 1, is_rechecking = 0
+    //       no tape, AETHER_VCR_RECORD irrelevant → proxy + flush
+    //   - is_recording = 1, is_rechecking = 1
+    //       tape present, AETHER_VCR_RECORD set → proxy + flush_or_check
+    //       (Servirtium step 4 — upstream-drift / client-drift detection)
+    //   - is_recording = 0, is_rechecking = 0
+    //       tape present, AETHER_VCR_RECORD unset → replay
     is_recording = 0
-    if file_exists(TAPE_PATH) == 0 {
+    is_rechecking = 0
+    tape_present = 0
+    if file_exists(TAPE_PATH) != 0 { tape_present = 1 }
+    force_record = 0
+    if io.getenv("AETHER_VCR_RECORD") != 0 { force_record = 1 }
+
+    if tape_present == 0 {
         is_recording = 1
         println("(no tape at ${TAPE_PATH} — recording from upstream)")
+    } else if force_record == 1 {
+        is_recording = 1
+        is_rechecking = 1
+        println("(tape present + AETHER_VCR_RECORD set — re-recording with byte-diff check)")
     } else {
         println("(tape present at ${TAPE_PATH} — replaying)")
     }
@@ -229,12 +247,27 @@ main() {
     run_assertions()
 
     if is_recording == 1 {
-        flush_err = vcr.flush(TAPE_PATH)
-        if flush_err != "" {
-            println("FAIL: tape flush: ${flush_err}"); exit(1)
+        if is_rechecking == 1 {
+            // Re-record check: write to a sibling .actual then byte-diff
+            // against the on-disk tape. Mismatch → fail loud with the
+            // diff offset. The .actual sibling is left on disk so the
+            // developer can inspect both and decide whether to update
+            // the committed tape or fix the client/upstream.
+            check_err = vcr.flush_or_check(TAPE_PATH)
+            if check_err != "" {
+                println("\nFAIL: re-record diverged from committed tape:")
+                println("  ${check_err}")
+                exit(1)
+            }
+            println("\nRe-record check passed: ${vcr.tape_length()} interactions byte-identical to ${TAPE_PATH}")
+        } else {
+            flush_err = vcr.flush(TAPE_PATH)
+            if flush_err != "" {
+                println("FAIL: tape flush: ${flush_err}"); exit(1)
+            }
+            println("\nWrote ${vcr.tape_length()} interactions to ${TAPE_PATH}")
+            println("Re-run this test to exercise the replay path.")
         }
-        println("\nWrote ${vcr.tape_length()} interactions to ${TAPE_PATH}")
-        println("Re-run this test to exercise the replay path.")
     }
 
     println("\n=== All 5 record-then-replay tests passed ===")
