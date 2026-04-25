@@ -81,6 +81,7 @@ zig_minimal
 *.swp
 *.swo
 *~
+.idea/
 
 # OS
 .DS_Store

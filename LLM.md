@@ -28,26 +28,28 @@ Erlang's actor syntax, compiling via C.**
   string interpolation, pattern matching.
 - **Actor model is Erlang-ish** but message types are declared, not
   duck-typed. `receive` + `send`, not `!` / mailbox-matching.
-- **Capability discipline is a mashup of Pony object capabilities,
-  Java's removed SecurityManager, and a fraction of gVisor.** Three
+- **Has some sandboxing features build in** - Three
   layers: `--emit=lib` + `--with=` gates stdlib imports at compile
   time; `hide` / `seal except` denies enclosing names per lexical
   block; `libaether_sandbox.so` (LD_PRELOAD) checks libc calls
-  against a builder-DSL grant list.
-- **Hosts other languages slightly better than a linked lib** —
+  against a builder-DSL grant list. If you like: a mashup of Pony 
+  object capabilities, Java's removed SecurityManager, and a fraction 
+  of gVisor. 
+- **Hosts other languages** - Granted thss is only slightly better 
+  than a linked lib, 
   Aether `main()` embeds Lua/Python/Perl/Ruby/Tcl/JS in-process via
   `contrib.host.<lang>.run_sandboxed(perms, code)`;
   Java/Go/aether-hosts-aether are separate-process. Same grant list
   + LD_PRELOAD gates the hosted interpreter's libc calls too. Guest
   direction: `--emit=lib` → Python ctypes / Java Panama / Ruby
   Fiddle SDKs auto-generated from `aether_describe()`.
-- **NOT Ruby/Smalltalk/Groovy builder closures** — those interpret
-  the trailing block at runtime with full reflection access. Aether
-  compiles closures to C; `hide`/`seal except` are compile-time, and
-  the grant list is the closure's only handle to privileged
-  operations.
+- **NOT quite Ruby/Smalltalk/Groovy's builder-style closures** 
+  — those interpret the trailing block at runtime with full reflection 
+  access. Aether compiles closures to C; `hide`/`seal except` are  
+  compile-time, and the grant list is the closure's only handle to 
+  privileged operations.
 
-  Full comparison (who brings what — Pony's per-reference
+Sandbox more info: Full comparison (who brings what — Pony's per-reference
   granularity, Java SecManager's policy-file ancestry, gVisor's
   syscall scope, plus WASI/Deno/Rust) lives in
   `docs/containment-sandbox.md` → *How Aether compares to other
