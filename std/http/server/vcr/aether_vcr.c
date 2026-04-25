@@ -480,16 +480,9 @@ static void emit_code_block(FILE* fp, const char* body) {
     fputs("```\n", fp);
 }
 
-int vcr_flush_to_tape(const char* path) {
-    if (!path) { tape_set_err("null tape output path"); return 0; }
-    FILE* fp = fopen(path, "wb");
-    if (!fp) {
-        char msg[1024];
-        snprintf(msg, sizeof(msg), "cannot open tape file for writing: %s", path);
-        tape_set_err(msg);
-        return 0;
-    }
-
+/* Emit the in-memory tape (g_tape, g_tape_n) to an open FILE*.
+ * Both vcr_flush_to_tape and vcr_flush_or_check_raw use this. */
+static void emit_tape_to_fp(FILE* fp) {
     for (int i = 0; i < g_tape_n; i++) {
         Interaction* e = &g_tape[i];
         fprintf(fp, "## Interaction %d: %s %s\n\n", i, e->method, e->path);
@@ -522,12 +515,126 @@ int vcr_flush_to_tape(const char* path) {
 
         fputc('\n', fp);
     }
+}
 
+int vcr_flush_to_tape(const char* path) {
+    if (!path) { tape_set_err("null tape output path"); return 0; }
+    FILE* fp = fopen(path, "wb");
+    if (!fp) {
+        char msg[1024];
+        snprintf(msg, sizeof(msg), "cannot open tape file for writing: %s", path);
+        tape_set_err(msg);
+        return 0;
+    }
+    emit_tape_to_fp(fp);
     if (fclose(fp) != 0) {
         tape_set_err("close failed while writing tape");
         return 0;
     }
     return 1;
+}
+
+/* Step 4 of the Servirtium roadmap — re-record check.
+ *
+ * If `path` doesn't exist on disk, behaves identically to
+ * vcr_flush_to_tape (writes the tape, returns 1). If it does
+ * exist, writes the in-memory tape to a sibling temp file then
+ * compares byte-for-byte against the on-disk version. Equal →
+ * delete the temp, return 1. Different → keep the temp at
+ * `<path>.actual` for inspection, populate g_tape_err with a
+ * diagnostic, return 0.
+ *
+ * The "keep the differing temp around" choice matches what
+ * Servirtium's Java implementation does: the developer can diff
+ * the expected (committed) tape against the actual (just-recorded)
+ * tape and decide whether the upstream changed (update the tape)
+ * or the client drifted (fix the bug). Either decision is informed
+ * by having both files on disk. */
+int vcr_flush_or_check_raw(const char* path) {
+    if (!path) { tape_set_err("null tape output path"); return 0; }
+
+    /* If the on-disk tape doesn't exist, this is the first record —
+     * just write it. */
+    FILE* existing = fopen(path, "rb");
+    if (!existing) {
+        return vcr_flush_to_tape(path);
+    }
+
+    /* Write the in-memory tape to a sibling .actual file. */
+    char actual_path[1024];
+    int n_written = snprintf(actual_path, sizeof(actual_path), "%s.actual", path);
+    if (n_written < 0 || (size_t)n_written >= sizeof(actual_path)) {
+        fclose(existing);
+        tape_set_err("path too long for .actual sibling");
+        return 0;
+    }
+    FILE* actual = fopen(actual_path, "wb");
+    if (!actual) {
+        fclose(existing);
+        char msg[1100];
+        snprintf(msg, sizeof(msg), "cannot open %s for writing", actual_path);
+        tape_set_err(msg);
+        return 0;
+    }
+    emit_tape_to_fp(actual);
+    if (fclose(actual) != 0) {
+        fclose(existing);
+        tape_set_err("close failed writing .actual sibling");
+        return 0;
+    }
+
+    /* Byte-compare the two files. Both are open-and-close in this
+     * scope; rewind `existing` to the start since we may have
+     * touched it via fopen.
+     *
+     * We re-open `actual` for read because we just closed the write
+     * handle above. */
+    FILE* actual_r = fopen(actual_path, "rb");
+    if (!actual_r) {
+        fclose(existing);
+        tape_set_err("cannot reopen .actual for compare");
+        return 0;
+    }
+
+    int diff_offset = -1;       /* -1 = no difference seen yet */
+    long off = 0;
+    int diff_byte_existing = 0;
+    int diff_byte_actual = 0;
+    for (;;) {
+        int ce = fgetc(existing);
+        int ca = fgetc(actual_r);
+        if (ce == EOF && ca == EOF) break;       /* equal, both ended */
+        if (ce != ca) {
+            diff_offset = (int)off;
+            diff_byte_existing = ce;
+            diff_byte_actual = ca;
+            break;
+        }
+        off++;
+    }
+    fclose(existing);
+    fclose(actual_r);
+
+    if (diff_offset < 0) {
+        /* Equal — clean up the .actual since nobody needs to look at it. */
+        remove(actual_path);
+        return 1;
+    }
+
+    /* Differed — leave `.actual` on disk for inspection, surface
+     * the diff location in the error string. */
+    char msg[2048];
+    snprintf(msg, sizeof(msg),
+        "tape mismatch at byte %d: expected 0x%02x ('%c'), got 0x%02x ('%c'). "
+        "Wrote new capture to %s; diff against %s to see what changed.",
+        diff_offset,
+        (unsigned)(diff_byte_existing & 0xff),
+        (diff_byte_existing >= 32 && diff_byte_existing < 127) ? (char)diff_byte_existing : '.',
+        (unsigned)(diff_byte_actual & 0xff),
+        (diff_byte_actual >= 32 && diff_byte_actual < 127) ? (char)diff_byte_actual : '.',
+        actual_path, path);
+    tape_set_err(msg);
+    return 0;
 }
 
 void vcr_dispatch(void* req, void* res, void* ud) {

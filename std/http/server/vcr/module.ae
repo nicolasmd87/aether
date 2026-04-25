@@ -116,6 +116,12 @@ extern vcr_register_routes(server: ptr)               // walks tape and calls se
 // is done.
 extern vcr_record_interaction(method: string, path: string, status: int, content_type: string, body: string) -> int
 extern vcr_flush_to_tape(path: string) -> int
+extern vcr_flush_or_check_raw(path: string) -> int
+
+// String concat for the recheck error path — used by flush_or_check
+// to pin the return type to string. Same shape stdlib wrappers
+// elsewhere use to dodge tuple-inference confusion.
+extern string_concat(a: string, b: string) -> string
 
 // ---- Aether-side surface ----
 
@@ -188,5 +194,24 @@ record(method: string, path: string, status: int, content_type: string, body: st
 flush(tape_path: string) -> string {
     ok = vcr_flush_to_tape(tape_path)
     if ok == 0 { return "vcr.flush failed" }
+    return ""
+}
+
+// Re-record check (Servirtium roadmap step 4). If `tape_path`
+// doesn't exist on disk, behaves identically to flush(). If it
+// does exist, writes the in-memory tape to a sibling `.actual`
+// file then byte-compares against the on-disk tape:
+//   - identical → deletes the .actual sibling, returns ""
+//   - different → leaves the .actual sibling on disk for the
+//     developer to diff, returns an error string with the diff
+//     offset
+//
+// Use this in CI to catch upstream drift (the upstream now returns
+// different bytes than when the tape was first recorded — so either
+// the tape needs updating, the upstream has changed semantically, or
+// the client's wire format drifted).
+flush_or_check(tape_path: string) -> string {
+    ok = vcr_flush_or_check_raw(tape_path)
+    if ok == 0 { return vcr_load_err() }
     return ""
 }
