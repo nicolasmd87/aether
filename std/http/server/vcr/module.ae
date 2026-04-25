@@ -118,6 +118,12 @@ extern vcr_record_interaction(method: string, path: string, status: int, content
 extern vcr_flush_to_tape(path: string) -> int
 extern vcr_flush_or_check_raw(path: string) -> int
 
+// Mutation-mode externs (Servirtium step 8). Redactions are applied
+// at flush time only — the in-memory capture stays untouched, so
+// the same VCR can serve replays AND emit redacted tapes.
+extern vcr_add_redaction(field: int, pattern: string, replacement: string) -> int
+extern vcr_clear_redactions()
+
 // String concat for the recheck error path — used by flush_or_check
 // to pin the return type to string. Same shape stdlib wrappers
 // elsewhere use to dodge tuple-inference confusion.
@@ -214,4 +220,44 @@ flush_or_check(tape_path: string) -> string {
     ok = vcr_flush_or_check_raw(tape_path)
     if ok == 0 { return vcr_load_err() }
     return ""
+}
+
+// ---- Mutation mode (Servirtium roadmap step 8) -----------------------
+//
+// Test code can scrub sensitive values (Authorization tokens, session
+// cookies, server-issued ids, API keys baked into URLs) out of the
+// tape *before* it lands on disk, so committing a recorded tape to a
+// public repo doesn't leak secrets.
+//
+// Redactions are applied at flush() / flush_or_check() time only —
+// the in-memory capture stays untouched, so the same VCR can keep
+// serving replays mid-test using the original bytes while still
+// writing a scrubbed tape at the end.
+//
+// Usage:
+//   vcr.redact(vcr.FIELD_RESPONSE_BODY, "Bearer abc123", "Bearer REDACTED")
+//   vcr.redact(vcr.FIELD_PATH,           "session=xyz",   "session=REDACTED")
+//   ... drive SUT, capture interactions ...
+//   vcr.flush(tape_path)
+//
+// Field selectors. v0.1 supports path + response body. Future:
+// request headers, request body, response headers (added when
+// the recorder starts capturing those — today it doesn't).
+const FIELD_PATH          = 1
+const FIELD_RESPONSE_BODY = 2
+
+// Register a redaction. Every occurrence of `pattern` in the
+// designated field is replaced with `replacement` at flush time.
+// Returns "" on success, error string otherwise.
+redact(field: int, pattern: string, replacement: string) -> string {
+    ok = vcr_add_redaction(field, pattern, replacement)
+    if ok == 0 { return vcr_load_err() }
+    return ""
+}
+
+// Drop all registered redactions. Call between tests in the same
+// process so a redaction set from one test doesn't leak into the
+// next.
+clear_redactions() {
+    vcr_clear_redactions()
 }

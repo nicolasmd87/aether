@@ -474,6 +474,142 @@ int vcr_record_interaction(const char* method, const char* path,
     return 1;
 }
 
+/* ---- Step 8: redactions (Servirtium "mutation operations") -----------
+ *
+ * Pattern → replacement substitutions applied at flush time, against
+ * specific fields of each interaction. The in-memory tape stays
+ * pristine (so the SUT sees real responses during recording);
+ * redactions only affect what gets written to disk and what gets
+ * compared in flush_or_check.
+ *
+ * v0.1: substring match only (no regex). Field selectors limited to
+ * what the recorder actually captures today — `path` and
+ * `response_body`. Adding `request_headers` etc. is straightforward
+ * once those fields land in the recorder.
+ *
+ * Use case: scrub Authorization tokens, session cookies, API keys
+ * embedded in URLs, server-issued ids that would otherwise leak
+ * into a public repo. Test author calls vcr.redact(field, pattern,
+ * replacement) once per pattern before flush; the flush walks each
+ * interaction and applies every registered redaction.
+ * -------------------------------------------------------------------- */
+
+#define VCR_FIELD_PATH          1
+#define VCR_FIELD_RESPONSE_BODY 2
+/* Future: VCR_FIELD_REQUEST_HEADERS, REQUEST_BODY, RESPONSE_HEADERS,
+ * once the recorder captures those. */
+
+typedef struct Redaction {
+    int   field;        /* VCR_FIELD_* */
+    char* pattern;      /* substring to match, owned */
+    char* replacement;  /* what to put in its place, owned */
+} Redaction;
+
+static Redaction* g_redactions     = NULL;
+static int        g_redactions_n   = 0;
+static int        g_redactions_cap = 0;
+
+static void redactions_free_storage(void) {
+    if (g_redactions) {
+        for (int i = 0; i < g_redactions_n; i++) {
+            free(g_redactions[i].pattern);
+            free(g_redactions[i].replacement);
+        }
+        free(g_redactions);
+        g_redactions = NULL;
+    }
+    g_redactions_n = 0;
+    g_redactions_cap = 0;
+}
+
+/* Replace every (non-overlapping) occurrence of `pattern` in `src`
+ * with `replacement`. Returns a freshly malloc'd NUL-terminated
+ * string the caller frees. NULL on OOM. Empty pattern returns a
+ * straight strdup of src (no-op). */
+static char* str_replace_all(const char* src, const char* pattern, const char* replacement) {
+    if (!src) return NULL;
+    if (!pattern || !*pattern) return strdup(src);
+    if (!replacement) replacement = "";
+
+    size_t src_len = strlen(src);
+    size_t pat_len = strlen(pattern);
+    size_t rep_len = strlen(replacement);
+
+    /* First pass: count occurrences so we can size the output. */
+    size_t hits = 0;
+    const char* scan = src;
+    while ((scan = strstr(scan, pattern)) != NULL) {
+        hits++;
+        scan += pat_len;
+    }
+    if (hits == 0) return strdup(src);
+
+    size_t out_len = src_len + hits * (rep_len > pat_len ? rep_len - pat_len : 0)
+                             - hits * (pat_len > rep_len ? pat_len - rep_len : 0);
+    char* out = (char*)malloc(out_len + 1);
+    if (!out) return NULL;
+
+    char* dst = out;
+    const char* p = src;
+    while (1) {
+        const char* hit = strstr(p, pattern);
+        if (!hit) { strcpy(dst, p); break; }
+        size_t prefix = (size_t)(hit - p);
+        memcpy(dst, p, prefix);
+        dst += prefix;
+        memcpy(dst, replacement, rep_len);
+        dst += rep_len;
+        p = hit + pat_len;
+    }
+    return out;
+}
+
+int vcr_add_redaction(int field, const char* pattern, const char* replacement) {
+    if (field != VCR_FIELD_PATH && field != VCR_FIELD_RESPONSE_BODY) {
+        tape_set_err("vcr_add_redaction: unsupported field selector");
+        return 0;
+    }
+    if (!pattern) { tape_set_err("vcr_add_redaction: null pattern"); return 0; }
+    if (g_redactions_n >= g_redactions_cap) {
+        int new_cap = g_redactions_cap ? g_redactions_cap * 2 : 4;
+        Redaction* bigger = (Redaction*)realloc(g_redactions, sizeof(Redaction) * (size_t)new_cap);
+        if (!bigger) { tape_set_err("OOM growing redactions"); return 0; }
+        g_redactions = bigger;
+        g_redactions_cap = new_cap;
+    }
+    Redaction* r = &g_redactions[g_redactions_n];
+    r->field = field;
+    r->pattern = strdup(pattern);
+    r->replacement = strdup(replacement ? replacement : "");
+    if (!r->pattern || !r->replacement) {
+        free(r->pattern); free(r->replacement);
+        tape_set_err("OOM appending redaction");
+        return 0;
+    }
+    g_redactions_n++;
+    return 1;
+}
+
+/* Apply every registered redaction whose field matches `field` to
+ * `src` (a malloc'd string the caller owns). Returns a freshly
+ * malloc'd replacement; the original is freed. If no redactions
+ * apply, returns `src` unchanged. */
+static char* apply_redactions(char* src, int field) {
+    if (!src) return NULL;
+    if (g_redactions_n == 0) return src;
+    char* cur = src;
+    for (int i = 0; i < g_redactions_n; i++) {
+        if (g_redactions[i].field != field) continue;
+        char* next = str_replace_all(cur, g_redactions[i].pattern, g_redactions[i].replacement);
+        if (!next) return cur; /* OOM — return what we have */
+        if (next != cur) {
+            free(cur);
+            cur = next;
+        }
+    }
+    return cur;
+}
+
 /* Helper: emit a fenced code block. The body is written verbatim;
  * if the body itself contains a "```" line the output won't round-trip
  * cleanly, but that's a Servirtium-spec-wide problem (every
@@ -492,11 +628,25 @@ static void emit_code_block(FILE* fp, const char* body) {
 }
 
 /* Emit the in-memory tape (g_tape, g_tape_n) to an open FILE*.
- * Both vcr_flush_to_tape and vcr_flush_or_check_raw use this. */
+ * Both vcr_flush_to_tape and vcr_flush_or_check_raw use this.
+ *
+ * If any redactions have been registered via vcr_add_redaction(),
+ * they are applied per-interaction at emit time — the in-memory
+ * Interaction is left untouched (so subsequent flushes still see
+ * the original capture), only the bytes written are scrubbed. */
 static void emit_tape_to_fp(FILE* fp) {
     for (int i = 0; i < g_tape_n; i++) {
         Interaction* e = &g_tape[i];
-        fprintf(fp, "## Interaction %d: %s %s\n\n", i, e->method, e->path);
+
+        /* Apply path/body redactions to local copies. */
+        char* path_out = strdup(e->path ? e->path : "");
+        char* body_out = strdup(e->body ? e->body : "");
+        if (g_redactions_n > 0) {
+            path_out = apply_redactions(path_out, VCR_FIELD_PATH);
+            body_out = apply_redactions(body_out, VCR_FIELD_RESPONSE_BODY);
+        }
+
+        fprintf(fp, "## Interaction %d: %s %s\n\n", i, e->method, path_out);
 
         /* v0.1 doesn't capture request headers/body during recording —
          * the request shape is path-only and matching is method+path
@@ -522,10 +672,19 @@ static void emit_tape_to_fp(FILE* fp) {
          * and content-type, mirroring what the parser reads. */
         fprintf(fp, "### Response body recorded for playback (%d: %s):\n\n",
                 e->status, e->content_type ? e->content_type : "text/plain");
-        emit_code_block(fp, e->body);
+        emit_code_block(fp, body_out);
 
         fputc('\n', fp);
+
+        free(path_out);
+        free(body_out);
     }
+}
+
+/* Drop all registered redactions. Useful to call between tests in
+ * the same process so a redaction set doesn't leak across them. */
+void vcr_clear_redactions(void) {
+    redactions_free_storage();
 }
 
 int vcr_flush_to_tape(const char* path) {
