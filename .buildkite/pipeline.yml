@@ -153,6 +153,40 @@
           - exit_status: -1
             limit: 1
 
+    - label: ":cloud: contrib/climate_http_tests (VCR replay)"
+      # Servirtium-format record/replay against the WorldBank climate
+      # API mirror. Three test files in this directory:
+      #
+      #   - test_climate_real.ae           — live network, NOT in CI
+      #   - test_climate_via_vcr.ae        — replay-only, hand-written
+      #                                       tape, fully offline
+      #   - test_climate_record_then_replay.ae — auto record/replay;
+      #                                       falls back to replay when
+      #                                       AETHER_SKIP_NETWORK is set
+      #                                       and a tape is present
+      #
+      # CI runs only the offline-safe replay test. The record path
+      # would need outbound HTTPS to servirtium.github.io; cleanest to
+      # leave that to local dev runs and have CI just confirm the
+      # replay path stays green. Companion to the test_vcr_*
+      # integration tests already in tests/integration/ (which
+      # already run via make test-ae); this label gives the
+      # contrib-shaped fixture its own broken-out tick in the BK UI.
+      #
+      # Binds port 18099 (test_climate_via_vcr.ae const PORT). No
+      # collision with tinyweb (8080) or aether_ui (9222).
+      command: |
+        make compiler ae stdlib && \
+        ./build/ae run contrib/climate_http_tests/test_climate_via_vcr.ae
+      agents:
+        queue: "default-queue"
+        aether: "1"
+      timeout_in_minutes: 10
+      retry:
+        automatic:
+          - exit_status: -1
+            limit: 1
+
     - label: ":package: contrib/sqlite roundtrip"
       # The sqlite roundtrip is already exercised via `make ci` →
       # `make test-ae` on the Linux/GCC and Linux/Clang steps. Broken
