@@ -433,42 +433,62 @@ static int get_exe_directory(char* buf, size_t bufsz) {
 }
 
 char* module_resolve_stdlib_path(const char* module_name) {
-    char path[1024];
+    /* 4 KiB buffer (was 1 KiB) — covers any plausible AETHER_HOME or
+     * exe_dir prefix even with deeply-nested module paths. The
+     * previous 1 KiB triggered -Wformat-truncation under -Werror
+     * once dot-to-slash conversion was added (the format-truncation
+     * analyser sums prefix + 512-byte module path + suffix and
+     * concludes 1024 may not be enough). */
+    char path[4096];
+
+    // Convert dots to slashes so `std.http.client` resolves to
+    // `std/http/client/module.ae` rather than the literal `std/http.client/`
+    // (which would never exist on disk). Mirrors what the local-path
+    // resolver below already does for non-stdlib imports. Without
+    // this, only single-component stdlib modules (`std.fs`, `std.io`)
+    // resolved; nested ones like `std.http.client` failed even when
+    // the file was present at the expected path.
+    char converted[512];
+    strncpy(converted, module_name, sizeof(converted) - 1);
+    converted[sizeof(converted) - 1] = '\0';
+    for (char* p = converted; *p; p++) {
+        if (*p == '.') *p = '/';
+    }
 
     // Try 1: Local development path (relative to CWD)
-    snprintf(path, sizeof(path), "std/%s/module.ae", module_name);
+    snprintf(path, sizeof(path), "std/%s/module.ae", converted);
     if (access(path, F_OK) == 0) return strdup(path);
 
     // Try 2: Installed path via AETHER_HOME
     const char* aether_home = getenv("AETHER_HOME");
     if (aether_home && aether_home[0]) {
-        snprintf(path, sizeof(path), "%s/share/aether/std/%s/module.ae", aether_home, module_name);
+        snprintf(path, sizeof(path), "%s/share/aether/std/%s/module.ae", aether_home, converted);
         if (access(path, F_OK) == 0) return strdup(path);
-        snprintf(path, sizeof(path), "%s/std/%s/module.ae", aether_home, module_name);
+        snprintf(path, sizeof(path), "%s/std/%s/module.ae", aether_home, converted);
         if (access(path, F_OK) == 0) return strdup(path);
     }
 
     // Try 3: Relative to the running aetherc binary
     char exe_dir[512];
     if (get_exe_directory(exe_dir, sizeof(exe_dir))) {
-        snprintf(path, sizeof(path), "%s/../share/aether/std/%s/module.ae", exe_dir, module_name);
+        snprintf(path, sizeof(path), "%s/../share/aether/std/%s/module.ae", exe_dir, converted);
         if (access(path, F_OK) == 0) return strdup(path);
-        snprintf(path, sizeof(path), "%s/../std/%s/module.ae", exe_dir, module_name);
+        snprintf(path, sizeof(path), "%s/../std/%s/module.ae", exe_dir, converted);
         if (access(path, F_OK) == 0) return strdup(path);
-        snprintf(path, sizeof(path), "%s/../lib/std/%s/module.ae", exe_dir, module_name);
+        snprintf(path, sizeof(path), "%s/../lib/std/%s/module.ae", exe_dir, converted);
         if (access(path, F_OK) == 0) return strdup(path);
     }
 
     // Try 4: User home directory (~/.aether)
     const char* home = get_user_home_dir();
     if (home && home[0]) {
-        snprintf(path, sizeof(path), "%s/.aether/share/aether/std/%s/module.ae", home, module_name);
+        snprintf(path, sizeof(path), "%s/.aether/share/aether/std/%s/module.ae", home, converted);
         if (access(path, F_OK) == 0) return strdup(path);
     }
 
 #ifndef _WIN32
     // Try 5: System install locations (POSIX only)
-    snprintf(path, sizeof(path), "/usr/local/share/aether/std/%s/module.ae", module_name);
+    snprintf(path, sizeof(path), "/usr/local/share/aether/std/%s/module.ae", converted);
     if (access(path, F_OK) == 0) return strdup(path);
 #endif
 

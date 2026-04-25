@@ -1228,12 +1228,24 @@ int typecheck_program(ASTNode* program) {
                     }
                 }
 
-                // Handle stdlib imports: import std.X
+                // Handle stdlib imports: import std.X (or std.X.Y, std.X.Y.Z, ...)
                 if (strncmp(module_path, "std.", 4) == 0) {
-                    const char* module_name = module_path + 4;  // "fs", "string", etc.
+                    // For selective-import filter purposes we still want
+                    // the substring after `std.` ("fs", "http.client", ...).
+                    const char* module_name = module_path + 4;
+
+                    // The qualified-call namespace prefix is the LEAF
+                    // component (the bit after the last dot), not the
+                    // whole sub-path. For `std.http.client` callers
+                    // write `client.foo(...)`, not `http.client.foo(...)`.
+                    // This matches what the orchestrator's merger uses
+                    // when it prefixes wrapper function names — see
+                    // module_get_namespace() in aether_module.c.
+                    const char* last_dot = strrchr(module_name, '.');
+                    const char* ns_leaf  = last_dot ? last_dot + 1 : module_name;
 
                     // Register namespace for qualified calls (e.g., string.new)
-                    register_namespace(module_name);
+                    register_namespace(ns_leaf);
 
                     // If this is a selective import, record the allow list
                     // so qualified calls to functions not in it get rejected.
