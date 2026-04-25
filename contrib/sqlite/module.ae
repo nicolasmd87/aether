@@ -13,10 +13,30 @@
 //   sqlite.cell(rs, row, col)   -> string     // "" if the DB stored NULL
 //   sqlite.free(rs)             -> void
 //
-// Parameter binding (?1, :name, etc.) is deliberately out of scope
-// for v1 — see docs/stdlib-vs-contrib.md for the "one obvious shape"
-// criterion. Users who need it can wait for an additive API or drop
-// down to sqlite3_prepare_v2 / bind / step via extern themselves.
+// v2 surface (additive — prepared statements + parameter binding):
+//   sqlite.prepare(db, sql)         -> (stmt, err)
+//   sqlite.bind_int(stmt, idx, v)   -> err
+//   sqlite.bind_text(stmt, idx, s)  -> err              // SQLITE_TRANSIENT
+//   sqlite.bind_blob(stmt, idx, b, n) -> err            // binary-safe
+//   sqlite.bind_i64(stmt, idx, hi, lo) -> err           // split for Aether int width
+//   sqlite.bind_null(stmt, idx)     -> err
+//   sqlite.step(stmt)               -> (rc, err)        // SQLITE_ROW / SQLITE_DONE
+//   sqlite.column_int(stmt, col)    -> int
+//   sqlite.column_i64(stmt, col)    -> (hi, lo)         // splitting matches bind_i64
+//   sqlite.column_text(stmt, col)   -> string           // "" for SQL NULL
+//   sqlite.column_blob(stmt, col)   -> (bytes, length, err)  // length-aware AetherString
+//   sqlite.reset(stmt)              -> err
+//   sqlite.finalize(stmt)           -> err
+//   sqlite.changes(db)              -> int
+//   sqlite.errmsg(db)               -> string
+//
+// Constants exported below so callers don't redeclare them:
+//   SQLITE_OK = 0, SQLITE_ROW = 100, SQLITE_DONE = 101.
+//
+// Streaming row iteration (cursor-style) is still out of scope —
+// tracked as v3 in sqlite-improvement-plan.md. The v2 primitives
+// here are sufficient to write the streaming loop in pure Aether
+// (`while step() == SQLITE_ROW { ... read columns ... }`).
 //
 // Build:
 //   - Drop `contrib/sqlite/aether_sqlite.c` into your project's
@@ -100,3 +120,182 @@ cell(rs: ptr, row: int, col: int) -> string { return sqlite_rs_cell(rs, row, col
 
 // Free the result set. Safe to call on a null pointer (no-op).
 free(rs: ptr) { sqlite_rs_free(rs) }
+
+// =================================================================
+// v2: prepared statements + parameter binding
+// =================================================================
+
+// SQLite result codes the Aether wrappers surface to callers.
+// Step returns one of these; tests typically branch on
+// `rc == SQLITE_ROW` to loop through results.
+const SQLITE_OK   = 0
+const SQLITE_ROW  = 100
+const SQLITE_DONE = 101
+
+// ---- Raw externs ----
+extern sqlite_prepare_raw(db: ptr, sql: string) -> ptr
+extern sqlite_bind_int_raw(stmt: ptr, idx: int, v: int) -> int
+extern sqlite_bind_text_raw(stmt: ptr, idx: int, text: string) -> int
+extern sqlite_bind_blob_raw(stmt: ptr, idx: int, data: string, len: int) -> int
+extern sqlite_bind_i64_raw(stmt: ptr, idx: int, hi: int, lo: int) -> int
+extern sqlite_bind_null_raw(stmt: ptr, idx: int) -> int
+extern sqlite_step_raw(stmt: ptr) -> int
+extern sqlite_column_int_raw(stmt: ptr, col: int) -> int
+extern sqlite_column_i64_hi_raw(stmt: ptr, col: int) -> int
+extern sqlite_column_i64_lo_raw(stmt: ptr, col: int) -> int
+extern sqlite_column_text_raw(stmt: ptr, col: int) -> string
+extern sqlite_try_column_blob(stmt: ptr, col: int) -> int
+extern sqlite_get_blob_bytes() -> string
+extern sqlite_get_blob_length() -> int
+extern sqlite_release_blob()
+extern sqlite_reset_raw(stmt: ptr) -> int
+extern sqlite_finalize_raw(stmt: ptr) -> int
+extern sqlite_changes_raw(db: ptr) -> int
+extern sqlite_errmsg_raw(db: ptr) -> string
+
+// Length-aware AetherString constructor — re-used from std.string.
+// Lets `column_blob` return a binary-safe AetherString rather than
+// a strlen-truncated copy.
+extern string_new_with_length(data: string, length: int) -> ptr
+
+// ---- Go-style wrappers ----
+
+// Compile a SQL string into a reusable statement. Bind parameters
+// per call, step until done, finalize when done with the statement
+// (or before sqlite.close on the db). Returns (stmt, "") on success;
+// (null, error) on parse failure. The error is read from the db
+// handle — sqlite stores prepare errors there, not on the (NULL)
+// statement.
+prepare(db: ptr, sql: string) -> {
+    stmt = sqlite_prepare_raw(db, sql)
+    if stmt == null {
+        return null, sqlite_errmsg_raw(db)
+    }
+    return stmt, ""
+}
+
+// Bind helpers. Each returns "" on success, sqlite's error text
+// otherwise. Index is 1-based to match SQLite's parameter numbering
+// (?1 binds at idx 1, etc.).
+bind_int(stmt: ptr, idx: int, v: int) -> string {
+    rc = sqlite_bind_int_raw(stmt, idx, v)
+    if rc != SQLITE_OK { return "bind_int failed" }
+    return ""
+}
+
+bind_text(stmt: ptr, idx: int, text: string) -> string {
+    rc = sqlite_bind_text_raw(stmt, idx, text)
+    if rc != SQLITE_OK { return "bind_text failed" }
+    return ""
+}
+
+bind_blob(stmt: ptr, idx: int, data: string, len: int) -> string {
+    rc = sqlite_bind_blob_raw(stmt, idx, data, len)
+    if rc != SQLITE_OK { return "bind_blob failed" }
+    return ""
+}
+
+// 64-bit int bind: split into (hi, lo) because Aether's `int` width
+// isn't guaranteed 64-bit (32-bit on MSVC). hi is signed, lo is
+// treated as unsigned 32-bit on the C side. Once Aether grows a
+// guaranteed int64 type this can be replaced with a single-arg form.
+bind_i64(stmt: ptr, idx: int, hi: int, lo: int) -> string {
+    rc = sqlite_bind_i64_raw(stmt, idx, hi, lo)
+    if rc != SQLITE_OK { return "bind_i64 failed" }
+    return ""
+}
+
+bind_null(stmt: ptr, idx: int) -> string {
+    rc = sqlite_bind_null_raw(stmt, idx)
+    if rc != SQLITE_OK { return "bind_null failed" }
+    return ""
+}
+
+// Drive the statement one step. Returns (rc, "") for the two success
+// codes (SQLITE_ROW = there's a row to read; SQLITE_DONE = no more
+// rows). Any other rc is an error and err carries sqlite's text.
+//
+// Typical loop:
+//   loop {
+//       rc, err = sqlite.step(stmt)
+//       if err != "" { /* handle error */ break }
+//       if rc != SQLITE_ROW { break }     // SQLITE_DONE
+//       v = sqlite.column_int(stmt, 0)
+//       ...
+//   }
+step(stmt: ptr, db: ptr) -> {
+    rc = sqlite_step_raw(stmt)
+    if rc == SQLITE_ROW { return rc, "" }
+    if rc == SQLITE_DONE { return rc, "" }
+    return rc, sqlite_errmsg_raw(db)
+}
+
+// Column accessors. Only valid after step() returned SQLITE_ROW.
+// SQL NULL columns surface as 0 (int), 0 (i64), "" (text), or empty
+// blob — sqlite's own column functions are forgiving the same way.
+column_int(stmt: ptr, col: int) -> int {
+    return sqlite_column_int_raw(stmt, col)
+}
+
+// 64-bit column read returns (hi, lo) — symmetric with bind_i64.
+column_i64(stmt: ptr, col: int) -> {
+    hi = sqlite_column_i64_hi_raw(stmt, col)
+    lo = sqlite_column_i64_lo_raw(stmt, col)
+    return hi, lo
+}
+
+column_text(stmt: ptr, col: int) -> string {
+    return sqlite_column_text_raw(stmt, col)
+}
+
+// Blob columns return a length-aware AetherString plus the explicit
+// byte count, matching the shape std.fs.read_binary uses. Embedded
+// NULs survive because the C side memcpy's the bytes into a TLS
+// slot, then the wrapper copies that slot into an owned AetherString
+// via string_new_with_length.
+//
+// Returns ("", 0, error) on misuse (null stmt, oob col); ("", 0, "")
+// for SQL NULL or genuinely empty blobs (these aren't distinguished
+// at this layer — add an explicit `column_type` accessor later if a
+// caller needs to tell them apart).
+column_blob(stmt: ptr, col: int) -> {
+    ok = sqlite_try_column_blob(stmt, col)
+    if ok == 0 { return "", 0, "column_blob failed" }
+    raw = sqlite_get_blob_bytes()
+    n   = sqlite_get_blob_length()
+    owned = string_new_with_length(raw, n)
+    sqlite_release_blob()
+    return owned, n, ""
+}
+
+// Reset rebinds the statement to its initial state. Bindings are
+// preserved — call bind_* again to overwrite them, or use the
+// statement as-is to re-execute with the same parameters.
+reset(stmt: ptr) -> string {
+    rc = sqlite_reset_raw(stmt)
+    if rc != SQLITE_OK { return "reset failed" }
+    return ""
+}
+
+// Free the statement's resources. Safe to call on null (no-op).
+// MUST be called before sqlite.close on the db, or close will
+// fail with "unable to close due to unfinalized statements".
+finalize(stmt: ptr) -> string {
+    rc = sqlite_finalize_raw(stmt)
+    if rc != SQLITE_OK { return "finalize failed" }
+    return ""
+}
+
+// Number of rows affected by the most-recent INSERT/UPDATE/DELETE
+// on this connection. Reset to 0 between connections; affected by
+// triggers (counts trigger rows too).
+changes(db: ptr) -> int {
+    return sqlite_changes_raw(db)
+}
+
+// Last error text from the connection. Always non-empty (returns
+// "not an error" when no error has occurred). Useful for surfacing
+// detail when bind/step return non-SQLITE_OK rcs.
+errmsg(db: ptr) -> string {
+    return sqlite_errmsg_raw(db)
+}
