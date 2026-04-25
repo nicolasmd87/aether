@@ -139,6 +139,11 @@ extern vcr_clear_last_error()
 extern vcr_add_static_content(mount_path: string, fs_dir: string) -> int
 extern vcr_clear_static_content()
 
+// Step 12 externs — optional markdown formatting toggles for the
+// recorder. Playback tolerates either form regardless.
+extern vcr_set_indent_code_blocks(on: int)
+extern vcr_set_emphasize_http_verbs(on: int)
+
 // String concat for the recheck error path — used by flush_or_check
 // to pin the return type to string. Same shape stdlib wrappers
 // elsewhere use to dodge tuple-inference confusion.
@@ -388,4 +393,39 @@ static_content(mount_path: string, fs_dir: string) -> string {
 // scenarios. Recommended pattern is one VCR per test.
 clear_static_content() {
     vcr_clear_static_content()
+}
+
+// ---- Optional markdown formatting (Servirtium roadmap step 12) -------
+//
+// Two recorder-only toggles for the on-disk tape format. Playback
+// tolerates either form regardless of these toggles — a tape
+// recorded by another Servirtium implementation in either form
+// loads cleanly here, and a tape we wrote in one form can be
+// loaded by any other implementation that meets the spec.
+//
+//   indent_code_blocks() — emit code blocks as 4-space-indented
+//   text instead of triple-backtick fences. Idiomatic for some
+//   markdown editors and avoids the open-fence/close-fence
+//   ambiguity when bodies happen to contain ``` lines.
+//
+//   emphasize_http_verbs() — emit the method in interaction
+//   headings as *GET* instead of bare GET. Some markdown
+//   renderers display this in italics, making the method visually
+//   distinct from the path.
+//
+// Default off; existing tapes round-trip byte-identical when no
+// toggle is set.
+indent_code_blocks() {
+    vcr_set_indent_code_blocks(1)
+}
+
+emphasize_http_verbs() {
+    vcr_set_emphasize_http_verbs(1)
+}
+
+// Reset toggles back to defaults (fenced blocks, bare verbs).
+// Useful between tests in the same process.
+clear_format_options() {
+    vcr_set_indent_code_blocks(0)
+    vcr_set_emphasize_http_verbs(0)
 }

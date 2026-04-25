@@ -258,6 +258,100 @@ static void rtrim(char* s) {
  * Returns a freshly-allocated string containing the block's body
  * (without the surrounding ``` lines), or NULL if none found. Trailing
  * newline trimmed. */
+/* Step 12: indented-code-block extractor. Markdown's alternative
+ * form: each content line starts with at least 4 spaces (or 1 tab).
+ * Block ends at the first line that is neither blank nor 4-space-
+ * indented. Output strips the leading 4 spaces from each line.
+ * Returns NULL if no indented block is detected here. */
+static char* extract_indented_block(const char* start, const char* end) {
+    /* Find first non-blank line. */
+    const char* p = start;
+    const char* block_start = NULL;
+    while (p < end) {
+        const char* nl = (const char*)memchr(p, '\n', (size_t)(end - p));
+        const char* line_end = nl ? nl : end;
+        /* Blank or whitespace-only? skip. */
+        const char* q = p;
+        while (q < line_end && (*q == ' ' || *q == '\t')) q++;
+        if (q == line_end) {
+            if (!nl) break;
+            p = nl + 1;
+            continue;
+        }
+        /* First non-blank line — must start with 4 spaces / tab to
+         * qualify as an indented code block. Otherwise no match. */
+        if ((line_end - p) >= 4 && p[0] == ' ' && p[1] == ' '
+            && p[2] == ' ' && p[3] == ' ') {
+            block_start = p;
+        } else if ((line_end - p) >= 1 && p[0] == '\t') {
+            block_start = p;
+        } else {
+            return NULL;
+        }
+        break;
+    }
+    if (!block_start) return NULL;
+
+    /* Walk forward, accumulating indented lines (with leading 4
+     * spaces / 1 tab stripped) until we hit a non-blank non-indented
+     * line or end. Trailing blank lines inside the block are kept
+     * verbatim until the dedented terminator. */
+    /* Two passes: size + copy. Simpler than realloc-grow. */
+    size_t out_cap = 0;
+    p = block_start;
+    while (p < end) {
+        const char* nl = (const char*)memchr(p, '\n', (size_t)(end - p));
+        const char* line_end = nl ? nl : end;
+        const char* q = p;
+        while (q < line_end && (*q == ' ' || *q == '\t')) q++;
+        int blank = (q == line_end);
+        int indented = ((line_end - p) >= 4 && p[0] == ' ' && p[1] == ' '
+                        && p[2] == ' ' && p[3] == ' ')
+                    || ((line_end - p) >= 1 && p[0] == '\t');
+        if (!blank && !indented) break;
+        if (indented) {
+            int strip = (p[0] == '\t') ? 1 : 4;
+            out_cap += (size_t)(line_end - p - strip) + 1;
+        } else {
+            out_cap += 1;  /* blank line → just \n */
+        }
+        if (!nl) break;
+        p = nl + 1;
+    }
+
+    char* out = (char*)malloc(out_cap + 1);
+    if (!out) return NULL;
+    char* dst = out;
+    p = block_start;
+    while (p < end) {
+        const char* nl = (const char*)memchr(p, '\n', (size_t)(end - p));
+        const char* line_end = nl ? nl : end;
+        const char* q = p;
+        while (q < line_end && (*q == ' ' || *q == '\t')) q++;
+        int blank = (q == line_end);
+        int indented = ((line_end - p) >= 4 && p[0] == ' ' && p[1] == ' '
+                        && p[2] == ' ' && p[3] == ' ')
+                    || ((line_end - p) >= 1 && p[0] == '\t');
+        if (!blank && !indented) break;
+        if (indented) {
+            int strip = (p[0] == '\t') ? 1 : 4;
+            size_t take = (size_t)(line_end - p - strip);
+            memcpy(dst, p + strip, take);
+            dst += take;
+            *dst++ = '\n';
+        } else {
+            *dst++ = '\n';
+        }
+        if (!nl) break;
+        p = nl + 1;
+    }
+    /* Trim trailing newline so output matches the fenced form, which
+     * also lacks the trailing \n before the close fence. */
+    if (dst > out && dst[-1] == '\n') dst--;
+    *dst = '\0';
+    return out;
+}
+
 static char* extract_code_block(const char* start, const char* end) {
     /* Look for "```\n" (open fence). */
     const char* open = start;
@@ -286,6 +380,17 @@ static char* extract_code_block(const char* start, const char* end) {
             }
             return NULL;  /* unclosed fence */
         }
+        /* Step 12: also accept a non-empty non-fence-prefixed line
+         * that happens to be 4-space-indented — markdown's alternative
+         * code block form. As soon as we see a non-blank line that
+         * isn't a fence, hand off to the indented-block extractor.
+         * If the first non-blank line isn't indented either, the
+         * section has no code block at all. */
+        const char* q = open;
+        while (q < nl && (*q == ' ' || *q == '\t')) q++;
+        if (q != nl) {
+            return extract_indented_block(open, end);
+        }
         open = nl + 1;
     }
     return NULL;
@@ -293,6 +398,9 @@ static char* extract_code_block(const char* start, const char* end) {
 
 /* Parse the interaction header line ("GET /path") into method + path.
  * Either the first space terminates the path, or the line ends.
+ * Step 12: also tolerates markdown-emphasized verbs — *GET*, _GET_,
+ * **GET**, __GET__ all reduce to GET. Playback adapts to whichever
+ * form the on-disk tape uses without an explicit toggle.
  * Returns 0 on success, -1 on malformed input. */
 static int parse_interaction_header(const char* line_start, const char* line_end,
                                     char** out_method, char** out_path) {
@@ -302,7 +410,20 @@ static int parse_interaction_header(const char* line_start, const char* line_end
      * and up to the newline. Format: "METHOD path". */
     const char* sp = (const char*)memchr(line_start, ' ', (size_t)(line_end - line_start));
     if (!sp) return -1;
-    *out_method = slice_dup(line_start, sp);
+    /* Strip emphasis markers around the method token. Asterisks and
+     * underscores are the two markdown-supported emphasis forms;
+     * doubling either marks strong emphasis. We just peel both ends
+     * off symmetrically — wide compatibility with whatever any
+     * Servirtium implementation emits. */
+    const char* m_start = line_start;
+    const char* m_end   = sp;
+    while (m_start < m_end
+           && (*m_start == '*' || *m_start == '_')
+           && (m_end[-1] == '*' || m_end[-1] == '_')) {
+        m_start++;
+        m_end--;
+    }
+    *out_method = slice_dup(m_start, m_end);
     /* path runs from sp+1 to line_end (rtrim handled by caller via
      * rtrim() on the result). */
     *out_path = slice_dup(sp + 1, line_end);
@@ -773,7 +894,35 @@ static char* apply_redactions(char* src, int field) {
  * implementation has the same constraint). v0.1 doesn't try to
  * escape — production Servirtium tapes don't carry ``` in bodies
  * in any of the climate-API or similar fixtures. */
+/* Step 12: optional markdown formatting toggles for the recorder.
+ * Defaults match v0.1 behavior (fenced blocks, bare verbs) so
+ * existing tapes stay byte-identical on re-flush. Playback is
+ * always tolerant of either form regardless of these toggles. */
+static int g_indent_code_blocks  = 0;
+static int g_emphasize_http_verbs = 0;
+
 static void emit_code_block(FILE* fp, const char* body) {
+    if (g_indent_code_blocks) {
+        /* Indented form: each line prefixed with 4 spaces, no fences.
+         * Empty body → emit a single 4-space-only line so the parser
+         * has something to anchor on (mirrors the empty-fence case). */
+        if (!body || !*body) {
+            fputs("    \n", fp);
+            return;
+        }
+        const char* p = body;
+        while (*p) {
+            const char* nl = strchr(p, '\n');
+            const char* line_end = nl ? nl : p + strlen(p);
+            fputs("    ", fp);
+            fwrite(p, 1, (size_t)(line_end - p), fp);
+            fputc('\n', fp);
+            if (!nl) break;
+            p = nl + 1;
+        }
+        return;
+    }
+    /* Default: fenced form. */
     fputs("```\n", fp);
     if (body && *body) {
         fputs(body, fp);
@@ -803,7 +952,11 @@ static void emit_tape_to_fp(FILE* fp) {
             body_out = apply_redactions(body_out, VCR_FIELD_RESPONSE_BODY);
         }
 
-        fprintf(fp, "## Interaction %d: %s %s\n\n", i, e->method, path_out);
+        if (g_emphasize_http_verbs) {
+            fprintf(fp, "## Interaction %d: *%s* %s\n\n", i, e->method, path_out);
+        } else {
+            fprintf(fp, "## Interaction %d: %s %s\n\n", i, e->method, path_out);
+        }
 
         /* Optional [Note] block (Servirtium step 9) — sits between the
          * interaction heading and the first ### section so the parser
@@ -860,6 +1013,13 @@ static void emit_tape_to_fp(FILE* fp) {
 void vcr_clear_redactions(void) {
     redactions_free_storage();
 }
+
+/* Step 12 setters — opt the recorder into the alternative markdown
+ * forms. Default off → fenced blocks + bare verbs (current
+ * behavior, byte-identical re-flush of existing tapes). Playback
+ * tolerates either form regardless of these toggles. */
+void vcr_set_indent_code_blocks(int on)   { g_indent_code_blocks  = on ? 1 : 0; }
+void vcr_set_emphasize_http_verbs(int on) { g_emphasize_http_verbs = on ? 1 : 0; }
 
 /* ---- Step 11: static-content serving --------------------------------
  *
