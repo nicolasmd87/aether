@@ -74,37 +74,40 @@
           - exit_status: -1
             limit: 1
 
-    - label: ":spider_web: contrib/tinyweb typecheck"
-      # Examples + tests that bind port 8080 are check-only on the
-      # shared agent — multiple jobs running simultaneously would
-      # collide on the port. Still catches regressions in the
-      # tinyweb module API surface that broke example_auth.ae /
-      # example_sse.ae / example_websocket.ae previously.
+    - label: ":spider_web: contrib/tinyweb compile + test"
+      # All three test files bind port 8080. Buildkite serializes
+      # jobs sharing a `concurrency_group` to `concurrency: 1`, so
+      # parallel tinyweb jobs queue rather than collide on the
+      # port. Worst case one tinyweb job waits ~10min for the
+      # previous to finish; acceptable trade for actually exercising
+      # the runtime path.
       #
-      # Intentional skips are pre-existing:
-      #   example_app/auth/composition/sse/static/websocket.ae
-      # — these reference `tinyweb.*` symbols that module.ae does
-      # not currently export. Whitelist what DOES check today so
-      # regressions in the working set fail loud.
+      # Whitelist of files (the others — example_app/auth/
+      # composition/sse/static/websocket.ae — reference `tinyweb.*`
+      # symbols that module.ae does not currently export; tracked in
+      # contrib/aeocha/TODO.md). example_inventory.ae is a DSL
+      # structure demo that exits cleanly without binding.
       command: |
         make compiler ae stdlib && \
         for f in contrib/tinyweb/example_inventory.ae \
-                 contrib/tinyweb/test_integration.ae \
                  contrib/tinyweb/test_inventory.ae \
+                 contrib/tinyweb/test_integration.ae \
                  contrib/tinyweb/test_spec.ae; do \
-            printf "  %-45s " "$$f"; \
-            if ./build/ae check "$$f" >/tmp/tw_check.err 2>&1; then \
+            printf "  %-50s " "$$f"; \
+            if ./build/ae run "$$f" >/tmp/tw_run.out 2>&1; then \
                 echo OK; \
             else \
                 echo FAIL; \
-                head -5 /tmp/tw_check.err; \
+                tail -10 /tmp/tw_run.out; \
                 exit 1; \
             fi; \
         done
       agents:
         queue: "default-queue"
         aether: "1"
-      timeout_in_minutes: 10
+      concurrency: 1
+      concurrency_group: "tinyweb-port-8080"
+      timeout_in_minutes: 15
       retry:
         automatic:
           - exit_status: -1
