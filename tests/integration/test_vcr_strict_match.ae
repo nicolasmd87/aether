@@ -22,6 +22,7 @@ import std.http.server.vcr
 import std.http
 import std.http.client
 import std.string
+import std.fs
 
 extern exit(code: int)
 extern http_server_start_raw(server: ptr) -> int
@@ -58,57 +59,42 @@ plain_get(url: string) -> int {
     return s
 }
 
-run_subtest(name: string, port: int, tape_path: string, expect_in_error: string) {
-    println("\n${name}")
+main() {
+    println("=== VCR strict request matching ===")
+    println("\nSubtest 1: tape expects a header the SUT never sent")
     vcr.clear_last_error()
 
-    raw = vcr.load(tape_path, port)
-    if raw == null {
-        println("  FAIL: vcr.load returned null for ${tape_path}")
-        exit(1)
-    }
+    raw = vcr.load("tests/integration/tapes/request_headers_that_never_happened.tape", PORT_HEADERS)
+    if raw == null { println("  FAIL: vcr.load returned null"); exit(1) }
 
     spawn(SchedHelper())
     a = spawn(VCRActor())
     a ! StartVCR { raw: raw }
     sleep(500)
 
-    url = "http://127.0.0.1:${port}/"
+    url = "http://127.0.0.1:${PORT_HEADERS}/"
     status = plain_get(url)
     if status != 599 {
-        println("  FAIL: expected 599 from dispatcher, got ${status}")
-        exit(1)
+        println("  FAIL: expected 599 from dispatcher, got ${status}"); exit(1)
     }
 
     err = vcr.last_error()
     if err == "" {
-        println("  FAIL: vcr.last_error() empty after a hostile-tape mismatch")
-        exit(1)
+        println("  FAIL: vcr.last_error() empty after a hostile-tape mismatch"); exit(1)
     }
-    if string.contains(err, expect_in_error) != 1 {
-        println("  FAIL: last_error did not mention '${expect_in_error}'")
+    if string.contains(err, "should_fail_here") != 1 {
+        println("  FAIL: last_error did not mention 'should_fail_here'")
         println("        actual: ${err}")
         exit(1)
     }
     println("  PASS: 599 + last_error='${err}'")
 
     vcr.eject(raw)
-}
-
-main() {
-    println("=== VCR strict request matching ===")
-
-    run_subtest(
-        "Subtest 1: tape expects a header the SUT never sent",
-        PORT_HEADERS,
-        "tests/integration/tapes/request_headers_that_never_happened.tape",
-        "should_fail_here"
-    )
 
     // NOTE: the second subtest needs a fresh process — the VCR's
     // server-actor blocks on accept() and we can't tear it down
-    // cleanly mid-process today. Run only the first subtest here;
-    // the body-mismatch case has its own test file.
+    // cleanly mid-process today. The body-mismatch case has its own
+    // test file (test_vcr_strict_match_body.ae).
     println("\n=== Strict-match header subtest passed ===")
     exit(0)
 }

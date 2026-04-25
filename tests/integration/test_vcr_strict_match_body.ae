@@ -15,6 +15,7 @@ import std.http.server.vcr
 import std.http
 import std.http.client
 import std.string
+import std.fs
 
 extern exit(code: int)
 extern http_server_start_raw(server: ptr) -> int

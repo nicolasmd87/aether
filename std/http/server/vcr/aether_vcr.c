@@ -800,48 +800,6 @@ static void redactions_free_storage(void) {
     g_redactions_cap = 0;
 }
 
-/* Replace every (non-overlapping) occurrence of `pattern` in `src`
- * with `replacement`. Returns a freshly malloc'd NUL-terminated
- * string the caller frees. NULL on OOM. Empty pattern returns a
- * straight strdup of src (no-op). */
-static char* str_replace_all(const char* src, const char* pattern, const char* replacement) {
-    if (!src) return NULL;
-    if (!pattern || !*pattern) return strdup(src);
-    if (!replacement) replacement = "";
-
-    size_t src_len = strlen(src);
-    size_t pat_len = strlen(pattern);
-    size_t rep_len = strlen(replacement);
-
-    /* First pass: count occurrences so we can size the output. */
-    size_t hits = 0;
-    const char* scan = src;
-    while ((scan = strstr(scan, pattern)) != NULL) {
-        hits++;
-        scan += pat_len;
-    }
-    if (hits == 0) return strdup(src);
-
-    size_t out_len = src_len + hits * (rep_len > pat_len ? rep_len - pat_len : 0)
-                             - hits * (pat_len > rep_len ? pat_len - rep_len : 0);
-    char* out = (char*)malloc(out_len + 1);
-    if (!out) return NULL;
-
-    char* dst = out;
-    const char* p = src;
-    while (1) {
-        const char* hit = strstr(p, pattern);
-        if (!hit) { strcpy(dst, p); break; }
-        size_t prefix = (size_t)(hit - p);
-        memcpy(dst, p, prefix);
-        dst += prefix;
-        memcpy(dst, replacement, rep_len);
-        dst += rep_len;
-        p = hit + pat_len;
-    }
-    return out;
-}
-
 int vcr_add_redaction(int field, const char* pattern, const char* replacement) {
     if (field != VCR_FIELD_PATH && field != VCR_FIELD_RESPONSE_BODY) {
         tape_set_err("vcr_add_redaction: unsupported field selector");
@@ -868,145 +826,19 @@ int vcr_add_redaction(int field, const char* pattern, const char* replacement) {
     return 1;
 }
 
-/* Apply every registered redaction whose field matches `field` to
- * `src` (a malloc'd string the caller owns). Returns a freshly
- * malloc'd replacement; the original is freed. If no redactions
- * apply, returns `src` unchanged. */
-static char* apply_redactions(char* src, int field) {
-    if (!src) return NULL;
-    if (g_redactions_n == 0) return src;
-    char* cur = src;
-    for (int i = 0; i < g_redactions_n; i++) {
-        if (g_redactions[i].field != field) continue;
-        char* next = str_replace_all(cur, g_redactions[i].pattern, g_redactions[i].replacement);
-        if (!next) return cur; /* OOM — return what we have */
-        if (next != cur) {
-            free(cur);
-            cur = next;
-        }
-    }
-    return cur;
-}
-
-/* Helper: emit a fenced code block. The body is written verbatim;
- * if the body itself contains a "```" line the output won't round-trip
- * cleanly, but that's a Servirtium-spec-wide problem (every
- * implementation has the same constraint). v0.1 doesn't try to
- * escape — production Servirtium tapes don't carry ``` in bodies
- * in any of the climate-API or similar fixtures. */
 /* Step 12: optional markdown formatting toggles for the recorder.
- * Defaults match v0.1 behavior (fenced blocks, bare verbs) so
- * existing tapes stay byte-identical on re-flush. Playback is
- * always tolerant of either form regardless of these toggles. */
+ * Read by the Aether-side emitter via vcr_get_indent_code_blocks /
+ * vcr_get_emphasize_http_verbs. Defaults off so existing tapes
+ * round-trip byte-identical when no toggle is set. */
 static int g_indent_code_blocks  = 0;
 static int g_emphasize_http_verbs = 0;
 
-static void emit_code_block(FILE* fp, const char* body) {
-    if (g_indent_code_blocks) {
-        /* Indented form: each line prefixed with 4 spaces, no fences.
-         * Empty body → emit a single 4-space-only line so the parser
-         * has something to anchor on (mirrors the empty-fence case). */
-        if (!body || !*body) {
-            fputs("    \n", fp);
-            return;
-        }
-        const char* p = body;
-        while (*p) {
-            const char* nl = strchr(p, '\n');
-            const char* line_end = nl ? nl : p + strlen(p);
-            fputs("    ", fp);
-            fwrite(p, 1, (size_t)(line_end - p), fp);
-            fputc('\n', fp);
-            if (!nl) break;
-            p = nl + 1;
-        }
-        return;
-    }
-    /* Default: fenced form. */
-    fputs("```\n", fp);
-    if (body && *body) {
-        fputs(body, fp);
-        /* Ensure the body ends with a newline before the close fence. */
-        size_t n = strlen(body);
-        if (n > 0 && body[n - 1] != '\n') fputc('\n', fp);
-    }
-    fputs("```\n", fp);
-}
-
-/* Emit the in-memory tape (g_tape, g_tape_n) to an open FILE*.
- * Both vcr_flush_to_tape and vcr_flush_or_check_raw use this.
- *
- * If any redactions have been registered via vcr_add_redaction(),
- * they are applied per-interaction at emit time — the in-memory
- * Interaction is left untouched (so subsequent flushes still see
- * the original capture), only the bytes written are scrubbed. */
-static void emit_tape_to_fp(FILE* fp) {
-    for (int i = 0; i < g_tape_n; i++) {
-        Interaction* e = &g_tape[i];
-
-        /* Apply path/body redactions to local copies. */
-        char* path_out = strdup(e->path ? e->path : "");
-        char* body_out = strdup(e->body ? e->body : "");
-        if (g_redactions_n > 0) {
-            path_out = apply_redactions(path_out, VCR_FIELD_PATH);
-            body_out = apply_redactions(body_out, VCR_FIELD_RESPONSE_BODY);
-        }
-
-        if (g_emphasize_http_verbs) {
-            fprintf(fp, "## Interaction %d: *%s* %s\n\n", i, e->method, path_out);
-        } else {
-            fprintf(fp, "## Interaction %d: %s %s\n\n", i, e->method, path_out);
-        }
-
-        /* Optional [Note] block (Servirtium step 9) — sits between the
-         * interaction heading and the first ### section so the parser
-         * (which only walks ### sections) skips over it harmlessly,
-         * while a human reader sees it inline next to the interaction
-         * it annotates. */
-        if (e->note_title) {
-            fprintf(fp, "## [Note] %s:\n\n", e->note_title);
-            if (e->note_body && *e->note_body) {
-                fputs(e->note_body, fp);
-                size_t bn = strlen(e->note_body);
-                if (e->note_body[bn - 1] != '\n') fputc('\n', fp);
-            }
-            fputc('\n', fp);
-        }
-
-        /* Request headers / body. Step-7-era recorder leaves these as
-         * empty strings → empty code blocks (still valid Servirtium
-         * markdown, dispatcher matches on method+path only). The
-         * step-10 recorder fills them with a normalized form
-         * ("Name: Value\n..." sorted, Host stripped) and the
-         * dispatcher hard-fails any incoming request that doesn't
-         * match. */
-        fputs("### Request headers recorded for playback:\n\n", fp);
-        emit_code_block(fp, e->req_headers ? e->req_headers : "");
-
-        fputs("### Request body recorded for playback ():\n\n", fp);
-        emit_code_block(fp, e->req_body ? e->req_body : "");
-
-        fputs("### Response headers recorded for playback:\n\n", fp);
-        if (e->content_type) {
-            char hdr[512];
-            snprintf(hdr, sizeof(hdr), "Content-Type: %s", e->content_type);
-            emit_code_block(fp, hdr);
-        } else {
-            emit_code_block(fp, "");
-        }
-
-        /* Response body section — its header line carries the status
-         * and content-type, mirroring what the parser reads. */
-        fprintf(fp, "### Response body recorded for playback (%d: %s):\n\n",
-                e->status, e->content_type ? e->content_type : "text/plain");
-        emit_code_block(fp, body_out);
-
-        fputc('\n', fp);
-
-        free(path_out);
-        free(body_out);
-    }
-}
+/* Emitter ported to Aether — see std/http/server/vcr/module.ae's
+ * emit_tape() / emit_one_interaction() / emit_code_block(). The
+ * Aether emitter walks the C-side tape via vcr_get_* accessors,
+ * builds the markdown blob, and writes it via fs.write. The C
+ * emitter that lived here previously was deleted in the same
+ * commit that introduced the Aether one. */
 
 /* Drop all registered redactions. Useful to call between tests in
  * the same process so a redaction set doesn't leak across them. */
@@ -1188,125 +1020,13 @@ static void register_static_routes(void* server) {
     }
 }
 
-int vcr_flush_to_tape(const char* path) {
-    if (!path) { tape_set_err("null tape output path"); return 0; }
-    FILE* fp = fopen(path, "wb");
-    if (!fp) {
-        char msg[1024];
-        snprintf(msg, sizeof(msg), "cannot open tape file for writing: %s", path);
-        tape_set_err(msg);
-        return 0;
-    }
-    emit_tape_to_fp(fp);
-    if (fclose(fp) != 0) {
-        tape_set_err("close failed while writing tape");
-        return 0;
-    }
-    return 1;
-}
-
-/* Step 4 of the Servirtium roadmap — re-record check.
- *
- * If `path` doesn't exist on disk, behaves identically to
- * vcr_flush_to_tape (writes the tape, returns 1). If it does
- * exist, writes the in-memory tape to a sibling temp file then
- * compares byte-for-byte against the on-disk version. Equal →
- * delete the temp, return 1. Different → keep the temp at
- * `<path>.actual` for inspection, populate g_tape_err with a
- * diagnostic, return 0.
- *
- * The "keep the differing temp around" choice matches what
- * Servirtium's Java implementation does: the developer can diff
- * the expected (committed) tape against the actual (just-recorded)
- * tape and decide whether the upstream changed (update the tape)
- * or the client drifted (fix the bug). Either decision is informed
- * by having both files on disk. */
-int vcr_flush_or_check_raw(const char* path) {
-    if (!path) { tape_set_err("null tape output path"); return 0; }
-
-    /* If the on-disk tape doesn't exist, this is the first record —
-     * just write it. */
-    FILE* existing = fopen(path, "rb");
-    if (!existing) {
-        return vcr_flush_to_tape(path);
-    }
-
-    /* Write the in-memory tape to a sibling .actual file. */
-    char actual_path[1024];
-    int n_written = snprintf(actual_path, sizeof(actual_path), "%s.actual", path);
-    if (n_written < 0 || (size_t)n_written >= sizeof(actual_path)) {
-        fclose(existing);
-        tape_set_err("path too long for .actual sibling");
-        return 0;
-    }
-    FILE* actual = fopen(actual_path, "wb");
-    if (!actual) {
-        fclose(existing);
-        char msg[1100];
-        snprintf(msg, sizeof(msg), "cannot open %s for writing", actual_path);
-        tape_set_err(msg);
-        return 0;
-    }
-    emit_tape_to_fp(actual);
-    if (fclose(actual) != 0) {
-        fclose(existing);
-        tape_set_err("close failed writing .actual sibling");
-        return 0;
-    }
-
-    /* Byte-compare the two files. Both are open-and-close in this
-     * scope; rewind `existing` to the start since we may have
-     * touched it via fopen.
-     *
-     * We re-open `actual` for read because we just closed the write
-     * handle above. */
-    FILE* actual_r = fopen(actual_path, "rb");
-    if (!actual_r) {
-        fclose(existing);
-        tape_set_err("cannot reopen .actual for compare");
-        return 0;
-    }
-
-    int diff_offset = -1;       /* -1 = no difference seen yet */
-    long off = 0;
-    int diff_byte_existing = 0;
-    int diff_byte_actual = 0;
-    for (;;) {
-        int ce = fgetc(existing);
-        int ca = fgetc(actual_r);
-        if (ce == EOF && ca == EOF) break;       /* equal, both ended */
-        if (ce != ca) {
-            diff_offset = (int)off;
-            diff_byte_existing = ce;
-            diff_byte_actual = ca;
-            break;
-        }
-        off++;
-    }
-    fclose(existing);
-    fclose(actual_r);
-
-    if (diff_offset < 0) {
-        /* Equal — clean up the .actual since nobody needs to look at it. */
-        remove(actual_path);
-        return 1;
-    }
-
-    /* Differed — leave `.actual` on disk for inspection, surface
-     * the diff location in the error string. */
-    char msg[2048];
-    snprintf(msg, sizeof(msg),
-        "tape mismatch at byte %d: expected 0x%02x ('%c'), got 0x%02x ('%c'). "
-        "Wrote new capture to %s; diff against %s to see what changed.",
-        diff_offset,
-        (unsigned)(diff_byte_existing & 0xff),
-        (diff_byte_existing >= 32 && diff_byte_existing < 127) ? (char)diff_byte_existing : '.',
-        (unsigned)(diff_byte_actual & 0xff),
-        (diff_byte_actual >= 32 && diff_byte_actual < 127) ? (char)diff_byte_actual : '.',
-        actual_path, path);
-    tape_set_err(msg);
-    return 0;
-}
+/* vcr_flush_to_tape and vcr_flush_or_check_raw deleted in the
+ * C→Aether emitter port. Their replacements live in module.ae as
+ * vcr.flush() and vcr.flush_or_check(), built on top of the Aether
+ * emit_tape() and fs.read / fs.write. The dispatcher and the
+ * tape-storage globals stayed in C since the http_server hands us
+ * function pointers, but everything that's pure string assembly
+ * is Aether now. */
 
 /* ---- Step 10: request normalization + match ----
  *
@@ -1692,4 +1412,80 @@ const char* vcr_last_error(void) {
 void vcr_clear_last_error(void) {
     free(g_last_error);
     g_last_error = NULL;
+}
+
+/* ---- Tape-iteration accessors (Aether-side emitter consumes these) ----
+ *
+ * The emitter is being ported to Aether. These accessors let the
+ * Aether code walk the in-memory tape one Interaction at a time
+ * without crossing a struct boundary. Each returns "" (not NULL)
+ * for absent / empty fields so the Aether side can do flat string
+ * concatenation without null guards. Notes return NULL-equivalent
+ * empty strings; vcr_get_note_present() distinguishes "no note"
+ * from "note with empty body". Same for content_type. */
+
+int vcr_get_tape_count(void) { return g_tape_n; }
+
+static const char* safe(const char* s) { return s ? s : ""; }
+
+const char* vcr_get_method(int i) {
+    if (i < 0 || i >= g_tape_n) return "";
+    return safe(g_tape[i].method);
+}
+const char* vcr_get_path(int i) {
+    if (i < 0 || i >= g_tape_n) return "";
+    return safe(g_tape[i].path);
+}
+int vcr_get_status(int i) {
+    if (i < 0 || i >= g_tape_n) return 0;
+    return g_tape[i].status;
+}
+const char* vcr_get_content_type(int i) {
+    if (i < 0 || i >= g_tape_n) return "";
+    return safe(g_tape[i].content_type);
+}
+const char* vcr_get_body(int i) {
+    if (i < 0 || i >= g_tape_n) return "";
+    return safe(g_tape[i].body);
+}
+const char* vcr_get_req_headers(int i) {
+    if (i < 0 || i >= g_tape_n) return "";
+    return safe(g_tape[i].req_headers);
+}
+const char* vcr_get_req_body(int i) {
+    if (i < 0 || i >= g_tape_n) return "";
+    return safe(g_tape[i].req_body);
+}
+int vcr_get_note_present(int i) {
+    if (i < 0 || i >= g_tape_n) return 0;
+    return g_tape[i].note_title ? 1 : 0;
+}
+const char* vcr_get_note_title(int i) {
+    if (i < 0 || i >= g_tape_n) return "";
+    return safe(g_tape[i].note_title);
+}
+const char* vcr_get_note_body(int i) {
+    if (i < 0 || i >= g_tape_n) return "";
+    return safe(g_tape[i].note_body);
+}
+
+/* Toggle accessors — the Aether emitter reads these when deciding
+ * which markdown form to emit. */
+int vcr_get_indent_code_blocks(void)   { return g_indent_code_blocks; }
+int vcr_get_emphasize_http_verbs(void) { return g_emphasize_http_verbs; }
+
+/* Redaction iteration — the Aether emitter applies redactions
+ * before writing path / response-body fields. */
+int vcr_get_redaction_count(void) { return g_redactions_n; }
+int vcr_get_redaction_field(int i) {
+    if (i < 0 || i >= g_redactions_n) return 0;
+    return g_redactions[i].field;
+}
+const char* vcr_get_redaction_pattern(int i) {
+    if (i < 0 || i >= g_redactions_n) return "";
+    return safe(g_redactions[i].pattern);
+}
+const char* vcr_get_redaction_replacement(int i) {
+    if (i < 0 || i >= g_redactions_n) return "";
+    return safe(g_redactions[i].replacement);
 }

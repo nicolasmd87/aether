@@ -102,6 +102,8 @@
 //   - Self-contained actor wiring (caller does spawn + send today)
 
 import std.http
+import std.fs
+import std.string
 
 // ---- Externs into the C-side parser + dispatcher ----
 
@@ -115,8 +117,6 @@ extern vcr_register_routes(server: ptr)               // walks tape and calls se
 // the lot to disk in canonical Servirtium markdown when the test
 // is done.
 extern vcr_record_interaction(method: string, path: string, status: int, content_type: string, body: string) -> int
-extern vcr_flush_to_tape(path: string) -> int
-extern vcr_flush_or_check_raw(path: string) -> int
 
 // Mutation-mode externs (Servirtium step 8). Redactions are applied
 // at flush time only — the in-memory capture stays untouched, so
@@ -143,6 +143,37 @@ extern vcr_clear_static_content()
 // recorder. Playback tolerates either form regardless.
 extern vcr_set_indent_code_blocks(on: int)
 extern vcr_set_emphasize_http_verbs(on: int)
+
+// Tape-iteration accessors — used by the Aether-side emitter to
+// walk the in-memory tape one Interaction at a time. Storage stays
+// in C (the dispatcher reads it directly via Interaction*); the
+// emitter is the only side that needed read access from Aether,
+// hence this targeted accessor surface.
+extern vcr_get_tape_count() -> int
+extern vcr_get_method(i: int) -> string
+extern vcr_get_path(i: int) -> string
+extern vcr_get_status(i: int) -> int
+extern vcr_get_content_type(i: int) -> string
+extern vcr_get_body(i: int) -> string
+extern vcr_get_req_headers(i: int) -> string
+extern vcr_get_req_body(i: int) -> string
+extern vcr_get_note_present(i: int) -> int
+extern vcr_get_note_title(i: int) -> string
+extern vcr_get_note_body(i: int) -> string
+extern vcr_get_indent_code_blocks() -> int
+extern vcr_get_emphasize_http_verbs() -> int
+extern vcr_get_redaction_count() -> int
+extern vcr_get_redaction_field(i: int) -> int
+extern vcr_get_redaction_pattern(i: int) -> string
+extern vcr_get_redaction_replacement(i: int) -> string
+
+// Direct concat extern — interpolation recycles a backing buffer
+// and corrupts when the same `out` variable is rebuilt many times
+// in sequence (the kind of pattern a markdown-emitter hammers).
+// string_concat returns a freshly-allocated AetherString every
+// call, side-stepping the issue. Tracked alongside #234 / closure
+// lifetime work.
+extern string_concat(a: string, b: string) -> string
 
 // String concat for the recheck error path — used by flush_or_check
 // to pin the return type to string. Same shape stdlib wrappers
@@ -217,9 +248,15 @@ record(method: string, path: string, status: int, content_type: string, body: st
 // Write every captured interaction to `tape_path` in canonical
 // Servirtium markdown. Overwrites any existing file at that path.
 // Returns "" on success, error string otherwise.
+//
+// Implementation: Aether-side. The full markdown blob is built by
+// emit_tape() and written via fs.write. The pre-port C path (still
+// shipped as vcr_flush_to_tape) is unused by this surface but
+// retained as a fallback during the C→Aether migration.
 flush(tape_path: string) -> string {
-    ok = vcr_flush_to_tape(tape_path)
-    if ok == 0 { return "vcr.flush failed" }
+    blob = emit_tape()
+    werr = fs.write(tape_path, blob)
+    if werr != "" { return werr }
     return ""
 }
 
@@ -237,9 +274,31 @@ flush(tape_path: string) -> string {
 // the tape needs updating, the upstream has changed semantically, or
 // the client's wire format drifted).
 flush_or_check(tape_path: string) -> string {
-    ok = vcr_flush_or_check_raw(tape_path)
-    if ok == 0 { return vcr_load_err() }
-    return ""
+    actual_path = "${tape_path}.actual"
+
+    // First-record case: no on-disk tape yet → just flush.
+    existing, eerr = fs.read(tape_path)
+    if eerr != "" {
+        return flush(tape_path)
+    }
+
+    // On-disk tape present. Build the in-memory tape and write to
+    // the .actual sibling for inspection.
+    blob = emit_tape()
+    werr = fs.write(actual_path, blob)
+    if werr != "" { return werr }
+
+    if existing == blob {
+        // Match — clean up the .actual sibling.
+        fs.delete(actual_path)
+        return ""
+    }
+
+    // Mismatch — surface a diff offset so the developer knows
+    // where to look. The .actual sibling stays on disk.
+    expected_len = string.length(existing)
+    actual_len   = string.length(blob)
+    return "tape mismatch: expected=${expected_len} bytes, actual=${actual_len} bytes; .actual sibling left at ${actual_path}"
 }
 
 // ---- Mutation mode (Servirtium roadmap step 8) -----------------------
@@ -428,4 +487,191 @@ emphasize_http_verbs() {
 clear_format_options() {
     vcr_set_indent_code_blocks(0)
     vcr_set_emphasize_http_verbs(0)
+}
+
+// ---- Aether-side tape emitter ---------------------------------------
+//
+// Ported from the original C-side emit_tape_to_fp + emit_code_block.
+// Pure string assembly + file I/O — nothing here needed C, it just
+// happened to start there. Storage stays in C (the dispatcher reads
+// it directly); the emitter walks the tape via accessor externs.
+//
+// Behavior must match the C emitter byte-for-byte for tapes flushed
+// without redactions / format toggles, since existing tests assert
+// against canonical Servirtium output.
+
+// Replace every (non-overlapping) occurrence of `pattern` in `src`
+// with `replacement`. Empty pattern is a no-op (returns src unchanged).
+// Mirrors the C str_replace_all this replaces.
+str_replace_all(src: string, pattern: string, replacement: string) -> string {
+    plen = string.length(pattern)
+    if plen == 0 { return src }
+
+    out = string.copy("")
+    cursor = 0
+    src_len = string.length(src)
+    while cursor < src_len {
+        idx = string.index_of_from(src, pattern, cursor)
+        if idx < 0 {
+            tail = string.substring(src, cursor, src_len)
+            out = string_concat(out, tail)
+            return out
+        }
+        chunk = string.substring(src, cursor, idx)
+        out = string_concat(out, chunk)
+        out = string_concat(out, replacement)
+        cursor = idx + plen
+    }
+    return out
+}
+
+// Apply every registered redaction whose field matches `field` to
+// `s`. No-op when no redactions registered.
+apply_redactions_for(s: string, field: int) -> string {
+    n = vcr_get_redaction_count()
+    if n == 0 { return s }
+    out = s
+    i = 0
+    while i < n {
+        if vcr_get_redaction_field(i) == field {
+            out = str_replace_all(out, vcr_get_redaction_pattern(i),
+                                       vcr_get_redaction_replacement(i))
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Emit one fenced or indented code block. Body may be empty —
+// the form has to land valid markdown either way (an empty fenced
+// block is "```\n```\n", an empty indented block is one 4-space
+// line so the parser has something to anchor on).
+emit_code_block(body: string) -> string {
+    if vcr_get_indent_code_blocks() == 1 {
+        if string.length(body) == 0 {
+            return "    \n"
+        }
+        // Indented: prefix every line with 4 spaces.
+        out = string.copy("")
+        body_len = string.length(body)
+        cursor = 0
+        while cursor < body_len {
+            nl_idx = string.index_of_from(body, "\n", cursor)
+            if nl_idx < 0 {
+                line = string.substring(body, cursor, body_len)
+                out = string_concat(out, "    ")
+                out = string_concat(out, line)
+                out = string_concat(out, "\n")
+                return out
+            }
+            line = string.substring(body, cursor, nl_idx)
+            out = string_concat(out, "    ")
+            out = string_concat(out, line)
+            out = string_concat(out, "\n")
+            cursor = nl_idx + 1
+        }
+        return out
+    }
+    // Fenced default.
+    if string.length(body) == 0 {
+        return "```\n```\n"
+    }
+    last_idx = string.length(body) - 1
+    last_char = string.char_at(body, last_idx)
+    // 10 == '\n'. Ensure trailing newline before close fence.
+    if last_char == 10 {
+        out = string_concat("```\n", body)
+        out = string_concat(out, "```\n")
+        return out
+    }
+    out = string_concat("```\n", body)
+    out = string_concat(out, "\n```\n")
+    return out
+}
+
+// Emit one Interaction at index `i` as a markdown chunk.
+//
+// Implementation note: every accumulator step uses string_concat
+// rather than "${out}..." interpolation. Interpolation recycles a
+// backing buffer in v0.90 and rebuild-in-loop overwrites earlier
+// content. string_concat returns a fresh AetherString each call.
+emit_one_interaction(i: int) -> string {
+    // Copy every accessor result. The accessors return `const char*`
+    // that points into the C-side g_tape — without copying, AetherString
+    // machinery would borrow the pointer and could see it change
+    // underfoot when later string ops touch the same slot.
+    method   = string.copy(vcr_get_method(i))
+    path     = string.copy(vcr_get_path(i))
+    status   = vcr_get_status(i)
+    ctype    = string.copy(vcr_get_content_type(i))
+    body     = string.copy(vcr_get_body(i))
+    req_h    = string.copy(vcr_get_req_headers(i))
+    req_b    = string.copy(vcr_get_req_body(i))
+
+    path_out = apply_redactions_for(path, FIELD_PATH)
+    body_out = apply_redactions_for(body, FIELD_RESPONSE_BODY)
+
+    heading = "## Interaction ${i}: ${method} ${path_out}\n\n"
+    if vcr_get_emphasize_http_verbs() == 1 {
+        heading = "## Interaction ${i}: *${method}* ${path_out}\n\n"
+    }
+    out = string.copy(heading)
+
+    if vcr_get_note_present(i) == 1 {
+        title = vcr_get_note_title(i)
+        nbody = vcr_get_note_body(i)
+        note_head = "## [Note] ${title}:\n\n"
+        out = string_concat(out, note_head)
+        if string.length(nbody) > 0 {
+            out = string_concat(out, nbody)
+            last_idx = string.length(nbody) - 1
+            if string.char_at(nbody, last_idx) != 10 {
+                out = string_concat(out, "\n")
+            }
+        }
+        out = string_concat(out, "\n")
+    }
+
+    rh_block = emit_code_block(req_h)
+    rb_block = emit_code_block(req_b)
+    out = string_concat(out, "### Request headers recorded for playback:\n\n")
+    out = string_concat(out, rh_block)
+    out = string_concat(out, "### Request body recorded for playback ():\n\n")
+    out = string_concat(out, rb_block)
+
+    out = string_concat(out, "### Response headers recorded for playback:\n\n")
+    if string.length(ctype) > 0 {
+        ct_line = "Content-Type: ${ctype}"
+        rsp_h_block = emit_code_block(ct_line)
+        out = string_concat(out, rsp_h_block)
+    } else {
+        rsp_h_block = emit_code_block("")
+        out = string_concat(out, rsp_h_block)
+    }
+
+    ct_for_header = ctype
+    if string.length(ct_for_header) == 0 {
+        ct_for_header = "text/plain"
+    }
+    rsp_b_header = "### Response body recorded for playback (${status}: ${ct_for_header}):\n\n"
+    out = string_concat(out, rsp_b_header)
+    rsp_b_block = emit_code_block(body_out)
+    out = string_concat(out, rsp_b_block)
+    out = string_concat(out, "\n")
+    return out
+}
+
+// Emit the entire in-memory tape as one big markdown blob.
+// Equivalent to the old C emit_tape_to_fp(fp), just delivering a
+// string instead of writing to FILE*.
+emit_tape() -> string {
+    n = vcr_get_tape_count()
+    out = string.copy("")
+    i = 0
+    while i < n {
+        chunk = emit_one_interaction(i)
+        out = string_concat(out, chunk)
+        i = i + 1
+    }
+    return out
 }
