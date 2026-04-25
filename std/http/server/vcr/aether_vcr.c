@@ -1,14 +1,19 @@
-/* std.http.server.tape — replay-driven HTTP server for testing.
+/* std.http.server.vcr — replay-driven HTTP server for testing.
  *
- * v0.1 surface (matches std/http/server/tape/module.ae):
+ * The metaphor: a VCR is the device, a tape is the medium. v0.1
+ * exposes only replay; the recorder lands later. C-side surface
+ * (matches std/http/server/vcr/module.ae's externs):
  *
- *   tape_load(path)  -> 1 on success, 0 on parse / I/O failure
- *   tape_load_err()  -> error string (when tape_load returned 0)
- *   tape_count()     -> number of entries the loaded tape contains
- *   tape_dispatch(req, res, ud) -> registered as the catch-all GET
- *                                   handler; matches the next tape
- *                                   entry against (method, path) and
- *                                   emits the recorded response.
+ *   vcr_load_tape(path)        -> 1 on success, 0 on parse / I/O failure
+ *   vcr_load_err()             -> error string (when vcr_load_tape returned 0)
+ *   vcr_tape_length()          -> number of entries the loaded tape contains
+ *   vcr_register_routes(srv)   -> walks tape and calls server_get for each
+ *                                  unique path so the routing layer dispatches
+ *                                  to vcr_dispatch.
+ *   vcr_dispatch(req, res, ud) -> registered handler. Matches the next tape
+ *                                  entry against (method, path) and emits
+ *                                  the recorded response. Mismatch → 599
+ *                                  with diagnostic body.
  *
  * Tape format — one or more `--- exchange N ---`-headed blocks, each
  * with `> ` request lines and `< ` response lines. See module.ae for
@@ -31,7 +36,7 @@ extern void        http_response_set_status(void* res, int code);
 extern void        http_response_set_header(void* res, const char* name, const char* value);
 extern void        http_response_set_body  (void* res, const char* body);
 
-/* And the routing extern — used by tape_register_routes() below to
+/* And the routing extern — used by vcr_register_routes() below to
  * register each unique tape-path under its own handler. We forward
  * declare here so we don't need a header dependency on std/net. */
 extern void http_server_get(void* server, const char* path, void* handler, void* user_data);
@@ -257,7 +262,7 @@ fail:
 
 /* ---- Aether-side externs ------------------------------------------- */
 
-int tape_load(const char* path) {
+int vcr_load_tape(const char* path) {
     if (!path) { tape_set_err("null tape path"); return 0; }
     tape_free_storage();
     /* tape_set_err sets g_tape_err = NULL via its NULL guard, so we
@@ -295,20 +300,20 @@ int tape_load(const char* path) {
     return 1;
 }
 
-const char* tape_load_err(void) {
+const char* vcr_load_err(void) {
     return g_tape_err ? g_tape_err : "";
 }
 
-int tape_count(void) {
+int vcr_tape_length(void) {
     return g_tape_n;
 }
 
 /* Forward decl — defined in the section below for the Aether-facing
  * surface. */
-void tape_dispatch(void* req, void* res, void* ud);
+void vcr_dispatch(void* req, void* res, void* ud);
 
-/* Register each unique tape path against tape_dispatch. Called by
- * the Aether-side bind() after server_create + tape_load.
+/* Register each unique tape path against vcr_dispatch. Called by
+ * the Aether-side bind() after server_create + vcr_load_tape.
  *
  * Why per-path registration rather than a `/(.*)` catch-all: the
  * catch-all regex isn't reliably matching in std.http.server v0.90
@@ -317,7 +322,7 @@ void tape_dispatch(void* req, void* res, void* ud);
  * signal — a SUT that hits a path the tape doesn't anticipate
  * gets a real 404 from the server, separate from the dispatcher's
  * 599 "tape mismatch" diagnostic. */
-void tape_register_routes(void* server) {
+void vcr_register_routes(void* server) {
     if (!server) return;
     /* Dedup by path — multiple entries can share a path (the dispatcher
      * advances through them in order). Each unique path needs only one
@@ -333,12 +338,12 @@ void tape_register_routes(void* server) {
             }
         }
         if (!already) {
-            http_server_get(server, g_tape[i].path, (void*)tape_dispatch, NULL);
+            http_server_get(server, g_tape[i].path, (void*)vcr_dispatch, NULL);
         }
     }
 }
 
-void tape_dispatch(void* req, void* res, void* ud) {
+void vcr_dispatch(void* req, void* res, void* ud) {
     (void)ud;
     /* Pull the next entry. If we've exhausted the tape, fail loudly
      * with 599 (an unassigned-by-IANA status, used here to signal
