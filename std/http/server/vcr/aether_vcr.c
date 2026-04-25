@@ -77,6 +77,15 @@ typedef struct VcrHttpRequestPrefix {
     /* (rest of struct ignored — body_length, params, ...) */
 } VcrHttpRequestPrefix;
 
+/* Step 11: static-content serving externs. The http_server module
+ * already implements the heavy lifting (mime-type detection,
+ * realpath canonicalization, traversal-prevention) via
+ * http_serve_file + http_serve_static. We reuse http_serve_file
+ * directly so we can prepend the mount-prefix-stripping ourselves
+ * and avoid double-prefix path construction. */
+extern void http_serve_file(void* res, const char* filepath);
+extern const char* http_mime_type(const char* path);
+
 /* And the routing extern — used by vcr_register_routes(). v0.1
  * used http_server_get exclusively (replay-of-GET-only); v0.2
  * uses add_route which takes the method as a string and so handles
@@ -149,6 +158,10 @@ static void tape_free_storage(void) {
     free(g_pending_note_title); g_pending_note_title = NULL;
     free(g_pending_note_body);  g_pending_note_body  = NULL;
     free(g_last_error);         g_last_error         = NULL;
+    /* Static mounts intentionally not freed here — mounts are
+     * configured by the caller before vcr.load() and survive across
+     * loads in the same process; vcr.clear_static_content() is the
+     * explicit reset. */
 }
 
 static void last_err_set(const char* msg) {
@@ -523,6 +536,9 @@ int vcr_tape_length(void) {
  * still strict-matches the actual incoming request against the
  * cursor's expected (method, path); the registration is purely
  * "wake me up for this combination.") */
+/* Forward decl — body lives next to the static-mount storage. */
+static void register_static_routes(void* server);
+
 void vcr_register_routes(void* server) {
     if (!server) return;
     for (int i = 0; i < g_tape_n; i++) {
@@ -539,6 +555,7 @@ void vcr_register_routes(void* server) {
                                   (void*)vcr_dispatch, NULL);
         }
     }
+    register_static_routes(server);
 }
 
 /* ---- Record-mode externs ---------------------------------------------
@@ -842,6 +859,173 @@ static void emit_tape_to_fp(FILE* fp) {
  * the same process so a redaction set doesn't leak across them. */
 void vcr_clear_redactions(void) {
     redactions_free_storage();
+}
+
+/* ---- Step 11: static-content serving --------------------------------
+ *
+ * Mark an on-disk directory as bypass-the-tape territory. Every
+ * incoming GET whose path starts with `mount_path` is served from
+ * disk (with the existing http_serve_file's mime-type detection
+ * and traversal-prevention) and never consulted against the tape.
+ *
+ * Use case: Selenium/Cypress/Playwright UI tests where the page
+ * is the SUT — letting the tape capture every CSS/JS/image asset
+ * is noise. Point the static-content config at the local build
+ * artifacts directory; the tape stays focused on the actual
+ * domain-API exchanges the test cares about.
+ *
+ * Lookup model: dispatcher's wildcard route `<mount>` followed by
+ * /-star is bound
+ * to vcr_static_dispatch with a heap StaticMount* as user_data.
+ * The handler strips the mount prefix from req->path, joins
+ * against fs_dir, and forwards to http_serve_file (whose realpath
+ * + mime-type machinery we get for free).
+ *
+ * v0.1: GET only (matches the spec). Multiple non-overlapping
+ * mounts are fine. Overlapping mounts (e.g. /a and /a/b) work in
+ * route-registration order — first registered wins.
+ * -------------------------------------------------------------------- */
+
+typedef struct StaticMount {
+    char* mount_path;    /* request prefix, e.g. "/static" — owned, no trailing slash */
+    char* fs_dir;        /* on-disk dir, e.g. "/tmp/static_root" — owned, no trailing slash */
+} StaticMount;
+
+static StaticMount* g_mounts     = NULL;
+static int          g_mounts_n   = 0;
+static int          g_mounts_cap = 0;
+
+static void mounts_free_storage(void) {
+    if (g_mounts) {
+        for (int i = 0; i < g_mounts_n; i++) {
+            free(g_mounts[i].mount_path);
+            free(g_mounts[i].fs_dir);
+        }
+        free(g_mounts);
+        g_mounts = NULL;
+    }
+    g_mounts_n = 0;
+    g_mounts_cap = 0;
+}
+
+/* Strip a single trailing '/' (other than a lone-root path) so
+ * concatenation doesn't double-slash. mutates `s` in place. */
+static void strip_trailing_slash(char* s) {
+    if (!s) return;
+    size_t n = strlen(s);
+    if (n > 1 && s[n - 1] == '/') s[n - 1] = '\0';
+}
+
+/* Dispatcher for a static-mount route. user_data is the
+ * StaticMount* registered alongside it. */
+static void vcr_static_dispatch(void* req, void* res, void* ud) {
+    StaticMount* m = (StaticMount*)ud;
+    if (!m) {
+        http_response_set_status(res, 500);
+        http_response_set_body(res, "static dispatch: null mount");
+        return;
+    }
+    const char* path = http_request_path(req);
+    if (!path) {
+        http_response_set_status(res, 400);
+        http_response_set_body(res, "static dispatch: null request path");
+        return;
+    }
+
+    /* Strip the mount prefix. Both `mount_path` and `path` start
+     * with '/'; after strlen(mount_path) chars, what remains is
+     * the asset's relative path under fs_dir (with a leading
+     * '/' if the request had it). */
+    size_t mlen = strlen(m->mount_path);
+    if (strncmp(path, m->mount_path, mlen) != 0) {
+        http_response_set_status(res, 500);
+        http_response_set_body(res, "static dispatch: prefix mismatch (router bug)");
+        return;
+    }
+    const char* rel = path + mlen;
+    if (*rel == '/') rel++;
+    if (*rel == '\0') rel = "index.html";
+
+    /* Belt-and-braces traversal guard. http_serve_file's
+     * realpath check below also catches escapes, but the
+     * percent-encoded variants need this string-level rejection
+     * up front. Mirrors http_serve_static's checks. */
+    if (strstr(rel, "..") != NULL
+        || strstr(rel, "%2e") != NULL || strstr(rel, "%2E") != NULL
+        || strstr(rel, "%2f") != NULL || strstr(rel, "%2F") != NULL
+        || strstr(rel, "%5c") != NULL || strstr(rel, "%5C") != NULL
+        || strstr(rel, "\\") != NULL) {
+        http_response_set_status(res, 403);
+        http_response_set_body(res, "403 - Forbidden");
+        return;
+    }
+
+    char filepath[1024];
+    int n = snprintf(filepath, sizeof(filepath), "%s/%s", m->fs_dir, rel);
+    if (n < 0 || (size_t)n >= sizeof(filepath)) {
+        http_response_set_status(res, 414);
+        http_response_set_body(res, "414 - URI Too Long");
+        return;
+    }
+    http_serve_file(res, filepath);
+}
+
+/* Register a static-content mount. Append to g_mounts; the
+ * actual route registration happens in vcr_register_routes
+ * (which is called by vcr.load — load order is: register tape
+ * routes, then mounts; routes overlap is fine since
+ * mount-rooted requests don't appear in tapes by definition). */
+int vcr_add_static_content(const char* mount_path, const char* fs_dir) {
+    if (!mount_path || !fs_dir) {
+        tape_set_err("vcr_add_static_content: null mount_path or fs_dir");
+        return 0;
+    }
+    if (mount_path[0] != '/') {
+        tape_set_err("vcr_add_static_content: mount_path must start with '/'");
+        return 0;
+    }
+    if (g_mounts_n >= g_mounts_cap) {
+        int new_cap = g_mounts_cap ? g_mounts_cap * 2 : 4;
+        StaticMount* bigger = (StaticMount*)realloc(g_mounts,
+                                  sizeof(StaticMount) * (size_t)new_cap);
+        if (!bigger) { tape_set_err("OOM growing mounts"); return 0; }
+        g_mounts = bigger;
+        g_mounts_cap = new_cap;
+    }
+    StaticMount* m = &g_mounts[g_mounts_n];
+    m->mount_path = strdup(mount_path);
+    m->fs_dir     = strdup(fs_dir);
+    if (!m->mount_path || !m->fs_dir) {
+        free(m->mount_path); free(m->fs_dir);
+        tape_set_err("OOM appending mount");
+        return 0;
+    }
+    strip_trailing_slash(m->mount_path);
+    strip_trailing_slash(m->fs_dir);
+    g_mounts_n++;
+    return 1;
+}
+
+/* Drop all static-content mounts. The route registrations against
+ * the http server stay live until the server is torn down — calling
+ * this between tests prevents stale mount config bleeding into
+ * the next test, but the recommended pattern is one VCR per test. */
+void vcr_clear_static_content(void) {
+    mounts_free_storage();
+}
+
+/* Register the wildcard routes for every mount with the http
+ * server. Called from vcr_register_routes() after the tape
+ * routes go in. */
+static void register_static_routes(void* server) {
+    if (!server) return;
+    for (int i = 0; i < g_mounts_n; i++) {
+        char pattern[1024];
+        int n = snprintf(pattern, sizeof(pattern), "%s/*", g_mounts[i].mount_path);
+        if (n < 0 || (size_t)n >= sizeof(pattern)) continue;
+        http_server_add_route(server, "GET", pattern,
+                              (void*)vcr_static_dispatch, &g_mounts[i]);
+    }
 }
 
 int vcr_flush_to_tape(const char* path) {

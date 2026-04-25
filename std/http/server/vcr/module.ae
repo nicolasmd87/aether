@@ -133,6 +133,12 @@ extern vcr_record_interaction_full(method: string, path: string, status: int, co
 extern vcr_last_error() -> string
 extern vcr_clear_last_error()
 
+// Step 11 externs — static-content mount points. Routes are
+// registered when vcr.load() calls vcr_register_routes() — so
+// configure mounts BEFORE loading the tape.
+extern vcr_add_static_content(mount_path: string, fs_dir: string) -> int
+extern vcr_clear_static_content()
+
 // String concat for the recheck error path — used by flush_or_check
 // to pin the return type to string. Same shape stdlib wrappers
 // elsewhere use to dodge tuple-inference confusion.
@@ -344,4 +350,42 @@ last_error() -> string {
 // mismatch doesn't bleed forward.
 clear_last_error() {
     vcr_clear_last_error()
+}
+
+// ---- Static-content mounts (Servirtium roadmap step 11) --------------
+//
+// Mark an on-disk directory as bypass-the-tape territory. Every
+// incoming GET whose path starts with `mount_path` is served from
+// disk (with the http_serve_file mime-type detection and traversal-
+// prevention) and never consulted against the tape.
+//
+// Use case: Selenium/Cypress/Playwright UI tests where the page
+// is the SUT — letting the tape capture every CSS/JS/image asset
+// is noise. Point the static-content config at the local build
+// artifacts directory; the tape stays focused on the actual
+// domain-API exchanges the test cares about.
+//
+// Configure mounts BEFORE calling vcr.load() — the tape loader is
+// what wires routes against the http server. Mounts persist across
+// vcr.load() calls in the same process; clear_static_content()
+// is the explicit reset.
+//
+//   vcr.static_content("/assets", "build/static")
+//   raw = vcr.load(tape_path, port)
+//   ... drives SUT, /assets/* served from disk, /api/* from tape ...
+//
+// Returns "" on success, error string otherwise.
+static_content(mount_path: string, fs_dir: string) -> string {
+    ok = vcr_add_static_content(mount_path, fs_dir)
+    if ok == 0 { return vcr_load_err() }
+    return ""
+}
+
+// Drop all static-content mounts. The route registrations against
+// a running http server are NOT removed (the http_server module
+// has no remove_route surface today) — call this between tests
+// only when reusing the same VCR config across very different
+// scenarios. Recommended pattern is one VCR per test.
+clear_static_content() {
+    vcr_clear_static_content()
 }
