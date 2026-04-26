@@ -1,0 +1,161 @@
+// Regression: std.cryptography Base64 codec + algorithm-by-name
+// dispatch (hash_hex, hash_supported). Eight cases:
+//
+//   1. base64_encode known vector — "Man" → "TWFu" (RFC 4648 §10)
+//   2. base64_encode known vector — "hello world" → "aGVsbG8gd29ybGQ"
+//   3. base64 round-trip — ASCII string survives encode→decode
+//   4. base64 round-trip — binary payload with embedded NULs survives
+//   5. base64 round-trip — empty input encodes to "", decodes to 0 bytes
+//   6. hash_hex("sha256", "abc") matches the per-algorithm sha256_hex
+//   7. hash_hex with unknown algorithm returns non-empty err
+//   8. hash_supported returns 1 for sha256, 0 for unknown
+//
+// Same SKIP-when-no-OpenSSL pattern as cryptography_sha test.
+
+import std.cryptography
+import std.string
+import std.io
+
+extern exit(code: int)
+
+// Write a binary buffer with NULs into a temp file the probe can
+// recover via fs.read_binary. Wait — the new base64 surface accepts
+// the buffer directly, so we stage the NUL-bearing bytes via a
+// known-shape constant rather than disk.
+extern cryptography_v2_probe_make_binary() -> string
+
+main() {
+    print("=== std.cryptography Base64 + dispatch ===\n\n")
+
+    // Probe: same skip-when-no-OpenSSL guard as cryptography_sha.
+    _, probe_err = cryptography.sha256_hex("probe", 5)
+    if probe_err != "" {
+        println("SKIP cryptography_v2: ${probe_err} (likely Windows CI without OpenSSL)")
+        print("\n=== std.cryptography v2 tests skipped (no backend) ===\n")
+        return
+    }
+
+    // ---- Test 1: base64_encode("Man", 3) == "TWFu" ----
+    print("Test 1: base64_encode(\"Man\", 3) == \"TWFu\"\n")
+    e1, eerr1 = cryptography.base64_encode("Man", 3)
+    if eerr1 != "" { println("  FAIL: ${eerr1}"); exit(1) }
+    if string.equals(e1, "TWFu") != 1 {
+        println("  FAIL: got '${e1}', want 'TWFu'")
+        exit(1)
+    }
+    print("  PASS\n")
+
+    // ---- Test 2: base64_encode("hello world", 11) == "aGVsbG8gd29ybGQ" ----
+    print("\nTest 2: base64_encode(\"hello world\", 11)\n")
+    e2, eerr2 = cryptography.base64_encode("hello world", 11)
+    if eerr2 != "" { println("  FAIL: ${eerr2}"); exit(1) }
+    if string.equals(e2, "aGVsbG8gd29ybGQ") != 1 {
+        println("  FAIL: got '${e2}', want 'aGVsbG8gd29ybGQ'")
+        exit(1)
+    }
+    print("  PASS\n")
+
+    // ---- Test 3: ASCII round-trip ----
+    print("\nTest 3: ASCII round-trip\n")
+    payload3 = "the quick brown fox"
+    enc3, _ = cryptography.base64_encode(payload3, 19)
+    dec3, dlen3, derr3 = cryptography.base64_decode(enc3)
+    if derr3 != "" { println("  FAIL decode: ${derr3}"); exit(1) }
+    if dlen3 != 19 {
+        println("  FAIL: expected 19 bytes, got ${dlen3}")
+        exit(1)
+    }
+    if string.equals(dec3, payload3) != 1 {
+        println("  FAIL: round-trip differs; got '${dec3}'")
+        exit(1)
+    }
+    print("  PASS\n")
+
+    // ---- Test 4: binary round-trip with embedded NULs ----
+    // The payload is sourced from a C shim so we know exactly which
+    // bytes are in it (a NUL at offset 3 makes round-trip integrity
+    // visible to length-aware accessors).
+    print("\nTest 4: binary payload with NUL round-trips\n")
+    bin = cryptography_v2_probe_make_binary()
+    bin_len = 10
+    enc4, eerr4 = cryptography.base64_encode(bin, bin_len)
+    if eerr4 != "" { println("  FAIL encode: ${eerr4}"); exit(1) }
+    dec4, dlen4, derr4 = cryptography.base64_decode(enc4)
+    if derr4 != "" { println("  FAIL decode: ${derr4}"); exit(1) }
+    if dlen4 != 10 {
+        println("  FAIL: expected 10 bytes, got ${dlen4}")
+        exit(1)
+    }
+    // Verify byte-identical via sha256: the digest of the round-tripped
+    // bytes must match the digest of the original. We can't string.equals
+    // because of the embedded NUL.
+    h_orig, _ = cryptography.sha256_hex(bin, bin_len)
+    h_rt, _   = cryptography.sha256_hex(dec4, dlen4)
+    if string.equals(h_orig, h_rt) != 1 {
+        println("  FAIL: round-tripped digest differs")
+        println("    orig=${h_orig}")
+        println("    rt  =${h_rt}")
+        exit(1)
+    }
+    print("  PASS: NUL-preserving round-trip\n")
+
+    // ---- Test 5: empty input ----
+    print("\nTest 5: empty input encodes to \"\", decodes to 0 bytes\n")
+    e5, eerr5 = cryptography.base64_encode("", 0)
+    if eerr5 != "" { println("  FAIL encode: ${eerr5}"); exit(1) }
+    if string.length(e5) != 0 {
+        println("  FAIL: empty encode should be 0 chars, got '${e5}'")
+        exit(1)
+    }
+    _, dlen5, derr5 = cryptography.base64_decode("")
+    if derr5 != "" { println("  FAIL decode: ${derr5}"); exit(1) }
+    if dlen5 != 0 {
+        println("  FAIL: empty decode should be 0 bytes, got ${dlen5}")
+        exit(1)
+    }
+    print("  PASS\n")
+
+    // ---- Test 6: hash_hex("sha256", "abc") matches sha256_hex ----
+    print("\nTest 6: hash_hex(\"sha256\", \"abc\") matches sha256_hex\n")
+    direct, _ = cryptography.sha256_hex("abc", 3)
+    via_disp, derr6 = cryptography.hash_hex("sha256", "abc", 3)
+    if derr6 != "" { println("  FAIL: ${derr6}"); exit(1) }
+    if string.equals(direct, via_disp) != 1 {
+        println("  FAIL: dispatcher disagrees with direct call")
+        println("    direct  =${direct}")
+        println("    via_disp=${via_disp}")
+        exit(1)
+    }
+    print("  PASS\n")
+
+    // ---- Test 7: hash_hex with unknown algorithm ----
+    print("\nTest 7: hash_hex(\"not_a_real_algo\", ...) errors\n")
+    _, derr7 = cryptography.hash_hex("not_a_real_algo", "x", 1)
+    if derr7 == "" {
+        println("  FAIL: expected non-empty err, got success")
+        exit(1)
+    }
+    if string.contains(derr7, "unknown") != 1 {
+        println("  FAIL: err should mention unknown, got '${derr7}'")
+        exit(1)
+    }
+    print("  PASS: '${derr7}'\n")
+
+    // ---- Test 8: hash_supported probe ----
+    print("\nTest 8: hash_supported probe\n")
+    if cryptography.hash_supported("sha256") != 1 {
+        println("  FAIL: sha256 should be supported")
+        exit(1)
+    }
+    if cryptography.hash_supported("sha1") != 1 {
+        println("  FAIL: sha1 should be supported")
+        exit(1)
+    }
+    if cryptography.hash_supported("not_a_real_algo") != 0 {
+        println("  FAIL: not_a_real_algo should be unsupported")
+        exit(1)
+    }
+    print("  PASS\n")
+
+    print("\n=== All std.cryptography v2 tests passed ===\n")
+}

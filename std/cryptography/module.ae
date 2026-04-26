@@ -1,24 +1,43 @@
-// std.cryptography - Cryptographic hash primitives
+// std.cryptography - Cryptographic hash primitives + Base64 codec
 // Import with: import std.cryptography
 //
-// v1 exposes one-shot SHA-1 and SHA-256 digests. Pure functions —
-// bytes in, lowercase-hex digest out. Binary-safe via an explicit
-// byte length (embedded NULs are fine; pass 0 to hash an empty
-// buffer). No streaming API, no HMAC, no KDFs, no symmetric
-// ciphers — see docs/stdlib-vs-contrib.md for the "one obvious
-// shape" criterion.
+// Pure functions: bytes in, hex digest or Base64 string out. Binary-
+// safe via explicit byte length (embedded NULs are fine; pass 0 to
+// hash or encode an empty buffer). HMAC, key derivation, symmetric
+// ciphers, signing, streaming digests, URL-safe Base64, and
+// PKCS#7 / PEM parsing are deliberately out of scope — see
+// docs/stdlib-vs-contrib.md for the "one obvious shape" criterion.
 //
-// When the Aether toolchain was built without OpenSSL, the Go-style
-// wrappers below return ("", "openssl unavailable") rather than
-// crashing. Callers that need hashing should check the error slot.
+// When the Aether toolchain was built without OpenSSL, every wrapper
+// returns a non-empty error string ("openssl unavailable") rather
+// than crashing. Callers that need cryptographic functions should
+// check the error slot.
+
+import std.string
 
 exports (
     cryptography_sha1_hex_raw, cryptography_sha256_hex_raw,
-    sha1_hex, sha256_hex
+    cryptography_hash_hex_raw, cryptography_hash_supported,
+    cryptography_base64_encode_raw,
+    cryptography_base64_decode_raw,
+    cryptography_get_base64_decode,
+    cryptography_get_base64_decode_length,
+    cryptography_release_base64_decode,
+    sha1_hex, sha256_hex, hash_hex, hash_supported,
+    base64_encode, base64_decode
 )
 
 extern cryptography_sha1_hex_raw(data: string, length: int) -> string
 extern cryptography_sha256_hex_raw(data: string, length: int) -> string
+extern cryptography_hash_hex_raw(algo: string, data: string, length: int) -> string
+extern cryptography_hash_supported(algo: string) -> int
+extern cryptography_base64_encode_raw(data: string, length: int) -> string
+extern cryptography_base64_decode_raw(b64: string) -> int
+extern cryptography_get_base64_decode() -> string
+extern cryptography_get_base64_decode_length() -> int
+extern cryptography_release_base64_decode()
+
+extern string_new_with_length(data: string, length: int) -> ptr
 
 // Compute the SHA-1 hex digest of the first `length` bytes of `data`.
 // Returns (digest, "") on success, ("", error) when OpenSSL is
@@ -42,4 +61,74 @@ sha256_hex(data: string, length: int) -> {
         return "", "openssl unavailable"
     }
     return out, ""
+}
+
+// Algorithm-by-name digest dispatch. `algo` is a string like "sha1"
+// or "sha256" — useful when the algorithm is config-driven rather
+// than compile-time. Returns the same lowercase-hex shape as
+// sha1_hex / sha256_hex, or ("", error) when:
+//   - OpenSSL isn't linked
+//   - the algorithm name is unknown ("unknown algorithm")
+//   - the digest computation itself fails
+//
+// Whatever names libcrypto recognizes work here ("sha384",
+// "sha512", "sha3-256", ...), but the supported set may vary by
+// OpenSSL build. Use hash_supported() to check before passing
+// user-supplied names.
+hash_hex(algo: string, data: string, length: int) -> {
+    out = cryptography_hash_hex_raw(algo, data, length)
+    if out == 0 {
+        if cryptography_hash_supported(algo) == 0 {
+            return "", "unknown algorithm"
+        }
+        return "", "openssl unavailable"
+    }
+    return out, ""
+}
+
+// Probe whether this build can compute `algo`. Returns 1 (yes) or 0
+// (no). Always succeeds — never errors. Use this at config time to
+// validate user-supplied algorithm names before they get written
+// somewhere persistent.
+hash_supported(algo: string) -> int {
+    return cryptography_hash_supported(algo)
+}
+
+// Encode `length` bytes of `data` as Base64 (RFC 4648 §4 standard
+// alphabet, unpadded for compactness). Callers that need `=`
+// padding to make the output length a multiple of 4 can append it
+// themselves; the unpadded length is `((n + 2) / 3) * 4` for an
+// n-byte input.
+//
+// Returns (b64_string, "") on success, ("", error) on failure.
+base64_encode(data: string, length: int) -> {
+    out = cryptography_base64_encode_raw(data, length)
+    if out == 0 {
+        return "", "openssl unavailable"
+    }
+    return out, ""
+}
+
+// Decode a Base64 string back into raw bytes. Accepts both padded
+// and unpadded RFC 4648 §4 input. Returns (bytes, length, "")
+// on success — `bytes` is an AetherString preserving any embedded
+// NULs in the decoded payload.
+//
+// Returns ("", 0, error) on:
+//   - malformed Base64 input
+//   - OpenSSL unavailable
+//   - allocation failure
+//
+// Same shape as fs.read_binary so callers can chain through the
+// same destructure pattern.
+base64_decode(b64: string) -> {
+    ok = cryptography_base64_decode_raw(b64)
+    if ok == 0 {
+        return "", 0, "base64 decode failed"
+    }
+    raw = cryptography_get_base64_decode()
+    n = cryptography_get_base64_decode_length()
+    owned = string_new_with_length(raw, n)
+    cryptography_release_base64_decode()
+    return owned, n, ""
 }
