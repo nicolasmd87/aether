@@ -1,0 +1,26 @@
+// Smoke test for @extern("c_symbol") aether_name(params) -> ret.
+//
+// The Aether-side names (ae_probe_compute, ae_probe_const) are what the
+// program calls, but the C symbols actually linked are probe_v2 and
+// probe_const — chosen by the @extern annotation and emitted as the
+// extern's forward declaration and at every call site.
+//
+// If the annotation isn't honored, the link step fails because shim.c
+// only defines probe_v2/probe_const, not ae_probe_*.
+
+@extern("probe_v2") ae_probe_compute(n: int) -> int
+@extern("probe_const") ae_probe_const() -> int
+
+main() {
+    a = ae_probe_compute(1)        // probe_v2(1) -> 42
+    b = ae_probe_const()           // probe_const() -> 7
+    if a != 42 {
+        println("FAIL: ae_probe_compute returned wrong value")
+        exit(1)
+    }
+    if b != 7 {
+        println("FAIL: ae_probe_const returned wrong value")
+        exit(1)
+    }
+    println("OK")
+}

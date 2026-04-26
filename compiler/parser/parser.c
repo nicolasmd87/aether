@@ -3039,6 +3039,82 @@ ASTNode* parse_program(Parser* parser) {
             case TOKEN_EXTERN:
                 node = parse_extern_declaration(parser);
                 break;
+            case TOKEN_AT: {
+                // @extern("c_symbol_name") aether_name(params) -> ret
+                //
+                // Binds an Aether-namespace function name to a chosen
+                // C symbol. The Aether name lives in the module's
+                // public surface (qualified callers write
+                // `module.aether_name(...)`); codegen forwards every
+                // call to the named C symbol. No wrapper function is
+                // emitted — one annotation, no thunk.
+                //
+                // Equivalent to writing:
+                //     extern c_symbol_name(...)
+                //     aether_name(...) { return c_symbol_name(...) }
+                // …without the wrapper. Closes #234.
+                Token* at_tok = expect_token(parser, TOKEN_AT);
+                if (!at_tok) { advance_token(parser); continue; }
+                // After `@`, the only attribute we accept right now is
+                // `extern`, which the lexer classifies as TOKEN_EXTERN
+                // (a reserved keyword). Match that shape directly so the
+                // user doesn't see a misleading "extern is reserved" error.
+                Token* attr = peek_token(parser);
+                if (!attr || attr->type != TOKEN_EXTERN) {
+                    parser_error(parser, "unknown attribute (only @extern(\"...\") is supported)");
+                    advance_token(parser);
+                    continue;
+                }
+                advance_token(parser);
+                expect_token(parser, TOKEN_LEFT_PAREN);
+                Token* sym = expect_token(parser, TOKEN_STRING_LITERAL);
+                expect_token(parser, TOKEN_RIGHT_PAREN);
+                if (!sym || !sym->value) { advance_token(parser); continue; }
+                // Now parse the function declaration that follows.
+                // We use parse_extern_declaration's shape (params with
+                // mandatory types, no body) but the Aether name comes
+                // from the identifier following the annotation rather
+                // than after an `extern` keyword. Re-purpose by temporarily
+                // pretending `extern` came in: easier to inline the small
+                // amount of code than to rework parse_extern_declaration.
+                Token* fname = expect_token(parser, TOKEN_IDENTIFIER);
+                if (!fname) continue;
+                expect_token(parser, TOKEN_LEFT_PAREN);
+                ASTNode* ext = create_ast_node(AST_EXTERN_FUNCTION, fname->value,
+                                               at_tok->line, at_tok->column);
+                // Stash the C symbol name with a recognizable prefix so
+                // codegen can detect it without colliding with other
+                // annotation users (e.g. defer factories).
+                char tag[256];
+                snprintf(tag, sizeof(tag), "c_symbol:%s", sym->value);
+                ext->annotation = strdup(tag);
+
+                if (!match_token(parser, TOKEN_RIGHT_PAREN)) {
+                    do {
+                        Token* pname = expect_token(parser, TOKEN_IDENTIFIER);
+                        if (!pname) break;
+                        ASTNode* p = create_ast_node(AST_IDENTIFIER, pname->value,
+                                                     pname->line, pname->column);
+                        if (match_token(parser, TOKEN_COLON)) {
+                            Type* pt = parse_type(parser);
+                            p->node_type = pt ? pt : create_type(TYPE_INT);
+                        } else {
+                            parser_error(parser, "Type annotation required for @extern parameter (use param: type)");
+                            p->node_type = create_type(TYPE_INT);
+                        }
+                        add_child(ext, p);
+                    } while (match_token(parser, TOKEN_COMMA));
+                    expect_token(parser, TOKEN_RIGHT_PAREN);
+                }
+                if (match_token(parser, TOKEN_ARROW)) {
+                    Type* rt = parse_type(parser);
+                    ext->node_type = rt ? rt : create_type(TYPE_INT);
+                } else {
+                    ext->node_type = create_type(TYPE_VOID);
+                }
+                node = ext;
+                break;
+            }
             case TOKEN_BUILDER: {
                 // builder before a function definition = builder function
                 Token* next_d = peek_ahead(parser, 1);

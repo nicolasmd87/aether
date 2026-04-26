@@ -1055,6 +1055,17 @@ Externs are useful for:
 - Custom C extensions
 - Platform-specific APIs
 
+### `@extern("c_name")` — bind to a renamed C symbol
+
+When the Aether-side name should differ from the C symbol (for example, to expose a clean module surface without trailing `_raw` suffixes), prefix the declaration with `@extern("c_symbol")`:
+
+```aether
+@extern("EVP_MD_CTX_new") md_ctx_new() -> ptr
+@extern("strerror") describe_errno(errno: int) -> string
+```
+
+The Aether-side name is what callers write; the annotated C symbol is what the linker sees. No wrapper function is emitted. See [`docs/c-interop.md`](c-interop.md#renaming-a-c-symbol--externc_name) for the full FFI reference.
+
 ---
 
 ## Built-in Functions

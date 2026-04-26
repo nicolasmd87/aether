@@ -52,7 +52,10 @@ typedef struct {
     // Extern function parameter type registry — used at call sites for proper casts
     // e.g., list_add(void*, void*) called with int arg → cast to (void*)(intptr_t)
     struct ExternParamInfo {
-        char* name;          // function name
+        char* name;          // Aether-side name (the namespace surface)
+        char* c_name;        // C symbol to emit at call sites; NULL = same as name.
+                             //   Set to a different value when the extern was declared
+                             //   via @extern("c_symbol") aether_name(...) — see #234.
         TypeKind* params;    // array of parameter kinds (TYPE_PTR, TYPE_INT, ...)
         int param_count;
     }* extern_registry;

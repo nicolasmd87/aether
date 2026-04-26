@@ -605,6 +605,7 @@ Token* next_token() {
             return create_token(TOKEN_DOT, ".", current_line, current_column);
         case ':': advance(); return create_token(TOKEN_COLON, ":", current_line, current_column);
         case '?': advance(); return create_token(TOKEN_QUESTION, "?", current_line, current_column);
+        case '@': advance(); return create_token(TOKEN_AT, "@", current_line, current_column);
         default: {
             advance();
             char err_ch[2] = { c, '\0' };
@@ -736,6 +737,7 @@ const char* token_type_to_string(AeTokenType type) {
         case TOKEN_COLON: return "COLON";
         case TOKEN_ARROW: return "ARROW";
         case TOKEN_PIPE: return "PIPE";
+        case TOKEN_AT: return "AT";
         case TOKEN_EXCLAIM: return "EXCLAIM";
         case TOKEN_QUESTION: return "QUESTION";
         case TOKEN_PRINT: return "PRINT";
