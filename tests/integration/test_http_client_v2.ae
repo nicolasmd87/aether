@@ -20,6 +20,7 @@
 import std.http.client
 import std.http
 import std.string
+import std.json
 
 extern exit(code: int)
 extern http_server_start_raw(server: ptr) -> int
@@ -86,6 +87,28 @@ handle_slow(req: ptr, res: ptr, ud: ptr) {
     sleep(3000)
     http.response_set_status(res, 200)
     http.response_set_body(res, "late")
+}
+
+// JSON sugar handlers (issue #240). The echo handler asserts that
+// the client set Content-Type: application/json and emits a
+// well-formed JSON response keyed off what it received. The broken
+// handler emits non-JSON regardless of the request — used to drive
+// response_body_json's parse-failure path.
+handle_json_echo(req: ptr, res: ptr, ud: ptr) {
+    ctype = http.get_header(req, "Content-Type")
+    body  = http.request_body(req)
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "application/json")
+    // Synthesise a small object that proves the round-trip preserved
+    // both the request's content-type header and its body.
+    out = "{\"echoed_ct\":\"${ctype}\",\"echoed_body\":${body}}"
+    http.response_set_body(res, out)
+}
+
+handle_json_broken(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "application/json")
+    http.response_set_body(res, "this is not { valid json")
 }
 
 // ------------------------------------------------------------------
@@ -156,6 +179,8 @@ main() {
     http.server_get (raw, "/broken",                 handle_broken,       0)
     http.server_post(raw, "/echo-length",            handle_echo_length,  0)
     http.server_get (raw, "/slow",                   handle_slow,         0)
+    http.server_post(raw, "/json-echo",              handle_json_echo,    0)
+    http.server_get (raw, "/json-broken",            handle_json_broken,  0)
 
     // Hand the server to an actor that calls server_start (blocking).
     // SchedHelper spawned first to satisfy the >=2-actor scheduler
@@ -269,6 +294,82 @@ main() {
         exit(1)
     }
     print("  PASS\n")
+
+    // ---- Test 8: post_json round-trip (issue #240) ----
+    // Build a small JSON object, POST it to /json-echo, parse the
+    // response, assert the server received Content-Type: application/json
+    // and the body we sent. json_* externs are flat-namespaced (no
+    // wrapper for create_object / object_set_raw etc. yet); call them
+    // directly. The error legs of object_get / get_string come back
+    // as (value, err) tuples per std.json's idiom.
+    print("\nTest 8: post_json round-trip\n")
+    name_val = json_create_string("alice")
+    age_val  = json_create_number(30.0)
+    payload  = json_create_object()
+    json_object_set_raw(payload, "name", name_val)
+    json_object_set_raw(payload, "age",  age_val)
+    resp8, err8 = client.post_json("${base_url()}/json-echo", payload)
+    if err8 != "" { println("  FAIL post_json: ${err8}"); exit(1) }
+    if client.response_status(resp8) != 200 {
+        println("  FAIL status ${client.response_status(resp8)}"); exit(1)
+    }
+    parsed8, perr8 = client.response_body_json(resp8)
+    if perr8 != "" { println("  FAIL parse: ${perr8}"); exit(1) }
+    ct_node, gctterr = json.object_get(parsed8, "echoed_ct")
+    if gctterr != "" { println("  FAIL no echoed_ct: ${gctterr}"); exit(1) }
+    echoed_ct, sctterr = json.get_string(ct_node)
+    if sctterr != "" { println("  FAIL get_string ct: ${sctterr}"); exit(1) }
+    if string.contains(echoed_ct, "application/json") != 1 {
+        println("  FAIL echoed_ct '${echoed_ct}' missing application/json")
+        exit(1)
+    }
+    echoed_body, ebgerr = json.object_get(parsed8, "echoed_body")
+    if ebgerr != "" { println("  FAIL no echoed_body: ${ebgerr}"); exit(1) }
+    eb_name_node, ebnnerr = json.object_get(echoed_body, "name")
+    if ebnnerr != "" { println("  FAIL no echoed name: ${ebnnerr}"); exit(1) }
+    eb_name, ebnsstrerr = json.get_string(eb_name_node)
+    if ebnsstrerr != "" { println("  FAIL get_string name: ${ebnsstrerr}"); exit(1) }
+    if eb_name != "alice" {
+        println("  FAIL round-tripped name '${eb_name}' != 'alice'"); exit(1)
+    }
+    json_free(parsed8)
+    client.response_free(resp8)
+    json_free(payload)
+    print("  PASS: round-trip preserved Content-Type and body\n")
+
+    // ---- Test 9: response_body_json happy path ----
+    // Use post_json with a trivial payload to drive a JSON response,
+    // then verify response_body_json parses it cleanly.
+    print("\nTest 9: response_body_json happy path\n")
+    p9 = json_create_object()
+    resp9, err9 = client.post_json("${base_url()}/json-echo", p9)
+    if err9 != "" { println("  FAIL: ${err9}"); exit(1) }
+    parsed9, perr9 = client.response_body_json(resp9)
+    if perr9 != "" { println("  FAIL parse: ${perr9}"); exit(1) }
+    if parsed9 == null { println("  FAIL parsed9 null"); exit(1) }
+    json_free(parsed9)
+    client.response_free(resp9)
+    json_free(p9)
+    print("  PASS: parsed cleanly\n")
+
+    // ---- Test 10: response_body_json malformed JSON surfaces err ----
+    print("\nTest 10: response_body_json on malformed JSON\n")
+    req10 = client.request("GET", "${base_url()}/json-broken")
+    client.set_timeout(req10, 5)
+    resp10, err10 = client.send_request(req10)
+    client.request_free(req10)
+    if err10 != "" { println("  FAIL transport: ${err10}"); exit(1) }
+    parsed10, perr10 = client.response_body_json(resp10)
+    if perr10 == "" {
+        println("  FAIL: expected parse error, got success")
+        exit(1)
+    }
+    if parsed10 != null {
+        println("  FAIL: expected null value on parse failure")
+        exit(1)
+    }
+    client.response_free(resp10)
+    print("  PASS: parse error surfaced as '${perr10}'\n")
 
     print("\n=== All std.http.client v2 tests passed ===\n")
     // Explicit exit because the SrvActor's accept loop would

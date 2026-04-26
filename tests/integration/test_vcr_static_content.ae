@@ -20,6 +20,7 @@ import std.http
 import std.http.client
 import std.fs
 import std.string
+import std.json
 
 extern exit(code: int)
 extern http_server_start_raw(server: ptr) -> int

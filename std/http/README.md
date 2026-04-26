@@ -85,6 +85,34 @@ the common "GET with auth headers" and "POST and inspect status"
 shapes. They're pure Aether on top of the v2 builder — same
 expressiveness, fewer call-site lines.
 
+JSON round-trip helpers compose the same way:
+
+```ae
+import std.http.client
+import std.json
+
+payload = json_create_object()
+json_object_set_raw(payload, "name", json_create_string("alice"))
+
+resp, err = client.post_json("https://api.example.com/users", payload)
+if err == "" {
+    parsed, perr = client.response_body_json(resp)
+    if perr == "" {
+        // walk parsed; caller owns it.
+        json_free(parsed)
+    }
+    client.response_free(resp)
+}
+json_free(payload)
+```
+
+`post_json` marshals the value via `json.stringify`, sets
+`Content-Type` and `Accept` to `application/json`, and returns the
+same `(resp, err)` shape as `send_request` — non-2xx status is still
+the caller's call. `response_body_json` wraps `response_body` +
+`json.parse`, returning `(value, "")` on success or `(null, error)`
+when the body isn't valid JSON.
+
 ## Server — routing + actor wiring
 
 ```ae
