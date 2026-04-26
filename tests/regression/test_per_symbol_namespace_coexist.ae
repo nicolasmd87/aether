@@ -1,0 +1,54 @@
+// Regression for issue #252: per-symbol import + namespace import
+// of the same module both work in the same file.
+//
+// Pre-fix: `import std.fs.file_exists` (parser-rewritten to
+// selective form `import std.fs (file_exists)`) registered fs as
+// having a selective filter. A subsequent qualified call like
+// `fs.read("...")` was rejected by is_selective_import_blocked
+// even when the user *also* added `import std.fs` to restore the
+// full namespace.
+//
+// Fix in compiler/analysis/typechecker.c: track non-selective
+// imports separately and use them as an override in the blocking
+// check.
+//
+// Note: this regression doesn't cover the `import std.fs` alone
+// case (no per-symbol form) — that path has always worked. The
+// regression is specifically the *coexistence* of both forms.
+
+import std.fs.file_exists
+import std.fs
+import std.string
+
+extern exit(code: int)
+
+// Write a small file so the test isn't dependent on host filesystem
+// state. /tmp is universally writable on every CI runner we use.
+main() {
+    werr = fs.write("/tmp/per_symbol_repro_marker", "marker\n")
+    if werr != "" {
+        println("FAIL: setup write: ${werr}")
+        exit(1)
+    }
+
+    // Per-symbol form: file_exists callable bare.
+    if file_exists("/tmp/per_symbol_repro_marker") != 1 {
+        println("FAIL: file_exists should be 1 on the file we just wrote")
+        exit(1)
+    }
+
+    // Namespace form: fs.read callable through the namespace.
+    // Pre-fix this E0301'd; that's the regression we're guarding.
+    contents, rerr = fs.read("/tmp/per_symbol_repro_marker")
+    if rerr != "" {
+        println("FAIL: fs.read: ${rerr}")
+        exit(1)
+    }
+    if string.length(contents) != 7 {
+        println("FAIL: expected 7 bytes, got ${string.length(contents)}")
+        exit(1)
+    }
+
+    fs.delete("/tmp/per_symbol_repro_marker")
+    println("PASS")
+}

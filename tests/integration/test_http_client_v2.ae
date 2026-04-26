@@ -111,6 +111,27 @@ handle_json_broken(req: ptr, res: ptr, ud: ptr) {
     http.response_set_body(res, "this is not { valid json")
 }
 
+// HEAD/PATCH handlers (issue #241). /head-target sets Content-Length
+// and an X-Marker header so the test can verify head() returns the
+// raw header block. /patch-echo echoes the request method + body
+// back so the test can verify patch() actually fired a PATCH.
+handle_head_target(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "X-Marker", "head-marker-value")
+    http.response_set_header(res, "Content-Length", "42")
+    // No body — HEAD by spec, but the server framework lets us set
+    // one anyway. The client should treat this as headers-only.
+    http.response_set_body(res, "")
+}
+
+handle_patch_echo(req: ptr, res: ptr, ud: ptr) {
+    method = http.request_method(req)
+    body   = http.request_body(req)
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_body(res, "method=${method} body=${body}")
+}
+
 // ------------------------------------------------------------------
 // Server actor — owns the blocking accept loop. The companion
 // SchedHelper is empty-on-purpose: the multicore scheduler needs
@@ -181,6 +202,8 @@ main() {
     http.server_get (raw, "/slow",                   handle_slow,         0)
     http.server_post(raw, "/json-echo",              handle_json_echo,    0)
     http.server_get (raw, "/json-broken",            handle_json_broken,  0)
+    http.server_add_route(raw, "HEAD",  "/head-target", handle_head_target, 0)
+    http.server_add_route(raw, "PATCH", "/patch-echo",  handle_patch_echo,  0)
 
     // Hand the server to an actor that calls server_start (blocking).
     // SchedHelper spawned first to satisfy the >=2-actor scheduler
@@ -370,6 +393,39 @@ main() {
     }
     client.response_free(resp10)
     print("  PASS: parse error surfaced as '${perr10}'\n")
+
+    // ---- Test 11: head() returns (status, headers, err) tuple ----
+    // Issue #241. /head-target sets X-Marker and Content-Length;
+    // the wrapper should hand back the header block as a string.
+    print("\nTest 11: head() shorthand\n")
+    h_status, h_headers, h_err = client.head("${base_url()}/head-target")
+    if h_err != "" { println("  FAIL transport: ${h_err}"); exit(1) }
+    if h_status != 200 { println("  FAIL status ${h_status}"); exit(1) }
+    if string.contains(h_headers, "X-Marker: head-marker-value") != 1 {
+        println("  FAIL headers missing X-Marker; got '${h_headers}'")
+        exit(1)
+    }
+    print("  PASS: 200 + X-Marker present\n")
+
+    // ---- Test 12: patch() sends PATCH method, echoed by server ----
+    // Issue #241. /patch-echo echoes "method=PATCH body=...".
+    print("\nTest 12: patch() shorthand\n")
+    p_resp, p_err = client.patch("${base_url()}/patch-echo",
+                                 "patch-payload", "text/plain")
+    if p_err != "" { println("  FAIL transport: ${p_err}"); exit(1) }
+    p_body = client.response_body(p_resp)
+    p_status = client.response_status(p_resp)
+    if p_status != 200 { println("  FAIL status ${p_status}"); exit(1) }
+    if string.contains(p_body, "method=PATCH") != 1 {
+        println("  FAIL: expected method=PATCH; got '${p_body}'")
+        exit(1)
+    }
+    if string.contains(p_body, "body=patch-payload") != 1 {
+        println("  FAIL: expected body=patch-payload; got '${p_body}'")
+        exit(1)
+    }
+    client.response_free(p_resp)
+    print("  PASS: PATCH method + body round-tripped\n")
 
     print("\n=== All std.http.client v2 tests passed ===\n")
     // Explicit exit because the SrvActor's accept loop would
