@@ -12,6 +12,7 @@
 exports (
     file_open_raw, file_close, file_read_all_raw, file_write_raw,
     file_exists, file_delete_raw, file_size_raw,
+    fs_last_error,
     open, read, write, delete, size
 )
 
@@ -28,11 +29,17 @@ extern file_size_raw(path: string) -> int
 extern string_concat(a: string, b: string) -> string
 extern string_length(str: string) -> int
 
+// Last-error accessor populated by the C side with a strerror-flavored
+// message. We copy it (string_concat with "") so the returned err
+// outlives the next call into fs_set_err — the underlying buffer is
+// thread-local but reused across calls.
+extern fs_last_error() -> string
+
 // Open a file. Returns (handle, "") on success, (null, error) on failure.
 open(path: string, mode: string) -> {
     handle = file_open_raw(path, mode)
     if handle == null {
-        return null, "cannot open file"
+        return null, string_concat(fs_last_error(), "")
     }
     return handle, ""
 }
@@ -43,12 +50,13 @@ open(path: string, mode: string) -> {
 read(path: string) -> {
     handle = file_open_raw(path, "r")
     if handle == 0 {
-        return "", "cannot open file"
+        return "", string_concat(fs_last_error(), "")
     }
     content = file_read_all_raw(handle)
     if content == 0 {
+        err = string_concat(fs_last_error(), "")
         file_close(handle)
-        return "", "cannot read file"
+        return "", err
     }
     content_copy = string_concat(content, "")
     file_close(handle)
@@ -60,14 +68,16 @@ read(path: string) -> {
 write(path: string, content: string) -> {
     handle = file_open_raw(path, "w")
     if handle == 0 {
-        return "cannot open file for writing"
+        return string_concat(fs_last_error(), "")
     }
     length = string_length(content)
     ok = file_write_raw(handle, content, length)
-    file_close(handle)
     if ok == 0 {
-        return "write failed"
+        err = string_concat(fs_last_error(), "")
+        file_close(handle)
+        return err
     }
+    file_close(handle)
     return ""
 }
 
@@ -75,7 +85,7 @@ write(path: string, content: string) -> {
 delete(path: string) -> {
     ok = file_delete_raw(path)
     if ok == 0 {
-        return "cannot delete file"
+        return string_concat(fs_last_error(), "")
     }
     return ""
 }
@@ -85,7 +95,7 @@ delete(path: string) -> {
 size(path: string) -> {
     s = file_size_raw(path)
     if s < 0 {
-        return 0, "cannot stat file"
+        return 0, string_concat(fs_last_error(), "")
     }
     return s, ""
 }

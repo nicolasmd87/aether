@@ -1,0 +1,73 @@
+// Regression test for the err-string audit (PR #244):
+// fs.* / file.* wrappers now return strerror-flavored diagnostics
+// instead of static "cannot open file" / "cannot read file" strings.
+//
+// The exact wording of strerror(errno) is platform-specific:
+//   Linux:   "cannot open file: No such file or directory"
+//   macOS:   "cannot open file: No such file or directory"
+//   Windows: "cannot open file: No such file or directory" (MinGW
+//            uses POSIX-flavored strerror by default)
+//
+// Rather than match the exact string, we assert that the err is
+// non-empty AND that it contains the prefix the C side stamps in
+// (so a regression that wired errno but lost the prefix would still
+// be caught).
+
+import std.string
+import std.file
+
+main() {
+    println("=== fs diagnostic err-string regression ===")
+
+    // 1. file.read on a path that doesn't exist
+    _, err = file.read("/this/path/almost/certainly/does/not/exist/aether-test")
+    if err == "" {
+        println("FAIL: file.read on missing path returned empty err")
+        exit(1)
+    }
+    if string.contains(err, "cannot open file") == 0 {
+        println("FAIL: file.read err missing 'cannot open file' prefix")
+        println("       got: ${err}")
+        exit(1)
+    }
+    // The strerror suffix is platform-specific; just confirm the
+    // colon-and-space delimiter from fs_set_err is present.
+    if string.contains(err, ": ") == 0 {
+        println("FAIL: file.read err missing strerror suffix")
+        println("       got: ${err}")
+        exit(1)
+    }
+    println("PASS: file.read('missing path') -> ${err}")
+
+    // 2. file.size on a missing path
+    sz, err2 = file.size("/this/path/also/does/not/exist/aether-test")
+    if err2 == "" {
+        println("FAIL: file.size on missing path returned empty err")
+        exit(1)
+    }
+    if sz != 0 {
+        println("FAIL: file.size on miss should return 0")
+        exit(1)
+    }
+    if string.contains(err2, "cannot stat file") == 0 {
+        println("FAIL: file.size err missing 'cannot stat file' prefix")
+        println("       got: ${err2}")
+        exit(1)
+    }
+    println("PASS: file.size('missing path') -> ${err2}")
+
+    // 3. file.delete on a missing path
+    err3 = file.delete("/this/path/never/existed/aether-test")
+    if err3 == "" {
+        println("FAIL: file.delete on missing path returned empty err")
+        exit(1)
+    }
+    if string.contains(err3, "cannot delete file") == 0 {
+        println("FAIL: file.delete err missing 'cannot delete file' prefix")
+        println("       got: ${err3}")
+        exit(1)
+    }
+    println("PASS: file.delete('missing path') -> ${err3}")
+
+    println("=== All diagnostic err-string assertions passed ===")
+}

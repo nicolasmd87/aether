@@ -19,6 +19,7 @@ exports (
     fs_try_stat, fs_get_stat_kind, fs_get_stat_size, fs_get_stat_mtime,
     fs_try_read_binary, fs_get_read_binary, fs_get_read_binary_length,
     fs_release_read_binary,
+    fs_last_error,
     dir_list_count, dir_list_get, dir_list_free,
     path_join, path_dirname, path_basename, path_extension, path_is_absolute,
     fs_glob_raw, fs_glob_multi_raw,
@@ -125,13 +126,19 @@ extern string_length(str: string) -> int
 // reading up to `length` see the full file.
 extern string_new_with_length(data: string, length: int) -> ptr
 
+// Last-error accessor populated by the C side with a strerror-flavored
+// message ("cannot open file: No such file or directory", etc).
+// Wrappers below read this on failure and string_concat-copy it so
+// the returned err outlives the next call into fs_set_err.
+extern fs_last_error() -> string
+
 // ---- Go-style wrappers ----
 
 // Open a file. Returns (handle, "") on success, (null, error) on failure.
 open(path: string, mode: string) -> {
     handle = file_open_raw(path, mode)
     if handle == null {
-        return null, "cannot open file"
+        return null, string_concat(fs_last_error(), "")
     }
     return handle, ""
 }
@@ -141,12 +148,13 @@ open(path: string, mode: string) -> {
 read(path: string) -> {
     handle = file_open_raw(path, "r")
     if handle == 0 {
-        return "", "cannot open file"
+        return "", string_concat(fs_last_error(), "")
     }
     content = file_read_all_raw(handle)
     if content == 0 {
+        err = string_concat(fs_last_error(), "")
         file_close(handle)
-        return "", "cannot read file"
+        return "", err
     }
     content_copy = string_concat(content, "")
     file_close(handle)
@@ -158,14 +166,16 @@ read(path: string) -> {
 write(path: string, content: string) -> {
     handle = file_open_raw(path, "w")
     if handle == 0 {
-        return "cannot open file for writing"
+        return string_concat(fs_last_error(), "")
     }
     length = string_length(content)
     ok = file_write_raw(handle, content, length)
-    file_close(handle)
     if ok == 0 {
-        return "write failed"
+        err = string_concat(fs_last_error(), "")
+        file_close(handle)
+        return err
     }
+    file_close(handle)
     return ""
 }
 
@@ -173,7 +183,7 @@ write(path: string, content: string) -> {
 delete(path: string) -> {
     ok = file_delete_raw(path)
     if ok == 0 {
-        return "cannot delete file"
+        return string_concat(fs_last_error(), "")
     }
     return ""
 }
@@ -183,7 +193,7 @@ delete(path: string) -> {
 size(path: string) -> {
     s = file_size_raw(path)
     if s < 0 {
-        return 0, "cannot stat file"
+        return 0, string_concat(fs_last_error(), "")
     }
     return s, ""
 }

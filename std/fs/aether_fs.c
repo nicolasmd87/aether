@@ -87,6 +87,12 @@ DirList* fs_glob_multi_raw(void* l) { (void)l; return NULL; }
     #include <unistd.h>
 #endif
 
+// Forward declaration for the err-stamping helper. Defined further
+// down in this file alongside the TLS storage; declared here so the
+// failure-path callers in file_open_raw / file_read_all_raw / etc.
+// can reach it.
+static void fs_set_err(const char* what, int errnum);
+
 // Unwrap the payload+length from a value that may be either an
 // AetherString* (from fs.read_binary, string_new_with_length, etc.)
 // or a plain C string literal. Extern fn signatures say `const char*`
@@ -109,20 +115,32 @@ static inline const char* fs_unwrap_bytes(const char* data, int explicit_len, si
 
 // File operations
 File* file_open_raw(const char* path, const char* mode) {
-    if (!path || !mode) return NULL;
+    if (!path || !mode) {
+        fs_set_err("invalid argument", EINVAL);
+        return NULL;
+    }
 
     // Sandbox check: determine read vs write from mode
     if (mode[0] == 'r') {
-        if (!aether_sandbox_check("fs_read", path)) return NULL;
+        if (!aether_sandbox_check("fs_read", path)) {
+            fs_set_err("sandbox denied read", EACCES);
+            return NULL;
+        }
     } else {
-        if (!aether_sandbox_check("fs_write", path)) return NULL;
+        if (!aether_sandbox_check("fs_write", path)) {
+            fs_set_err("sandbox denied write", EACCES);
+            return NULL;
+        }
     }
 
     FILE* fp = fopen(path, mode);
-    if (!fp) return NULL;
+    if (!fp) {
+        fs_set_err("cannot open file", errno);
+        return NULL;
+    }
 
     File* file = (File*)malloc(sizeof(File));
-    if (!file) { fclose(fp); return NULL; }
+    if (!file) { fclose(fp); fs_set_err("out of memory", ENOMEM); return NULL; }
     file->handle = fp;
     file->is_open = 1;
     file->path = strdup(path);
@@ -130,28 +148,44 @@ File* file_open_raw(const char* path, const char* mode) {
 }
 
 char* file_read_all_raw(File* file) {
-    if (!file || !file->is_open) return NULL;
+    if (!file || !file->is_open) {
+        fs_set_err("file not open", EBADF);
+        return NULL;
+    }
 
     FILE* fp = (FILE*)file->handle;
     fseek(fp, 0, SEEK_END);
     long size = ftell(fp);
-    if (size < 0) return NULL;
+    if (size < 0) { fs_set_err("cannot determine file size", errno); return NULL; }
     fseek(fp, 0, SEEK_SET);
 
     char* buffer = (char*)malloc(size + 1);
-    if (!buffer) return NULL;
+    if (!buffer) { fs_set_err("out of memory", ENOMEM); return NULL; }
     size_t read = fread(buffer, 1, size, fp);
+    if (read != (size_t)size && ferror(fp)) {
+        fs_set_err("cannot read file", errno);
+        free(buffer);
+        return NULL;
+    }
     buffer[read] = '\0';
 
     return buffer;
 }
 
 int file_write_raw(File* file, const char* data, int length) {
-    if (!file || !file->is_open || !data) return 0;
+    if (!file || !file->is_open || !data) {
+        fs_set_err(!file || !file->is_open ? "file not open" : "invalid argument",
+                   !file || !file->is_open ? EBADF : EINVAL);
+        return 0;
+    }
 
     FILE* fp = (FILE*)file->handle;
     size_t written = fwrite(data, 1, (size_t)length, fp);
-    return (written == (size_t)length) ? 1 : 0;
+    if (written != (size_t)length) {
+        fs_set_err("write failed", errno);
+        return 0;
+    }
+    return 1;
 }
 
 int file_close(File* file) {
@@ -176,17 +210,30 @@ int file_exists(const char* path) {
 }
 
 int file_delete_raw(const char* path) {
-    if (!path) return 0;
-    if (!aether_sandbox_check("fs_write", path)) return 0;
-    return remove(path) == 0 ? 1 : 0;
+    if (!path) { fs_set_err("invalid argument", EINVAL); return 0; }
+    if (!aether_sandbox_check("fs_write", path)) {
+        fs_set_err("sandbox denied write", EACCES);
+        return 0;
+    }
+    if (remove(path) != 0) {
+        fs_set_err("cannot delete file", errno);
+        return 0;
+    }
+    return 1;
 }
 
 int file_size_raw(const char* path) {
-    if (!path) return 0;
-    if (!aether_sandbox_check("fs_read", path)) return 0;
+    if (!path) { fs_set_err("invalid argument", EINVAL); return -1; }
+    if (!aether_sandbox_check("fs_read", path)) {
+        fs_set_err("sandbox denied read", EACCES);
+        return -1;
+    }
 
     struct stat st;
-    if (stat(path, &st) != 0) return -1;
+    if (stat(path, &st) != 0) {
+        fs_set_err("cannot stat file", errno);
+        return -1;
+    }
     return (int)st.st_size;
 }
 
@@ -481,6 +528,29 @@ int fs_stat_raw(const char* path, int* out_kind,
 static AETHER_FS_TLS int s_last_kind  = 0;
 static AETHER_FS_TLS int s_last_size  = 0;
 static AETHER_FS_TLS int s_last_mtime = 0;
+
+// Thread-local last-error string. Populated by failing fs_* externs
+// with a "<what>: <strerror(errno)>" message that the Aether-side
+// wrappers (file.read, fs.write, etc.) splice into their (value, err)
+// returns. Empty string when no error is staged. See the err-string
+// audit pattern in docs/stdlib-module-pattern.md.
+static AETHER_FS_TLS char s_last_err[256] = {0};
+
+static void fs_set_err(const char* what, int errnum) {
+    if (errnum == 0) {
+        snprintf(s_last_err, sizeof(s_last_err), "%s", what);
+    } else {
+        snprintf(s_last_err, sizeof(s_last_err), "%s: %s", what, strerror(errnum));
+    }
+}
+
+const char* fs_last_error(void) {
+    return s_last_err;
+}
+
+void fs_clear_last_error(void) {
+    s_last_err[0] = '\0';
+}
 
 int fs_try_stat(const char* path) {
     int k = 0, sz = 0, mt = 0;

@@ -3,9 +3,26 @@ name: Aether CI
 on:
   push:
     branches: [ main, develop ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+      - 'LICENSE'
   pull_request:
     branches: [ main, develop ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+      - 'LICENSE'
   workflow_dispatch:
+
+# Cancel in-flight runs from previous pushes to the same ref. Saves
+# macOS minutes on rebases (10x billing multiplier even on public
+# repos) and prevents a queue of stale runs from finishing redundantly.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   # ============================================================
@@ -105,6 +122,9 @@ jobs:
       with:
         msystem: MINGW64
         update: false
+        # cache: true keeps the package set across runs (~1-2 min saved
+        # per Windows job by skipping the pacman download dance).
+        cache: true
         # zlib + openssl are needed by std.zlib and std.cryptography
         # (+ std.net TLS). Without them AETHER_HAS_ZLIB /
         # AETHER_HAS_OPENSSL go undefined and the stdlib wrappers
@@ -147,6 +167,8 @@ jobs:
       uses: mymindstorm/setup-emsdk@v14
       with:
         version: 3.1.51
+        # ~600 MB SDK; cache it across runs by version key.
+        actions-cache-folder: 'emsdk-cache-3.1.51'
 
     - name: Install native GCC
       run: sudo apt-get update && sudo apt-get install -y gcc make bc

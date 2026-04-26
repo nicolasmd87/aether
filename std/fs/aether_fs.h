@@ -153,5 +153,19 @@ DirList* fs_glob_raw(const char* pattern);
 // E.g., fs_glob_multi_raw(["**/*.c", "**/*.h"]) returns all .c and .h files.
 DirList* fs_glob_multi_raw(void* pattern_list);
 
+// Last-error string — populated by failing fs_* externs with a
+// "<what>: <strerror(errno)>" message that the Aether-side wrappers
+// (file.read, fs.write, etc.) splice into their (value, err) returns.
+// Returns "" when no error has been staged. Thread-local: each
+// scheduler thread has its own slot, so concurrent failures don't
+// race. Callers don't free the returned pointer.
+const char* fs_last_error(void);
+
+// Reset the last-error slot to empty. Optional — fs_set_err()
+// (internal) overwrites unconditionally on the next failure. Useful
+// when a wrapper wants to ensure stale state from a prior call
+// doesn't leak into a path that succeeds.
+void fs_clear_last_error(void);
+
 #endif // AETHER_FS_H
 

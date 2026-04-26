@@ -1,59 +1,26 @@
-name: Windows Build
+name: Windows MSVC Headers
 
 on:
   pull_request:
     branches: [ main, develop ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
+      - 'LICENSE'
   workflow_dispatch:
 
-# Build the Aether compiler and ae CLI on Windows using MinGW (GCC).
-# MinGW gives us the same GCC/Clang toolchain surface without an MSVC license,
-# while our aether_thread.h Win32 compat layer keeps the runtime fully native.
+# The MinGW build that previously lived here duplicated `ci.yml::ci-windows`
+# (same OS, same setup-msys2, same `make ci`). Removed in #244 to drop a
+# 2x-billing-multiplier job from every PR. The MSVC header check stays
+# because MSVC parses our headers differently than MinGW GCC and has
+# caught real portability bugs.
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  # ============================================================
-  # MinGW build — primary Windows target
-  # Full CI suite: compiler (-Werror), ae, stdlib, unit tests,
-  # .ae integration tests (includes REPL tests), examples.
-  # ============================================================
-  build-mingw:
-    name: Build + Test (Windows / MinGW-w64)
-    runs-on: windows-latest
-
-    defaults:
-      run:
-        shell: msys2 {0}
-
-    steps:
-    - name: Checkout repository
-      uses: actions/checkout@v4
-
-    - name: Set up MSYS2 / MinGW-w64
-      uses: msys2/setup-msys2@v2
-      with:
-        msystem: MINGW64
-        update: true
-        install: >-
-          mingw-w64-x86_64-gcc
-          mingw-w64-x86_64-make
-          mingw-w64-x86_64-openssl
-          mingw-w64-x86_64-ca-certificates
-          mingw-w64-x86_64-zlib
-          pkg-config
-          make
-          bc
-
-    - name: Run full CI suite
-      run: make ci
-
-    - name: Upload Windows binaries
-      uses: actions/upload-artifact@v4
-      with:
-        name: aether-windows-mingw64
-        path: |
-          build/aetherc.exe
-          build/ae.exe
-        retention-days: 30
-
   # ============================================================
   # MSVC compatibility check — ensure headers compile under cl.exe
   # No full build yet (runtime needs Win32 threading wiring), but
