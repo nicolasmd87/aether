@@ -458,6 +458,33 @@ All documented in [stdlib-module-pattern.md](stdlib-module-pattern.md).
 - `JSON_ARRAY` = 4
 - `JSON_OBJECT` = 5
 
+### What `std.json` doesn't do
+
+Coming from Go's `json.Unmarshal`, Java's Jackson, Python's `json.load` + dataclasses, or C#'s `JsonSerializer`, expect to do more by hand:
+
+- **No struct ↔ JSON mapping.** Aether has no runtime reflection — no `instanceof`, no `T.GetType()`, no `reflect.TypeOf` — so a library function that takes a struct type and a JSON tree and populates the struct fields can't exist as a stdlib API. Callers walk the tree by hand: `json.object_get(v, "name")` then `json.get_string(...)`, repeated per field. For tree-shaped or dynamically-shaped JSON the Aether code looks similar to other languages; for struct-shaped JSON it's more verbose. A future codegen step (a `--derive-json` flag on struct definitions, or a build-step macro) could close this gap without runtime reflection, but isn't shipped today.
+- **No annotations / struct tags.** `@JsonProperty("user_name")`, Go struct tags `json:"user_name,omitempty"`, etc. don't apply — there's nothing for them to attach to without struct-mapping in the first place.
+- **No streaming parse.** The whole document is buffered into the arena before the tree is walkable. For multi-gigabyte JSON, use a different tool. Documents into the tens of MB are fine.
+- **No JSON5 / comments / trailing commas.** Strict RFC 8259 only.
+- **No pretty-print on stringify.** Compact output only. Wrap with a separate prettier if you need one.
+- **No JSON Schema validation.** Validate by hand or build it on top.
+- **No arbitrary-precision numbers.** Numbers are `int` or `double`; the parser auto-falls-through to `strtod` for correctly-rounded IEEE-754 on edge cases (16+ significant digits, huge exponents) but there's no `BigDecimal` / `decimal.Decimal` equivalent for financial precision.
+- **Hard-coded depth limit of 256.** DoS protection against deeply nested JSON bombs; not configurable. Rare to hit in practice.
+
+### Other structured-data formats
+
+Beyond JSON, the stdlib has **no built-in support** for:
+
+- **YAML** — no parser. The runtime is single-language, so configuration files for Aether projects use TOML (read by the build tool internally — not a user-facing stdlib module) or hand-rolled formats.
+- **XML** — no parser. The Servirtium climate-API replay tests parse XML by hand from the WorldBank API responses (substring-extract `<double>...</double>` values from a known-shape body), not via a real DOM/SAX surface.
+- **TOML** — there's a parser at `tools/apkg/toml_parser.c` used internally by the `ae` CLI to read `aether.toml` project files. It's not exposed as `std.toml`. If a project needs TOML, copying that parser or shelling out to a host-language tool are the options today.
+- **INI** — no parser. Trivial to implement on top of `string.split` if needed.
+- **Java-style `.properties`** — no parser. Same shape as INI without sections; same advice.
+- **CSV** — no parser. `string.split(line, ",")` covers the no-quoting / no-embedded-commas case; anything more needs a real CSV parser, which isn't shipped.
+- **Protocol Buffers / MessagePack / CBOR / Avro / Thrift** — no codecs. Same reflection-gap reasoning as struct ↔ JSON: without struct introspection there's no automatic encode/decode, and a hand-written codec on top of `tcp.write` / `tcp.read` / `aether_string_data` is what you'd build.
+
+This isn't a hidden roadmap — these are absent because no downstream user has driven the need yet. If you're starting a project that needs YAML config, expect to write a parser, ship a contrib module, or shell out. The structured-data thinking in the stdlib is currently JSON-shaped and HTTP-adjacent; broader format coverage is open territory.
+
 ---
 
 ## Networking Library
@@ -542,6 +569,89 @@ main() {
 - `http.response_set_header(res, name, value)` - Set header
 
 Raw externs: `http_server_bind_raw`, `http_server_start_raw`.
+
+### HTTP Client Builder (`std.http.client`)
+
+Builder-shaped requests with full response access. The `http.get` / `http.post` / `http.put` / `http.delete` one-liners above are good for "no auth, JSON in, 200 means good" calls; reach for `std.http.client` when you need custom request headers, response-header capture, status discrimination, per-request timeouts, or methods other than the four common verbs (PROPFIND, PATCH, custom RPC verbs all work). Method is an arbitrary string. Non-2xx is not an error — the caller checks `response_status`.
+
+```aether
+import std.http.client
+
+main() {
+    req = client.request("GET", "https://api.example.com/users/42")
+    client.set_header(req, "Authorization", "Bearer abc123")
+    client.set_timeout(req, 30)
+    resp, err = client.send_request(req)
+    client.request_free(req)
+    if err != "" { return }
+    status = client.response_status(resp)
+    body   = client.response_body(resp)
+    client.response_free(resp)
+}
+```
+
+**Builder + send:**
+- `client.request(method, url)` → `ptr` - Build a request handle
+- `client.set_header(req, name, value)` → `string` - Append a request header
+- `client.set_body(req, body, length, content_type)` → `string` - Set request body (length explicit for binary safety)
+- `client.set_timeout(req, seconds)` → `string` - Per-request timeout (`0` = block forever)
+- `client.send_request(req)` → `(ptr, string)` - Fire it; `(resp, "")` on success, `(null, err)` on transport failure
+- `client.request_free(req)` - Free the request handle
+
+**Response accessors:**
+- `client.response_status(resp)` → `int`
+- `client.response_body(resp)` → `string` (binary-safe AetherString)
+- `client.response_header(resp, name)` → `string` (case-insensitive)
+- `client.response_headers(resp)` → `string` (raw header block)
+- `client.response_error(resp)` → `string`
+- `client.response_free(resp)` - Free the response
+
+**Sugar wrappers** (pure Aether on top of the builder):
+- `client.get_with_headers(url, header_pairs)` → `(string, int, string)`
+- `client.post_with_status(url, body, content_type)` → `(string, int, string)`
+- `client.post_json(url, value)` → `(ptr, string)` - Marshal value via `std.json`, set Content-Type + Accept
+- `client.response_body_json(resp)` → `(ptr, string)` - `response_body` + `json.parse` round-trip
+
+See `std/http/README.md` for design rationale and `tests/integration/test_http_client_v2.ae` for ten worked examples (header round-trip, status discrimination, binary body, timeout, transport failure, JSON sugar, malformed-JSON parse failure).
+
+### HTTP Record/Replay (`std.http.server.vcr`)
+
+Aether's implementation of [Servirtium](https://servirtium.dev) — cross-language record/replay HTTP testing. Tapes are markdown, interoperable with Java/Kotlin/Python/Go implementations of the same framework.
+
+```aether
+import std.http.server.vcr
+import std.http
+extern http_server_start_raw(server: ptr) -> int
+
+message StartVCR { raw: ptr }
+actor VCRActor { state s = 0
+    receive { StartVCR(raw) -> { s = raw; http_server_start_raw(raw) } } }
+
+main() {
+    raw = vcr.load("tests/tapes/my.tape", 18099)
+    a = spawn(VCRActor())
+    a ! StartVCR { raw: raw }
+    sleep(500)
+    body, err = http.get("http://127.0.0.1:18099/things/42")
+    vcr.eject(raw)
+}
+```
+
+**Replay:** `vcr.load(tape_path, port)` / `vcr.eject(server)` / `vcr.tape_length()`.
+
+**Record:** `vcr.record(method, path, status, content_type, body)` / `vcr.record_full(...)` / `vcr.flush(tape_path)` / `vcr.flush_or_check(tape_path)` (re-record byte-diff with `.actual` sibling on mismatch).
+
+**Secret scrubbing** (applied at flush time; in-memory capture stays untouched): `vcr.redact(field, pattern, replacement)` / `vcr.clear_redactions()` with `vcr.FIELD_PATH` and `vcr.FIELD_RESPONSE_BODY` selectors.
+
+**Per-interaction notes:** `vcr.note(title, body)` — record-only `[Note]` markdown block attached to the next interaction.
+
+**Strict request matching:** `vcr.last_error()` / `vcr.clear_last_error()` — tearDown-readable mismatch diagnostics.
+
+**Static content:** `vcr.static_content(mount_path, fs_dir)` / `vcr.clear_static_content()` — bypass-the-tape mounts for Selenium/Cypress assets.
+
+**Markdown format options:** `vcr.emphasize_http_verbs()` / `vcr.indent_code_blocks()` / `vcr.clear_format_options()` — alternative emit forms; playback tolerates either.
+
+Full surface, design notes, and the runnable test suite live in `std/http/README.md`.
 
 ### TCP Sockets (Go-style)
 

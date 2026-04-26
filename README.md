@@ -235,33 +235,45 @@ aether/
 │   ├── memory/        # Arena allocators, memory pools, batch allocation
 │   ├── scheduler/     # Multi-core scheduler + cooperative single-threaded backend
 │   └── utils/         # CPU detection, SIMD, tracing, thread portability
-├── std/               # Standard library
-│   ├── string/       # String operations
-│   ├── file/         # File operations (open, read, write, delete)
-│   ├── dir/          # Directory operations (create, delete, list)
-│   ├── path/         # Path utilities (join, basename, dirname)
-│   ├── fs/           # Combined file/dir/path module
-│   ├── collections/  # List, HashMap, Vector, Set, PQueue
-│   ├── list/         # Dynamic array (ArrayList)
-│   ├── map/          # Hash map
-│   ├── json/         # JSON parser and builder
-│   ├── http/         # HTTP client and server
-│   ├── tcp/          # TCP client and server
-│   ├── net/          # Combined TCP/HTTP networking module
-│   ├── math/         # Math functions and random numbers
-│   ├── io/           # Console I/O, environment variables
-│   ├── os/           # Shell execution, command capture, env vars
-│   └── log/          # Structured logging
-├── tools/            # Developer tools
-│   ├── ae.c          # Unified CLI tool (ae command)
-│   └── apkg/         # Project tooling, TOML parser
-├── tests/            # Test suite (runtime, syntax, integration)
-├── examples/         # Example programs (.ae files)
-│   ├── basics/       # Hello world, variables, arrays, etc.
-│   ├── actors/       # Actor patterns (ping-pong, pipeline, etc.)
-│   └── applications/ # Complete applications
-├── docs/            # Documentation
-└── docker/          # Docker (CI, dev, WASM, embedded)
+├── std/                # Standard library
+│   ├── string/         # String operations
+│   ├── file/           # File operations (open, read, write, delete)
+│   ├── dir/            # Directory operations (create, delete, list)
+│   ├── path/           # Path utilities (join, basename, dirname)
+│   ├── fs/             # Combined file/dir/path module
+│   ├── collections/    # List, HashMap, Vector, Set, PQueue
+│   ├── list/           # Dynamic array (ArrayList)
+│   ├── map/            # Hash map
+│   ├── intarr/         # Fixed-size packed int buffer
+│   ├── json/           # JSON parser and builder
+│   ├── http/           # v1 HTTP client + server
+│   │   ├── client/     # v2 client (request builder, full response, JSON sugar)
+│   │   └── server/vcr/ # Servirtium-format record/replay for HTTP tests
+│   ├── tcp/            # TCP client and server
+│   ├── net/            # Combined TCP/HTTP networking module
+│   ├── cryptography/   # SHA-1, SHA-256
+│   ├── zlib/           # One-shot deflate/inflate
+│   ├── math/           # Math functions and random numbers
+│   ├── io/             # Console I/O, environment variables
+│   ├── os/             # Shell execution, command capture, env vars, ISO-8601 time
+│   └── log/            # Structured logging
+├── contrib/            # Optional / opinionated modules outside std/
+│   ├── sqlite/         # SQLite bindings (open, prepare, bind, step, column, ...)
+│   ├── tinyweb/        # Server-side request/response DSL
+│   ├── aether_ui/      # GTK4 / AppKit / Win32 widget toolkit
+│   ├── aeocha/         # Test framework
+│   ├── host/<lang>/    # Embed Lua, Python, Perl, Ruby, Tcl, JS in-process
+│   └── climate_http_tests/ # Servirtium climate-API record/replay fixtures
+├── tools/              # Developer tools
+│   ├── ae.c            # Unified CLI tool (ae command)
+│   └── apkg/           # Project tooling, TOML parser
+├── tests/              # Test suite (runtime, syntax, integration, regression)
+├── examples/           # Example programs (.ae files)
+│   ├── basics/         # Hello world, variables, arrays, etc.
+│   ├── actors/         # Actor patterns (ping-pong, pipeline, etc.)
+│   └── applications/   # Complete applications
+├── docs/               # Documentation
+└── docker/             # Docker (CI, dev, WASM, embedded)
 ```
 
 ## Language Example
