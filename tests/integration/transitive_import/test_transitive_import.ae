@@ -1,0 +1,38 @@
+// Regression test for issue #171 P2 — selective imports must
+// transitively pull in helpers that the imported function references.
+//
+// Before this fix:
+//
+//     import mathy (cube)
+//     main() { println(cube(3)) }   // error: Undefined function 'mathy_square'
+//
+// `module_merge_into_program` cloned `cube` and renamed `square` →
+// `mathy_square` in its body, but because `square` wasn't named in the
+// selective import list, `mathy_square` was never added to the merged
+// AST and the cloned body had an unresolvable call.
+//
+// After the fix, the merger runs a fixed-point pass: any prefixed
+// function call inside an already-merged sibling that points at an
+// unmerged helper triggers cloning of that helper. Visibility from
+// outside the module is unchanged — `mathy.square(...)` from main code
+// is still rejected at the qualified-call site by the existing
+// is_export_blocked path. Only the cloned caller can reach the helper.
+
+import mathy (cube)
+
+extern exit(code: int)
+
+main() {
+    println("test: selective import pulls in transitive helpers")
+
+    // cube(3) = _double_it(square(3)) + 3 = 18 + 3 = 21
+    // Both `square` and `_double_it` were skipped by the per-decl loop
+    // (neither named in `import mathy (cube)`); the transitive pass
+    // must clone them or the build fails with E0301.
+    out = cube(3)
+    if out != 21 {
+        println("  FAIL: cube(3) returned ${out}, expected 21")
+        exit(1)
+    }
+    println("  PASS: cube(3) == 21 — transitive helpers pulled in")
+}

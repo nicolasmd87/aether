@@ -1,0 +1,21 @@
+// Module with a public function (`cube`) that internally calls a
+// non-exported helper (`square`) and a private helper (`_double_it`).
+// `_double_it` has a leading-underscore convention but is reachable
+// from same-module callers — what matters for the regression test is
+// that selectively importing `cube` brings both helpers into the
+// merged AST, even though neither was named in the import list.
+
+exports (cube)
+
+_double_it(n: int) -> int {
+    return n + n
+}
+
+// Not exported — visible only to other functions in this module.
+square(n: int) -> int {
+    return n * n
+}
+
+cube(n: int) -> int {
+    return _double_it(square(n)) + n
+}

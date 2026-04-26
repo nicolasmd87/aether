@@ -523,6 +523,7 @@ Aether draws inspiration from:
 - **Go** — Pragmatic tooling, simple concurrency primitives
 - **Rust** — Systems programming practices, zero-cost abstractions
 - **Pony** — Actor-based type safety concepts and object-capability model
+- **Smalltalk / Ruby / Groovy** — Block / closure ergonomics: trailing-block builders, `do |x| … end` syntax, and DSL-shaped APIs where the closure is the configuration
 
 ## License
 
