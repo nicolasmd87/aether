@@ -1,0 +1,30 @@
+// Regression test for issue #233 — built-in `sleep(ms)` should not
+// collide with a user-declared `extern sleep(...)` (or libc's
+// unsigned int sleep(unsigned int) underneath it).
+//
+// Before the fix, codegen emitted `Sleep(...)`/`usleep(...)` inline at
+// every Aether-side `sleep(n)` call site, AND emitted the user's
+// `extern sleep(...)` as a C forward declaration. The latter clashed
+// with libc's prototype:
+//
+//   error: conflicting types for 'sleep'; have 'void(int)'
+//   note:  previous declaration … 'unsigned int(unsigned int)'
+//
+// Now:
+//   1. The Aether built-in lowers to aether_sleep_ms (a stable runtime
+//      helper) — no libc symbol involved.
+//   2. The user's `extern sleep(...)` is recognized as a libc-provided
+//      name; the C forward declaration is suppressed, and the libc
+//      header (already pulled in by the prelude) supplies the real
+//      prototype.
+//
+// Both should coexist in one translation unit without conflict, and
+// the program should run end-to-end.
+
+extern sleep(ms: int) -> int   // user-declared libc binding (no-op decl)
+
+main() {
+    println("test: aether built-in sleep + user extern sleep coexist")
+    sleep(1)  // Aether built-in — lowered to aether_sleep_ms
+    println("PASS: build clean, sleep(1) executed without libc collision")
+}

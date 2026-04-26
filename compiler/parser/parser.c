@@ -1772,17 +1772,32 @@ ASTNode* parse_import_statement(Parser* parser) {
                                           import_token->line, import_token->column);
     
     // Check for selective import: import mod (a, b, c)
+    // Or glob import: import mod (*)
+    //
+    // The glob form expands at typecheck time to short aliases for every
+    // public name (no leading underscore) defined by the imported module.
+    // Implemented as a parser-side annotation rather than AST children
+    // because the parser doesn't yet know what the module exports —
+    // typechecker.c walks the symbol table to register the aliases once
+    // the module's symbols are loaded. See issue #171 (P1).
     if (match_token(parser, TOKEN_LEFT_PAREN)) {
-        do {
-            Token* symbol = expect_token(parser, TOKEN_IDENTIFIER);
-            if (!symbol) break;
-            
-            ASTNode* symbol_node = create_ast_node(AST_IDENTIFIER, symbol->value, 
-                                                  symbol->line, symbol->column);
-            add_child(import_stmt, symbol_node);
-        } while (match_token(parser, TOKEN_COMMA));
-        
-        expect_token(parser, TOKEN_RIGHT_PAREN);
+        Token* first = peek_token(parser);
+        if (first && first->type == TOKEN_MULTIPLY) {
+            advance_token(parser);  // consume '*'
+            import_stmt->annotation = strdup("glob_import");
+            expect_token(parser, TOKEN_RIGHT_PAREN);
+        } else {
+            do {
+                Token* symbol = expect_token(parser, TOKEN_IDENTIFIER);
+                if (!symbol) break;
+
+                ASTNode* symbol_node = create_ast_node(AST_IDENTIFIER, symbol->value,
+                                                      symbol->line, symbol->column);
+                add_child(import_stmt, symbol_node);
+            } while (match_token(parser, TOKEN_COMMA));
+
+            expect_token(parser, TOKEN_RIGHT_PAREN);
+        }
     }
     
     // Check for alias: import mod as alias

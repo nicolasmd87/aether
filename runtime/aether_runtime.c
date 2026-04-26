@@ -6,6 +6,37 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#ifdef _WIN32
+    #include <windows.h>
+#else
+    #include <unistd.h>
+#endif
+
+// Aether built-in `sleep(ms)` lowers to this. The codegen used to inline
+// Sleep()/usleep() at every call site, but that meant any user `extern
+// sleep(...)` declaration emitted a C `void sleep(int);` forward decl
+// that conflicted with libc's `unsigned int sleep(unsigned int)`. Routing
+// the built-in through aether_sleep_ms — a stable, prefixed symbol —
+// removes the collision class without changing user-visible behavior.
+// See GitHub issue #233.
+void aether_sleep_ms(int ms) {
+    if (ms <= 0) return;
+#ifdef _WIN32
+    Sleep((DWORD)ms);
+#else
+    // usleep takes microseconds; ms can hit ~2 billion before overflow,
+    // so promote through unsigned long long defensively.
+    unsigned long long usec = (unsigned long long)ms * 1000ull;
+    // Cap at ~999 seconds per call to stay inside usleep's documented
+    // limit (it's only required to support up to 1e6); split longer waits.
+    while (usec > 999000000ull) {
+        usleep(999000000u);
+        usec -= 999000000ull;
+    }
+    if (usec > 0) usleep((useconds_t)usec);
+#endif
+}
+
 // Global runtime configuration
 static AetherRuntimeInitConfig g_runtime_config = {0};
 static int g_runtime_initialized = 0;

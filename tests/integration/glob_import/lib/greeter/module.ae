@@ -1,0 +1,18 @@
+// Tiny module exporting two public names + one private helper.
+// Used by the glob-import probe at tests/integration/glob_import/test_glob_import.ae.
+
+// PUBLIC: greeter.say_hello() — should be exposed by `import greeter (*)`
+say_hello() -> {
+    return "hello"
+}
+
+// PUBLIC: greeter.greet_world() — also a public top-level
+greet_world() -> {
+    return "hello world"
+}
+
+// PRIVATE: leading underscore — the glob form must NOT expose this
+// as a short alias (Aether's "private at the C level" convention).
+_secret_value() -> {
+    return "this should not be reachable via short name"
+}

@@ -930,6 +930,27 @@ main() {
 }
 ```
 
+### Glob Import — `import mod (*)`
+
+Expose **every public name** in a module as an unqualified short alias,
+without enumerating each symbol individually. Names with a leading
+underscore (`_helper`, `_internal`) stay private and are not aliased.
+
+```aether
+import std.math (*)
+
+main() {
+    x = sqrt(16.0)         // works — short alias registered
+    y = pow(2.0, 3.0)      // works
+    z = math.sin(1.0)      // qualified form still works alongside the glob
+}
+```
+
+Use this when you'd otherwise list 20+ symbols just to use the module
+without the namespace prefix. Bare `import std.math` (no parens) loads
+the module but does **not** register short aliases — you have to write
+`math.sqrt(...)` for everything.
+
 ### Import with Alias (Planned)
 
 > **Note:** Import aliasing is parsed but not yet fully functional. Use the default namespace for now.

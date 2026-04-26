@@ -1,0 +1,45 @@
+// Regression test for issue #171 P1 — `import mod (*)` glob form.
+//
+// Before this fix: `import greeter` (non-selective) loaded the module
+// but didn't expose unqualified short names. Calling bare `say_hello()`
+// failed with `error[E0301]: Undefined function 'say_hello'`. The only
+// workarounds were `import greeter (say_hello, greet_world, …)` (which
+// requires enumerating every name) or fully-qualified calls like
+// `greeter.say_hello()` everywhere.
+//
+// `import greeter (*)` parses as a glob form, the typechecker walks the
+// imported module's symbol table once at import time and registers a
+// short-name alias for every public symbol (no leading underscore).
+// Private names stay invisible.
+
+import greeter (*)
+
+extern exit(code: int)
+
+main() {
+    println("test: glob import exposes public names")
+
+    // Direct unqualified call — only works if the glob registered the alias.
+    out = say_hello()
+    if out != "hello" {
+        println("  FAIL: say_hello() returned '${out}', expected 'hello'")
+        exit(1)
+    }
+    println("  PASS: say_hello() resolved without qualification")
+
+    // Second public function also resolved.
+    out2 = greet_world()
+    if out2 != "hello world" {
+        println("  FAIL: greet_world() returned '${out2}'")
+        exit(1)
+    }
+    println("  PASS: greet_world() resolved without qualification")
+
+    // Sanity check: the fully-qualified form still works.
+    qual = greeter.say_hello()
+    if qual != "hello" {
+        println("  FAIL: greeter.say_hello() returned '${qual}'")
+        exit(1)
+    }
+    println("  PASS: qualified call still works alongside the glob")
+}

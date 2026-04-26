@@ -13,22 +13,11 @@ main() {
         return
     }
 
-    // Windows MinGW's OpenSSL doesn't ship a default CA trust path the
-    // way /etc/ssl/certs/ exists on Linux and Keychain exists on macOS.
-    // Before this branch (PR #219) HTTPS errored earlier with "no
-    // OpenSSL support" and that path handled the skip; now that
-    // OpenSSL is actually linked in the Windows release binary, the
-    // handshake progresses to cert verification and fails with
-    // "certificate verify failed" because no trust anchor is
-    // configured. Follow-up work: either bake in a CA bundle path
-    // resolution in std.net, or fall through to Windows Cert Store
-    // via schannel. Until then, skip the assertion on Windows rather
-    // than crash the CI matrix. Matches CONTRIBUTING.md §"Coding for
-    // portability" pattern #1.
-    if io.getenv("OS") == "Windows_NT" {
-        println("SKIP https: Windows CA trust path not yet configured in std.net")
-        return
-    }
+    // (Windows trust-path skip removed — PR for issue #222 wired up
+    // SSL_CTX_load_verify_locations against
+    // mingw-w64-x86_64-ca-certificates / SSL_CERT_FILE / a bundle
+    // shipped alongside ae.exe. Verification is now expected to work
+    // on every platform.)
 
     println("Test: https://example.com/ responds with 'Example Domain'")
     body, err = http.get("https://example.com/")

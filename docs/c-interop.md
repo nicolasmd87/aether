@@ -170,6 +170,24 @@ link_flags = ["-lsqlite3"]
 4. **Handle errors** - C functions often return error codes
 5. **Memory management** - Be careful with C memory; use Aether's memory management where possible
 
+## Built-in primitives and the `aether_` C-symbol convention
+
+Aether's built-in primitives that have a corresponding libc function (e.g. `sleep(ms)`) lower to `aether_`-prefixed runtime symbols rather than the bare libc name. For `sleep(ms)`, the generated C calls `aether_sleep_ms(ms)` — a thin wrapper provided by `libaether.a` that handles `Sleep()` on Win32 and `usleep()` on POSIX.
+
+This matters when your Aether program (or any module it imports) declares its own `extern sleep(...)` for some other purpose. Without the prefix, the codegen-emitted forward declaration of the user's `extern sleep` would conflict with libc's `unsigned int sleep(unsigned int)` and break compilation:
+
+```
+error: conflicting types for 'sleep'; have 'void(int)'
+note:  previous declaration … 'unsigned int(unsigned int)'
+```
+
+To avoid this collision class entirely:
+
+- **Built-ins are routed through `aether_`-prefixed runtime helpers** in the generated C — they never emit a bare libc symbol.
+- **User `extern` declarations of well-known libc names** (e.g. `sleep`, `exit`, `printf`, `puts`, `malloc`, `read`, `write`, `time`, …) are recognized and the compiler **suppresses the C forward declaration**. The libc header (already included by the prelude) supplies the canonical prototype, and call-site code generation still uses the registered Aether parameter types for type-aware casting.
+
+When you write a C shim or third-party binding, you can follow the same convention: prefix exported symbols with `aether_<module>_` (e.g. `aether_vcr_record`, `aether_http_get`) so they don't collide with vendor libraries the user might link via `[build] extra_sources = […]`.
+
 ## Working with Pointers
 
 The `ptr` type maps to `void*` in C, useful for opaque handles and callbacks:

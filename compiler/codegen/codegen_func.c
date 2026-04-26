@@ -116,6 +116,35 @@ int has_return_value(ASTNode* node) {
     return 0;
 }
 
+// Names that are unconditionally declared by the C standard library
+// (or POSIX headers we already include via the prelude) and whose
+// signatures we don't want to redeclare from the user's `extern`. The
+// generated C already pulls in <stdlib.h>/<stdio.h>/<string.h>/<unistd.h>,
+// so a redeclaration of `sleep` / `exit` / `printf` / etc. with the
+// Aether-translated prototype would conflict whenever the libc and
+// Aether parameter shapes differ (e.g. unsigned vs int sleep, varargs
+// vs typed printf). The user's `extern foo(...)` is still useful — it
+// registers the function for type-aware call-site emission — but we
+// skip writing the C forward declaration. Issue #233.
+static int extern_name_is_libc_conflict(const char* name) {
+    if (!name) return 0;
+    static const char* libc_names[] = {
+        "sleep", "usleep", "exit", "abort", "atexit",
+        "printf", "fprintf", "sprintf", "snprintf",
+        "puts", "fputs", "gets", "fgets",
+        "malloc", "calloc", "realloc", "free",
+        "strlen", "strcmp", "strcpy", "strncpy", "strcat",
+        "memcpy", "memset", "memmove", "memcmp",
+        "open", "close", "read", "write", "fopen", "fclose",
+        "time", "clock", "signal", "kill",
+        NULL
+    };
+    for (int i = 0; libc_names[i]; i++) {
+        if (strcmp(name, libc_names[i]) == 0) return 1;
+    }
+    return 0;
+}
+
 // Generate extern C function declaration
 // extern printf(format: string) -> int  =>  extern int printf(const char*);
 void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext) {
@@ -123,6 +152,20 @@ void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext) {
 
     // Register parameter types for call-site type-aware casting
     register_extern_func(gen, ext);
+
+    // Skip the C forward declaration for libc-conflicting names — the
+    // libc headers we include in the prelude already declare them with
+    // the canonical prototype. Without this skip, e.g. `extern sleep(ms:
+    // int)` produces `void sleep(int);` which conflicts with libc's
+    // `unsigned int sleep(unsigned int)` and breaks compilation.
+    // The function's name is still registered above, so call-site code
+    // generation uses the correct cast-to-libc-type emission.
+    if (extern_name_is_libc_conflict(ext->value)) {
+        fprintf(gen->output,
+                "// Extern C function: %s (libc-provided, declaration skipped)\n",
+                ext->value);
+        return;
+    }
 
     fprintf(gen->output, "// Extern C function: %s\n", ext->value);
 

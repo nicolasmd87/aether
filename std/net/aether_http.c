@@ -127,6 +127,62 @@ static int parse_url(const char* url, char* host, size_t host_size,
 
 static _Atomic(SSL_CTX*) g_ssl_ctx;
 
+#ifdef _WIN32
+// Probe well-known CA-bundle locations on Windows in priority order and
+// load the first one that exists. Linux + macOS have a system trust
+// store that OpenSSL's compiled-in default paths point at; Windows
+// MSYS2 builds keep theirs at MINGW_PREFIX/etc/ssl/certs/ca-bundle.crt
+// (from the `mingw-w64-x86_64-ca-certificates` package), and the Aether
+// release archive includes a bundle next to ae.exe at
+// <root>/share/ssl/ca-bundle.crt. Without a trust anchor every HTTPS
+// request fails with "certificate verify failed".
+//
+// Returns 1 if a bundle was successfully loaded, 0 if no probe matched.
+static int load_windows_ca_bundle(SSL_CTX* ctx) {
+    // 1. SSL_CERT_FILE env var — also honored by SSL_CTX_set_default_
+    //    verify_paths, but try it first so the load succeeds even when
+    //    the default paths weren't compiled in.
+    const char* env = getenv("SSL_CERT_FILE");
+    if (env && env[0] && SSL_CTX_load_verify_locations(ctx, env, NULL) == 1) {
+        return 1;
+    }
+
+    // 2. Bundle shipped alongside ae.exe in the release archive
+    //    (<root>/bin/ae.exe → <root>/share/ssl/ca-bundle.crt).
+    char exe_path[MAX_PATH];
+    DWORD n = GetModuleFileNameA(NULL, exe_path, sizeof(exe_path));
+    if (n > 0 && n < sizeof(exe_path)) {
+        char* p = strrchr(exe_path, '\\');           // …\bin\ae.exe → …\bin
+        if (p) {
+            *p = '\0';
+            char* q = strrchr(exe_path, '\\');        // …\bin → …
+            if (q && _stricmp(q, "\\bin") == 0) *q = '\0';
+        }
+        char bundle[MAX_PATH + 64];
+        snprintf(bundle, sizeof(bundle),
+                 "%s\\share\\ssl\\ca-bundle.crt", exe_path);
+        if (SSL_CTX_load_verify_locations(ctx, bundle, NULL) == 1) {
+            return 1;
+        }
+    }
+
+    // 3. MSYS2 well-known paths (mingw-w64-x86_64-ca-certificates package).
+    static const char* candidates[] = {
+        "C:\\msys64\\mingw64\\etc\\ssl\\certs\\ca-bundle.crt",
+        "C:\\msys64\\ucrt64\\etc\\ssl\\certs\\ca-bundle.crt",
+        "C:\\msys64\\mingw64\\etc\\ssl\\cert.pem",
+        "C:\\msys64\\ucrt64\\etc\\ssl\\cert.pem",
+        NULL
+    };
+    for (int i = 0; candidates[i]; i++) {
+        if (SSL_CTX_load_verify_locations(ctx, candidates[i], NULL) == 1) {
+            return 1;
+        }
+    }
+    return 0;
+}
+#endif  // _WIN32
+
 // Get (or lazily create) the shared SSL_CTX. Benign race on first call —
 // compare-exchange ensures at most one SSL_CTX is installed even if two
 // threads reach here simultaneously. Returns NULL on OpenSSL error.
@@ -138,8 +194,20 @@ static SSL_CTX* get_ssl_ctx(void) {
     if (!ctx) return NULL;
     SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
     SSL_CTX_set_verify(ctx, SSL_VERIFY_PEER, NULL);
-    // Load the system trust store; fall back to OpenSSL's default search paths.
+
+#ifdef _WIN32
+    // Windows OpenSSL builds typically have no compiled-in CA path — probe
+    // SSL_CERT_FILE / the shipped bundle / MSYS2 paths first; only fall
+    // through to the default-paths call (which is effectively a no-op on
+    // Win32) if every probe missed.
+    if (!load_windows_ca_bundle(ctx)) {
+        SSL_CTX_set_default_verify_paths(ctx);
+    }
+#else
+    // Linux/macOS: the system trust store lives at the path OpenSSL was
+    // compiled with — /etc/ssl/certs and the macOS keychain bridge.
     SSL_CTX_set_default_verify_paths(ctx);
+#endif
 
     SSL_CTX* expected = NULL;
     if (!atomic_compare_exchange_strong(&g_ssl_ctx, &expected, ctx)) {
