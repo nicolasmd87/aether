@@ -930,6 +930,8 @@ main() {
 }
 ```
 
+If `sqrt` internally calls a sibling helper that *isn't* in the import list, the helper is still pulled into the merged build so the imported function can resolve its calls. Only the names you actually listed are visible to your code; the transitive pull-in is bookkeeping the compiler does on your behalf.
+
 ### Module Public API — `exports (…)`
 
 Each module declares its public surface once at the top of the file via

@@ -1009,6 +1009,50 @@ static void rename_intra_module_refs(ASTNode* node, const char* prefix,
     }
 }
 
+// Is a function with the given (already-prefixed) name present in the program?
+static int program_has_function(ASTNode* program, const char* prefixed_name) {
+    if (!program || !prefixed_name) return 0;
+    for (int m = 0; m < program->child_count; m++) {
+        ASTNode* existing = program->children[m];
+        if (existing && (existing->type == AST_FUNCTION_DEFINITION ||
+            existing->type == AST_BUILDER_FUNCTION) &&
+            existing->value && strcmp(existing->value, prefixed_name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+// Walk a node looking for AST_FUNCTION_CALL targets that match a
+// "<ns>_<name>" prefix where <name> is one of the module's own function
+// names. Append unique matches into `out` (storing the bare name).
+// Used to discover transitive intra-module callees in a cloned-and-
+// renamed function body — see #171 P2.
+static void collect_intra_module_callees(ASTNode* node, const char* ns,
+                                          const char** mod_func_names, int mod_func_count,
+                                          const char** out, int* out_count, int max) {
+    if (!node || *out_count >= max) return;
+    if (node->type == AST_FUNCTION_CALL && node->value) {
+        size_t ns_len = strlen(ns);
+        if (strncmp(node->value, ns, ns_len) == 0 && node->value[ns_len] == '_') {
+            const char* bare = node->value + ns_len + 1;
+            for (int i = 0; i < mod_func_count; i++) {
+                if (strcmp(bare, mod_func_names[i]) == 0) {
+                    if (!name_in_list(bare, out, *out_count) && *out_count < max) {
+                        out[(*out_count)++] = mod_func_names[i];
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        collect_intra_module_callees(node->children[i], ns,
+                                     mod_func_names, mod_func_count,
+                                     out, out_count, max);
+    }
+}
+
 // Insert a node into program->children at a specific index, shifting others right.
 static void insert_child_at(ASTNode* parent, ASTNode* child, int index) {
     if (!parent || !child) return;
@@ -1077,7 +1121,10 @@ void module_merge_into_program(ASTNode* program) {
             ASTNode* decl = unwrap_export(mod_ast->children[j]);
 
             if ((decl->type == AST_FUNCTION_DEFINITION || decl->type == AST_BUILDER_FUNCTION) && decl->value) {
-                // Skip if not in selective import list
+                // Skip if not in selective import list. Note: even when
+                // skipped here, the function may still be cloned later
+                // by the transitive-pull-in pass below if a selectively
+                // imported sibling calls it. See #171 P2.
                 if (has_selection) {
                     int selected = 0;
                     for (int k = 0; k < child->child_count; k++) {
@@ -1102,17 +1149,7 @@ void module_merge_into_program(ASTNode* program) {
                 if (module_has_extern_named(mod_ast, prefixed)) continue;
 
                 // Skip if already merged (e.g. from a prior non-selective import)
-                int already_merged = 0;
-                for (int m = 0; m < program->child_count; m++) {
-                    ASTNode* existing = program->children[m];
-                    if (existing && (existing->type == AST_FUNCTION_DEFINITION ||
-                        existing->type == AST_BUILDER_FUNCTION) &&
-                        existing->value && strcmp(existing->value, prefixed) == 0) {
-                        already_merged = 1;
-                        break;
-                    }
-                }
-                if (already_merged) continue;
+                if (program_has_function(program, prefixed)) continue;
 
                 ASTNode* clone = clone_ast_node(decl);
                 free(clone->value);
@@ -1161,6 +1198,88 @@ void module_merge_into_program(ASTNode* program) {
             // Skip AST_MAIN_FUNCTION, AST_IMPORT_STATEMENT, etc.
         }
     }
+
+    // Transitive pull-in: a selectively imported function may call
+    // sibling helpers defined in the same module that weren't named in
+    // the import list. The first-pass rename above rewrote those calls
+    // to the prefixed `<ns>_<name>` form, but the helpers themselves
+    // were skipped — leaving an unresolvable reference. Walk the merged
+    // program until no new helpers appear (#171 P2).
+    //
+    // Visibility from outside the module is unchanged: the user's own
+    // code still sees only the names it imported; the typechecker's
+    // is_export_blocked path keeps unselected names off-limits at
+    // qualified-call sites. This pass only ensures the symbol exists
+    // in the merged AST so the cloned caller can link.
+    int progressed;
+    do {
+        progressed = 0;
+        for (int i = 0; i < orig_count; i++) {
+            ASTNode* child = program->children[i];
+            if (!child || child->type != AST_IMPORT_STATEMENT || !child->value) continue;
+
+            // Only selective imports trigger transitive pull-in. Non-
+            // selective imports already merged everything (they have no
+            // selection list so the `if (!selected) continue;` guard
+            // above never fired).
+            int has_selection = (child->child_count > 0 &&
+                                child->children[0]->type == AST_IDENTIFIER);
+            if (!has_selection) continue;
+
+            AetherModule* mod = module_find(child->value);
+            if (!mod || !mod->ast) continue;
+            ASTNode* mod_ast = mod->ast;
+            const char* ns = module_get_namespace(child->value);
+
+            const char* mod_func_names[128];
+            int mod_func_count = collect_module_func_names(mod_ast, mod_func_names, 128);
+            const char* mod_const_names[128];
+            int mod_const_count = collect_module_const_names(mod_ast, mod_const_names, 128);
+
+            // Collect bare names of intra-module callees referenced from
+            // any function already merged from this module.
+            const char* needed[128];
+            int needed_count = 0;
+            for (int m = 0; m < program->child_count; m++) {
+                ASTNode* top = program->children[m];
+                if (!top || !top->is_imported) continue;
+                if (top->type != AST_FUNCTION_DEFINITION &&
+                    top->type != AST_BUILDER_FUNCTION) continue;
+                if (!top->value) continue;
+                size_t ns_len = strlen(ns);
+                if (strncmp(top->value, ns, ns_len) != 0 || top->value[ns_len] != '_') continue;
+                collect_intra_module_callees(top, ns, mod_func_names, mod_func_count,
+                                             needed, &needed_count, 128);
+            }
+
+            for (int n = 0; n < needed_count; n++) {
+                const char* bare = needed[n];
+                char prefixed[256];
+                snprintf(prefixed, sizeof(prefixed), "%s_%s", ns, bare);
+                if (program_has_function(program, prefixed)) continue;
+                if (module_has_extern_named(mod_ast, prefixed)) continue;
+
+                // Locate the helper in the source module and clone it.
+                for (int j = 0; j < mod_ast->child_count; j++) {
+                    ASTNode* decl = unwrap_export(mod_ast->children[j]);
+                    if (!decl || !decl->value) continue;
+                    if ((decl->type != AST_FUNCTION_DEFINITION &&
+                         decl->type != AST_BUILDER_FUNCTION)) continue;
+                    if (strcmp(decl->value, bare) != 0) continue;
+
+                    ASTNode* clone = clone_ast_node(decl);
+                    free(clone->value);
+                    clone->value = strdup(prefixed);
+                    clone->is_imported = 1;
+                    rename_intra_module_refs(clone, ns, mod_func_names, mod_func_count,
+                                             mod_const_names, mod_const_count, NULL, 0);
+                    insert_child_at(program, clone, insert_idx++);
+                    progressed = 1;
+                    break;
+                }
+            }
+        }
+    } while (progressed);
 
     // Second pass: for each selective import (either the parenthesised
     // `import mod (a, b, c)` form or the trailing-component `import mod.a`
