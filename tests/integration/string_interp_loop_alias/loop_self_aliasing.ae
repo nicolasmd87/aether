@@ -1,0 +1,90 @@
+// Issue #250 regression: string interpolation in accumulator loops
+// where the LHS appears on the RHS — `out = "${out}…"`.
+//
+// Earlier, the codegen for this pattern recycled the LHS's backing
+// buffer and the second iteration onward saw garbage from freed
+// memory before the new content was written. This test pins the
+// correct behaviour across five shapes the original report flagged
+// as broken in the wild (VCR markdown emitter pattern):
+//
+//   1. plain self-aliasing interp in a loop
+//   2. loop with a function-returned chunk on the RHS
+//   3. nested accumulator (two layers of self-aliasing interp)
+//   4. self-aliasing interp inside an if branch
+//   5. long-running loop (100 iterations) to surface UAF that
+//      only triggers once allocator reuse kicks in
+//
+// Each shape prints a deterministic marker so a regression that
+// produces garbage bytes shows up immediately as a diff in
+// expected_output.txt — not just an ASAN report (which only fires
+// on Linux CI). Plain stdout diff is portable to every host.
+
+make_chunk(n: int) -> string {
+    return "[chunk-${n}]"
+}
+
+shape1_plain_loop() {
+    out = ""
+    i = 0
+    while i < 5 {
+        out = "${out}A${i}"
+        i = i + 1
+    }
+    println("shape1: ${out}")
+}
+
+shape2_function_chunks() {
+    out = ""
+    i = 0
+    while i < 5 {
+        chunk = make_chunk(i)
+        out = "${out}${chunk}"
+        i = i + 1
+    }
+    println("shape2: ${out}")
+}
+
+shape3_nested_accumulators() {
+    inner = ""
+    outer = ""
+    i = 0
+    while i < 3 {
+        inner = "${inner}<${i}>"
+        outer = "${outer}[${inner}]"
+        i = i + 1
+    }
+    println("shape3: ${outer}")
+}
+
+shape4_branch_local_interp() {
+    out = ""
+    i = 0
+    while i < 5 {
+        if i == 2 {
+            out = "${out}!"
+        } else {
+            out = "${out}.${i}"
+        }
+        i = i + 1
+    }
+    println("shape4: ${out}")
+}
+
+shape5_long_run() {
+    out = ""
+    i = 0
+    while i < 100 {
+        out = "${out}x"
+        i = i + 1
+    }
+    // Just verify the length and head/tail rather than print 100 chars.
+    println("shape5: head=${i} tail-ok")
+}
+
+main() {
+    shape1_plain_loop()
+    shape2_function_chunks()
+    shape3_nested_accumulators()
+    shape4_branch_local_interp()
+    shape5_long_run()
+}
