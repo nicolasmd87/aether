@@ -597,9 +597,9 @@ This isn't a hidden roadmap — these are absent because no downstream user has 
 
 ## Cryptography (`std.cryptography`)
 
-One-shot SHA-1 and SHA-256 hex digests. Pure functions — bytes in,
-lowercase-hex digest out, binary-safe via an explicit byte length
-(embedded NULs are fine; pass 0 to hash the empty string).
+Hash digests + Base64 codec. Pure functions — bytes in, hex digest
+or Base64 string out, binary-safe via an explicit byte length
+(embedded NULs are fine; pass 0 to hash or encode an empty buffer).
 
 Built on OpenSSL's EVP API, which is already linked for `std.net`'s
 TLS support. When the Aether toolchain was built without OpenSSL,
@@ -615,16 +615,37 @@ main() {
     digest, err = cryptography.sha256_hex("abc", 3)
     // digest == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 
-    // Binary payload via fs.read_binary — AetherString with embedded
-    // NULs survives because the extern unwraps the struct.
-    data, n, _ = fs.read_binary("payload.bin")
-    sha, _ = cryptography.sha256_hex(data, n)
+    // Algorithm chosen at runtime (e.g. read from a config file).
+    algo = "sha256"
+    if cryptography.hash_supported(algo) == 1 {
+        d, _ = cryptography.hash_hex(algo, "abc", 3)
+    }
+
+    // Base64 — round-trip a binary payload through JSON.
+    b64, _   = cryptography.base64_encode("\x01\x02\x03", 3)   // "AQID"
+    raw, n, _ = cryptography.base64_decode(b64)                // 3 bytes
 }
 ```
 
-**Functions:**
+**Hash functions:**
 - `cryptography.sha1_hex(data, length)` → `(string, string)` - 40-char lowercase hex digest. Included for interop with legacy formats (Git, Subversion, HMAC-SHA1). Prefer SHA-256 for new work.
 - `cryptography.sha256_hex(data, length)` → `(string, string)` - 64-char lowercase hex digest.
+- `cryptography.hash_hex(algo, data, length)` → `(string, string)` - Algorithm-by-name dispatcher. `algo` is `"sha1"`, `"sha256"`, or any other name OpenSSL's `EVP_get_digestbyname()` recognizes (`"sha384"`, `"sha512"`, `"sha3-256"`, ...). Returns `("", "unknown algorithm")` for unrecognized names. Useful when the algorithm is config-driven rather than compile-time.
+- `cryptography.hash_supported(algo)` → `int` - `1` if this build can compute `algo`, `0` otherwise. Always succeeds; never errors. Use at config time to validate user-supplied algorithm names before they hit `hash_hex`.
+
+**Base64 (RFC 4648 §4 standard alphabet, unpadded):**
+- `cryptography.base64_encode(data, length)` → `(string, string)` - Encode `length` bytes. Output has no `=` padding (callers needing strict-RFC padded output append `=` themselves to make the length a multiple of 4).
+- `cryptography.base64_decode(b64)` → `(string, int, string)` - Decode a Base64 string. Returns `(bytes, byte_count, "")` on success, `("", 0, error)` on malformed input. Accepts both padded and unpadded input; `bytes` is an AetherString preserving embedded NULs.
+
+**What `std.cryptography` doesn't do:**
+
+Coming from Java's `java.security`, Python's `cryptography`, or Go's `crypto/*`, expect to reach for an external library if you need:
+
+- **HMAC, KDFs, symmetric ciphers, signing, certificate handling.** All out of scope for stdlib — the API surface for "real cryptography" is large enough that one obvious shape doesn't exist. A `contrib/cryptography_advanced/` module is the right home if a downstream user shows up needing them.
+- **Streaming digest API.** The current shape is bytes-in / digest-out one-shot; for multi-gigabyte inputs that don't fit in memory, drop down to OpenSSL `EVP_DigestUpdate` directly.
+- **URL-safe Base64 (RFC 4648 §5).** Standard alphabet only; URL-safe (`-` / `_` instead of `+` / `/`) is a separate variant the wrappers don't expose. Callers needing it can post-process: `string.replace_all(b64, "+", "-")` followed by `"_"` for `"/"`.
+- **MD5.** Weak hash, deliberately not exposed. Reach for `hash_hex("md5", ...)` only if interop with legacy formats forces it — `hash_supported("md5")` will tell you whether the OpenSSL backend has it.
+- **Constant-time comparison.** Equality checks via `string.equals` are not constant-time; callers comparing hashes for security-sensitive cases need their own constant-time helper.
 
 Raw externs: `cryptography_sha1_hex_raw`, `cryptography_sha256_hex_raw` — return allocated `char*` or NULL on failure. The Go-style wrappers translate the NULL into `("", "openssl unavailable")`.
 

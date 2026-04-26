@@ -70,6 +70,136 @@ char* cryptography_sha256_hex_raw(const char* data, int length) {
     return sha_hex(EVP_sha256(), data, length);
 }
 
+/* Algorithm-by-name dispatcher. EVP_get_digestbyname returns NULL for
+ * unrecognized names; we let that NULL propagate through sha_hex's
+ * NULL check. The set of names libcrypto recognizes is broader than
+ * what this stdlib documents — sha384, sha512, sha3-256, etc. all
+ * work — but the wrapper layer's docs only commit to sha1 + sha256
+ * as supported names. Future stdlib additions (per-algo hex helpers)
+ * land here too. */
+char* cryptography_hash_hex_raw(const char* algo, const char* data, int length) {
+    if (!algo) return NULL;
+    const EVP_MD* md = EVP_get_digestbyname(algo);
+    if (!md) return NULL;
+    return sha_hex(md, data, length);
+}
+
+int cryptography_hash_supported(const char* algo) {
+    if (!algo) return 0;
+    return EVP_get_digestbyname(algo) != NULL ? 1 : 0;
+}
+
+/* ---- Base64 ----
+ *
+ * Standard alphabet (RFC 4648 §4), unpadded. OpenSSL's EVP_EncodeBlock
+ * pads the output with '=' to a multiple of 4 — we strip the trailing
+ * pad bytes after the call to satisfy the unpadded-output contract.
+ * EVP_DecodeBlock handles padded-or-unpadded input, but it always
+ * decodes in 4-byte groups: an unpadded input length must be padded
+ * up to a multiple of 4 with '=' before passing to libcrypto, then
+ * the trailing zero bytes from the decoded buffer get trimmed. */
+
+char* cryptography_base64_encode_raw(const char* data, int length) {
+    if (length < 0) return NULL;
+    size_t want;
+    const unsigned char* bytes = cryptography_unwrap_bytes(data, length, &want);
+    if (want > 0 && !bytes) return NULL;
+
+    /* EVP_EncodeBlock writes ((n+2)/3)*4 bytes plus a NUL. */
+    size_t out_cap = ((want + 2) / 3) * 4 + 1;
+    char* out = (char*)malloc(out_cap);
+    if (!out) return NULL;
+
+    int written = EVP_EncodeBlock((unsigned char*)out, bytes, (int)want);
+    if (written < 0) { free(out); return NULL; }
+    out[written] = '\0';
+
+    /* Strip trailing '=' padding for the unpadded contract. */
+    while (written > 0 && out[written - 1] == '=') {
+        out[--written] = '\0';
+    }
+    return out;
+}
+
+/* TLS-owned decode buffer + length, mirroring std.fs.read_binary's
+ * split-accessor shape. Tracked per-thread so concurrent decodes on
+ * different threads don't clobber each other; lifetime is until the
+ * next call on the same thread. Aether-side wrappers are expected to
+ * copy the bytes out via string_new_with_length before calling
+ * back into the C side. */
+static __thread unsigned char* g_b64_buf = NULL;
+static __thread int            g_b64_len = 0;
+
+static void release_b64_locked(void) {
+    if (g_b64_buf) free(g_b64_buf);
+    g_b64_buf = NULL;
+    g_b64_len = 0;
+}
+
+void cryptography_release_base64_decode(void) {
+    release_b64_locked();
+}
+
+int cryptography_base64_decode_raw(const char* b64) {
+    release_b64_locked();
+    if (!b64) return 0;
+
+    size_t in_len;
+    const unsigned char* in = cryptography_unwrap_bytes(b64, -1, &in_len);
+    if (in_len == 0) {
+        /* Decoding "" is a valid request — yields zero bytes. Allocate
+         * a 1-byte buffer so the caller can distinguish "decoded 0
+         * bytes" from "no data" via the length accessor. */
+        g_b64_buf = (unsigned char*)malloc(1);
+        if (!g_b64_buf) return 0;
+        g_b64_buf[0] = 0;
+        g_b64_len = 0;
+        return 1;
+    }
+
+    /* EVP_DecodeBlock requires the input length to be a multiple of
+     * 4. Pad up with '=' if the caller passed an unpadded string. */
+    size_t padded_len = (in_len + 3) / 4 * 4;
+    unsigned char* padded = (unsigned char*)malloc(padded_len);
+    if (!padded) return 0;
+    memcpy(padded, in, in_len);
+    for (size_t i = in_len; i < padded_len; i++) padded[i] = '=';
+
+    /* Output is at most 3/4 of input. */
+    size_t out_cap = (padded_len / 4) * 3;
+    unsigned char* out = (unsigned char*)malloc(out_cap > 0 ? out_cap : 1);
+    if (!out) { free(padded); return 0; }
+
+    int written = EVP_DecodeBlock(out, padded, (int)padded_len);
+    free(padded);
+    if (written < 0) { free(out); return 0; }
+
+    /* Trim trailing zero bytes that correspond to the padding we
+     * added. EVP_DecodeBlock decodes '=' as 0, so the original
+     * input's trailing-pad count tells us how many bytes to drop. */
+    int pad_added = (int)(padded_len - in_len);
+    int extra_pad_in_input = 0;
+    while (extra_pad_in_input < (int)in_len &&
+           in[in_len - 1 - extra_pad_in_input] == '=') {
+        extra_pad_in_input++;
+    }
+    int trim = pad_added + extra_pad_in_input;
+    if (trim > written) trim = written;
+    written -= trim;
+
+    g_b64_buf = out;
+    g_b64_len = written;
+    return 1;
+}
+
+const char* cryptography_get_base64_decode(void) {
+    return g_b64_buf ? (const char*)g_b64_buf : "";
+}
+
+int cryptography_get_base64_decode_length(void) {
+    return g_b64_len;
+}
+
 #else /* !AETHER_HAS_OPENSSL */
 
 char* cryptography_sha1_hex_raw(const char* data, int length) {
@@ -78,5 +208,20 @@ char* cryptography_sha1_hex_raw(const char* data, int length) {
 char* cryptography_sha256_hex_raw(const char* data, int length) {
     (void)data; (void)length; return NULL;
 }
+char* cryptography_hash_hex_raw(const char* algo, const char* data, int length) {
+    (void)algo; (void)data; (void)length; return NULL;
+}
+int cryptography_hash_supported(const char* algo) {
+    (void)algo; return 0;
+}
+char* cryptography_base64_encode_raw(const char* data, int length) {
+    (void)data; (void)length; return NULL;
+}
+int cryptography_base64_decode_raw(const char* b64) {
+    (void)b64; return 0;
+}
+const char* cryptography_get_base64_decode(void) { return ""; }
+int cryptography_get_base64_decode_length(void) { return 0; }
+void cryptography_release_base64_decode(void) {}
 
 #endif /* AETHER_HAS_OPENSSL */

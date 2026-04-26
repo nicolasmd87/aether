@@ -28,6 +28,7 @@ Functions are called using **namespace-style syntax**: `namespace.function()`
 | `import std.dir` | `dir` | `dir.exists("path")`, `dir.create("path")` |
 | `import std.path` | `path` | `path.join("a", "b")`, `path.dirname("/a/b")` |
 | `import std.json` | `json` | `json.parse(str)`, `json.create_object()` |
+| `import std.cryptography` | `cryptography` | `cryptography.sha256_hex(data, n)`, `cryptography.base64_encode(data, n)` |
 | `import std.http` | `http` | `http.get(url)`, `http.server_create(port)` |
 | `import std.tcp` | `tcp` | `tcp.connect(host, port)`, `tcp.send(sock, data)` |
 | `import std.list` | `list` | `list.new()`, `list.add(l, item)` |
@@ -484,6 +485,40 @@ Beyond JSON, the stdlib has **no built-in support** for:
 - **Protocol Buffers / MessagePack / CBOR / Avro / Thrift** — no codecs. Same reflection-gap reasoning as struct ↔ JSON: without struct introspection there's no automatic encode/decode, and a hand-written codec on top of `tcp.write` / `tcp.read` / `aether_string_data` is what you'd build.
 
 This isn't a hidden roadmap — these are absent because no downstream user has driven the need yet. If you're starting a project that needs YAML config, expect to write a parser, ship a contrib module, or shell out. The structured-data thinking in the stdlib is currently JSON-shaped and HTTP-adjacent; broader format coverage is open territory.
+
+---
+
+## Cryptography Library
+
+Hash digests + Base64 codec. Built on OpenSSL's EVP API. When OpenSSL isn't linked, every wrapper returns `("", "openssl unavailable")` rather than crashing.
+
+```aether
+import std.cryptography
+
+main() {
+    digest, _ = cryptography.sha256_hex("abc", 3)
+    b64,    _ = cryptography.base64_encode("\x01\x02\x03", 3)
+    raw, n, _ = cryptography.base64_decode(b64)
+}
+```
+
+### Hash Functions
+
+- `cryptography.sha1_hex(data, length)` → `(string, string)` - 40-char lowercase hex digest. Legacy interop (Git, Subversion); prefer SHA-256 for new work.
+- `cryptography.sha256_hex(data, length)` → `(string, string)` - 64-char lowercase hex digest.
+- `cryptography.hash_hex(algo, data, length)` → `(string, string)` - Algorithm-by-name dispatcher. `algo` is `"sha1"`, `"sha256"`, or any name `EVP_get_digestbyname()` recognizes (`"sha384"`, `"sha512"`, `"sha3-256"`, ...). Returns `("", "unknown algorithm")` for unrecognized names.
+- `cryptography.hash_supported(algo)` → `int` - `1` if this build can compute `algo`, `0` otherwise. Always succeeds. Use to validate user-supplied algorithm names before calling `hash_hex`.
+
+`length` is explicit so binary payloads with embedded NULs survive. `data` may be either a plain string literal or an AetherString from `fs.read_binary` — the runtime unwraps automatically.
+
+### Base64 (RFC 4648 §4 standard alphabet, unpadded)
+
+- `cryptography.base64_encode(data, length)` → `(string, string)` - Encode `length` bytes. Output has no `=` padding.
+- `cryptography.base64_decode(b64)` → `(string, int, string)` - Decode. Returns `(bytes, byte_count, "")` on success — `bytes` is an AetherString preserving embedded NULs. Accepts both padded and unpadded input.
+
+### What's not in `std.cryptography`
+
+HMAC, key derivation, symmetric ciphers, signing, certificate handling, streaming digests, URL-safe Base64 (RFC 4648 §5), MD5, and constant-time comparison are all out of scope. See [stdlib-reference.md](stdlib-reference.md) §"What `std.cryptography` doesn't do" for the rationale.
 
 ---
 
