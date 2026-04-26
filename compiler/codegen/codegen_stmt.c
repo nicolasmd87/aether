@@ -510,6 +510,106 @@ static int is_heap_string_expr(ASTNode* expr) {
     return 0;
 }
 
+// Collect the names of top-level AST_VARIABLE_DECLARATION nodes in a
+// block. Used by the if/else hoist below to find variables that are
+// first-assigned in BOTH branches — those need to be visible after the
+// `if`, so we declare them at the outer scope before opening the if.
+//
+// Pulls only direct children (not nested blocks) since a name introduced
+// inside a deeper `while` of the then-branch should NOT escape to the
+// post-if scope.
+static void collect_branch_decl_names(ASTNode* body,
+                                       const char** names, int* count, int cap) {
+    if (!body) return;
+    for (int i = 0; i < body->child_count; i++) {
+        ASTNode* child = body->children[i];
+        if (!child) continue;
+        if (child->type == AST_VARIABLE_DECLARATION && child->value
+            && *count < cap) {
+            // Dedup so a branch like `x = 1; x = 2` only registers once.
+            int already = 0;
+            for (int j = 0; j < *count; j++) {
+                if (strcmp(names[j], child->value) == 0) { already = 1; break; }
+            }
+            if (!already) names[(*count)++] = child->value;
+        }
+    }
+}
+
+// Find the AST_VARIABLE_DECLARATION node for `name` inside a block,
+// returning the first match (so type inference can use its initializer).
+static ASTNode* find_branch_decl(ASTNode* body, const char* name) {
+    if (!body || !name) return NULL;
+    for (int i = 0; i < body->child_count; i++) {
+        ASTNode* child = body->children[i];
+        if (!child) continue;
+        if (child->type == AST_VARIABLE_DECLARATION && child->value
+            && strcmp(child->value, name) == 0) {
+            return child;
+        }
+    }
+    return NULL;
+}
+
+// When both arms of an if/else first-assign the same variable name,
+// hoist a single declaration to the enclosing scope so the post-block
+// code can read it. Without this, both arms emit a C-local declaration
+// and the variable goes out of scope at the closing `}`. See
+// docs/notes/compiler_notes_from_vcr_port.md item #2 for the original
+// repro and rationale.
+//
+// Names that appear in only one arm are deliberately NOT hoisted —
+// using such a name after the if would be undefined behavior at the
+// Aether level, and the existing scope-restore in AST_IF_STATEMENT
+// keeps that locality. Names already declared before the if are also
+// skipped (they're already in scope).
+static void hoist_if_else_common_vars(CodeGenerator* gen,
+                                       ASTNode* then_body,
+                                       ASTNode* else_body) {
+    if (!then_body || !else_body) return;
+    const char* then_names[64];
+    int then_count = 0;
+    collect_branch_decl_names(then_body, then_names, &then_count, 64);
+    const char* else_names[64];
+    int else_count = 0;
+    collect_branch_decl_names(else_body, else_names, &else_count, 64);
+
+    for (int i = 0; i < then_count; i++) {
+        const char* n = then_names[i];
+        // Must appear in else_names too.
+        int in_else = 0;
+        for (int j = 0; j < else_count; j++) {
+            if (strcmp(n, else_names[j]) == 0) { in_else = 1; break; }
+        }
+        if (!in_else) continue;
+
+        // Skip if already declared at outer scope.
+        if (is_var_declared(gen, n)) continue;
+        mark_var_declared(gen, n);
+
+        // Recover a usable type from either branch's initializer.
+        ASTNode* decl = find_branch_decl(then_body, n);
+        Type* var_type = decl ? decl->node_type : NULL;
+        if ((!var_type || var_type->kind == TYPE_VOID
+             || var_type->kind == TYPE_UNKNOWN)
+            && decl && decl->child_count > 0
+            && decl->children[0] && decl->children[0]->node_type) {
+            var_type = decl->children[0]->node_type;
+        }
+        if (!var_type || var_type->kind == TYPE_VOID
+            || var_type->kind == TYPE_UNKNOWN) {
+            decl = find_branch_decl(else_body, n);
+            if (decl && decl->child_count > 0
+                && decl->children[0] && decl->children[0]->node_type) {
+                var_type = decl->children[0]->node_type;
+            }
+        }
+        const char* c_type = get_c_type(var_type);
+        print_indent(gen);
+        fprintf(gen->output, "%s %s;\n", c_type, n);
+    }
+}
+
 // Pre-declare variables from a while/for loop body so they're visible
 // at function scope in the generated C. Without this, variables first
 // assigned inside a while block are C-block-scoped and invisible to
@@ -1349,6 +1449,16 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
         }
 
         case AST_IF_STATEMENT:
+            // Hoist any variable that's first-assigned in BOTH branches to
+            // the outer scope before opening the if. Without this, the
+            // C-side declarations stay block-local and disappear at the
+            // closing `}`, even though Aether semantics expect them to
+            // survive the merge. See docs/notes/compiler_notes_from_vcr_port.md
+            // item #2.
+            if (stmt->child_count > 2) {
+                hoist_if_else_common_vars(gen, stmt->children[1], stmt->children[2]);
+            }
+
             fprintf(gen->output, "if (");
             if (stmt->child_count > 0) {
                 gen->in_condition = 1;
