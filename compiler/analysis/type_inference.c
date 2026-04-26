@@ -205,7 +205,7 @@ void collect_expression_constraints(ASTNode* node, InferenceContext* ctx) {
             // Always process initializer if present (even with explicit types)
             if (node->child_count > 0) {
                 collect_constraints(node->children[0], ctx);
-                
+
                 // If declaration type is unknown, infer it from initializer
                 if (is_type_inferrable(node->node_type)) {
                     Type* init_type = node->children[0]->node_type;
@@ -215,7 +215,7 @@ void collect_expression_constraints(ASTNode* node, InferenceContext* ctx) {
                     }
                 }
             }
-            
+
             // Add variable to symbol table for later lookups (member access, etc.)
             if (node->value && node->node_type && node->node_type->kind != TYPE_UNKNOWN && ctx->symbols) {
                 Symbol* existing = lookup_symbol_local(ctx->symbols, node->value);
@@ -229,6 +229,48 @@ void collect_expression_constraints(ASTNode* node, InferenceContext* ctx) {
                 }
             }
             break;
+
+        case AST_TUPLE_DESTRUCTURE: {
+            // a, b, _ = func() — last child is the RHS expression; preceding
+            // children are the destructure lvalues (AST_VARIABLE_DECLARATIONs).
+            // Without this case, destructured locals aren't visible in the
+            // current function's symbol table, so `return v` after
+            // `v, _ = some_tuple_call()` falls back to default inference (int).
+            if (node->child_count >= 2) {
+                int var_count = node->child_count - 1;
+                ASTNode* rhs = node->children[var_count];
+
+                // Process RHS so its tuple type gets resolved
+                collect_constraints(rhs, ctx);
+
+                Type* rhs_type = rhs ? rhs->node_type : NULL;
+                if (rhs_type && rhs_type->kind == TYPE_TUPLE &&
+                    rhs_type->tuple_count == var_count) {
+                    // Bind each lvalue's slot type onto the corresponding
+                    // AST_VARIABLE_DECLARATION node and into the symbol table.
+                    for (int j = 0; j < var_count; j++) {
+                        ASTNode* var = node->children[j];
+                        if (!var) continue;
+                        Type* slot = rhs_type->tuple_types[j];
+                        if (!slot || slot->kind == TYPE_UNKNOWN) continue;
+
+                        if (var->node_type) free_type(var->node_type);
+                        var->node_type = clone_type(slot);
+
+                        if (var->value && strcmp(var->value, "_") != 0 && ctx->symbols) {
+                            Symbol* existing = lookup_symbol_local(ctx->symbols, var->value);
+                            if (existing) {
+                                if (existing->type) free_type(existing->type);
+                                existing->type = clone_type(slot);
+                            } else {
+                                add_symbol(ctx->symbols, var->value, clone_type(slot), 0, 0, 0);
+                            }
+                        }
+                    }
+                }
+            }
+            break;
+        }
             
         case AST_IDENTIFIER:
             // Look up in symbol table
@@ -399,6 +441,57 @@ static Type* resolve_local_var_type(const char* name, ASTNode* block, int before
     for (int i = before_index - 1; i >= 0; i--) {
         ASTNode* stmt = block->children[i];
         if (!stmt) continue;
+
+        // Tuple destructure: `name, _ = some_call()` — the destructure
+        // node holds AST_VARIABLE_DECLARATION children for each lvalue
+        // and the RHS expression as the last child. If `name` matches
+        // one of the lvalues, return the type of the corresponding
+        // tuple slot from the RHS's resolved tuple type. Without this
+        // branch, callers like `target = build._get(ctx, key)` whose
+        // body is `v, _ = map.get(ctx, key); return v` can't resolve
+        // `_get`'s return type, defaulting it to int and breaking
+        // every caller.
+        if (stmt->type == AST_TUPLE_DESTRUCTURE && stmt->child_count >= 2) {
+            int var_count = stmt->child_count - 1;
+            ASTNode* rhs = stmt->children[var_count];
+            for (int j = 0; j < var_count; j++) {
+                ASTNode* var = stmt->children[j];
+                if (!var || !var->value) continue;
+                if (strcmp(var->value, name) != 0) continue;
+                if (var->node_type && var->node_type->kind != TYPE_UNKNOWN) {
+                    return clone_type(var->node_type);
+                }
+                if (rhs && rhs->node_type && rhs->node_type->kind == TYPE_TUPLE &&
+                    j < rhs->node_type->tuple_count) {
+                    Type* slot = rhs->node_type->tuple_types[j];
+                    if (slot && slot->kind != TYPE_UNKNOWN) {
+                        return clone_type(slot);
+                    }
+                }
+                // RHS is a function call whose return type might be a
+                // tuple resolved later in the inference loop — look it up.
+                if (rhs && rhs->type == AST_FUNCTION_CALL && rhs->value && symbols) {
+                    Symbol* func_sym = lookup_symbol(symbols, rhs->value);
+                    if (!func_sym && strchr(rhs->value, '.')) {
+                        char mangled[256];
+                        strncpy(mangled, rhs->value, sizeof(mangled) - 1);
+                        mangled[sizeof(mangled) - 1] = '\0';
+                        for (char* p = mangled; *p; p++) { if (*p == '.') *p = '_'; }
+                        func_sym = lookup_symbol(symbols, mangled);
+                    }
+                    if (func_sym && func_sym->type &&
+                        func_sym->type->kind == TYPE_TUPLE &&
+                        j < func_sym->type->tuple_count) {
+                        Type* slot = func_sym->type->tuple_types[j];
+                        if (slot && slot->kind != TYPE_UNKNOWN) {
+                            return clone_type(slot);
+                        }
+                    }
+                }
+                break;
+            }
+        }
+
         if (stmt->type == AST_VARIABLE_DECLARATION && stmt->value &&
             strcmp(stmt->value, name) == 0 && stmt->child_count > 0) {
             ASTNode* init = stmt->children[0];
@@ -570,10 +663,27 @@ Type* infer_return_type_from_body(ASTNode* body, SymbolTable* symbols) {
     return infer_return_type_impl(body, symbols, true);
 }
 
-// Collect constraints from function
+// Collect constraints from function.
+//
+// Local variables declared inside this function are added to the symbol
+// table while the body is processed, then unwound at the end so they
+// don't leak into sibling functions. Without the unwind, `z` defined as
+// a string local in one function and `z` destructured as a ptr local in
+// another collide at the global table level — `lookup_symbol` returns
+// either type depending on traversal order, producing spurious E0200
+// "Type mismatch in variable initialization" diagnostics on later
+// `something = z` assignments inside the second function.
+//
+// We unwind by snapshotting the head of the symbol list before processing
+// and trimming back to it after. Function-level symbols (function
+// definitions, externs, imports) are added by other code paths before any
+// function body is visited, so they sit beneath the snapshot and are
+// unaffected.
 void collect_function_constraints(ASTNode* node, InferenceContext* ctx) {
     if (!node || (node->type != AST_FUNCTION_DEFINITION && node->type != AST_BUILDER_FUNCTION)) return;
-    
+
+    Symbol* saved_head = ctx->symbols ? ctx->symbols->symbols : NULL;
+
     // Add parameters to symbol table so identifiers in function body can look them up
     int body_index = node->child_count - 1;
     for (int i = 0; i < body_index; i++) {
@@ -594,10 +704,25 @@ void collect_function_constraints(ASTNode* node, InferenceContext* ctx) {
             }
         }
     }
-    
+
     // Collect constraints from function body
     if (body_index >= 0 && body_index < node->child_count) {
         collect_constraints(node->children[body_index], ctx);
+    }
+
+    // Unwind any symbols this function added so they don't pollute sibling
+    // functions' lookups.
+    if (ctx->symbols) {
+        Symbol* current = ctx->symbols->symbols;
+        while (current && current != saved_head) {
+            Symbol* next = current->next;
+            if (current->name) free(current->name);
+            if (current->type) free_type(current->type);
+            if (current->alias_target) free(current->alias_target);
+            free(current);
+            current = next;
+        }
+        ctx->symbols->symbols = saved_head;
     }
 }
 
@@ -846,15 +971,24 @@ void infer_function_return_types(ASTNode* program, SymbolTable* table) {
         ASTNode* node = program->children[i];
         if (!node || (node->type != AST_FUNCTION_DEFINITION && node->type != AST_BUILDER_FUNCTION)) continue;
 
-        // Infer return type from return statements
+        // Infer return type from return statements. Also re-infer when
+        // node_type is VOID, because earlier iterations may have guessed
+        // VOID for a function whose body's `return v` referenced a local
+        // whose type wasn't yet resolvable (e.g. destructured from a
+        // call to a function whose own return type was still UNKNOWN).
+        // The inference loop in infer_all_types runs us again with more
+        // information; without re-inferring, the early VOID guess sticks.
         int body_index = node->child_count - 1;
         if (body_index >= 0 && body_index < node->child_count) {
-            if (!node->node_type || node->node_type->kind == TYPE_UNKNOWN) {
+            if (!node->node_type ||
+                node->node_type->kind == TYPE_UNKNOWN ||
+                node->node_type->kind == TYPE_VOID) {
                 Type* return_type = infer_return_type_from_body(node->children[body_index], table);
                 if (return_type) {
+                    if (node->node_type) free_type(node->node_type);
                     node->node_type = return_type;
-                } else {
-                    // No explicit return, assume void
+                } else if (!node->node_type) {
+                    // No explicit return, assume void (only on first pass).
                     node->node_type = create_type(TYPE_VOID);
                 }
             }
@@ -1000,12 +1134,48 @@ int infer_all_types(ASTNode* program, SymbolTable* table) {
     
     // Phase 3-5: Interleaved propagation + constraint solving.
     // Each pass: propagate call-site types into parameter definitions,
-    // then re-collect and re-solve so that identifier references inside
-    // function bodies pick up the newly resolved parameter types.
+    // re-infer function return types, sync those return types into the
+    // global function-symbol table (so call sites in other functions
+    // resolve correctly on the next pass), then re-collect and re-solve.
     // This handles deep call chains (a->b->c->d) where each level needs
     // one propagation pass followed by one constraint-solve pass.
+    //
+    // The return-type sync inside the loop (rather than only after) is
+    // load-bearing for tuple-destructured callers: `target = some_call()`
+    // where some_call() returns `(ptr, string)`. Without per-iteration
+    // sync, `some_call()`'s call-site node_type stays UNKNOWN until phase
+    // 6, after which no further constraint pass runs to set `target`'s
+    // type from the resolved tuple slot.
     for (int pass = 0; pass < MAX_INFERENCE_ITERATIONS; pass++) {
         int changed = propagate_function_call_types(program, table);
+
+        // Refresh function return types. Crucially, on iteration N this
+        // produces a return type that uses iteration N-1's func_sym info
+        // for any cross-function inference (e.g. resolving a destructure
+        // local from the called function's tuple return). To converge,
+        // we re-publish those return types onto the function symbols and
+        // require child->node_type to be a *more specific* type (i.e.
+        // not VOID/UNKNOWN) before incrementing `changed` — otherwise a
+        // function whose body genuinely returns void would loop forever
+        // re-syncing the same VOID.
+        infer_function_return_types(program, table);
+        for (int i = 0; i < program->child_count; i++) {
+            ASTNode* child = program->children[i];
+            if (!child || !child->value || !child->node_type) continue;
+            if (child->type != AST_FUNCTION_DEFINITION &&
+                child->type != AST_BUILDER_FUNCTION) continue;
+            if (child->node_type->kind == TYPE_UNKNOWN ||
+                child->node_type->kind == TYPE_VOID) continue;
+            Symbol* func_sym = lookup_symbol(table, child->value);
+            if (!func_sym) continue;
+            if (!func_sym->type ||
+                func_sym->type->kind == TYPE_UNKNOWN ||
+                func_sym->type->kind == TYPE_VOID) {
+                if (func_sym->type) free_type(func_sym->type);
+                func_sym->type = clone_type(child->node_type);
+                changed++;
+            }
+        }
 
         free_inference_context(ctx);
         ctx = create_inference_context(table);
@@ -1014,7 +1184,7 @@ int infer_all_types(ASTNode* program, SymbolTable* table) {
 
         if (changed == 0) break;
     }
-    
+
     // Phase 6: Infer function return types (now that return expressions have types)
     infer_function_return_types(program, table);
 
