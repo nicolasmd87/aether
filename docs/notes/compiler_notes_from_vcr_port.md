@@ -96,7 +96,7 @@ behavior is correct.)
 
 ---
 
-## 3. Actor state-type inference fragile under import-order changes
+## 3. Actor state-type inference fragile under import-order changes [RESOLVED 2026-04-26 in PR #238]
 
 **Symptom**: this pattern works in one test file and fails in another
 with seemingly identical code:
@@ -158,7 +158,12 @@ wrapper foo` pair in the stdlib shrinks to one line.
 
 ---
 
-## 5. Tuple return-type annotation flaky for multi-return funcs
+## 5. Tuple return-type annotation flaky for multi-return funcs [RESOLVED 2026-04-26 in PR #238]
+
+The cross-module tuple destructure case from issue #240's JSON sugar
+work compiles cleanly: `parsed, perr = client.response_body_json(resp)`,
+`echoed_ct, sctterr = json.get_string(ct_node)`, etc. all work first
+time without the `-> {` workaround.
 
 **Symptom**: declaring an explicit `-> (int, string)` annotation on a
 function and then destructuring its result fails:

@@ -45,6 +45,22 @@
 // opt out and block forever (rarely what you want; preserved as the
 // v1 wrappers' behaviour). Negative values are an error.
 
+// std.json is pulled in for the v2.1 JSON sugar wrappers
+// (post_json / response_body_json) at the bottom of this file.
+// The core builder + send + response surface above doesn't depend
+// on it — callers that don't touch JSON pay no cost beyond the
+// import.
+import std.json
+
+exports (
+    request, set_header, set_body, set_timeout, request_free,
+    send_request,
+    response_status, response_body, response_error,
+    response_header, response_headers, response_free,
+    get_with_headers, post_with_status,
+    post_json, response_body_json
+)
+
 // ---- Raw externs ----
 // HttpRequest is opaque. Build → set_* → send → free in that order.
 // HttpResponse carries the same shape the v1 wrappers return; reuse
@@ -223,4 +239,68 @@ post_with_status(url: string, body: string, content_type: string) -> {
     rbody_copy = string_concat(rbody, "")
     response_free(resp)
     return rbody_copy, status, ""
+}
+
+// ---- JSON sugar (issue #240) ----------------------------------------
+//
+// Two helpers for the common "POST a JSON body, parse the JSON
+// response" round-trip. Pure Aether on top of v2 + std.json — no
+// new C externs.
+//
+//   import std.http.client
+//   import std.json
+//
+//   value = json.create_object()
+//   json.object_set_string(value, "name", "alice")
+//   resp, err = client.post_json("https://api.example.com/users", value)
+//   if err == "" {
+//       parsed, perr = client.response_body_json(resp)
+//       if perr == "" {
+//           // walk parsed
+//           json.free(parsed)
+//       }
+//       client.response_free(resp)
+//   }
+//   json.free(value)
+//
+// Like send_request, post_json's err covers transport-level failures
+// only — non-2xx HTTP status leaves err == "" and the caller checks
+// response_status(resp). response_body_json's err covers JSON parse
+// failures (the response was received fine but the body wasn't valid
+// JSON).
+
+// POST a JSON value to `url`. Marshals via json.stringify, sets
+// Content-Type + Accept to application/json, fires the request.
+// Same (resp, err) shape as send_request. Caller frees resp via
+// response_free, and json.free's the value they passed in (we
+// don't take ownership of it).
+//
+// The request handle's lifetime is fully internal — we allocate
+// it on entry and `defer request_free` it so the cleanup pairs
+// visually with the allocation and survives every return path.
+post_json(url: string, value: ptr) -> {
+    body_str, sferr = json.stringify(value)
+    if sferr != "" { return null, sferr }
+
+    req = request("POST", url)
+    if req == null { return null, "request build failed" }
+    defer request_free(req)
+
+    set_timeout(req, 30)
+    set_header(req, "Content-Type", "application/json")
+    set_header(req, "Accept",       "application/json")
+    body_len = string_length(body_str)
+    set_body(req, body_str, body_len, "application/json")
+
+    return send_request(req)
+}
+
+// Parse the response body as JSON. Returns (value, "") on success,
+// (null, parse_error) when the body isn't valid JSON. Doesn't free
+// the response — the caller still owns it (so they can read other
+// accessors like response_status before/after parsing). Caller owns
+// the returned value and must json.free it.
+response_body_json(resp: ptr) -> {
+    body = response_body(resp)
+    return json.parse(body)
 }
