@@ -359,7 +359,7 @@ test-ae: compiler ae stdlib
 	xargs -P $(NPROC) -I{} "$$script" "{}" "$$tmpdir" "$$root"; \
 	for sh_test in $$(find tests/integration -name 'test_*.sh' 2>/dev/null | sort); do \
 		name=$$(echo "$$sh_test" | sed 's|tests/||;s|/|_|g;s|\.sh$$||'); \
-		if sh "$$sh_test" >"$$tmpdir/run_$$name.out" 2>"$$tmpdir/run_$$name.err"; then \
+		if bash "$$sh_test" >"$$tmpdir/run_$$name.out" 2>"$$tmpdir/run_$$name.err"; then \
 			echo "  [PASS] $$name"; touch "$$tmpdir/PASS_$$name"; \
 		else \
 			echo "  [FAIL] $$name (shell test)"; \
