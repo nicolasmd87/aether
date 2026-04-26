@@ -1,0 +1,69 @@
+// Issue #261 prep: smoke test for std.dl cross-platform loader.
+//
+// Loads the test-side probe library, resolves three known symbols,
+// confirms that:
+//   - dl.open returns a non-null handle
+//   - dl.symbol returns non-null pointers for known names
+//   - dl.symbol returns null + error for an unknown name
+//   - dl.close succeeds
+//
+// The library path is passed via the LIB_PATH env var by the test
+// runner so the test does not embed an absolute path.
+
+import std.dl
+import std.os
+
+main() {
+    lib_path = os_getenv("LIB_PATH")
+    if lib_path == 0 {
+        println("FAIL: LIB_PATH unset")
+        return
+    }
+
+    handle, err = dl.open(lib_path)
+    if handle == null {
+        println("FAIL: open: ${err}")
+        return
+    }
+    println("open: ok")
+
+    sym1, e1 = dl.symbol(handle, "probe_answer")
+    if sym1 == null {
+        println("FAIL: symbol probe_answer: ${e1}")
+        return
+    }
+    println("symbol probe_answer: ok")
+
+    sym2, e2 = dl.symbol(handle, "probe_add")
+    if sym2 == null {
+        println("FAIL: symbol probe_add: ${e2}")
+        return
+    }
+    println("symbol probe_add: ok")
+
+    // Distinct symbols should have distinct addresses.
+    if sym1 == sym2 {
+        println("FAIL: distinct symbols share address")
+        return
+    }
+    println("distinct symbols: ok")
+
+    // Unknown symbol should return null + a non-empty error.
+    bad, ebad = dl.symbol(handle, "definitely_not_a_real_symbol")
+    if bad != null {
+        println("FAIL: unknown symbol returned non-null")
+        return
+    }
+    if ebad == "" {
+        println("FAIL: unknown symbol returned empty error")
+        return
+    }
+    println("unknown symbol error: ok")
+
+    close_err = dl.close(handle)
+    if close_err != "" {
+        println("FAIL: close: ${close_err}")
+        return
+    }
+    println("close: ok")
+}
