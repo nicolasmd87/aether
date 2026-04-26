@@ -66,20 +66,25 @@ int is_type_inferrable(Type* type) {
 // Infer type from literal value
 Type* infer_from_literal(const char* value) {
     if (!value) return create_type(TYPE_UNKNOWN);
-    
-    // Check if it's a number
+
+    // Check if it's a number. Start is_number = 0 so the empty
+    // buffer doesn't decay to TYPE_INT — require at least one
+    // digit to flip it on. See bug #2 in
+    // tests/integration/multi_return_destructure_chain/ for the cluster.
     int is_float = 0;
-    int is_number = 1;
-    
+    int is_number = 0;
+
     for (const char* p = value; *p; p++) {
         if (*p == '.') {
             is_float = 1;
-        } else if (!isdigit(*p) && *p != '-' && *p != '+') {
+        } else if (isdigit((unsigned char)*p)) {
+            is_number = 1;
+        } else if (*p != '-' && *p != '+') {
             is_number = 0;
             break;
         }
     }
-    
+
     if (is_number) {
         return create_type(is_float ? TYPE_FLOAT : TYPE_INT);
     }
@@ -520,6 +525,67 @@ static Type* resolve_local_var_type(const char* name, ASTNode* block, int before
     return NULL;
 }
 
+// Walk the subtree rooted at `node` looking for multi-value return
+// statements. For each untyped AST_IDENTIFIER slot, resolve the
+// type from `outer_block`'s preceding siblings (where any
+// destructure that introduced the local lives) and stamp it onto
+// the slot's node_type. After this pass, the recursive
+// infer_return_type_impl below sees a fully-typed tuple instead of
+// one with UNKNOWN slots. See Bug #4 in
+// tests/integration/multi_return_destructure_chain/.
+//
+// Bounded recursion: only descends into block-shaped children
+// (AST_BLOCK, AST_IF_STATEMENT, AST_FOR_LOOP, AST_WHILE_LOOP,
+// AST_SWITCH_STATEMENT, AST_MATCH_STATEMENT, AST_MATCH_ARM,
+// AST_DEFER_STATEMENT). Doesn't descend into nested function or
+// closure definitions — they have their own scopes.
+static void preresolve_return_idents_in(ASTNode* node, ASTNode* outer_block,
+                                        int outer_index, SymbolTable* symbols) {
+    if (!node) return;
+
+    if (node->type == AST_RETURN_STATEMENT && node->child_count > 1) {
+        for (int i = 0; i < node->child_count; i++) {
+            ASTNode* slot = node->children[i];
+            if (!slot) continue;
+            if (slot->type == AST_EXPRESSION_STATEMENT && slot->child_count > 0)
+                slot = slot->children[0];
+            if (slot->type != AST_IDENTIFIER || !slot->value) continue;
+            if (slot->node_type && slot->node_type->kind != TYPE_UNKNOWN) continue;
+            Type* local_type = resolve_local_var_type(slot->value, outer_block, outer_index, symbols);
+            if (local_type) {
+                if (slot->node_type) free_type(slot->node_type);
+                slot->node_type = local_type;
+            }
+        }
+        // Don't descend further — return statements terminate.
+        return;
+    }
+
+    // Recurse into block-shaped children only. Skip function /
+    // closure boundaries — those open new scopes whose locals can't
+    // be resolved from `outer_block`.
+    if (node->type == AST_FUNCTION_DEFINITION ||
+        node->type == AST_BUILDER_FUNCTION ||
+        node->type == AST_CLOSURE) {
+        return;
+    }
+
+    int recurse =
+        node->type == AST_BLOCK ||
+        node->type == AST_IF_STATEMENT ||
+        node->type == AST_FOR_LOOP ||
+        node->type == AST_WHILE_LOOP ||
+        node->type == AST_SWITCH_STATEMENT ||
+        node->type == AST_MATCH_STATEMENT ||
+        node->type == AST_MATCH_ARM ||
+        node->type == AST_DEFER_STATEMENT;
+    if (!recurse) return;
+
+    for (int i = 0; i < node->child_count; i++) {
+        preresolve_return_idents_in(node->children[i], outer_block, outer_index, symbols);
+    }
+}
+
 static Type* infer_return_type_impl(ASTNode* body, SymbolTable* symbols, bool is_top_level) {
     if (!body) return NULL;
 
@@ -547,10 +613,15 @@ static Type* infer_return_type_impl(ASTNode* body, SymbolTable* symbols, bool is
                     if (strcmp(val->value, "true") == 0 || strcmp(val->value, "false") == 0) {
                         tuple->tuple_types[i] = create_type(TYPE_BOOL);
                     } else {
-                        // Check if numeric
-                        int is_num = 1;
+                        // Check if numeric. Start is_num = 0 and require at
+                        // least one numeric character to flip it on; an
+                        // empty buffer (the "" literal in tuple slots) must
+                        // resolve as TYPE_STRING, not TYPE_INT. See bug #2
+                        // in tests/integration/multi_return_destructure_chain/.
+                        int is_num = 0;
                         for (const char* p = val->value; *p; p++) {
-                            if (*p != '-' && *p != '.' && (*p < '0' || *p > '9')) { is_num = 0; break; }
+                            if (*p >= '0' && *p <= '9') { is_num = 1; }
+                            else if (*p != '-' && *p != '.')      { is_num = 0; break; }
                         }
                         tuple->tuple_types[i] = create_type(is_num ? TYPE_INT : TYPE_STRING);
                     }
@@ -619,6 +690,23 @@ static Type* infer_return_type_impl(ASTNode* body, SymbolTable* symbols, bool is
     // This avoids mistaking a string literal inside print() for a return type.
     switch (body->type) {
         case AST_BLOCK:
+            // Pre-resolve nested multi-value returns. The existing
+            // direct-child pre-resolve below handles single-value
+            // returns at the block's top level only. A multi-value
+            // return inside an if/while/for body sees AST_IDENTIFIER
+            // slots whose types were never set (the surrounding
+            // destructure that introduced the local lives in `body`,
+            // not in the nested body that holds the return).
+            // preresolve_return_idents_in walks the subtree from
+            // here, finds every multi-value AST_RETURN_STATEMENT,
+            // and stamps each untyped AST_IDENTIFIER slot from this
+            // outer block's resolve_local_var_type. After this pass,
+            // the recursive infer_return_type_impl below sees a
+            // fully-typed tuple instead of one with UNKNOWN slots.
+            // Bug #4 in tests/integration/multi_return_destructure_chain/.
+            for (int i = 0; i < body->child_count; i++) {
+                preresolve_return_idents_in(body->children[i], body, i, symbols);
+            }
             for (int i = 0; i < body->child_count; i++) {
                 ASTNode* child = body->children[i];
                 if (!child) continue;
@@ -948,10 +1036,14 @@ static void merge_tuple_returns(ASTNode* node, Type* merged) {
                     free_type(merged->tuple_types[i]);
                     merged->tuple_types[i] = clone_type(val->node_type);
                 } else if (val->type == AST_LITERAL && val->value) {
-                    // Infer literal type
-                    int is_num = 1;
+                    // Infer literal type. Same fix as the matching site
+                    // in infer_return_type_impl: start is_num = 0 so the
+                    // empty-string literal "" doesn't decay to TYPE_INT.
+                    // See bug #2 in tests/integration/multi_return_destructure_chain/.
+                    int is_num = 0;
                     for (const char* p = val->value; *p; p++) {
-                        if (*p != '-' && *p != '.' && (*p < '0' || *p > '9')) { is_num = 0; break; }
+                        if (*p >= '0' && *p <= '9') { is_num = 1; }
+                        else if (*p != '-' && *p != '.')      { is_num = 0; break; }
                     }
                     free_type(merged->tuple_types[i]);
                     merged->tuple_types[i] = create_type(is_num ? TYPE_INT : TYPE_STRING);
@@ -976,13 +1068,28 @@ void infer_function_return_types(ASTNode* program, SymbolTable* table) {
         // VOID for a function whose body's `return v` referenced a local
         // whose type wasn't yet resolvable (e.g. destructured from a
         // call to a function whose own return type was still UNKNOWN).
-        // The inference loop in infer_all_types runs us again with more
-        // information; without re-inferring, the early VOID guess sticks.
+        // Same logic for partially-resolved tuples: a TUPLE(string, UNKNOWN)
+        // typed in iteration N may be refinable in iteration N+1 once
+        // more function signatures are known. Without firing on
+        // partially-resolved tuples the early guess sticks and codegen
+        // emits the UNKNOWN slot as int. Bug #3 in
+        // tests/integration/multi_return_destructure_chain/.
         int body_index = node->child_count - 1;
         if (body_index >= 0 && body_index < node->child_count) {
+            int has_unknown_tuple_slot = 0;
+            if (node->node_type && node->node_type->kind == TYPE_TUPLE) {
+                for (int s = 0; s < node->node_type->tuple_count; s++) {
+                    Type* slot = node->node_type->tuple_types[s];
+                    if (!slot || slot->kind == TYPE_UNKNOWN) {
+                        has_unknown_tuple_slot = 1;
+                        break;
+                    }
+                }
+            }
             if (!node->node_type ||
                 node->node_type->kind == TYPE_UNKNOWN ||
-                node->node_type->kind == TYPE_VOID) {
+                node->node_type->kind == TYPE_VOID ||
+                has_unknown_tuple_slot) {
                 Type* return_type = infer_return_type_from_body(node->children[body_index], table);
                 if (return_type) {
                     if (node->node_type) free_type(node->node_type);
@@ -1168,9 +1275,28 @@ int infer_all_types(ASTNode* program, SymbolTable* table) {
                 child->node_type->kind == TYPE_VOID) continue;
             Symbol* func_sym = lookup_symbol(table, child->value);
             if (!func_sym) continue;
+            int sync = 0;
             if (!func_sym->type ||
                 func_sym->type->kind == TYPE_UNKNOWN ||
                 func_sym->type->kind == TYPE_VOID) {
+                sync = 1;
+            } else if (func_sym->type->kind == TYPE_TUPLE &&
+                       child->node_type->kind == TYPE_TUPLE &&
+                       func_sym->type->tuple_count == child->node_type->tuple_count) {
+                // Sync only when the child's tuple is *strictly* more
+                // specific — fewer UNKNOWN slots. Without strictness,
+                // syncing TUPLE(s, UNKNOWN) → TUPLE(s, UNKNOWN) loops
+                // forever and exhausts MAX_INFERENCE_ITERATIONS.
+                int sym_unknown = 0, child_unknown = 0;
+                for (int s = 0; s < func_sym->type->tuple_count; s++) {
+                    Type* a = func_sym->type->tuple_types[s];
+                    Type* b = child->node_type->tuple_types[s];
+                    if (!a || a->kind == TYPE_UNKNOWN) sym_unknown++;
+                    if (!b || b->kind == TYPE_UNKNOWN) child_unknown++;
+                }
+                if (child_unknown < sym_unknown) sync = 1;
+            }
+            if (sync) {
                 if (func_sym->type) free_type(func_sym->type);
                 func_sym->type = clone_type(child->node_type);
                 changed++;
