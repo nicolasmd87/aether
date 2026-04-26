@@ -17,6 +17,13 @@ void register_extern_func(CodeGenerator* gen, ASTNode* ext) {
 
     int idx = gen->extern_registry_count++;
     gen->extern_registry[idx].name = strdup(ext->value);
+    gen->extern_registry[idx].c_name = NULL;
+    // @extern("c_symbol") rebinds the call-site emission to a chosen
+    // C symbol while keeping the Aether-side name in the namespace.
+    if (ext->annotation &&
+        strncmp(ext->annotation, "c_symbol:", 9) == 0) {
+        gen->extern_registry[idx].c_name = strdup(ext->annotation + 9);
+    }
     gen->extern_registry[idx].param_count = ext->child_count;
     gen->extern_registry[idx].params = NULL;
 
@@ -78,6 +85,23 @@ int is_extern_func(CodeGenerator* gen, const char* func_name) {
         }
     }
     return 0;
+}
+
+// If `func_name` was declared via @extern("c_symbol"), return the C
+// symbol bound to it. Otherwise returns `func_name` unchanged. Used
+// at call sites: codegen translates the Aether-side name (which lives
+// in the module namespace) into the actual C symbol the linker wants.
+// See #234.
+const char* lookup_extern_c_name(CodeGenerator* gen, const char* func_name) {
+    if (!gen || !func_name) return func_name;
+    for (int i = 0; i < gen->extern_registry_count; i++) {
+        if (gen->extern_registry[i].name &&
+            strcmp(gen->extern_registry[i].name, func_name) == 0 &&
+            gen->extern_registry[i].c_name) {
+            return gen->extern_registry[i].c_name;
+        }
+    }
+    return func_name;
 }
 
 // Look up the expected TypeKind for the nth parameter of an extern function.
@@ -160,14 +184,24 @@ void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext) {
     // `unsigned int sleep(unsigned int)` and breaks compilation.
     // The function's name is still registered above, so call-site code
     // generation uses the correct cast-to-libc-type emission.
-    if (extern_name_is_libc_conflict(ext->value)) {
+    // @extern("c_symbol") aether_name(...) — the Aether-side name
+    // (ext->value) lives in the module namespace, but the C forward
+    // declaration and every call site use the annotated C symbol.
+    // Closes #234.
+    const char* c_name = ext->value;
+    if (ext->annotation &&
+        strncmp(ext->annotation, "c_symbol:", 9) == 0) {
+        c_name = ext->annotation + 9;
+    }
+
+    if (extern_name_is_libc_conflict(c_name)) {
         fprintf(gen->output,
                 "// Extern C function: %s (libc-provided, declaration skipped)\n",
-                ext->value);
+                c_name);
         return;
     }
 
-    fprintf(gen->output, "// Extern C function: %s\n", ext->value);
+    fprintf(gen->output, "// Extern C function: %s\n", c_name);
 
     // Generate return type (map Aether types to C types)
     if (ext->node_type && ext->node_type->kind != TYPE_VOID) {
@@ -192,7 +226,7 @@ void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext) {
         fprintf(gen->output, "void");
     }
 
-    fprintf(gen->output, " %s(", ext->value);  // No mangling: extern refers to actual C symbol
+    fprintf(gen->output, " %s(", c_name);  // No mangling: extern refers to actual C symbol
 
     // Generate parameters
     int first_param = 1;

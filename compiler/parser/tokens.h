@@ -119,7 +119,8 @@ typedef enum {
     TOKEN_COLON,
     TOKEN_ARROW,
     TOKEN_PIPE,
-    
+    TOKEN_AT,               // '@' attribute / annotation prefix
+
     // Special
     TOKEN_PRINT,
     TOKEN_EOF,

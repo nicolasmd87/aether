@@ -2185,8 +2185,12 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 }
                 else {
                     char c_func_name[256];
-                    // Don't mangle extern functions — they refer to real C symbols
-                    const char* mangled = is_extern_func(gen, func_name) ? func_name : safe_c_name(func_name);
+                    // Don't mangle extern functions — they refer to real C symbols.
+                    // For @extern("c_symbol") aether_name(...), translate the
+                    // Aether-side name to its bound C symbol. See #234.
+                    const char* mangled = is_extern_func(gen, func_name)
+                        ? lookup_extern_c_name(gen, func_name)
+                        : safe_c_name(func_name);
                     strncpy(c_func_name, mangled, sizeof(c_func_name) - 1);
                     c_func_name[sizeof(c_func_name) - 1] = '\0';
                     for (char* p = c_func_name; *p; p++) {

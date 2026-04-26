@@ -167,6 +167,7 @@ void free_code_generator(CodeGenerator* gen) {
         if (gen->extern_registry) {
             for (int i = 0; i < gen->extern_registry_count; i++) {
                 free(gen->extern_registry[i].name);
+                free(gen->extern_registry[i].c_name);
                 free(gen->extern_registry[i].params);
             }
             free(gen->extern_registry);

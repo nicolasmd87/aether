@@ -110,6 +110,29 @@ gcc -I$HOME/.aether/include/aether/runtime main.c my_math.o \
 ./myapp
 ```
 
+## Renaming a C Symbol — `@extern("c_name")`
+
+Sometimes the C symbol you want to bind has a name that clashes with a wrapper you'd like to expose, or that doesn't fit the module's naming style. Use the `@extern` annotation to bind an Aether-side name to a chosen C symbol:
+
+```aether
+@extern("EVP_MD_CTX_new") md_ctx_new() -> ptr
+@extern("EVP_MD_CTX_free") md_ctx_free(ctx: ptr)
+@extern("strerror") describe_errno(errno: int) -> string
+```
+
+The Aether-side name (`md_ctx_new`, `describe_errno`) is what callers write. The compiler emits the forward declaration and every call site using the C symbol from the annotation — no wrapper function is generated. This is exactly equivalent to writing:
+
+```aether
+extern EVP_MD_CTX_new() -> ptr
+md_ctx_new() -> ptr {
+    return EVP_MD_CTX_new()
+}
+```
+
+…minus the wrapper. Both forms link to the same C symbol; `@extern` just removes the ceremony when all you wanted was a rename.
+
+The annotation accepts a single string literal (the C symbol name). Parameter types and return type are required, exactly as for plain `extern`.
+
 ## Linking External Libraries
 
 Use `link_flags` in your `aether.toml` to link external C libraries:
