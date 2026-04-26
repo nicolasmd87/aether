@@ -978,13 +978,33 @@ static void rename_intra_module_refs(ASTNode* node, const char* prefix,
         // Only rename if this identifier matches a module constant AND is not
         // shadowed by a local variable or parameter in the enclosing function
         if (!name_in_list(node->value, local_names, local_count)) {
+            int renamed = 0;
             for (int i = 0; i < const_count; i++) {
                 if (strcmp(node->value, const_names[i]) == 0) {
                     char prefixed[256];
                     snprintf(prefixed, sizeof(prefixed), "%s_%s", prefix, node->value);
                     free(node->value);
                     node->value = strdup(prefixed);
+                    renamed = 1;
                     break;
+                }
+            }
+            // Also rewrite identifier-as-value references to module
+            // functions (e.g. `my_handler` passed as a `ptr` argument
+            // to a C extern that takes a function pointer). Without
+            // this, the C compiler sees the unprefixed bare name and
+            // fails with "undeclared identifier" — see #235. The
+            // call-site rewrite above only catches AST_FUNCTION_CALL,
+            // not value-position AST_IDENTIFIER.
+            if (!renamed) {
+                for (int i = 0; i < func_count; i++) {
+                    if (strcmp(node->value, func_names[i]) == 0) {
+                        char prefixed[256];
+                        snprintf(prefixed, sizeof(prefixed), "%s_%s", prefix, node->value);
+                        free(node->value);
+                        node->value = strdup(prefixed);
+                        break;
+                    }
                 }
             }
         }

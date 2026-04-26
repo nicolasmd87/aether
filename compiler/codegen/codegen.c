@@ -1465,8 +1465,10 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         // (see generate_function_definition / generate_combined_function),
         // so the matching forward declaration must also be `static` —
         // otherwise C rejects the file with "static declaration follows
-        // non-static declaration".
-        if (child->is_imported) {
+        // non-static declaration". `@c_callback` (#235) opts the function
+        // out of `static` so it stays externally addressable; the forward
+        // declaration follows suit.
+        if (child->is_imported && !is_c_callback(child)) {
             fprintf(gen->output, "static ");
         }
 
@@ -1478,7 +1480,8 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         } else {
             generate_type(gen, ret_type);
         }
-        fprintf(gen->output, " %s(", safe_c_name(child->value));
+        const char* cb_sym = c_callback_symbol(child);
+        fprintf(gen->output, " %s(", cb_sym ? cb_sym : safe_c_name(child->value));
 
         // Generate parameter types
         int param_count = 0;

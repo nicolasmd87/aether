@@ -1449,6 +1449,19 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     break;
                 }
             }
+            // Identifier-as-value naming a @c_callback function: emit
+            // the C symbol the annotation binds to (#235), so passing
+            // an Aether function as a function pointer to a C extern
+            // resolves at link time. Handles both in-file callbacks
+            // (Aether-side name == AST value) and imported-module ones
+            // (AST value is the post-merge prefixed form).
+            {
+                const char* cb_sym = lookup_c_callback_symbol(gen, expr->value);
+                if (cb_sym) {
+                    fprintf(gen->output, "%s", cb_sym);
+                    break;
+                }
+            }
             if (gen->current_actor) {
                 int is_state_var = 0;
                 for (int i = 0; i < gen->state_var_count; i++) {

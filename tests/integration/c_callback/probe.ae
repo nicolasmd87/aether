@@ -1,0 +1,59 @@
+// Regression test for #235 — @c_callback FFI annotation. Three forms:
+//
+//   1. Bare `@c_callback` — Aether-side name == C symbol. The shim
+//      gets called through a function pointer that links to the
+//      Aether function's compiled body.
+//   2. Explicit `@c_callback("c_name")` — Aether-side name differs
+//      from the C symbol. The C symbol the linker sees is the one
+//      named in the annotation; calls in Aether code still use the
+//      Aether-side name.
+//   3. Same callback referenced twice — pointer-equality check. The
+//      identifier-as-value resolution must produce the same C symbol
+//      every time, not a per-site thunk.
+
+extern call_int1(fn: ptr, x: int) -> int
+extern call_int2(fn: ptr, a: int, b: int) -> int
+extern same_pointer(a: ptr, b: ptr) -> int
+
+@c_callback
+double_it(x: int) -> int {
+    return x * 2
+}
+
+@c_callback("aether_test_add")
+add_helper(a: int, b: int) -> int {
+    return a + b
+}
+
+main() {
+    // Form 1: bare @c_callback
+    a = call_int1(double_it, 21)
+    if a != 42 {
+        println("FAIL: bare @c_callback — call_int1(double_it, 21) returned ${a}, want 42")
+        exit(1)
+    }
+
+    // Form 2: explicit symbol binding
+    b = call_int2(add_helper, 17, 25)
+    if b != 42 {
+        println("FAIL: @c_callback(\"name\") — call_int2(add_helper, 17, 25) returned ${b}, want 42")
+        exit(1)
+    }
+
+    // Form 3: pointer-equality across two reference sites
+    eq = same_pointer(double_it, double_it)
+    if eq != 1 {
+        println("FAIL: pointer equality — same Aether fn yielded different C ptrs")
+        exit(1)
+    }
+
+    // The Aether function is still callable through Aether's normal
+    // call path too — annotation doesn't break direct calls.
+    direct = double_it(20)
+    if direct != 40 {
+        println("FAIL: direct call — double_it(20) returned ${direct}, want 40")
+        exit(1)
+    }
+
+    println("OK")
+}

@@ -62,6 +62,21 @@ const char* get_builder_factory(CodeGenerator* gen, const char* func_name);
 
 /* Function/struct generation (codegen_func.c) */
 int has_return_value(ASTNode* node);
+/* @c_callback annotation helpers (#235). A function declared with
+   `@c_callback aether_name(...)` (or `@c_callback("c_sym") aether_name(...)`)
+   gets a stable, externally-visible C symbol so it can be passed across
+   module boundaries as a function pointer to C externs. Codegen drops
+   the `static` storage class for these even when imported, and uses
+   the chosen C symbol at the C-decl name slot and at every value-
+   position reference. */
+int is_c_callback(ASTNode* func);
+const char* c_callback_symbol(ASTNode* func);
+/* Look up a top-level @c_callback function by its current AST value
+   (after any import-rename pass) and return its bound C symbol — or
+   NULL when no such callback exists. Used at value-position
+   AST_IDENTIFIER emission so a function name passed as a function
+   pointer resolves to the linked symbol, not the Aether-side name. */
+const char* lookup_c_callback_symbol(CodeGenerator* gen, const char* name);
 void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext);
 void generate_function_definition(CodeGenerator* gen, ASTNode* func);
 void generate_struct_definition(CodeGenerator* gen, ASTNode* struct_def);
