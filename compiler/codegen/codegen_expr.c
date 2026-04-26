@@ -1419,6 +1419,39 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
 
         case AST_IDENTIFIER:
             if (!expr->value) { fprintf(gen->output, "/* NULL identifier */0"); break; }
+            // Source-location intrinsics (#265) — `__LINE__` / `__FILE__` /
+            // `__func__` substitute literal AST-node line, source-file path,
+            // and C-side function name (which mirrors the Aether function
+            // name in most cases). No call syntax — they're spelled as
+            // identifiers but produce literal values at codegen. Caller-site
+            // capture via default arguments is deferred to a follow-up;
+            // today callers pass them explicitly:
+            //     my_log(msg, __LINE__, __FILE__, __func__)
+            if (strcmp(expr->value, "__LINE__") == 0) {
+                fprintf(gen->output, "%d", expr->line);
+                break;
+            }
+            if (strcmp(expr->value, "__FILE__") == 0) {
+                /* Use C string literal escaping for safety against `\` and `"`
+                 * in path components (Windows paths in particular). */
+                const char* path = gen->source_file ? gen->source_file : "(unknown)";
+                fputc('"', gen->output);
+                for (const char* p = path; *p; p++) {
+                    if (*p == '\\' || *p == '"') fputc('\\', gen->output);
+                    fputc(*p, gen->output);
+                }
+                fputc('"', gen->output);
+                break;
+            }
+            if (strcmp(expr->value, "__func__") == 0) {
+                /* C99 `__func__` — expands at compile time to the enclosing
+                 * function's name. Since codegen mirrors Aether function
+                 * names to C, this gives the Aether-side function name in
+                 * the common case. Closure / arrow-function bodies get the
+                 * generated wrapper's name; acceptable for v1. */
+                fprintf(gen->output, "__func__");
+                break;
+            }
             // Route 1: promoted captures are `int* name` — dereference on read.
             // Applies uniformly in outer function bodies and in closure bodies;
             // the difference is only at declaration time (outer: malloc+init;

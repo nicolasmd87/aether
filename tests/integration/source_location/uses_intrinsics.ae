@@ -1,0 +1,28 @@
+// Issue #265 regression: source-location intrinsics.
+//
+// `__LINE__`, `__FILE__`, `__func__` are recognised as global
+// identifiers that expand at codegen time to:
+//
+//   __LINE__ -> int literal of the AST node's source line
+//   __FILE__ -> string literal of the source file path
+//   __func__ -> the C99 __func__ identifier (enclosing C function name)
+//
+// Caller-site capture via default arguments is deferred to a
+// follow-up; for now callers pass them explicitly. The test
+// asserts that the values reflect the AST node's actual location
+// (different lines yield different line numbers; the file path
+// matches what was passed to aetherc).
+
+report(label: string, line: int, file: string, fn: string) {
+    println("${label} L${line} F=${file} fn=${fn}")
+}
+
+run() {
+    report("a", __LINE__, __FILE__, __func__)
+    report("b", __LINE__, __FILE__, __func__)
+}
+
+main() {
+    report("m", __LINE__, __FILE__, __func__)
+    run()
+}

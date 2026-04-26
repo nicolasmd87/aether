@@ -1088,6 +1088,16 @@ int typecheck_program(ASTNode* program) {
     Type* clock_ns_type = create_type(TYPE_INT64);
     add_symbol(global_table, "clock_ns", clock_ns_type, 0, 1, 0);
 
+    // Source-location intrinsics (#265). At codegen time these expand
+    // to the AST node's line, source-file path, and enclosing C
+    // function name — useful for assertions, panic messages, and log
+    // formatters. Caller-site capture via default arguments is not
+    // yet wired up (deferred to a follow-up); for now callers pass
+    // them explicitly: `my_log(msg, __LINE__, __FILE__, __func__)`.
+    add_symbol(global_table, "__LINE__", create_type(TYPE_INT),    0, 1, 0);
+    add_symbol(global_table, "__FILE__", create_type(TYPE_STRING), 0, 1, 0);
+    add_symbol(global_table, "__func__", create_type(TYPE_STRING), 0, 1, 0);
+
     // Output builtins
     Type* println_type = create_type(TYPE_VOID);
     add_symbol(global_table, "println", println_type, 0, 1, 0);

@@ -722,6 +722,8 @@ int compile_source(const char* input_path, const char* output_path) {
     if (preempt_mode) codegen->preempt_loops = 1;
     codegen->emit_exe = emit_exe ? 1 : 0;
     codegen->emit_lib = emit_lib ? 1 : 0;
+    // Source path so codegen can expand `__FILE__` literally (#265).
+    codegen->source_file = input_path;
     int errors_before_codegen = aether_error_count();
     generate_program(codegen, program);
     fclose(output);
