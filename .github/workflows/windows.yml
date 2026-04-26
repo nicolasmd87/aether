@@ -43,7 +43,14 @@ jobs:
           bc
 
     - name: Run full CI suite
-      run: make ci
+      # See ci.yml::ci-windows for why SSL_CERT_FILE is exported here.
+      # Hardcoded probe paths in aether_http.c don't match the GitHub
+      # runner's MSYS2 install location.
+      run: |
+        export SSL_CERT_FILE="$(cygpath -w /mingw64/etc/ssl/certs/ca-bundle.crt)"
+        echo "SSL_CERT_FILE=$SSL_CERT_FILE"
+        ls -la "$(cygpath -u "$SSL_CERT_FILE")"
+        make ci
 
     - name: Upload Windows binaries
       uses: actions/upload-artifact@v4
