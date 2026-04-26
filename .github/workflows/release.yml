@@ -37,6 +37,14 @@ jobs:
     runs-on: ubuntu-latest
     if: github.ref == 'refs/heads/main'
 
+    # `pull-requests: read` lets the decide step query PR state via gh,
+    # so we can distinguish an in-flight release PR (skip) from an
+    # abandoned branch (delete + retry). `contents: write` is needed
+    # to delete a stale release branch.
+    permissions:
+      contents: write
+      pull-requests: read
+
     outputs:
       action:  ${{ steps.decide.outputs.action }}
       version: ${{ steps.decide.outputs.version }}
@@ -52,6 +60,7 @@ jobs:
       id: decide
       env:
         COMMIT_MSG: ${{ github.event.head_commit.message }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         VERSION=$(cat VERSION | tr -d '[:space:]')
         TAG="v${VERSION}"
@@ -74,6 +83,7 @@ jobs:
           fi
 
           NEW_TAG="v$NEW"
+          BRANCH="release/v${NEW}"
 
           # If next tag also exists (idempotent), skip entirely
           if git rev-parse "$NEW_TAG" >/dev/null 2>&1; then
@@ -82,11 +92,35 @@ jobs:
             exit 0
           fi
 
-          # If a release PR branch already exists, skip (avoid duplicates)
-          if git ls-remote --heads origin "release/v${NEW}" | grep -q "release/v${NEW}"; then
-            echo "Release branch release/v${NEW} already exists -- skipping"
-            echo "action=skip" >> "$GITHUB_OUTPUT"
-            exit 0
+          # If the branch exists, decide based on its PR state — not branch
+          # existence alone. Previous logic skipped on branch existence,
+          # which left the workflow permanently stuck whenever a release PR
+          # was abandoned without being merged or closed.
+          if git ls-remote --heads origin "$BRANCH" | grep -q "$BRANCH"; then
+            PR_STATE=$(gh pr list --head "$BRANCH" --state all --json state --jq '.[0].state // ""' 2>/dev/null || echo "")
+
+            case "$PR_STATE" in
+              OPEN)
+                echo "Release PR for $BRANCH is OPEN -- skipping (waiting on merge)"
+                echo "action=skip" >> "$GITHUB_OUTPUT"
+                exit 0
+                ;;
+              MERGED)
+                # Should not normally hit here: a merged release PR would have
+                # bumped VERSION on main, so the outer "tag exists" check
+                # would have flipped us to action=tag. Treat as skip to be safe.
+                echo "Release PR for $BRANCH is MERGED but VERSION not advanced -- skipping"
+                echo "action=skip" >> "$GITHUB_OUTPUT"
+                exit 0
+                ;;
+              CLOSED|"")
+                # Closed without merging, or no PR was ever opened for the
+                # branch — branch is stale. Delete it and fall through to
+                # creating a fresh bump PR.
+                echo "Release PR for $BRANCH is ${PR_STATE:-MISSING} -- deleting stale branch and re-bumping"
+                git push origin --delete "$BRANCH" || true
+                ;;
+            esac
           fi
 
           echo "action=bump"      >> "$GITHUB_OUTPUT"
