@@ -262,6 +262,15 @@ static int selective_import_modules_count = 0;
 // the non-selective import semantics.
 static char* selective_import_modules[MAX_SELECTIVE_IMPORTS];
 
+// Tracks namespaces that ALSO have a non-selective import in the same
+// file. When both forms coexist (`import std.fs.file_exists` followed
+// by `import std.fs`), the non-selective form makes the whole namespace
+// accessible — the per-symbol form just adds bare-name binding.
+// Without this, is_selective_import_blocked rejected fs.read because
+// fs had a filter from the per-symbol import. Issue #252.
+static char* nonselective_import_modules[MAX_SELECTIVE_IMPORTS];
+static int nonselective_import_modules_count = 0;
+
 static void selective_import_reset(void) {
     for (int i = 0; i < selective_import_count; i++) {
         free(selective_imports[i].namespace);
@@ -272,6 +281,26 @@ static void selective_import_reset(void) {
         free(selective_import_modules[i]);
     }
     selective_import_modules_count = 0;
+    for (int i = 0; i < nonselective_import_modules_count; i++) {
+        free(nonselective_import_modules[i]);
+    }
+    nonselective_import_modules_count = 0;
+}
+
+static void selective_import_mark_nonselective(const char* ns) {
+    for (int i = 0; i < nonselective_import_modules_count; i++) {
+        if (strcmp(nonselective_import_modules[i], ns) == 0) return;
+    }
+    if (nonselective_import_modules_count < MAX_SELECTIVE_IMPORTS) {
+        nonselective_import_modules[nonselective_import_modules_count++] = strdup(ns);
+    }
+}
+
+static int has_nonselective_import(const char* ns) {
+    for (int i = 0; i < nonselective_import_modules_count; i++) {
+        if (strcmp(nonselective_import_modules[i], ns) == 0) return 1;
+    }
+    return 0;
 }
 
 static void selective_import_mark_module(const char* ns) {
@@ -300,10 +329,17 @@ static int module_has_selective_filter(const char* ns) {
 }
 
 // Returns 1 if the user wrote a selective import for `ns` AND `func_name`
-// is not in the selection list. Returns 0 when there's no filter or when
-// the name is in the list. Used only at qualified-call sites.
+// is not in the selection list. Returns 0 when there's no filter, when
+// the name is in the list, or when the user *also* wrote a non-selective
+// import of the same namespace (in which case the whole namespace is
+// accessible — the per-symbol form just adds the bare-name binding).
+// Used only at qualified-call sites.
 static int is_selective_import_blocked(const char* ns, const char* func_name) {
     if (!module_has_selective_filter(ns)) return 0;
+    // If a non-selective import exists for this namespace, it overrides
+    // the filter — fs.read should resolve when both `import std.fs.file_exists`
+    // and `import std.fs` are present. Issue #252.
+    if (has_nonselective_import(ns)) return 0;
     for (int i = 0; i < selective_import_count; i++) {
         if (strcmp(selective_imports[i].namespace, ns) == 0 &&
             strcmp(selective_imports[i].func_name, func_name) == 0) {
@@ -1251,9 +1287,16 @@ int typecheck_program(ASTNode* program) {
                     // so qualified calls to functions not in it get rejected.
                     // Does not affect unqualified resolution inside merged
                     // stdlib function bodies.
+                    //
+                    // Otherwise (non-selective), mark the namespace as
+                    // having full access — required so a non-selective
+                    // import after a per-symbol import of the same module
+                    // gives the whole namespace back. Issue #252.
+                    int is_selective = 0;
                     if (child->child_count > 0) {
                         ASTNode* first_sel = child->children[0];
                         if (first_sel && first_sel->type == AST_IDENTIFIER) {
+                            is_selective = 1;
                             for (int sk = 0; sk < child->child_count; sk++) {
                                 ASTNode* sel = child->children[sk];
                                 if (sel && sel->type == AST_IDENTIFIER && sel->value) {
@@ -1261,6 +1304,9 @@ int typecheck_program(ASTNode* program) {
                                 }
                             }
                         }
+                    }
+                    if (!is_selective) {
+                        selective_import_mark_nonselective(module_name);
                     }
 
                     // Look up cached module from orchestrator

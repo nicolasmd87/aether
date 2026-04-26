@@ -58,7 +58,8 @@ exports (
     response_status, response_body, response_error,
     response_header, response_headers, response_free,
     get_with_headers, post_with_status,
-    post_json, response_body_json
+    post_json, response_body_json,
+    head, patch
 )
 
 // ---- Raw externs ----
@@ -303,4 +304,59 @@ post_json(url: string, value: ptr) -> {
 response_body_json(resp: ptr) -> {
     body = response_body(resp)
     return json.parse(body)
+}
+
+// HEAD a URL. Returns (status, headers_block, err) — HEAD responses
+// have no body by spec, so a dedicated wrapper saves the caller from
+// the request-handle-and-response-free dance for the common
+// "does this URL exist / what's Content-Length / Content-Type"
+// use case.
+//
+// `headers_block` is the raw header text (\r\n-separated "Name: value"
+// lines), same shape as response_headers() returns. Callers wanting
+// a single value can use string.contains / string.index_of, or fall
+// back to the request builder + response_header(resp, name) for
+// case-insensitive single-header lookup. (Issue #241 originally
+// proposed a typed map; we don't have a string→string map shape in
+// the language today that composes with the raw-text-block accessor,
+// so the string form keeps the wrapper one-line and lets callers
+// grep — same trade-off get_with_headers / post_with_status make.)
+//
+// Implementation note: doesn't use `defer request_free(req)` because
+// the codegen for `defer` + multi-value returns is broken today
+// (issue #254). Instead does manual cleanup at each return site.
+//
+// Closes #241 (HEAD half).
+head(url: string) -> {
+    req = request("HEAD", url)
+    if req == null { return 0, "", "request build failed" }
+    set_timeout(req, 30)
+    resp, err = send_request(req)
+    if err != "" {
+        request_free(req)
+        return 0, "", err
+    }
+    status = response_status(resp)
+    headers = response_headers(resp)
+    headers_copy = string_concat(headers, "")
+    response_free(resp)
+    request_free(req)
+    return status, headers_copy, ""
+}
+
+// PATCH (RFC 5789) — partial-update verb common in REST APIs
+// (GitHub, GitLab, Stripe). Same shape as send_request. Body
+// length is computed from the string; binary payloads with
+// embedded NULs need the bare builder + set_body(..., explicit_length).
+//
+// Closes #241 (PATCH half).
+patch(url: string, body: string, content_type: string) -> {
+    req = request("PATCH", url)
+    if req == null { return null, "request build failed" }
+    set_timeout(req, 30)
+    body_len = string_length(body)
+    set_body(req, body, body_len, content_type)
+    resp, err = send_request(req)
+    request_free(req)
+    return resp, err
 }
