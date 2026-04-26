@@ -718,13 +718,49 @@ static int orchestrate_module(const char* module_name, const char* file_path,
     mod->ast = ast;
     module_register(mod);
 
-    // Collect exports from AST_EXPORT_STATEMENT nodes
+    // Collect exports from BOTH the legacy per-function `export <fn>`
+    // form (AST_EXPORT_STATEMENT) AND the new top-of-file `exports (…)`
+    // list form (AST_EXPORTS_LIST). The two forms are mutually exclusive
+    // within a single module — mixing them is a hard error since it
+    // signals confusion about which is the source of truth. The legacy
+    // form gets a one-shot deprecation warning per module so existing
+    // code keeps working through the deprecation window.
+    int has_legacy_export = 0;
+    int has_exports_list  = 0;
     for (int i = 0; i < ast->child_count; i++) {
         ASTNode* child = ast->children[i];
+        if (child->type == AST_EXPORT_STATEMENT) has_legacy_export = 1;
+        if (child->type == AST_EXPORTS_LIST)     has_exports_list = 1;
+    }
+    if (has_legacy_export && has_exports_list) {
+        fprintf(stderr,
+                "error: module '%s' mixes the legacy `export <fn>` form with "
+                "the new top-of-file `exports (…)` list. Use one or the other.\n",
+                module_name);
+    }
+    if (has_legacy_export && !has_exports_list) {
+        fprintf(stderr,
+                "warning: module '%s' uses the legacy per-function `export` "
+                "keyword. Migrate to the top-of-file `exports (a, b, c)` list "
+                "form — see docs/module-system-design.md.\n",
+                module_name);
+    }
+    for (int i = 0; i < ast->child_count; i++) {
+        ASTNode* child = ast->children[i];
+        // Legacy: `export <fn>` wraps the declaration as the first child.
         if (child->type == AST_EXPORT_STATEMENT && child->child_count > 0) {
             ASTNode* exported = child->children[0];
             if (exported->value) {
                 module_add_export(mod, exported->value);
+            }
+        }
+        // New: `exports (a, b, c)` — children are AST_IDENTIFIER name nodes.
+        if (child->type == AST_EXPORTS_LIST) {
+            for (int k = 0; k < child->child_count; k++) {
+                ASTNode* name_node = child->children[k];
+                if (name_node && name_node->value) {
+                    module_add_export(mod, name_node->value);
+                }
             }
         }
     }

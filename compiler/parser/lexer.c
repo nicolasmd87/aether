@@ -325,6 +325,7 @@ Token* read_identifier() {
     else if (strcmp(buffer, "import") == 0) token = create_token(TOKEN_IMPORT, buffer, current_line, current_column);
     else if (strcmp(buffer, "as") == 0) token = create_token(TOKEN_AS, buffer, current_line, current_column);
     else if (strcmp(buffer, "export") == 0) token = create_token(TOKEN_EXPORT, buffer, current_line, current_column);
+    else if (strcmp(buffer, "exports") == 0) token = create_token(TOKEN_EXPORTS, buffer, current_line, current_column);
     else if (strcmp(buffer, "module") == 0) token = create_token(TOKEN_MODULE, buffer, current_line, current_column);
     else if (strcmp(buffer, "message") == 0) token = create_token(TOKEN_MESSAGE_KEYWORD, buffer, current_line, current_column);
     else if (strcmp(buffer, "reply") == 0) token = create_token(TOKEN_REPLY, buffer, current_line, current_column);
@@ -668,6 +669,7 @@ const char* token_type_to_string(AeTokenType type) {
         case TOKEN_IMPORT: return "IMPORT";
         case TOKEN_AS: return "AS";
         case TOKEN_EXPORT: return "EXPORT";
+        case TOKEN_EXPORTS: return "EXPORTS";
         case TOKEN_MODULE: return "MODULE";
         case TOKEN_MESSAGE_KEYWORD: return "MESSAGE_KEYWORD";
         case TOKEN_REPLY: return "REPLY";

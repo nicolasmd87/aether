@@ -1,9 +1,10 @@
-// Pure module used alongside stdlib imports
+// Pure module used alongside stdlib imports.
+exports (square, sum_of_squares)
 
-export square(x) {
+square(x) {
     return x * x
 }
 
-export sum_of_squares(a, b) {
+sum_of_squares(a, b) {
     return square(a) + square(b)
 }

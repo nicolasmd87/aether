@@ -76,21 +76,26 @@ cached ASTs — each module file is read and parsed exactly once.
 
 ## Export Visibility
 
-Use `export` to control which symbols are part of a module's public API:
+Modules declare their public API via a single Erlang-style `exports (…)`
+list at the top of the file. Names in the list are accessible from
+importers; names not in the list are private — still usable inside the
+module's own functions, but rejected at qualified-call sites.
 
 ```aether
 // lib/geometry/module.ae
 
-export const PI = 3
+exports (PI, distance)
 
-export distance(x1, y1, x2, y2) {
+const PI = 3
+
+distance(x1, y1, x2, y2) {
     dx = x1 - x2
     dy = y1 - y2
-    return sqrt_approx(dx * dx + dy * dy)
+    return _sqrt_approx(dx * dx + dy * dy)
 }
 
-// Private helper — not accessible from outside
-sqrt_approx(n) {
+// Private helper — not in the exports list, not accessible from outside.
+_sqrt_approx(n) {
     return n  // placeholder
 }
 ```
@@ -99,17 +104,40 @@ sqrt_approx(n) {
 import geometry
 
 main() {
-    d = geometry.distance(0, 0, 3, 4)  // OK — exported
-    println(geometry.PI)                 // OK — exported
-    // geometry.sqrt_approx(25)          // Error: not exported
+    d = geometry.distance(0, 0, 3, 4)   // OK — listed
+    println(geometry.PI)                 // OK — listed
+    // geometry._sqrt_approx(25)         // Error: not in exports list
 }
 ```
 
 **Rules:**
-- `export` works with functions (`export func_name(...)`), constants (`export const NAME = value`), and `fn`-keyword functions (`export fn func_name(...)`)
-- If a module has **any** `export` declarations, only exported symbols are accessible from importers. Non-exported symbols are private.
-- If a module has **no** `export` declarations, all symbols are public (backwards compatible)
-- Private functions can still be used internally by exported functions — they are merged into the program but not accessible via `module.name()`
+- `exports (…)` accepts any combination of function names, const names,
+  and struct/actor names. The list is the contract.
+- A module that declares an `exports (…)` list exposes **only** the
+  listed names. Anything else is private.
+- A module with no `exports (…)` list keeps the legacy default-public
+  behavior — every top-level name is callable from outside. v1 is
+  additive; v2 will flip this default to private once every stdlib +
+  contrib module has been migrated.
+- Private names can still be referenced from inside the module's own
+  functions — they're merged into the program, just blocked at the
+  external call boundary.
+
+### Legacy `export <fn>` form (deprecated)
+
+Earlier versions of Aether used a per-function `export` keyword:
+
+```aether
+// DEPRECATED — emits a warning at compile time.
+export const PI = 3
+export distance(...) { … }
+```
+
+This form is still accepted for one release as a deprecation alias.
+Modules using it get a one-shot warning to stderr. Migrate by
+collecting every `export`-tagged name into one `exports (…)` line at
+the top, then removing the per-function keywords. Mixing both forms in
+one module is a hard error.
 
 ## Future
 

@@ -1,0 +1,31 @@
+// Module exporting its public API via the top-of-file `exports (…)`
+// list — the new Erlang-style form (issue #171 follow-up).
+//
+// Listed names are the module's contract. Unlisted top-level functions
+// are still merged into the program (so they're callable from inside
+// the module's own functions) but are blocked at qualified-call sites
+// from outside the module — the existing is_export_blocked() check
+// works the same way as for the legacy per-function `export` form.
+
+exports (square, cube, PI)
+
+const PI = 3        // listed → public
+
+square(n: int) {
+    return n * n   // listed → public
+}
+
+cube(n: int) {
+    return n * square(n)   // listed → public; calls private helper internally
+}
+
+// _internal_helper isn't in the list and starts with _ — both signals
+// of privacy. The qualified call mathlist._internal_helper(…) from
+// outside should fail to resolve.
+_internal_helper(n: int) {
+    return n * 2
+}
+
+// SECRET also isn't in the list, no leading underscore. It must still
+// be private — the list is the contract, not the underscore convention.
+const SECRET = 42

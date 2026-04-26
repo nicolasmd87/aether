@@ -33,6 +33,7 @@ typedef enum {
     TOKEN_IMPORT,
     TOKEN_AS,               // 'as' keyword for import aliasing
     TOKEN_EXPORT,
+    TOKEN_EXPORTS,          // 'exports' — top-of-file public-API list
     TOKEN_MODULE,
     TOKEN_MESSAGE_KEYWORD,  // 'message' keyword for message definitions
     TOKEN_REPLY,            // 'reply' keyword for sending responses

@@ -9,6 +9,11 @@ typedef enum {
     AST_MODULE_DECLARATION,
     AST_IMPORT_STATEMENT,
     AST_EXPORT_STATEMENT,
+    AST_EXPORTS_LIST,        // top-of-file `exports (a, b, c)` declaration —
+                             // children are AST_IDENTIFIER nodes naming the
+                             // module's public API. Replaces per-function
+                             // AST_EXPORT_STATEMENT for modules using the
+                             // Erlang-style list form.
     AST_ACTOR_DEFINITION,
     AST_FUNCTION_DEFINITION,
     AST_FUNCTION_CLAUSE,

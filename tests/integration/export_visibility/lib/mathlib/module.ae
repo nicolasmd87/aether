@@ -1,15 +1,18 @@
-// Public API — accessible via mathlib.double_it(), mathlib.PI
-export double_it(x) {
+// Public API — declared once at the top via `exports (…)`. Names not
+// in the list are private to this module.
+exports (double_it, add, PI)
+
+double_it(x) {
     return internal_multiply(x, 2)
 }
 
-export add(a, b) {
+add(a, b) {
     return a + b
 }
 
-export const PI = 3
+const PI = 3
 
-// Private helpers — NOT accessible from outside
+// Private helpers — NOT in the exports list; not accessible from outside.
 internal_multiply(a, b) {
     return a * b
 }

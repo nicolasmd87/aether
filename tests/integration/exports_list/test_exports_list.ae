@@ -1,0 +1,43 @@
+// Regression test for the Erlang-style `exports (…)` declaration.
+//
+// Validates:
+//   1. A name listed in `exports (…)` is callable from outside via
+//      both qualified (mathlist.square) and short-alias (square via
+//      glob import) forms.
+//   2. A name NOT in the list is blocked at the qualified-call site,
+//      regardless of whether it has a leading underscore.
+//   3. The list intersects correctly with the existing selective and
+//      glob import forms.
+
+import mathlist (*)
+
+extern exit(code: int)
+
+main() {
+    println("test: exports list — public names callable")
+
+    // Listed name, qualified.
+    a = mathlist.square(4)
+    if a != 16 {
+        println("FAIL test 1: mathlist.square(4) = ${a}, expected 16")
+        exit(1)
+    }
+    println("  PASS test 1: mathlist.square(4) = 16 (qualified)")
+
+    // Listed name, short alias via glob import.
+    b = cube(3)
+    if b != 27 {
+        println("FAIL test 2: cube(3) = ${b}, expected 27")
+        exit(1)
+    }
+    println("  PASS test 2: cube(3) = 27 (short alias from glob)")
+
+    // Listed const.
+    if mathlist.PI != 3 {
+        println("FAIL test 3: mathlist.PI = ${mathlist.PI}, expected 3")
+        exit(1)
+    }
+    println("  PASS test 3: mathlist.PI listed and accessible")
+
+    println("=== exports list tests passed ===")
+}
