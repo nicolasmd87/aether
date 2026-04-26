@@ -11,6 +11,24 @@ next version number before tagging the release.
 
 ## [current]
 
+### Deferred
+
+- **HTTP server Apache-class capability gap (#260) — Tier 0 + Tier 1
+  remain on the roadmap.** This issue-pack PR sized #260 (TLS
+  termination + HTTP/1.1 keep-alive + per-connection actor dispatch +
+  eight stdlib middleware modules) at 3–4 weeks of focused work and
+  scoped it out of the current pack to land the smaller issues
+  cleanly. Concrete next-steps inventory now lives in
+  [`docs/next-steps.md`](docs/next-steps.md) → "HTTP server —
+  Apache-class capability gap (#260)" with realistic per-tier
+  estimates (Tier 0 ≈ 8–11 days, Tier 1 ≈ 4–5 days, Tier 2 / 3 still
+  deferred behind Tier 0). The umbrella issue is the canonical
+  tracker; per-tier sub-issues should be filed when scheduled. The
+  existing HTTP server (routing, middleware function-pointer chain,
+  multi-accept with SO_REUSEPORT, optional actor dispatch via
+  `MSG_HTTP_CONNECTION`) is unchanged by this PR and continues to be
+  the supported surface for HTTP/1.1 request/response use cases.
+
 ### Added
 
 - **`@c_callback` FFI annotation — export an Aether function as a C callback** (`compiler/parser/parser.c`, `compiler/codegen/{codegen.c,codegen_func.c,codegen_expr.c,codegen_internal.h}`, `compiler/aether_module.c`, `docs/c-interop.md`, `docs/language-reference.md`). Issue #235. The inverse direction of `@extern` (#234) — marks an Aether function as having a stable, externally-visible C symbol so it can be passed across the linkage boundary as a function pointer to C externs that take callbacks (HTTP route handlers, signal handlers, `qsort` comparators, libcurl callbacks, sqlite hooks, libuv `uv_*_cb`). Two forms: bare `@c_callback my_handler(...)` (Aether-side name == C symbol; namespace-prefixed when the function lives in an imported module) and explicit `@c_callback("aether_signal_handler") on_sigint(sig: int) { … }` (linker resolves the named symbol; Aether-side calls keep the unmangled name). Three codegen changes: (1) annotated functions are emitted without `static` storage even when imported, so the symbol stays externally addressable; (2) the C-decl name slot uses the bound symbol rather than `safe_c_name(func->value)`; (3) at value-position `AST_IDENTIFIER` emission, a new `lookup_c_callback_symbol` helper translates the Aether-side identifier to the bound C symbol so `http_server_add_route(server, "GET", "/", my_handler, null)` resolves at link time. The companion fix in `aether_module.c`'s `rename_intra_module_refs` extends the import-rename pass so identifier-as-value references to imported functions get the namespace prefix (was previously call-site only). Closes the FFI loop bidirectionally with #234. Direct Aether-side calls to annotated functions are unchanged. Regression: `tests/integration/c_callback/` — three forms checked (bare annotation, explicit symbol binding, pointer equality across two reference sites for stable-symbol verification), plus a direct-call sanity check that the annotation doesn't break the regular call path.
