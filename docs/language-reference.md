@@ -1068,6 +1068,25 @@ When the Aether-side name should differ from the C symbol (for example, to expos
 
 The Aether-side name is what callers write; the annotated C symbol is what the linker sees. No wrapper function is emitted. See [`docs/c-interop.md`](c-interop.md#renaming-a-c-symbol--externc_name) for the full FFI reference.
 
+### `@c_callback` — export an Aether function as a C callback
+
+The inverse of `@extern`. Marks an Aether function as having a stable, externally-visible C symbol so it can be passed across the linkage boundary as a function pointer to C externs that take callbacks (HTTP route handlers, signal handlers, `qsort` comparators, libcurl write callbacks, sqlite hooks):
+
+```aether
+extern http_server_add_route(server: ptr, method: string, path: string, handler: ptr, user_data: ptr)
+
+@c_callback
+my_handler(req: ptr, res: ptr, ud: ptr) {
+    // …
+}
+
+main() {
+    http_server_add_route(server, "GET", "/hello", my_handler, null)
+}
+```
+
+By default the C symbol matches the Aether-side name (or its namespace-prefixed form when the function lives in an imported module). For a specific C symbol, use the parenthesised form: `@c_callback("aether_signal_handler") on_sigint(sig: int) { … }`. See [`docs/c-interop.md`](c-interop.md#exporting-an-aether-function-as-a-c-callback--c_callback) for the full reference.
+
 ---
 
 ## Built-in Functions

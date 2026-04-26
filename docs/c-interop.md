@@ -133,6 +133,58 @@ md_ctx_new() -> ptr {
 
 The annotation accepts a single string literal (the C symbol name). Parameter types and return type are required, exactly as for plain `extern`.
 
+## Exporting an Aether Function as a C Callback — `@c_callback`
+
+The inverse of `@extern`. When a C library wants you to hand it a function pointer — HTTP route handlers, signal handlers, `qsort` comparators, libcurl callbacks, sqlite hooks — annotate the Aether function with `@c_callback`. The compiler emits a stable, externally-visible C symbol that the linker can resolve from any translation unit:
+
+```aether
+extern http_server_add_route(server: ptr, method: string, path: string, handler: ptr, user_data: ptr)
+
+@c_callback
+my_handler(req: ptr, res: ptr, ud: ptr) {
+    // …handler body in Aether…
+}
+
+main() {
+    http_server_add_route(server, "GET", "/hello", my_handler, null)
+}
+```
+
+`my_handler` here is a normal Aether function — direct calls work the same as any other function. The annotation only changes two things:
+
+1. **The C symbol stays addressable across the linkage boundary.** Without `@c_callback`, an imported function would be emitted as `static` (so each translation unit gets a private copy and macOS's `ld64` doesn't trip on duplicate symbols). With `@c_callback`, the function is non-`static` and the symbol resolves at link time wherever it's referenced.
+2. **The function name used as a value** (when you pass it as a `ptr` argument like the `http_server_add_route` example above) emits the C symbol the annotation binds to — not the namespace-mangled Aether name.
+
+### Optional explicit symbol
+
+By default, the C symbol matches the Aether-side name (or the namespace-prefixed form `<module>_<name>` when defined inside an imported module — e.g. `vcr_dispatch`). Pass an explicit string when you need a specific C name:
+
+```aether
+@c_callback("aether_signal_handler")
+on_sigint(sig: int) {
+    // …
+}
+```
+
+…the linker resolves `aether_signal_handler`; calls in Aether code still use `on_sigint`. Useful when integrating with a C library whose API documents a specific symbol name.
+
+### When to use it
+
+`@c_callback` is the right shape any time a C function takes a function pointer parameter:
+
+- HTTP route handlers (`http_server_add_route`).
+- POSIX signal handlers (`signal(SIGINT, …)`).
+- `qsort` / `bsearch` comparators.
+- libcurl write/read/header callbacks.
+- libuv `uv_*_cb` callbacks.
+- sqlite update/commit/rollback hooks.
+
+For plain Aether-to-Aether function-pointer use within a single program, no annotation is needed — top-level functions are already addressable as values. The annotation is specifically for the cross-language path.
+
+### Companion: `@extern("c_symbol")`
+
+`@extern` and `@c_callback` close the FFI loop in both directions. `@extern` binds an Aether-namespace name to a C symbol the linker provides; `@c_callback` emits an Aether function under a C symbol the linker can hand to any consumer. Both use the same `@`-prefixed annotation grammar.
+
 ## Linking External Libraries
 
 Use `link_flags` in your `aether.toml` to link external C libraries:

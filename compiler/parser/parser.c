@@ -3055,13 +3055,48 @@ ASTNode* parse_program(Parser* parser) {
                 // …without the wrapper. Closes #234.
                 Token* at_tok = expect_token(parser, TOKEN_AT);
                 if (!at_tok) { advance_token(parser); continue; }
-                // After `@`, the only attribute we accept right now is
-                // `extern`, which the lexer classifies as TOKEN_EXTERN
-                // (a reserved keyword). Match that shape directly so the
-                // user doesn't see a misleading "extern is reserved" error.
+                // Two attribute forms accepted at top-level:
+                //   @extern("c_symbol") aether_name(params) -> ret    (#234)
+                //   @c_callback aether_name(params) -> ret { body }   (#235)
+                //   @c_callback("c_symbol") aether_name(...) {body}   (#235, explicit name)
+                // The lexer classifies `extern` as TOKEN_EXTERN (reserved
+                // keyword); `c_callback` is TOKEN_IDENTIFIER.
                 Token* attr = peek_token(parser);
+                if (attr && attr->type == TOKEN_IDENTIFIER &&
+                    attr->value && strcmp(attr->value, "c_callback") == 0) {
+                    advance_token(parser);  // consume 'c_callback'
+                    // Optional ("c_symbol_name") binding. Without it, the
+                    // C symbol matches the Aether-side name verbatim.
+                    char* explicit_sym = NULL;
+                    if (match_token(parser, TOKEN_LEFT_PAREN)) {
+                        Token* sym = expect_token(parser, TOKEN_STRING_LITERAL);
+                        expect_token(parser, TOKEN_RIGHT_PAREN);
+                        if (sym && sym->value) explicit_sym = strdup(sym->value);
+                    }
+                    // Parse the function definition that follows. Any
+                    // existing function-def grammar is fine — the
+                    // annotation only changes codegen of a normal
+                    // function, it doesn't change the parse shape.
+                    ASTNode* fdef = parse_function_definition(parser);
+                    if (fdef) {
+                        // Tag shape:
+                        //   "c_callback:NAME" — explicit @c_callback("NAME")
+                        //   "c_callback:"     — bare @c_callback; codegen
+                        //                       falls back to fdef->value
+                        //                       (post-merge namespace-
+                        //                       prefixed when imported).
+                        char tag[256];
+                        snprintf(tag, sizeof(tag), "c_callback:%s",
+                                 explicit_sym ? explicit_sym : "");
+                        if (fdef->annotation) free(fdef->annotation);
+                        fdef->annotation = strdup(tag);
+                    }
+                    if (explicit_sym) free(explicit_sym);
+                    node = fdef;
+                    break;
+                }
                 if (!attr || attr->type != TOKEN_EXTERN) {
-                    parser_error(parser, "unknown attribute (only @extern(\"...\") is supported)");
+                    parser_error(parser, "unknown attribute (expected @extern(\"...\") or @c_callback)");
                     advance_token(parser);
                     continue;
                 }

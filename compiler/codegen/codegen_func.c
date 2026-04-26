@@ -1,5 +1,53 @@
 #include "codegen_internal.h"
 
+// True when this function definition is annotated `@c_callback`.
+// The annotation (#235) marks a function as having a stable, externally-
+// visible C symbol so it can be passed across module boundaries to C
+// externs that take function pointers (HTTP route handlers, signal
+// handlers, qsort comparators, libcurl callbacks).
+int is_c_callback(ASTNode* func) {
+    return func && func->annotation &&
+           strncmp(func->annotation, "c_callback:", 11) == 0;
+}
+
+// Returns the C symbol bound by a `@c_callback` annotation.
+//   `@c_callback("name") foo(...)` — uses "name" verbatim.
+//   `@c_callback foo(...)`         — falls back to func->value, which
+//                                    after the module merger is the
+//                                    namespace-prefixed form (e.g.
+//                                    `vcr_dispatch`). That's the safe
+//                                    default — no symbol collisions
+//                                    between modules — and callers who
+//                                    want an unmangled symbol opt in
+//                                    explicitly with the parenthesised
+//                                    form.
+// Returns NULL when the function is not @c_callback-annotated.
+const char* c_callback_symbol(ASTNode* func) {
+    if (!is_c_callback(func)) return NULL;
+    const char* tag = func->annotation + 11;
+    return (tag && tag[0]) ? tag : (func->value ? func->value : NULL);
+}
+
+// Look up a top-level @c_callback function by its current AST value
+// (post-merge: the prefixed `<ns>_<name>` form for imported callbacks;
+// the bare name for in-file ones) and return the C symbol it's bound
+// to. Returns NULL when no such callback exists, so the caller can
+// fall through to the default identifier-emission path.
+const char* lookup_c_callback_symbol(CodeGenerator* gen, const char* name) {
+    if (!gen || !gen->program || !name) return NULL;
+    for (int i = 0; i < gen->program->child_count; i++) {
+        ASTNode* top = gen->program->children[i];
+        if (!top || !top->value) continue;
+        if (top->type != AST_FUNCTION_DEFINITION &&
+            top->type != AST_BUILDER_FUNCTION) continue;
+        if (!is_c_callback(top)) continue;
+        if (strcmp(top->value, name) == 0) {
+            return c_callback_symbol(top);
+        }
+    }
+    return NULL;
+}
+
 // Register an extern function's parameter types for call-site cast emission.
 // Called whenever generate_extern_declaration() processes a function.
 void register_extern_func(CodeGenerator* gen, ASTNode* ext) {
@@ -328,7 +376,12 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
     // Without this, linking multiple .o files that all import the same
     // SDK module produces duplicate symbol errors on linkers that don't
     // support GNU's --allow-multiple-definition (notably macOS ld64).
-    if (func->is_imported) {
+    //
+    // Exception: `@c_callback` (#235) demands an externally-visible
+    // symbol — the whole point of the annotation is that the function
+    // can be referenced as a function pointer from across the linkage
+    // boundary, so it must NOT be static even when imported.
+    if (func->is_imported && !is_c_callback(func)) {
         fprintf(gen->output, "static ");
     }
 
@@ -339,7 +392,11 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
     } else {
         generate_type(gen, ret_type);
     }
-    fprintf(gen->output, " %s(", safe_c_name(func->value));
+    // For @c_callback, emit the chosen C symbol verbatim (no namespace
+    // mangling); the symbol is what other translation units reach for
+    // when they take the address of this function.
+    const char* cb_sym = c_callback_symbol(func);
+    fprintf(gen->output, " %s(", cb_sym ? cb_sym : safe_c_name(func->value));
 
     // Generate parameters - handle pattern matching
     int param_count = 0;
@@ -937,8 +994,9 @@ void generate_combined_function(CodeGenerator* gen, ASTNode** clauses, int claus
     }
 
     // Imported clauses get the same `static` storage class — see
-    // generate_function_definition for the full rationale.
-    if (first->is_imported) {
+    // generate_function_definition for the full rationale. @c_callback
+    // overrides this so the symbol is reachable from other TUs (#235).
+    if (first->is_imported && !is_c_callback(first)) {
         fprintf(gen->output, "static ");
     }
 
@@ -947,7 +1005,8 @@ void generate_combined_function(CodeGenerator* gen, ASTNode** clauses, int claus
     } else {
         generate_type(gen, ret_type);
     }
-    fprintf(gen->output, " %s(", safe_c_name(first->value));
+    const char* cb_sym = c_callback_symbol(first);
+    fprintf(gen->output, " %s(", cb_sym ? cb_sym : safe_c_name(first->value));
 
     // Generate unified parameter list using _argN naming
     // Count parameters from first clause
