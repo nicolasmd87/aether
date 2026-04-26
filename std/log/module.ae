@@ -5,6 +5,13 @@
 // LOG_LEVEL_DEBUG = 0, LOG_LEVEL_INFO = 1, LOG_LEVEL_WARN = 2
 // LOG_LEVEL_ERROR = 3, LOG_LEVEL_FATAL = 4
 
+exports (
+    log_init_raw, log_shutdown, log_write,
+    log_set_level, log_set_colors, log_set_timestamps,
+    log_get_stats, log_print_stats,
+    init
+)
+
 // Initialize and shutdown. Raw init returns 1/0 for ok/file-open-failed.
 extern log_init_raw(filename: string, min_level: int) -> int
 extern log_shutdown()

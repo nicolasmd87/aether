@@ -8,6 +8,19 @@
 //     `err` returns and are the idiomatic way to call collections
 //     operations that can fail.
 
+exports (
+    list_new, list_add_raw, list_get_raw, list_set, list_size,
+    list_remove, list_clear, list_free,
+    map_new, map_put_raw, map_get_raw, map_has, map_remove,
+    map_size, map_clear, map_free, map_keys_raw, map_keys_free,
+    intarr_new_raw, intarr_new_filled_raw, intarr_size,
+    intarr_get_raw, intarr_set_raw,
+    intarr_get_unchecked, intarr_set_unchecked,
+    intarr_fill, intarr_free,
+    list_add, list_get,
+    map_put, map_get, map_keys
+)
+
 // ---- ArrayList raw externs ----
 extern list_new() -> ptr
 extern list_add_raw(list: ptr, item: ptr) -> int

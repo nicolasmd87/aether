@@ -10,6 +10,12 @@
 // calls back into the script through normal typed downcalls (the
 // aether_<name>() exports the script declares as top-level functions).
 
+exports (
+    notify, describe, input, event, bindings,
+    java, python, ruby, go,
+    manifest_get, manifest_clear
+)
+
 // Emit an event to the host process. Returns 1 if a handler was found
 // and invoked, 0 if no listener is registered for this event name.
 //

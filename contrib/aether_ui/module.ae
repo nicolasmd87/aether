@@ -8,6 +8,41 @@
 // Build with:
 //   ./contrib/aether_ui/build.sh your_app.ae build/your_app
 
+exports (
+    ALIGN_LEADING, ALIGN_CENTER, ALIGN_FILL, ALIGN_TOP, ALIGN_BOTTOM, ALIGN_CENTER_Y,
+    DIST_FILL, DIST_FILL_EQUALLY,
+    root_vstack, root_hstack,
+    app_run, app_create, app_start,
+    vstack, hstack, scrollview, zstack, form, section, navstack,
+    nav_push, nav_pop,
+    text, button, btn, spacer, divider,
+    textfield, securefield, toggle, slider, picker, picker_add,
+    textarea, progressbar,
+    ui_state, ui_get, ui_set, text_bound,
+    set_text, get_text, set_toggle, get_toggle,
+    set_slider, get_slider, set_progress,
+    bg_color, text_color, font_size, font_bold, corner_radius,
+    opacity, enabled, tooltip, onclick,
+    style_bg_color, style_text_color, style_font_size, style_font_bold,
+    style_bg_gradient, style_corner_radius, style_opacity,
+    style_enabled, style_tooltip,
+    edge_insets, width, height, distribution, alignment,
+    fill_width, fill_height, margin,
+    alert, clipboard_write, open_url, is_dark_mode,
+    timer, timer_cancel,
+    window_create, window_set_body, window_show, window_close,
+    sheet_create, sheet_set_body, sheet_present, sheet_dismiss,
+    image, image_size,
+    canvas_create, canvas_begin_path, canvas_move_to, canvas_line_to,
+    canvas_stroke, canvas_fill_rect, canvas_clear, canvas_redraw,
+    on_hover, on_double_click, on_click,
+    remove_child, clear_children,
+    enable_test_server, seal_widget, seal_subtree,
+    menu_bar, menu, menu_item, menu_separator,
+    menu_bar_add, attach_menu_bar, menu_popup,
+    root_grid, grid, grid_place
+)
+
 // ---------------------------------------------------------------------------
 // C externs — raw widget creation and manipulation
 // ---------------------------------------------------------------------------

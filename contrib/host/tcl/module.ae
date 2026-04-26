@@ -14,6 +14,8 @@
 //   }
 //   tcl.run_sandboxed(worker, "puts $::env(HOME)")
 
+exports (tcl_run_sandboxed, tcl_run, tcl_init, tcl_finalize)
+
 extern tcl_run_sandboxed(perms: ptr, code: string) -> int
 extern tcl_run(code: string) -> int
 extern tcl_init() -> int

@@ -9,6 +9,12 @@
 //   - Aether-native wrappers (below) use Go-style `(value, err)` tuple
 //     returns and are the idiomatic way to call file operations.
 
+exports (
+    file_open_raw, file_close, file_read_all_raw, file_write_raw,
+    file_exists, file_delete_raw, file_size_raw,
+    open, read, write, delete, size
+)
+
 // Raw ptr/int externs (escape hatch).
 extern file_open_raw(path: string, mode: string) -> ptr
 extern file_close(file: ptr) -> int

@@ -13,6 +13,11 @@
 //   }
 //   js.run_sandboxed(worker, "print(env('HOME'))")
 
+exports (
+    js_run_sandboxed, js_run_sandboxed_with_map,
+    js_run, js_init, js_finalize
+)
+
 extern js_run_sandboxed(perms: ptr, code: string) -> int
 extern js_run_sandboxed_with_map(perms: ptr, code: string, map_token: int) -> int
 extern js_run(code: string) -> int

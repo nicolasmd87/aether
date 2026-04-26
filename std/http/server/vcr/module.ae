@@ -105,6 +105,39 @@ import std.http
 import std.fs
 import std.string
 
+exports (
+    vcr_load_err, vcr_tape_length, vcr_dispatch, vcr_register_routes,
+    vcr_record_interaction,
+    vcr_add_redaction, vcr_clear_redactions,
+    vcr_add_note,
+    vcr_record_interaction_full, vcr_last_error, vcr_clear_last_error,
+    vcr_add_static_content, vcr_clear_static_content,
+    vcr_set_indent_code_blocks, vcr_set_emphasize_http_verbs,
+    vcr_get_tape_count, vcr_get_method, vcr_get_path, vcr_get_status,
+    vcr_get_content_type, vcr_get_body, vcr_get_req_headers, vcr_get_req_body,
+    vcr_get_note_present, vcr_get_note_title, vcr_get_note_body,
+    vcr_get_indent_code_blocks, vcr_get_emphasize_http_verbs,
+    vcr_get_redaction_count, vcr_get_redaction_field,
+    vcr_get_redaction_pattern, vcr_get_redaction_replacement,
+    vcr_aether_clear_tape, vcr_aether_append_interaction,
+    vcr_aether_set_load_err,
+    FIELD_PATH, FIELD_RESPONSE_BODY,
+    load, eject, tape_length,
+    record, flush, flush_or_check,
+    redact, clear_redactions,
+    note,
+    record_full, last_error, clear_last_error,
+    static_content, clear_static_content,
+    indent_code_blocks, emphasize_http_verbs, clear_format_options,
+    str_replace_all, apply_redactions_for, emit_code_block,
+    emit_one_interaction, emit_tape,
+    find_at_line_start, rtrim,
+    extract_code_block_at, extract_indented_at,
+    parse_interaction_header_aether, parse_response_body_header_aether,
+    icmp_aether, sort_lines, normalize_recorded_headers,
+    parse_one_interaction, parse_tape_file
+)
+
 // ---- Externs into the C-side parser + dispatcher ----
 
 // vcr_load_tape removed in the C→Aether parser port. The Aether

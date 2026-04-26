@@ -21,6 +21,14 @@
 //   aether.run_sandboxed(worker, "rules/pricing.ae")
 //   aether.run_sandboxed_with_map(worker, "rules/pricing.ae", shared_map_token)
 
+exports (
+    aether_host_compile,
+    aether_host_run_sandboxed, aether_host_run_script_sandboxed,
+    aether_host_run_sandboxed_with_map, aether_host_run_script_sandboxed_with_map,
+    aether_host_run, aether_host_run_script,
+    aether_host_capture_sandboxed, aether_host_capture_script_sandboxed
+)
+
 // Compile an Aether script to an executable.
 // Returns: 0 on success, -1 on compile error.
 // Output binary is placed at out_path.

@@ -13,6 +13,11 @@
 //   }
 //   ruby.run_sandboxed(worker, "puts ENV['HOME']")
 
+exports (
+    ruby_run_sandboxed, ruby_run_sandboxed_with_map,
+    ruby_run, ruby_init_host, ruby_finalize_host
+)
+
 extern ruby_run_sandboxed(perms: ptr, code: string) -> int
 extern ruby_run_sandboxed_with_map(perms: ptr, code: string, map_token: int) -> int
 extern ruby_run(code: string) -> int

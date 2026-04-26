@@ -9,6 +9,15 @@
 import std.list
 import std.map
 
+exports (
+    before, after, before_each, after_each,
+    it, describe,
+    fail, assert_true, assert_false, assert_eq, assert_str_eq,
+    assert_not_eq, assert_gt, assert_contains,
+    assert_null, assert_not_null,
+    run_summary
+)
+
 // ---------------------------------------------------------------------------
 // State — test runner accumulates results
 // ---------------------------------------------------------------------------

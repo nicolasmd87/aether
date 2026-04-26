@@ -45,6 +45,8 @@
 import std.http.client
 import std.string
 
+exports (DEFAULT_BASE, get_ave_annual_rainfall_from)
+
 // Default base URL — the GitHub-Pages mirror of WorldBank's climate
 // XML API. Swap to "http://127.0.0.1:18091" or similar when driving
 // the test through a local VCR replayer.
