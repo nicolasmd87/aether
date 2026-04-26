@@ -8,6 +8,14 @@ typedef struct {
     AetherString* body;
     AetherString* headers;
     AetherString* error;
+    /* The URL that produced this response. For requests where redirects
+     * were not followed (max_redirects == 0, the default), this equals
+     * the URL the caller passed to http_send_raw. For requests that
+     * followed redirects, this is the URL of the final hop — not the
+     * original — so callers can disambiguate `client.response_url(r)`
+     * vs the URL they originally passed to the builder. NULL until the
+     * response is populated; readable via http_response_effective_url_raw. */
+    AetherString* effective_url;
 } HttpResponse;
 
 // ---------------------------------------------------------------------------
@@ -92,6 +100,23 @@ int http_request_set_body_raw(HttpRequest* req, const char* body, int len, const
 // (preserves v1's behaviour). Negative values are an error.
 int http_request_set_timeout_raw(HttpRequest* req, int seconds);
 
+// Configure automatic redirect-following on this request. `max_hops` of
+// 0 (the default) keeps the v1/v2 behaviour: redirects are returned as
+// 30x to the caller, which decides what to do. `max_hops > 0` follows
+// up to that many redirect responses; the loop stops when a non-3xx
+// status comes back, when the hop limit is reached (returns the last
+// 3xx response with an error string set), when a redirect points back
+// to a URL we've already visited (loop detection), or when an HTTPS
+// origin tries to redirect to HTTP (scheme downgrade rejection).
+//
+// Authorisation headers are not forwarded across host changes; the
+// builder strips Authorization / Cookie / Proxy-Authorization when the
+// redirect target's host differs from the previous host. Callers that
+// need cross-host auth can re-`set_header(req, ...)` between sends.
+//
+// Negative values are an error.
+int http_request_set_follow_redirects_raw(HttpRequest* req, int max_hops);
+
 void http_request_free_raw(HttpRequest* req);
 
 // Fire the configured request. Returns an HttpResponse on success
@@ -106,6 +131,13 @@ HttpResponse* http_send_raw(HttpRequest* req);
 // http_response_free(). Multiple values for one header are joined
 // with ", " (RFC 7230 §3.2.2 conformant).
 const char* http_response_header_raw(HttpResponse* response, const char* name);
+
+// Returns the URL of the response — the original request URL when no
+// redirects were followed, or the URL of the final hop when they
+// were. Useful after `http_request_set_follow_redirects_raw(req, N)`
+// to discover where the chain landed without re-parsing Location
+// headers from response->headers. NULL/free-safe.
+const char* http_response_effective_url_raw(HttpResponse* response);
 
 #endif
 
