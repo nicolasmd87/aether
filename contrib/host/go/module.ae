@@ -33,6 +33,12 @@
 //   }
 //   go.run_script_sandboxed(worker, "/tmp/hello.go")
 
+exports (
+    go_run_sandboxed, go_run_script_sandboxed,
+    go_run, go_run_script,
+    go_run_sandboxed_with_map, go_run_script_sandboxed_with_map
+)
+
 // Run a pre-built Go binary under the sandbox. Returns child exit code.
 extern go_run_sandboxed(perms: ptr, binary_path: string) -> int
 

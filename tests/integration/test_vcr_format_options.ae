@@ -23,13 +23,23 @@ import std.http
 import std.http.client
 import std.fs
 import std.string
+import std.io
 
 extern exit(code: int)
 extern http_server_start_raw(server: ptr) -> int
 
 const PORT = 18130
 const ALT_TAPE  = "tests/integration/tapes/alt_format.tape"
-const FLUSH_OUT = "/tmp/vcr_format_options_test.tape"
+
+// Platform temp dir — TEMP on Windows, TMPDIR on POSIX, /tmp fallback.
+// A bare "/tmp/..." path is drive-relative on the MinGW C runtime
+// (e.g. C:\tmp\) and the directory typically doesn't exist on CI.
+flush_out_path() -> {
+    tmp = io.getenv("TEMP")
+    if tmp == 0 { tmp = io.getenv("TMPDIR") }
+    if tmp == 0 { tmp = "/tmp" }
+    return "${tmp}/vcr_format_options_test.tape"
+}
 
 message StartVCR { raw: ptr }
 message Noop {}
@@ -60,6 +70,8 @@ assert_not_contains(haystack: string, needle: string, label: string) {
 
 main() {
     println("=== VCR markdown format options ===\n")
+
+    FLUSH_OUT = flush_out_path()
 
     // ---- Test 1: replay an alternative-form tape ----
     println("Test 1: replay tape using *GET* + 4-space-indented body")

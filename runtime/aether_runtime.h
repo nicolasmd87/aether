@@ -49,6 +49,11 @@ const AetherRuntimeInitConfig* aether_runtime_get_config();
 int aether_runtime_has_feature(int feature_flag);
 void aether_runtime_print_config();
 
+// Aether built-in `sleep(ms)` lowers to a call to this — a stable,
+// prefixed symbol that won't collide with libc's `sleep` if user code
+// declares `extern sleep(...)` for some other purpose. See issue #233.
+void aether_sleep_ms(int ms);
+
 // Legacy compatibility
 static inline void aether_init() {
     aether_runtime_init(0, AETHER_FLAG_AUTO_DETECT);

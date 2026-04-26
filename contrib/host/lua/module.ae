@@ -12,6 +12,8 @@
 //   }
 //   lua.run_sandboxed(worker, "print(os.getenv('HOME'))")
 
+exports (lua_run_sandboxed, lua_run, lua_init, lua_finalize)
+
 extern lua_run_sandboxed(perms: ptr, code: string) -> int
 extern lua_run(code: string) -> int
 extern lua_init() -> int

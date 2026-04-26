@@ -12,6 +12,11 @@
 // wrappers below return ("", "openssl unavailable") rather than
 // crashing. Callers that need hashing should check the error slot.
 
+exports (
+    cryptography_sha1_hex_raw, cryptography_sha256_hex_raw,
+    sha1_hex, sha256_hex
+)
+
 extern cryptography_sha1_hex_raw(data: string, length: int) -> string
 extern cryptography_sha256_hex_raw(data: string, length: int) -> string
 

@@ -1332,13 +1332,31 @@ int typecheck_program(ASTNode* program) {
     // Register unqualified short names for selective imports.
     // At this point all merged function definitions are in the symbol table,
     // so we can look up their types to register the short aliases.
+    //
+    // Two forms register short aliases here:
+    //   1. Selective:  import mod (a, b)        — children are AST_IDENTIFIER
+    //   2. Glob:       import mod (*)           — annotation == "glob_import"
+    //
+    // The glob form synthesizes the same per-name registration by walking
+    // every symbol in global_table whose name starts with the module's
+    // namespace prefix (`<ns>_`) and registering the trailing short name
+    // as an alias. Names with a leading underscore in the short part are
+    // treated as private and skipped. Issue #171 (P1).
     import_alias_count = 0;  // Reset for fresh compilation
     for (int i = 0; i < program->child_count; i++) {
         ASTNode* child = program->children[i];
         if (child->type != AST_IMPORT_STATEMENT || !child->value) continue;
-        if (child->child_count == 0) continue;
-        ASTNode* first = child->children[0];
-        if (!first || first->type != AST_IDENTIFIER) continue;
+
+        int is_glob = (child->annotation
+                       && strcmp(child->annotation, "glob_import") == 0);
+
+        // Selective imports need at least one identifier child to do anything;
+        // glob imports drive their own loop off the symbol table.
+        if (!is_glob && child->child_count == 0) continue;
+        if (!is_glob) {
+            ASTNode* first = child->children[0];
+            if (!first || first->type != AST_IDENTIFIER) continue;
+        }
 
         const char* module_path = child->value;
         const char* ns;
@@ -1348,10 +1366,40 @@ int typecheck_program(ASTNode* program) {
             ns = get_namespace_from_path(module_path);
         }
 
-        for (int k = 0; k < child->child_count; k++) {
-            ASTNode* sel = child->children[k];
-            if (!sel || sel->type != AST_IDENTIFIER) continue;
-            const char* short_name = sel->value;
+        // Build the iteration source for the inner loop. For selective
+        // imports, this is the AST_IDENTIFIER children. For glob imports,
+        // we materialize a temporary list of short-name strings by
+        // scanning global_table for every "<ns>_*" symbol.
+        const char** glob_names = NULL;
+        int glob_count = 0;
+        int glob_cap = 0;
+        if (is_glob) {
+            size_t ns_len = strlen(ns);
+            for (Symbol* sym = global_table->symbols; sym; sym = sym->next) {
+                if (!sym->name) continue;
+                if (strncmp(sym->name, ns, ns_len) != 0) continue;
+                if (sym->name[ns_len] != '_') continue;
+                const char* tail = sym->name + ns_len + 1;
+                if (!*tail || *tail == '_') continue;  // private / malformed
+                if (glob_count >= glob_cap) {
+                    glob_cap = glob_cap == 0 ? 16 : glob_cap * 2;
+                    glob_names = (const char**)realloc(
+                        glob_names, sizeof(const char*) * glob_cap);
+                }
+                glob_names[glob_count++] = tail;
+            }
+        }
+
+        int loop_end = is_glob ? glob_count : child->child_count;
+        for (int k = 0; k < loop_end; k++) {
+            const char* short_name;
+            if (is_glob) {
+                short_name = glob_names[k];
+            } else {
+                ASTNode* sel = child->children[k];
+                if (!sel || sel->type != AST_IDENTIFIER) continue;
+                short_name = sel->value;
+            }
 
             // Build the full C name: namespace_shortname
             char full_name[256];
@@ -1389,6 +1437,7 @@ int typecheck_program(ASTNode* program) {
                 add_import_alias(short_name, dotted);
             }
         }
+        free((void*)glob_names);
     }
 
     // NEW: Run type inference before type checking

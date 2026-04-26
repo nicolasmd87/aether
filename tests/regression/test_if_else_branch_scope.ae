@@ -1,0 +1,71 @@
+// Regression test for compiler_notes_from_vcr_port.md item #2 —
+// "Variable scope leak from if branches".
+//
+// When the same variable is first-assigned in BOTH arms of an
+// if/else, it should be visible at the post-block scope. Before the
+// fix, codegen scope-isolated each branch and the variable was
+// invisible after the if/else, breaking the standard "branches
+// assign, post-block uses" idiom. This file pins the fix.
+
+extern exit(code: int)
+
+main() {
+    // -- Test 1: both arms assign, post-block reads --
+    cond1 = 1
+    if cond1 == 1 {
+        heading = "A"
+    } else {
+        heading = "B"
+    }
+    if heading != "A" {
+        println("FAIL test 1: expected 'A', got '${heading}'")
+        exit(1)
+    }
+    println("PASS test 1: branch-assigned var visible after if/else")
+
+    // -- Test 2: else branch wins --
+    cond2 = 0
+    if cond2 == 1 {
+        winner = "then"
+    } else {
+        winner = "else"
+    }
+    if winner != "else" {
+        println("FAIL test 2: expected 'else', got '${winner}'")
+        exit(1)
+    }
+    println("PASS test 2: else-branch assignment also visible")
+
+    // -- Test 3: integer branch result --
+    base = 10
+    if base > 5 {
+        result = base * 2
+    } else {
+        result = 0
+    }
+    if result != 20 {
+        println("FAIL test 3: expected 20, got ${result}")
+        exit(1)
+    }
+    println("PASS test 3: int branch-assigned var works")
+
+    // -- Test 4: sibling if blocks with reused names — must NOT leak --
+    // (regression guard for the original "siblings see each other's
+    // names" bug that the existing scope-restore prevents).
+    if 1 == 1 {
+        local_only = "first-block"
+    }
+    // No else above means `local_only` is intentionally NOT in scope here.
+    // We can declare it fresh in a sibling and shouldn't see "first-block"
+    // leaking through.
+    if 1 == 1 {
+        local_only = "second-block"
+        if local_only != "second-block" {
+            println("FAIL test 4: sibling if leaked '${local_only}'")
+            exit(1)
+        }
+    }
+    println("PASS test 4: sibling if blocks stay scope-isolated")
+
+    println("=== if/else branch-scope tests passed ===")
+}

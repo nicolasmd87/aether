@@ -14,6 +14,11 @@
 //   python.run_sandboxed(worker, "print('hello')")
 //   python.run_sandboxed(worker, script, "arg1", "arg2")
 
+exports (
+    python_run_sandboxed, python_run_sandboxed_with_map,
+    python_run, python_init, python_finalize
+)
+
 // Run Python code string within a sandbox
 // Returns: 0 on success, -1 on error
 extern python_run_sandboxed(perms: ptr, code: string) -> int

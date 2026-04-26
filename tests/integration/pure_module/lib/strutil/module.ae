@@ -1,6 +1,7 @@
-// String utility module — tests multi-import alongside mymath
+// String utility module — tests multi-import alongside mymath.
+exports (repeat_sum, MAGIC)
 
-export repeat_sum(x, times) {
+repeat_sum(x, times) {
     total = 0
     for (i = 0; i < times; i = i + 1) {
         total = total + x
@@ -8,9 +9,9 @@ export repeat_sum(x, times) {
     return total
 }
 
-export const MAGIC = 7
+const MAGIC = 7
 
-// Private — not accessible from outside
+// Private — not listed in exports.
 internal_helper(x) {
     return x + 1
 }

@@ -8,6 +8,30 @@
 // The implementations are in std/net/aether_http.c and std/net/aether_http_server.c
 // which are compiled into libaether.a
 
+exports (
+    http_get_raw, http_post_raw, http_put_raw, http_delete_raw,
+    http_response_free, http_response_status_code,
+    http_response_body_str, http_response_headers_str,
+    http_response_status, http_response_body, http_response_headers,
+    http_response_error, http_response_ok,
+    get, post, put, delete,
+    http_server_create, http_server_bind_raw, http_server_start_raw,
+    http_server_stop, http_server_free,
+    server_bind, server_start,
+    http_server_add_route, http_server_get, http_server_post,
+    http_server_put, http_server_delete,
+    http_server_use_middleware,
+    http_get_header, http_get_query_param, http_get_path_param,
+    http_request_free,
+    http_response_create, http_response_set_status,
+    http_response_set_header, http_response_set_body,
+    http_response_json, http_server_response_free,
+    http_server_set_actor_handler,
+    http_request_method, http_request_path, http_request_body, http_request_query,
+    http_serve_static, http_serve_file, http_mime_type,
+    ae_io_await, ae_io_cancel, await_io
+)
+
 // HTTP Client — raw ptr-returning externs.
 // These are the escape hatch for code that needs direct access to the
 // underlying HttpResponse struct (e.g. to inspect headers and body

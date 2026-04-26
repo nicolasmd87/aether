@@ -52,6 +52,30 @@
 //     symbol table is empty (unlikely at runtime — a link failure
 //     stops the build), which covers the CI matrix.
 
+exports (
+    SQLITE_OK, SQLITE_ROW, SQLITE_DONE,
+    sqlite_open_raw, sqlite_close_raw, sqlite_exec_raw, sqlite_query_raw,
+    sqlite_rs_row_count, sqlite_rs_col_count, sqlite_rs_col_name,
+    sqlite_rs_cell, sqlite_rs_free,
+    sqlite_prepare_raw,
+    sqlite_bind_int_raw, sqlite_bind_text_raw, sqlite_bind_blob_raw,
+    sqlite_bind_i64_raw, sqlite_bind_null_raw,
+    sqlite_step_raw,
+    sqlite_column_int_raw, sqlite_column_i64_hi_raw, sqlite_column_i64_lo_raw,
+    sqlite_column_text_raw,
+    sqlite_try_column_blob, sqlite_get_blob_bytes,
+    sqlite_get_blob_length, sqlite_release_blob,
+    sqlite_reset_raw, sqlite_finalize_raw,
+    sqlite_changes_raw, sqlite_errmsg_raw,
+    open, close, exec, query,
+    row_count, col_count, col_name, cell, free,
+    prepare,
+    bind_int, bind_text, bind_blob, bind_i64, bind_null,
+    step,
+    column_int, column_i64, column_text, column_blob,
+    reset, finalize, changes, errmsg
+)
+
 // ---- Raw externs ----
 extern sqlite_open_raw(path: string) -> ptr
 extern sqlite_close_raw(db: ptr) -> int

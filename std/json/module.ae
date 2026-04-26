@@ -13,6 +13,20 @@
 //   JSON_NULL = 0, JSON_BOOL = 1, JSON_NUMBER = 2,
 //   JSON_STRING = 3, JSON_ARRAY = 4, JSON_OBJECT = 5
 
+exports (
+    json_parse_raw, json_last_error, json_stringify_raw, json_free,
+    json_type, json_is_null,
+    json_get_bool, json_get_number, json_get_int, json_get_string_raw,
+    json_object_get_raw, json_object_set_raw, json_object_has,
+    json_object_size_raw, json_object_key_at, json_object_value_at,
+    json_array_get_raw, json_array_add_raw, json_array_size,
+    json_create_null, json_create_bool, json_create_number,
+    json_create_string, json_create_array, json_create_object,
+    parse, stringify, get_string,
+    object_get, object_set, object_size, object_entry,
+    array_get, array_add
+)
+
 // ---- parsing and serialization (raw externs) ----
 extern json_parse_raw(json_str: string) -> ptr
 extern json_last_error() -> string

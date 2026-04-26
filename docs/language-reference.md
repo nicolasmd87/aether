@@ -930,6 +930,68 @@ main() {
 }
 ```
 
+### Module Public API — `exports (…)`
+
+Each module declares its public surface once at the top of the file via
+an Erlang-style `exports (…)` list. Names in the list are callable from
+outside the module via either qualified (`mod.name(…)`) or short-alias
+(`import mod (*)`) forms. Names **not** in the list are private — still
+callable from inside the module's own functions, but rejected at
+qualified-call sites from outside.
+
+```aether
+// At the top of greeter/module.ae:
+exports (say_hello, greet_world, GREETING)
+
+const GREETING = "hello"
+
+say_hello() {
+    return GREETING                  // public — listed
+}
+
+greet_world() {
+    return _format(GREETING, "world")  // public — listed; calls private helper
+}
+
+// Not listed → private. Leading underscore is a naming convention only;
+// the exports list is the contract that actually enforces visibility.
+_format(prefix: string, target: string) {
+    return "${prefix} ${target}"
+}
+```
+
+The form is *additive* in v1: a module without an `exports (…)` list
+keeps the legacy default-public behavior so existing code continues to
+work unchanged. v2 will flip the default to private once every module
+in `std/` and `contrib/` has been migrated.
+
+The legacy per-function `export <fn>` form is still accepted but emits
+a one-shot deprecation warning per module. Migrate by collecting every
+`export`-tagged name into a single `exports (…)` line at the top, then
+removing the `export` keywords from each declaration. Mixing both forms
+in one module is a hard error.
+
+### Glob Import — `import mod (*)`
+
+Expose **every public name** in a module as an unqualified short alias,
+without enumerating each symbol individually. Names with a leading
+underscore (`_helper`, `_internal`) stay private and are not aliased.
+
+```aether
+import std.math (*)
+
+main() {
+    x = sqrt(16.0)         // works — short alias registered
+    y = pow(2.0, 3.0)      // works
+    z = math.sin(1.0)      // qualified form still works alongside the glob
+}
+```
+
+Use this when you'd otherwise list 20+ symbols just to use the module
+without the namespace prefix. Bare `import std.math` (no parens) loads
+the module but does **not** register short aliases — you have to write
+`math.sqrt(...)` for everything.
+
 ### Import with Alias (Planned)
 
 > **Note:** Import aliasing is parsed but not yet fully functional. Use the default namespace for now.

@@ -1772,17 +1772,32 @@ ASTNode* parse_import_statement(Parser* parser) {
                                           import_token->line, import_token->column);
     
     // Check for selective import: import mod (a, b, c)
+    // Or glob import: import mod (*)
+    //
+    // The glob form expands at typecheck time to short aliases for every
+    // public name (no leading underscore) defined by the imported module.
+    // Implemented as a parser-side annotation rather than AST children
+    // because the parser doesn't yet know what the module exports —
+    // typechecker.c walks the symbol table to register the aliases once
+    // the module's symbols are loaded. See issue #171 (P1).
     if (match_token(parser, TOKEN_LEFT_PAREN)) {
-        do {
-            Token* symbol = expect_token(parser, TOKEN_IDENTIFIER);
-            if (!symbol) break;
-            
-            ASTNode* symbol_node = create_ast_node(AST_IDENTIFIER, symbol->value, 
-                                                  symbol->line, symbol->column);
-            add_child(import_stmt, symbol_node);
-        } while (match_token(parser, TOKEN_COMMA));
-        
-        expect_token(parser, TOKEN_RIGHT_PAREN);
+        Token* first = peek_token(parser);
+        if (first && first->type == TOKEN_MULTIPLY) {
+            advance_token(parser);  // consume '*'
+            import_stmt->annotation = strdup("glob_import");
+            expect_token(parser, TOKEN_RIGHT_PAREN);
+        } else {
+            do {
+                Token* symbol = expect_token(parser, TOKEN_IDENTIFIER);
+                if (!symbol) break;
+
+                ASTNode* symbol_node = create_ast_node(AST_IDENTIFIER, symbol->value,
+                                                      symbol->line, symbol->column);
+                add_child(import_stmt, symbol_node);
+            } while (match_token(parser, TOKEN_COMMA));
+
+            expect_token(parser, TOKEN_RIGHT_PAREN);
+        }
     }
     
     // Check for alias: import mod as alias
@@ -1803,6 +1818,41 @@ ASTNode* parse_import_statement(Parser* parser) {
     }
     
     return import_stmt;
+}
+
+// Parse top-of-file `exports (a, b, c)` list — Erlang-style public-API
+// declaration. Replaces the per-function `export <fn>` form for modules
+// that prefer to list their public surface in one place. Mutually
+// exclusive with `export` at the module-orchestration layer (the parser
+// accepts both, the orchestrator errors if both appear in one module).
+//
+// Grammar:  exports ( IDENT [, IDENT]* )
+//
+// Children of the resulting AST_EXPORTS_LIST node are AST_IDENTIFIER
+// nodes carrying each name. The orchestrator walks this list and
+// populates `mod->exports[]` exactly as if each name had been written
+// with a per-function `export <name>`.
+ASTNode* parse_exports_list(Parser* parser) {
+    Token* exports_token = advance_token(parser);  // consume 'exports'
+    ASTNode* list = create_ast_node(AST_EXPORTS_LIST, NULL,
+                                    exports_token->line, exports_token->column);
+
+    if (!expect_token(parser, TOKEN_LEFT_PAREN)) return list;
+
+    // Allow an empty list `exports ()` as a valid (if unusual) declaration —
+    // it pins "this module exports nothing public" explicitly.
+    if (peek_token(parser) && peek_token(parser)->type != TOKEN_RIGHT_PAREN) {
+        do {
+            Token* name = expect_token(parser, TOKEN_IDENTIFIER);
+            if (!name) break;
+            ASTNode* id = create_ast_node(AST_IDENTIFIER, name->value,
+                                          name->line, name->column);
+            add_child(list, id);
+        } while (match_token(parser, TOKEN_COMMA));
+    }
+
+    expect_token(parser, TOKEN_RIGHT_PAREN);
+    return list;
 }
 
 // Parse export statement
@@ -2968,6 +3018,9 @@ ASTNode* parse_program(Parser* parser) {
                 break;
             case TOKEN_EXPORT:
                 node = parse_export_statement(parser);
+                break;
+            case TOKEN_EXPORTS:
+                node = parse_exports_list(parser);
                 break;
             case TOKEN_ACTOR:
                 node = parse_actor_definition(parser);

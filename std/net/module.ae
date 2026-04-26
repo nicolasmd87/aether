@@ -6,6 +6,32 @@
 // - http_*        : HTTP client operations
 // - http_server_* : HTTP server operations
 
+exports (
+    tcp_connect_raw, tcp_send_raw, tcp_receive_raw, tcp_close,
+    tcp_listen_raw, tcp_accept_raw, tcp_server_close,
+    http_get_raw, http_post_raw, http_put_raw, http_delete_raw,
+    http_response_free, http_response_status_code,
+    http_response_body_str, http_response_headers_str,
+    http_response_status, http_response_body, http_response_headers,
+    http_response_error, http_response_ok,
+    http_server_create, http_server_bind_raw, http_server_start_raw,
+    http_server_stop, http_server_free,
+    http_server_add_route, http_server_get, http_server_post,
+    http_server_put, http_server_delete,
+    http_server_use_middleware,
+    http_get_header, http_get_query_param, http_get_path_param,
+    http_request_free,
+    http_response_create, http_response_set_status,
+    http_response_set_header, http_response_set_body,
+    http_response_json, http_server_response_free,
+    http_server_set_actor_handler,
+    http_request_method, http_request_path, http_request_body, http_request_query,
+    http_serve_static, http_serve_file, http_mime_type,
+    ae_io_await, ae_io_cancel,
+    ae_pipe_open, ae_pipe_write_fd, ae_fd_write, ae_fd_close,
+    await_io, pipe_open, pipe_write_fd, fd_write, fd_close
+)
+
 // TCP Client - raw externs (escape hatch)
 extern tcp_connect_raw(host: string, port: int) -> ptr
 extern tcp_send_raw(sock: ptr, data: string) -> int

@@ -1,27 +1,27 @@
-// Utils Module — pure Aether library with export visibility
+// Utils Module — pure Aether library with export visibility.
 //
-// Public API:
-//   utils.double_value(x), utils.triple_value(x), utils.quadruple_value(x)
-//   utils.MULTIPLIER
-//
-// Internal helpers (not accessible from outside):
-//   multiply() — used by the public functions
+// Public API is declared once at the top via the Erlang-style
+// `exports (…)` list. Anything not listed (here, `multiply`) is
+// private — callable from inside this module's own functions, but
+// blocked at qualified-call sites from outside.
 
-export const MULTIPLIER = 2
+exports (MULTIPLIER, double_value, triple_value, quadruple_value)
 
-export double_value(x) {
+const MULTIPLIER = 2
+
+double_value(x) {
     return multiply(x, MULTIPLIER)
 }
 
-export triple_value(x) {
+triple_value(x) {
     return multiply(x, 3)
 }
 
-export quadruple_value(x) {
+quadruple_value(x) {
     return multiply(double_value(x), MULTIPLIER)
 }
 
-// Private helper — not exported, used internally only
+// Private helper — not in the exports list, used internally only.
 multiply(a, b) {
     return a * b
 }

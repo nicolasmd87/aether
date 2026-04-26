@@ -1175,6 +1175,10 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "static inline const char* _aether_safe_str(const void* s) {");
     print_line(gen, "    return s ? (const char*)s : \"(null)\";");
     print_line(gen, "}");
+    // Built-in `sleep(ms)` lowers to aether_sleep_ms — a runtime helper
+    // with a stable, prefixed name so user `extern sleep(...)` doesn't
+    // conflict with libc's `unsigned int sleep(unsigned int)`. Issue #233.
+    print_line(gen, "extern void aether_sleep_ms(int ms);");
     // Ref cells: heap-allocated mutable values for shared state in closures
     print_line(gen, "#if !AETHER_GCC_COMPAT");
     print_line(gen, "static void* _aether_ref_new(intptr_t val) { intptr_t* r = malloc(sizeof(intptr_t)); *r = val; return (void*)r; }");

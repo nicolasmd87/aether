@@ -1,6 +1,14 @@
 // std.os - Shell & Process Execution
 // Import with: import std.os
 
+exports (
+    os_system, os_exec_raw, os_run, os_run_capture_raw,
+    os_getenv, os_which,
+    aether_args_count, aether_args_get, aether_argv0,
+    os_execv, os_now_utc_iso8601_raw,
+    exec, run_capture, argv0, now_utc_iso8601
+)
+
 // Run a shell command, returns exit code (0 = success)
 extern os_system(cmd: string) -> int
 

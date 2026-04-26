@@ -111,7 +111,10 @@ jobs:
         # fall into their "unavailable" stub paths — which is a real
         # cliff for users of the Windows binary release, not just a
         # test-matrix skip.
-        install: mingw-w64-x86_64-gcc mingw-w64-x86_64-zlib mingw-w64-x86_64-openssl pkg-config make bc
+        # ca-certificates ships /mingw64/etc/ssl/certs/ca-bundle.crt — required
+        # for HTTPS in std.net (without it the OpenSSL handshake completes but
+        # cert verification fails for lack of a trust anchor on Windows).
+        install: mingw-w64-x86_64-gcc mingw-w64-x86_64-zlib mingw-w64-x86_64-openssl mingw-w64-x86_64-ca-certificates pkg-config make bc
 
     - name: Run CI suite
       run: make ci

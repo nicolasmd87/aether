@@ -1861,12 +1861,13 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     fprintf(gen->output, "scheduler_wait()");
                 }
                 else if (strcmp(func_name, "sleep") == 0 && expr->child_count == 1) {
-                    // Emit target-guarded code (not host-guarded)
-                    fprintf(gen->output, "\n#ifdef _WIN32\nSleep(");
+                    // Route through the runtime's aether_sleep_ms wrapper —
+                    // a stable, prefixed symbol that won't collide with
+                    // libc's sleep() if user code declares `extern sleep`
+                    // for an unrelated binding. See issue #233.
+                    fprintf(gen->output, "aether_sleep_ms(");
                     generate_expression(gen, expr->children[0]);
-                    fprintf(gen->output, ");\n#else\nusleep(1000 * (");
-                    generate_expression(gen, expr->children[0]);
-                    fprintf(gen->output, "));\n#endif\n");
+                    fprintf(gen->output, ")");
                 }
                 else if (strcmp(func_name, "getenv") == 0 && expr->child_count == 1) {
                     fprintf(gen->output, "getenv(");

@@ -3,6 +3,11 @@
 // Raw externs end in `_raw`. Aether-native wrappers return Go-style
 // `(value, err)` tuples. The implementations are in std/fs/aether_fs.c.
 
+exports (
+    dir_exists, dir_create_raw, dir_delete_raw, dir_list_raw, dir_list_free,
+    create, delete, list
+)
+
 extern dir_exists(path: string) -> int
 extern dir_create_raw(path: string) -> int
 extern dir_delete_raw(path: string) -> int

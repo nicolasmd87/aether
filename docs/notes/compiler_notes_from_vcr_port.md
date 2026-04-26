@@ -5,6 +5,22 @@ Aether. None block the port — every issue had a workaround — but each
 one cost time, so they're worth fixing in the compiler/runtime when
 their owners get to them.
 
+## Resolution status (re-triaged)
+
+| # | Item | Status |
+|---|------|--------|
+| 1 | String interpolation recycles backing buffer | **No longer reproduces.** A simple `out = "${out}${chunk}"` accumulator emits the expected concatenated output. Either the underlying interpolation lowering changed since this note was written, or the original repro depended on a more complex shape. Closed. |
+| 2 | Variable scope leak from `if`/`else` branches | **Fixed.** Codegen now hoists variables that are first-assigned in BOTH arms of an `if`/`else` to the enclosing scope, so the post-block code can read them. Sibling-block scope isolation (the existing scope-restore behavior) is preserved — only common names get hoisted. Regression test: `tests/regression/test_if_else_branch_scope.ae` (4 cases including the sibling-isolation regression guard). |
+| 3 | Actor state-type inference fragile under import-order changes | **Open.** Hard to reproduce deterministically — needs the original import sequence to surface. Left as-is. |
+| 4 | FFI naming collision between extern and same-named wrapper | **Filed as issue #234** (`@extern("c_symbol")` annotation). Not in this batch. |
+| 5 | Tuple return-type annotation `-> (int, string)` | **Open.** The parser falls through to expression-body parsing on `(`. Adding tuple return-type parsing is non-trivial (parser grammar + type-system propagation through the existing TYPE_TUPLE machinery). The bare `-> {` form already works for multi-return, so this is documentation/clarity, not blocker. Workaround: omit the annotation. |
+| 6 | Stdlib archive doesn't rebuild on `.ae` changes | **Open.** Build-system polish. The dev-loop friction is real but the workaround (`make all`) is fast. |
+| 7 | Per-symbol import hides namespace | **Closed as not-a-bug.** The selective-import filter is intentional — `import std.fs (file_exists)` deliberately blocks `fs.<other>` to enforce the user's allow list. New glob form `import std.fs (*)` (issue #171 P1) removes the blocker for callers who want both a short alias *and* the namespace: glob registers short aliases for every public name and does not engage the selective filter. Documented under "Glob Import" in `docs/language-reference.md`. |
+
+The two currently-actionable items (#3 and #5) have clear workarounds
+documented below. The notes are kept verbatim for the historical
+record.
+
 ## 1. String interpolation recycles its backing buffer
 
 **Symptom**: `out = "${out}${chunk}"` in a loop produces corrupted output.

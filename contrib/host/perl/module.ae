@@ -12,6 +12,11 @@
 //   }
 //   perl.run_sandboxed(worker, "print $ENV{HOME}")
 
+exports (
+    aether_perl_run_sandboxed, aether_perl_run_sandboxed_with_map,
+    aether_perl_run, aether_perl_init, aether_perl_finalize
+)
+
 extern aether_perl_run_sandboxed(perms: ptr, code: string) -> int
 extern aether_perl_run_sandboxed_with_map(perms: ptr, code: string, map_token: int) -> int
 extern aether_perl_run(code: string) -> int

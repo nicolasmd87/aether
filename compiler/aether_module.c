@@ -718,13 +718,74 @@ static int orchestrate_module(const char* module_name, const char* file_path,
     mod->ast = ast;
     module_register(mod);
 
-    // Collect exports from AST_EXPORT_STATEMENT nodes
+    // Collect exports from BOTH the legacy per-function `export <fn>`
+    // form (AST_EXPORT_STATEMENT) AND the new top-of-file `exports (…)`
+    // list form (AST_EXPORTS_LIST). The two forms are mutually exclusive
+    // within a single module — mixing them is a hard error since it
+    // signals confusion about which is the source of truth. The legacy
+    // form gets a per-module deprecation warning that prints the exact
+    // migration line so users know what to paste at the top of their
+    // file and which `export` keywords to remove.
+    int has_legacy_export = 0;
+    int has_exports_list  = 0;
     for (int i = 0; i < ast->child_count; i++) {
         ASTNode* child = ast->children[i];
+        if (child->type == AST_EXPORT_STATEMENT) has_legacy_export = 1;
+        if (child->type == AST_EXPORTS_LIST)     has_exports_list = 1;
+    }
+    if (has_legacy_export && has_exports_list) {
+        fprintf(stderr,
+                "error: module '%s' mixes the legacy `export <fn>` form with "
+                "the new top-of-file `exports (…)` list — pick one.\n",
+                module_name);
+    }
+    if (has_legacy_export && !has_exports_list) {
+        // Build a precise, copy-pasteable migration message. Show the
+        // exact `exports (…)` line the user should add, list each
+        // `export`-tagged declaration that needs the keyword stripped,
+        // and point at the docs section that explains the rationale.
+        fprintf(stderr,
+                "warning: module '%s' uses the deprecated per-function "
+                "`export` keyword.\n", module_name);
+        fprintf(stderr, "  Migrate in two steps:\n");
+        fprintf(stderr, "    1. Add this line at the top of the file:\n");
+        fprintf(stderr, "         exports (");
+        int first = 1;
+        for (int i = 0; i < ast->child_count; i++) {
+            ASTNode* child = ast->children[i];
+            if (child->type != AST_EXPORT_STATEMENT) continue;
+            if (child->child_count == 0) continue;
+            ASTNode* exported = child->children[0];
+            if (!exported || !exported->value) continue;
+            if (!first) fprintf(stderr, ", ");
+            fprintf(stderr, "%s", exported->value);
+            first = 0;
+        }
+        fprintf(stderr, ")\n");
+        fprintf(stderr,
+                "    2. Remove the `export` keyword from each declaration:\n"
+                "         export double_value(x) { … }\n"
+                "                ^^^^^ delete\n");
+        fprintf(stderr,
+                "  See docs/module-system-design.md "
+                "§ \"Legacy `export <fn>` form (deprecated)\".\n");
+    }
+    for (int i = 0; i < ast->child_count; i++) {
+        ASTNode* child = ast->children[i];
+        // Legacy: `export <fn>` wraps the declaration as the first child.
         if (child->type == AST_EXPORT_STATEMENT && child->child_count > 0) {
             ASTNode* exported = child->children[0];
             if (exported->value) {
                 module_add_export(mod, exported->value);
+            }
+        }
+        // New: `exports (a, b, c)` — children are AST_IDENTIFIER name nodes.
+        if (child->type == AST_EXPORTS_LIST) {
+            for (int k = 0; k < child->child_count; k++) {
+                ASTNode* name_node = child->children[k];
+                if (name_node && name_node->value) {
+                    module_add_export(mod, name_node->value);
+                }
             }
         }
     }

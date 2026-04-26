@@ -4,6 +4,15 @@
 // Raw externs end in `_raw` and return the C-style NULL/0/1 convention.
 // The Aether-native wrappers (below) use Go-style `(value, err)` tuples.
 
+exports (
+    io_print, io_print_line, io_print_int, io_print_float,
+    io_read_file_raw, io_write_file_raw, io_append_file_raw, io_file_exists,
+    io_delete_file_raw, io_file_info_raw, io_file_info_free,
+    io_getenv, io_setenv_raw, io_unsetenv_raw,
+    read_file, write_file, append_file, delete_file, file_info,
+    setenv, unsetenv
+)
+
 // Console I/O — infallible in practice
 extern io_print(str: string)
 extern io_print_line(str: string)

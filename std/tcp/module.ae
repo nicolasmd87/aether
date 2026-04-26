@@ -4,6 +4,12 @@
 // wrappers (below) use Go-style `(value, err)` tuple returns.
 // The implementations are in std/net/aether_net.c.
 
+exports (
+    tcp_connect_raw, tcp_send_raw, tcp_receive_raw, tcp_close,
+    tcp_listen_raw, tcp_accept_raw, tcp_server_close,
+    connect, write, read, listen, accept
+)
+
 // Raw externs - escape hatch
 extern tcp_connect_raw(host: string, port: int) -> ptr
 extern tcp_send_raw(sock: ptr, data: string) -> int

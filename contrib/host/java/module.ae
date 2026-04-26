@@ -25,6 +25,8 @@
 
 import std.list
 
+exports (grant_jvm_runtime)
+
 // Add a (category, pattern) pair to a grant list. Mirrors the idiom
 // every example defines locally — we keep the definition local here
 // too so this module stays self-contained (no transitive dependency

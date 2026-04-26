@@ -20,6 +20,15 @@
 // undefined), the wrappers return ("", 0, "zlib unavailable")
 // rather than crashing.
 
+exports (
+    zlib_backend_available,
+    zlib_try_deflate, zlib_get_deflate_bytes, zlib_get_deflate_length,
+    zlib_release_deflate,
+    zlib_try_inflate, zlib_get_inflate_bytes, zlib_get_inflate_length,
+    zlib_release_inflate,
+    available, deflate, inflate
+)
+
 // Probe: returns 1 when the toolchain was built with zlib detected,
 // 0 otherwise. Lets callers / tests distinguish "no backend" from
 // "backend returned an error at runtime". C-side name is
