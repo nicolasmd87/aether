@@ -1785,6 +1785,51 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             }
             // Emit ALL defers before return (unwind entire function)
             if (gen->defer_count > 0) {
+                // Multi-value return + defer: build a _builder_ret typed
+                // as the function's tuple return so the existing defer-
+                // unwind machinery still applies. Without this branch,
+                // we'd save children[0]'s type alone and the C compiler
+                // would reject `return _builder_ret;` against the tuple-
+                // typed function. Issue #254. Mirrors the no-defer
+                // multi-value path below at the "return (_tuple_X_Y){...}"
+                // line — same tuple-literal shape, just stuffed into
+                // _builder_ret first.
+                if (stmt->child_count > 1) {
+                    print_indent(gen);
+                    Type* tuple = NULL;
+                    int owned = 0;
+                    if (gen->current_func_return_type &&
+                        gen->current_func_return_type->kind == TYPE_TUPLE) {
+                        tuple = gen->current_func_return_type;
+                    } else {
+                        tuple = create_type(TYPE_TUPLE);
+                        tuple->tuple_count = stmt->child_count;
+                        tuple->tuple_types = malloc(stmt->child_count * sizeof(Type*));
+                        for (int j = 0; j < stmt->child_count; j++) {
+                            tuple->tuple_types[j] = stmt->children[j]->node_type
+                                ? clone_type(stmt->children[j]->node_type)
+                                : create_type(TYPE_INT);
+                        }
+                        owned = 1;
+                    }
+                    ensure_tuple_typedef(gen, tuple);
+                    const char* tname = get_c_type(tuple);
+                    fprintf(gen->output, "%s _builder_ret = (%s){", tname, tname);
+                    for (int j = 0; j < stmt->child_count; j++) {
+                        if (j > 0) fprintf(gen->output, ", ");
+                        generate_expression(gen, stmt->children[j]);
+                    }
+                    fprintf(gen->output, "};\n");
+                    if (owned) free_type(tuple);
+                    // Multi-value returns can't be returning a closure
+                    // (closures aren't tuples), so the closure-of-captures
+                    // protection logic the single-value path runs is
+                    // unnecessary here — drain the defers and emit the
+                    // return.
+                    emit_all_defers(gen);
+                    print_line(gen, "return _builder_ret;");
+                    break;
+                }
                 // For return with value, save to temp first
                 if (stmt->child_count > 0 && stmt->children[0] &&
                     stmt->children[0]->type != AST_PRINT_STATEMENT) {

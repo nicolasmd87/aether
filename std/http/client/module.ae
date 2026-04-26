@@ -322,25 +322,18 @@ response_body_json(resp: ptr) -> {
 // so the string form keeps the wrapper one-line and lets callers
 // grep — same trade-off get_with_headers / post_with_status make.)
 //
-// Implementation note: doesn't use `defer request_free(req)` because
-// the codegen for `defer` + multi-value returns is broken today
-// (issue #254). Instead does manual cleanup at each return site.
-//
 // Closes #241 (HEAD half).
 head(url: string) -> {
     req = request("HEAD", url)
     if req == null { return 0, "", "request build failed" }
+    defer request_free(req)
     set_timeout(req, 30)
     resp, err = send_request(req)
-    if err != "" {
-        request_free(req)
-        return 0, "", err
-    }
+    if err != "" { return 0, "", err }
     status = response_status(resp)
     headers = response_headers(resp)
     headers_copy = string_concat(headers, "")
     response_free(resp)
-    request_free(req)
     return status, headers_copy, ""
 }
 
@@ -353,10 +346,9 @@ head(url: string) -> {
 patch(url: string, body: string, content_type: string) -> {
     req = request("PATCH", url)
     if req == null { return null, "request build failed" }
+    defer request_free(req)
     set_timeout(req, 30)
     body_len = string_length(body)
     set_body(req, body, body_len, content_type)
-    resp, err = send_request(req)
-    request_free(req)
-    return resp, err
+    return send_request(req)
 }
