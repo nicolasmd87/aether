@@ -21,10 +21,19 @@ import std.http.server.vcr
 import std.http
 import std.fs
 import std.string
+import std.io
 
 extern exit(code: int)
 
-const TAPE_PATH = "/tmp/vcr_redactions_test.tape"
+// Platform temp dir — TEMP on Windows, TMPDIR on POSIX, /tmp fallback.
+// A bare "/tmp/..." path is drive-relative on the MinGW C runtime
+// (e.g. C:\tmp\) and the directory typically doesn't exist on CI.
+tape_path() -> {
+    tmp = io.getenv("TEMP")
+    if tmp == 0 { tmp = io.getenv("TMPDIR") }
+    if tmp == 0 { tmp = "/tmp" }
+    return "${tmp}/vcr_redactions_test.tape"
+}
 
 assert_contains(haystack: string, needle: string, label: string) {
     if string.contains(haystack, needle) != 1 {
@@ -42,6 +51,8 @@ assert_not_contains(haystack: string, needle: string, label: string) {
 
 main() {
     println("=== VCR redactions smoke test ===\n")
+
+    TAPE_PATH = tape_path()
 
     // ---- Setup: capture two interactions with sensitive data. ----
     // Body holds an Authorization-style token; path holds a session id.
