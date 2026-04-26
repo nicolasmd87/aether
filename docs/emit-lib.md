@@ -70,9 +70,11 @@ Every exported Aether function becomes `aether_<name>` in the library:
 | `build_config(env, port)` | `aether_build_config` |
 
 The internal `sum`, `greet`, etc. symbols are **also present** in the
-library for now (v1 doesn't mark them `static`). Callers should use the
-`aether_<name>` entry points for ABI stability — the un-prefixed names
-are an implementation detail and may be hidden in a future version.
+library with external linkage. Callers should use the `aether_<name>`
+entry points for ABI stability — the un-prefixed names are an
+implementation detail and may be hidden in a future version. See
+[Symbol visibility matrix](#symbol-visibility-matrix) below for the
+full picture across emit modes.
 
 ## Type mapping
 
@@ -173,10 +175,12 @@ handwritten C into one binary, rather than embedding Aether as an
 untrusted user script — opt into specific capability categories:
 
 ```sh
-ae build --emit=lib --with=fs      file.ae   # std.fs
-ae build --emit=lib --with=net     file.ae   # std.net, std.http, std.tcp
-ae build --emit=lib --with=os      file.ae   # std.os
-ae build --emit=lib --with=fs,os   file.ae   # multiple, comma-separated
+ae build --emit=lib --with=fs           file.ae   # std.fs
+ae build --emit=lib --with=net          file.ae   # std.net, std.http, std.tcp
+ae build --emit=lib --with=os           file.ae   # std.os
+ae build --emit=lib --with=fs,os        file.ae   # multiple, comma-separated
+ae build --emit=lib --with=first-party  file.ae   # alias for fs,net,os
+ae build --emit=lib --with=all          file.ae   # alias for fs,net,os
 ```
 
 The gate stays default-deny: a build without `--with=fs` still rejects
@@ -184,6 +188,15 @@ The gate stays default-deny: a build without `--with=fs` still rejects
 shouldn't silently leave a gate closed). The categories mirror the
 banned-import groupings above — three buckets, chosen coarsely enough
 that opting in is an auditable event in a project's build invocation.
+
+`--with=first-party` and `--with=all` both expand to `fs,net,os`.
+The two names are equivalent; pick whichever expresses intent better
+in your project. `first-party` reads as "this Aether code is
+trusted-as-first-party, give it everything"; `all` reads as a literal
+shorthand for the full set. Using either one is appropriate for tools
+like build systems and SDK generators where the `.ae` files ship with
+the toolchain itself; it is **not** appropriate for plugin / user-
+script scenarios — see "When NOT to use this" below.
 
 **When to use this.** Systems code where the `.ae` files are
 first-party and version-controlled the same way as the `.c` files.
@@ -193,6 +206,50 @@ calling `fopen` — there's no privilege boundary to police.
 **When NOT to use this.** Anywhere the library could run untrusted
 Aether (user scripts, a plugin loader, a DSL evaluator). Leave the
 default in place; the host mediates I/O on the script's behalf.
+
+## Symbol visibility matrix
+
+What gets `static` storage class versus external linkage in the
+generated `.c` file, by function origin × emit mode. This determines
+which symbols collide when multiple `.c` files compiled from
+different `.ae` sources are linked into one binary.
+
+| Function origin                     | `--emit=exe` | `--emit=lib`                            |
+|-------------------------------------|:------------:|:---------------------------------------:|
+| Local (defined in this `.ae`)       | external     | external + `aether_<name>` alias        |
+| Imported Aether wrapper             | **`static`** | **`static`** (no `aether_<name>` alias) |
+| `extern` declaration (any module)   | declaration only — refers to external symbol from `libaether.a` or another TU |
+| Stdlib C externs (`std/*/aether_*.c`) | linked from `libaether.a`; no per-TU duplication |
+
+Two consequences worth highlighting:
+
+**Imported Aether wrappers are private to each TU.** When module A
+and module B both `import std.string`, both generated `.c` files
+contain `static const char* string_copy(...)` — a private copy each.
+Linking the two `.o` files together produces no duplicate-symbol
+errors, even on linkers that don't support
+`-Wl,--allow-multiple-definition` (notably macOS ld64). This is
+deliberate; see [`compiler/aether_module.c:1126`](../compiler/aether_module.c)
+where `clone->is_imported = 1` is set, and
+[`compiler/codegen/codegen_func.c:297`](../compiler/codegen/codegen_func.c)
+where the `static` keyword gets emitted.
+
+**Locally-defined functions retain external linkage.** If two `.ae`
+files both define a function with the same name (e.g. both define
+`helper`), they DO collide at link time. `--emit=lib` adds an
+`aether_<name>` alias on top, but the un-aliased local symbol is
+still external. This is the symmetric opposite of the imported case
+and is intentional — local functions are the unit of inter-TU
+linking; the user program structures around their names.
+
+**Implication for downstream tools.** Multi-TU binaries that import
+the same SDK module across many `.ae` files do not need
+`-Wl,--allow-multiple-definition`. The static-marking on imported
+wrappers handles deduplication at the source level. Tools building
+this shape can drop the link flag and gain macOS compatibility for
+free — `ld64` (Apple's linker) silently rejects
+`--allow-multiple-definition`, and the static-marking removes the
+need for it.
 
 ## Using SWIG to generate Java/Python/Ruby/Go bindings
 
@@ -252,6 +309,7 @@ The integration suite under `tests/integration/` covers:
 | `emit_lib_banned/` | All five capability-heavy imports rejected |
 | `emit_lib_dual_build/` | Same source → exe AND lib via separate invocations |
 | `emit_lib_swig/` | SWIG Python round-trip (skips if `swig` missing) |
+| `emit_lib_with_capability/` | `--with=fs,net,os` opt-ins; `--with=first-party` and `--with=all` aliases |
 
 Run them with the standard `make test-ae` or individually:
 

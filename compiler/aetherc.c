@@ -911,10 +911,20 @@ int main(int argc, char *argv[]) {
                     with_net = true;
                 } else if (len == 2 && strncmp(start, "os", 2) == 0) {
                     with_os = true;
+                } else if ((len == 11 && strncmp(start, "first-party", 11) == 0) ||
+                           (len == 3  && strncmp(start, "all", 3) == 0)) {
+                    // "I am the host, every capability is granted."
+                    // Equivalent to fs,net,os but expresses intent
+                    // (systems code, not sandboxed plugin) rather
+                    // than enumerating buckets. See docs/emit-lib.md
+                    // §"Opting in" for when this is appropriate.
+                    with_fs = true;
+                    with_net = true;
+                    with_os = true;
                 } else {
                     fprintf(stderr,
                         "Error: --with= got unknown capability '%.*s'. "
-                        "Known: fs, net, os.\n",
+                        "Known: fs, net, os, first-party (alias: all).\n",
                         (int)len, start);
                     return 1;
                 }

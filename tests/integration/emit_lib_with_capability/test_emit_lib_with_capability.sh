@@ -11,6 +11,8 @@
 #   4. --with=fs,os unlocks both in one invocation.
 #   5. --with=<unknown> is a hard error, not a silent no-op.
 #   6. --with=fs WITHOUT --emit=lib is a no-op (no error, no effect).
+#   7. --with=first-party unlocks fs / net / os in one go.
+#   8. --with=all is an alias for --with=first-party.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
@@ -75,6 +77,18 @@ run_case "--with=os accepts std.os"    std.os  "--emit=lib --with=os"  accept
 run_case "--with=fs,os accepts std.fs" std.fs  "--emit=lib --with=fs,os" accept
 run_case "--with=fs,os accepts std.os" std.os  "--emit=lib --with=fs,os" accept
 run_case "--with=fs,os still rejects std.net" std.net "--emit=lib --with=fs,os" reject
+
+# ---- 4b. --with=first-party unlocks fs / net / os ----
+
+run_case "--with=first-party accepts std.fs"  std.fs  "--emit=lib --with=first-party" accept
+run_case "--with=first-party accepts std.net" std.net "--emit=lib --with=first-party" accept
+run_case "--with=first-party accepts std.os"  std.os  "--emit=lib --with=first-party" accept
+
+# ---- 4c. --with=all is the same alias ----
+
+run_case "--with=all accepts std.fs"  std.fs  "--emit=lib --with=all" accept
+run_case "--with=all accepts std.net" std.net "--emit=lib --with=all" accept
+run_case "--with=all accepts std.os"  std.os  "--emit=lib --with=all" accept
 
 # ---- 5. --with=<unknown> is a hard error ----
 
