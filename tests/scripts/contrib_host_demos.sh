@@ -116,6 +116,22 @@ probe_go() {
     return 1
 }
 
+probe_tinygo() {
+    # TinyGo host loads c-shared .so/.dylib/.dll via std.dl. The C
+    # bridge itself is dlopen-only (no Go runtime in-process), so the
+    # only requirement at link time is libdl on Linux. macOS ships
+    # dlopen in libc — no extra -l flag.
+    if command -v tinygo >/dev/null 2>&1; then
+        echo ""   # no -I beyond the std.dl include
+        case "$(uname -s)" in
+            Linux)  echo "-ldl" ;;
+            *)      echo "" ;;
+        esac
+        return 0
+    fi
+    return 1
+}
+
 # Build + run one language's demo. $1 = lang, $2 = LANG_UPPER,
 # $3 = flag_suffix (AETHER_HAS_<LANG>). Returns 0 success, 1 fail.
 run_demo() {
@@ -168,7 +184,7 @@ CC="${CC:-cc}"
 printf "  using CC=%s\n" "$CC"
 printf "\n"
 
-for lang in js lua perl python ruby tcl go; do
+for lang in js lua perl python ruby tcl go tinygo; do
     flag=""
     case "$lang" in
         js)     flag="AETHER_HAS_JS" ;;
@@ -178,6 +194,7 @@ for lang in js lua perl python ruby tcl go; do
         ruby)   flag="AETHER_HAS_RUBY" ;;
         tcl)    flag="AETHER_HAS_TCL" ;;
         go)     flag="AETHER_HAS_GO" ;;
+        tinygo) flag="AETHER_HAS_TINYGO" ;;
     esac
 
     printf "  %-10s " "$lang"

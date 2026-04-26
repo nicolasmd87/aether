@@ -1,0 +1,90 @@
+// contrib.host.tinygo — In-process Go via TinyGo c-shared.
+//
+// Unlike contrib/host/go (subprocess + LD_PRELOAD), this host loads a
+// TinyGo-built .so/.dll into the Aether process via std.dl and calls
+// the exported functions directly. No JSON marshalling, no IPC, no
+// fork/exec — same address space, same scheduler.
+//
+// Build the Go side first:
+//
+//   tinygo build -buildmode=c-shared -o libgreet.so contrib/host/tinygo/examples/greet.go
+//
+// Then from Aether:
+//
+//   import contrib.host.tinygo
+//
+//   handle, err = tinygo.load("./libgreet.so")
+//   answer = tinygo.call_int_void(handle, "Answer")
+//   total  = tinygo.call_int_int_int(handle, "Add", 2, 40)
+//   tinygo.unload(handle)
+//
+// Calling-convention surface for v1: pre-defined wrapper signatures
+// for the most common shapes (int(), int(int), int(int,int), void(int),
+// const char*(const char*)). Adding more shapes is a one-line C
+// extension; libffi-style fully dynamic dispatch is intentionally out
+// of scope for v1 (libffi adds a system dependency 95% of users do
+// not need).
+
+import std.dl
+
+exports (
+    load, unload, last_error,
+    call_int_void, call_int_int, call_int_int_int,
+    call_void_int, call_str_str
+)
+
+// C-side externs. tinygo_* helpers do the (handle, sym_name) lookup
+// and function-pointer cast.
+extern aether_host_tinygo_last_error() -> string
+extern tinygo_call_int_void(handle: ptr, sym: string) -> int
+extern tinygo_call_int_int(handle: ptr, sym: string, a: int) -> int
+extern tinygo_call_int_int_int(handle: ptr, sym: string, a: int, b: int) -> int
+extern tinygo_call_void_int(handle: ptr, sym: string, a: int)
+extern tinygo_call_str_str(handle: ptr, sym: string, a: string) -> string
+
+// Load a TinyGo c-shared library. Returns (handle, "") on success,
+// (null, error) on failure. Just a thin alias over std.dl.open with
+// the tinygo namespace for self-documenting call sites.
+load(path: string) -> {
+    return dl.open(path)
+}
+
+// Unload a previously loaded library. Returns "" on success, error
+// on failure.
+unload(handle: ptr) -> {
+    return dl.close(handle)
+}
+
+// Last-error string for the calling thread.
+last_error() -> {
+    return aether_host_tinygo_last_error()
+}
+
+// Invoke an exported `func() int32` (or any int-returning, no-arg
+// TinyGo function whose c-shared signature is `int fn(void)`).
+call_int_void(handle: ptr, sym: string) -> int {
+    return tinygo_call_int_void(handle, sym)
+}
+
+// Invoke `int fn(int)`.
+call_int_int(handle: ptr, sym: string, a: int) -> int {
+    return tinygo_call_int_int(handle, sym, a)
+}
+
+// Invoke `int fn(int, int)`.
+call_int_int_int(handle: ptr, sym: string, a: int, b: int) -> int {
+    return tinygo_call_int_int_int(handle, sym, a, b)
+}
+
+// Invoke `void fn(int)`.
+call_void_int(handle: ptr, sym: string, a: int) {
+    tinygo_call_void_int(handle, sym, a)
+}
+
+// Invoke `const char* fn(const char*)`. TinyGo `//export` functions
+// returning `string` produce this c-shared signature. Returned
+// pointer ownership follows TinyGo's rule: callee-owned, valid
+// until the next call into the library or library unload.
+call_str_str(handle: ptr, sym: string, a: string) -> string {
+    return tinygo_call_str_str(handle, sym, a)
+}

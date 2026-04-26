@@ -1,0 +1,34 @@
+// Build with:
+//   tinygo build -buildmode=c-shared -o libgreet.so contrib/host/tinygo/examples/greet.go
+//
+// Then load from Aether via contrib.host.tinygo (see ../README.md).
+package main
+
+import "C"
+
+//export Answer
+func Answer() int32 { return 42 }
+
+//export Add
+func Add(a, b int32) int32 { return a + b }
+
+//export Negate
+func Negate(a int32) int32 { return -a }
+
+//export Greet
+func Greet(name *C.char) *C.char {
+	greeting := "hello, " + C.GoString(name)
+	return C.CString(greeting) // leaks; see README "Memory ownership"
+}
+
+//export PrintN
+func PrintN(n int32) {
+	// TinyGo's c-shared programs can println directly; useful for
+	// callbacks that side-effect rather than return.
+	for i := int32(0); i < n; i++ {
+		print(".")
+	}
+	println()
+}
+
+func main() {} // c-shared still requires main()
