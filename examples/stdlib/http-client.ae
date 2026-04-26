@@ -12,9 +12,9 @@ fetch(url: string) {
     body, err = http.get(url)
     if err != "" {
         println("  failed: ${err}")
-        return
+    } else {
+        println("  ok: ${body}")
     }
-    println("  ok: ${body}")
 }
 
 main() {

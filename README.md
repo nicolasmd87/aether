@@ -194,7 +194,31 @@ make -j8                         # Parallel build
 make help                        # Show all targets
 ```
 
-**Windows:** Use the [release binary](https://github.com/nicolasmd87/aether/releases) — no MSYS2 needed. To build from source, use MSYS2 MinGW 64-bit shell; `make ci` runs the full suite (compiler, ae, stdlib, REPL, C tests, .ae tests, examples) with no skips.
+### Building on Windows
+
+The Aether build is GNU-make based. Use one of the two paths below — `nmake` from a Visual Studio Developer Prompt **will not work** (the Makefile uses GNU-only syntax that NMAKE can't parse).
+
+**Just running Aether? Skip this section** and use the [release binary](https://github.com/nicolasmd87/aether/releases) — no MSYS2 setup required.
+
+**Building from source — recommended (MSYS2 / MinGW-w64):**
+
+1. Install [MSYS2](https://www.msys2.org/) and open the **MSYS2 MinGW 64-bit** shell (not the bare MSYS shell).
+2. Install the toolchain:
+   ```bash
+   pacman -S mingw-w64-x86_64-gcc mingw-w64-x86_64-make \
+             mingw-w64-x86_64-openssl mingw-w64-x86_64-zlib \
+             mingw-w64-x86_64-ca-certificates pkg-config make bc
+   ```
+3. Clone and build:
+   ```bash
+   git clone https://github.com/nicolasmd87/aether.git
+   cd aether
+   make ci   # full suite: compiler, ae, stdlib, REPL, C tests, .ae tests, examples
+   ```
+
+For HTTPS to verify certs, the `mingw-w64-x86_64-ca-certificates` package above provides the bundle at `/mingw64/etc/ssl/certs/ca-bundle.crt`. The runtime auto-detects it; if your install is in a non-standard location, export `SSL_CERT_FILE` to the bundle's Windows path.
+
+**Native MSVC (cl.exe / nmake):** not currently supported as a full build path — tracker [#99](https://github.com/nicolasmd87/aether/issues/99). The MSVC matrix job in CI verifies our public headers parse under `cl.exe` so a future native MSVC port stays feasible, but `make` (the build system itself) requires GNU make. The MSYS2 MinGW build above is the supported source-build path for Windows today.
 
 ## Project Structure
 

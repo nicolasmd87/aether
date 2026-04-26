@@ -24,7 +24,12 @@
 #   - infer_function_return_types re-tries when a function's previous
 #     guess was VOID (otherwise an early UNKNOWN-resolved-as-VOID guess
 #     sticks across iterations).
-set -euo pipefail
+# Note: the test harness invokes this via `sh path/to/test.sh`, which
+# resolves to dash on Ubuntu — dash does not implement `-o pipefail`,
+# so this script avoids it. No pipelines are used below; `-eu` alone
+# gives the safety we need (fail-fast on any non-zero, error on
+# unset vars).
+set -eu
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
 AETHER_ROOT="$(cd "$DIR/../../.." && pwd)"
