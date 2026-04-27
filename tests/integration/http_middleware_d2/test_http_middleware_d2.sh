@@ -1,0 +1,138 @@
+#!/bin/sh
+# #260 Tier 1 / Phase D2: 4 more middleware end-to-end.
+#
+# Verifies:
+#   - rewrite     : GET /old/data hits the /api/data handler
+#   - static_files: GET /static/hello.txt returns the file content
+#                   GET /static/../etc/passwd is rejected with 403
+#   - gzip        : Accept-Encoding: gzip -> Content-Encoding: gzip,
+#                   body decompresses back to the original
+#   - error_pages : 404 / 500 bodies are swapped for the registered
+#                   custom HTML
+#
+# Skips when curl(1) is missing.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+AE="$ROOT/build/ae"
+
+if ! command -v curl >/dev/null 2>&1; then
+    echo "  [SKIP] curl not on PATH"
+    exit 0
+fi
+
+# Pre-create the static directory the server is mounted on.
+STATIC_DIR=/tmp/static-test
+mkdir -p "$STATIC_DIR"
+echo "static-hello-content" > "$STATIC_DIR/hello.txt"
+
+TMPDIR="$(mktemp -d)"
+cleanup() {
+    if [ -n "${SRV_PID:-}" ]; then
+        kill "$SRV_PID" 2>/dev/null || true
+        wait "$SRV_PID" 2>/dev/null || true
+    fi
+    rm -rf "$TMPDIR" "$STATIC_DIR"
+}
+trap cleanup EXIT
+
+AETHER_HOME="$ROOT" "$AE" run "$SCRIPT_DIR/server.ae" >"$TMPDIR/srv.log" 2>&1 &
+SRV_PID=$!
+
+deadline=$(($(date +%s) + 5))
+while [ "$(date +%s)" -lt "$deadline" ]; do
+    if grep -q READY "$TMPDIR/srv.log" 2>/dev/null; then break; fi
+    if ! kill -0 "$SRV_PID" 2>/dev/null; then
+        echo "  [FAIL] server died:"
+        head -30 "$TMPDIR/srv.log"
+        exit 1
+    fi
+    sleep 0.1
+done
+sleep 0.3
+
+URL_BASE="http://127.0.0.1:18106"
+
+# --- rewrite: /old/data should hit the /api/data handler ---
+status=$(curl -s -o "$TMPDIR/rw.body" -w '%{http_code}' --max-time 5 \
+    "$URL_BASE/old/data")
+if [ "$status" != "200" ]; then
+    echo "  [FAIL] rewrite: /old/data expected 200; got $status"
+    exit 1
+fi
+if ! grep -q "lorem ipsum" "$TMPDIR/rw.body"; then
+    echo "  [FAIL] rewrite: body wrong; got: $(cat "$TMPDIR/rw.body")"
+    exit 1
+fi
+
+# --- static_files: serve a file ---
+status=$(curl -s -o "$TMPDIR/static.body" -w '%{http_code}' --max-time 5 \
+    "$URL_BASE/static/hello.txt")
+if [ "$status" != "200" ]; then
+    echo "  [FAIL] static_files: /static/hello.txt expected 200; got $status"
+    exit 1
+fi
+if ! grep -q "static-hello-content" "$TMPDIR/static.body"; then
+    echo "  [FAIL] static_files: body wrong; got: $(cat "$TMPDIR/static.body")"
+    exit 1
+fi
+
+# --- static_files: path traversal blocked ---
+status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+    "$URL_BASE/static/../etc/passwd")
+# curl normalises the URL client-side. To actually send "../" we
+# need --path-as-is.
+status=$(curl -s -o /dev/null --path-as-is -w '%{http_code}' --max-time 5 \
+    "$URL_BASE/static/../etc/passwd")
+if [ "$status" != "403" ]; then
+    echo "  [FAIL] static_files: traversal expected 403; got $status"
+    exit 1
+fi
+
+# --- gzip: Accept-Encoding: gzip -> Content-Encoding: gzip ---
+HEADERS="$TMPDIR/gz.h"
+curl -s -D "$HEADERS" -o "$TMPDIR/gz.body" --max-time 5 \
+    -H "Accept-Encoding: gzip" "$URL_BASE/api/data" --compressed
+if ! grep -qi "Content-Encoding: gzip" "$HEADERS"; then
+    echo "  [FAIL] gzip: missing Content-Encoding: gzip"
+    cat "$HEADERS"
+    exit 1
+fi
+if ! grep -qi "Vary: Accept-Encoding" "$HEADERS"; then
+    echo "  [FAIL] gzip: missing Vary: Accept-Encoding"
+    cat "$HEADERS"
+    exit 1
+fi
+# curl --compressed transparently decompresses; body should be the
+# original plaintext.
+if ! grep -q "lorem ipsum" "$TMPDIR/gz.body"; then
+    echo "  [FAIL] gzip: decompressed body wrong; got: $(cat "$TMPDIR/gz.body")"
+    exit 1
+fi
+
+# --- gzip: client without Accept-Encoding gets uncompressed ---
+HEADERS="$TMPDIR/gz_off.h"
+curl -s -D "$HEADERS" -o /dev/null --max-time 5 "$URL_BASE/api/data"
+if grep -qi "Content-Encoding: gzip" "$HEADERS"; then
+    echo "  [FAIL] gzip: compressed even when client did not accept gzip"
+    cat "$HEADERS"
+    exit 1
+fi
+
+# --- error_pages: 500 swapped for custom HTML ---
+curl -s -o "$TMPDIR/500.body" --max-time 5 "$URL_BASE/kaboom" >/dev/null
+if ! grep -q "Custom Internal Error" "$TMPDIR/500.body"; then
+    echo "  [FAIL] error_pages: 500 body not swapped; got: $(cat "$TMPDIR/500.body")"
+    exit 1
+fi
+
+# --- error_pages: 404 swapped for custom HTML ---
+curl -s -o "$TMPDIR/404.body" --max-time 5 "$URL_BASE/no-such-route" >/dev/null
+if ! grep -q "Custom Not Found" "$TMPDIR/404.body"; then
+    echo "  [FAIL] error_pages: 404 body not swapped; got: $(cat "$TMPDIR/404.body")"
+    exit 1
+fi
+
+echo "  [PASS] http_middleware_d2: rewrite / static_files / gzip / error_pages all enforced"

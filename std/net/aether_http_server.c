@@ -21,6 +21,9 @@ void http_server_post(HttpServer* s, const char* p, HttpHandler h, void* u) { (v
 void http_server_put(HttpServer* s, const char* p, HttpHandler h, void* u) { (void)s; (void)p; (void)h; (void)u; }
 void http_server_delete(HttpServer* s, const char* p, HttpHandler h, void* u) { (void)s; (void)p; (void)h; (void)u; }
 void http_server_use_middleware(HttpServer* s, HttpMiddleware m, void* u) { (void)s; (void)m; (void)u; }
+void http_server_use_response_transformer(HttpServer* s, HttpResponseTransformer x, void* u) {
+    (void)s; (void)x; (void)u;
+}
 HttpRequest* http_parse_request(const char* r) { (void)r; return NULL; }
 const char* http_get_header(HttpRequest* r, const char* k) { (void)r; (void)k; return NULL; }
 const char* http_get_query_param(HttpRequest* r, const char* k) { (void)r; (void)k; return NULL; }
@@ -284,6 +287,7 @@ HttpServer* http_server_create(int port) {
     server->keep_alive_enabled = 0;
     server->keep_alive_max = 0;
     server->keep_alive_idle_ms = 0;
+    server->response_transformer_chain = NULL;
 
     return server;
 }
@@ -660,28 +664,43 @@ void http_response_json(HttpServerResponse* res, const char* json) {
     http_response_set_body(res, json);
 }
 
-// Returns a heap-allocated string; caller must free() it.
-char* http_response_serialize(HttpServerResponse* res) {
+// Length-aware serializer. The body may be binary (gzip-compressed,
+// other application/octet-stream payloads); the returned buffer is
+// NOT a C string — caller must use *out_len, never strlen.
+char* http_response_serialize_len(HttpServerResponse* res, size_t* out_len) {
+    if (!res) { if (out_len) *out_len = 0; return NULL; }
     // Compute required size: status line + headers + blank line + body
     size_t needed = 64;  // status line headroom
     for (int i = 0; i < res->header_count; i++)
         needed += strlen(res->header_keys[i]) + strlen(res->header_values[i]) + 4;
     needed += 2;  // blank line
-    if (res->body) needed += res->body_length + 1;
+    if (res->body) needed += res->body_length;
 
-    char* buf = malloc(needed);
-    if (!buf) return NULL;
+    char* buf = malloc(needed + 1);
+    if (!buf) { if (out_len) *out_len = 0; return NULL; }
 
-    int off = snprintf(buf, needed, "HTTP/1.1 %d %s\r\n",
+    int off = snprintf(buf, needed + 1, "HTTP/1.1 %d %s\r\n",
                        res->status_code, res->status_text);
     for (int i = 0; i < res->header_count; i++)
-        off += snprintf(buf + off, needed - off, "%s: %s\r\n",
+        off += snprintf(buf + off, needed + 1 - off, "%s: %s\r\n",
                         res->header_keys[i], res->header_values[i]);
-    off += snprintf(buf + off, needed - off, "\r\n");
-    if (res->body)
-        memcpy(buf + off, res->body, res->body_length + 1);
-
+    off += snprintf(buf + off, needed + 1 - off, "\r\n");
+    if (res->body && res->body_length > 0) {
+        memcpy(buf + off, res->body, res->body_length);
+        off += (int)res->body_length;
+    }
+    if (out_len) *out_len = (size_t)off;
     return buf;
+}
+
+// String-shaped legacy serializer. Equivalent to the length-aware
+// variant for text bodies; truncates at the first NUL in the body
+// for binary responses (callers wanting binary support should use
+// http_response_serialize_len directly). Kept for backward compat
+// with downstream consumers.
+char* http_response_serialize(HttpServerResponse* res) {
+    size_t len = 0;
+    return http_response_serialize_len(res, &len);
 }
 
 void http_server_response_free(HttpServerResponse* res) {
@@ -759,6 +778,34 @@ void http_server_use_middleware(HttpServer* server, HttpMiddleware middleware, v
         server->middleware_chain = node;
     } else {
         HttpMiddlewareNode* tail = server->middleware_chain;
+        while (tail->next) tail = tail->next;
+        tail->next = node;
+    }
+}
+
+/* Response-transformer chain node. Hidden in .c — header only
+ * forward-declares the struct via the field's `struct
+ * HttpResponseTransformerNode*` reference so the type is stable
+ * across translation units. */
+struct HttpResponseTransformerNode {
+    HttpResponseTransformer xform;
+    void* user_data;
+    struct HttpResponseTransformerNode* next;
+};
+
+void http_server_use_response_transformer(HttpServer* server,
+                                          HttpResponseTransformer xform,
+                                          void* user_data) {
+    if (!server || !xform) return;
+    struct HttpResponseTransformerNode* node =
+        (struct HttpResponseTransformerNode*)malloc(sizeof(*node));
+    node->xform = xform;
+    node->user_data = user_data;
+    node->next = NULL;
+    if (!server->response_transformer_chain) {
+        server->response_transformer_chain = node;
+    } else {
+        struct HttpResponseTransformerNode* tail = server->response_transformer_chain;
         while (tail->next) tail = tail->next;
         tail->next = node;
     }
@@ -943,8 +990,9 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
 
     // If middleware blocked, send response and close.
     if (!should_continue) {
-        char* response_str = http_response_serialize(res);
-        if (response_str) { conn_send(conn, response_str, (int)strlen(response_str)); free(response_str); }
+        size_t resp_len = 0;
+        char* response_str = http_response_serialize_len(res, &resp_len);
+        if (response_str) { conn_send(conn, response_str, (int)resp_len); free(response_str); }
         http_request_free(req);
         http_server_response_free(res);
         return 0;
@@ -970,6 +1018,18 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
     } else {
         http_response_set_status(res, 404);
         http_response_set_body(res, "404 Not Found");
+    }
+
+    /* Run response-transformer chain (#260 Tier 1). Each transformer
+     * may mutate the response — typical uses include gzip
+     * compression and error-page substitution. They run in
+     * registration order. */
+    {
+        struct HttpResponseTransformerNode* xform = server->response_transformer_chain;
+        while (xform) {
+            xform->xform(req, res, xform->user_data);
+            xform = xform->next;
+        }
     }
 
     /* Decide whether this response keeps the connection open.
@@ -1002,9 +1062,13 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
         http_response_set_header(res, "Connection", "close");
     }
 
-    // Send response
-    char* response_str = http_response_serialize(res);
-    if (response_str) { conn_send(conn, response_str, (int)strlen(response_str)); free(response_str); }
+    // Send response — length-aware so binary bodies (e.g. gzip-
+    // compressed) survive intact past their first NUL byte.
+    {
+        size_t resp_len = 0;
+        char* response_str = http_response_serialize_len(res, &resp_len);
+        if (response_str) { conn_send(conn, response_str, (int)resp_len); free(response_str); }
+    }
 
     // Cleanup
     http_request_free(req);
@@ -1501,6 +1565,16 @@ void http_server_free(HttpServer* server) {
         HttpMiddlewareNode* next = middleware->next;
         free(middleware);
         middleware = next;
+    }
+
+    // Free response transformers
+    {
+        struct HttpResponseTransformerNode* xform = server->response_transformer_chain;
+        while (xform) {
+            struct HttpResponseTransformerNode* next = xform->next;
+            free(xform);
+            xform = next;
+        }
     }
 
     /* Free TLS context if one was loaded via http_server_set_tls_raw. */

@@ -38,6 +38,12 @@ exports (
     use_basic_auth,
     use_rate_limit,
     use_vhost,
+    use_gzip,
+    use_static_files,
+    use_rewrite,
+    rewrite_add_rule,
+    use_error_pages,
+    error_pages_register,
 )
 
 // ---- Raw externs ----
@@ -62,6 +68,22 @@ extern aether_vhost_register_host(map: ptr, host: string) -> int
 extern aether_middleware_vhost(req: ptr, res: ptr, user_data: ptr) -> int
 
 extern http_server_use_middleware(server: ptr, middleware: ptr, user_data: ptr)
+extern http_server_use_response_transformer(server: ptr, xform: ptr, user_data: ptr)
+
+// D2 externs.
+extern aether_gzip_opts_new(min_size: int, level: int) -> ptr
+extern aether_xform_gzip(req: ptr, res: ptr, user_data: ptr)
+
+extern aether_static_opts_new(url_prefix: string, root: string) -> ptr
+extern aether_middleware_static(req: ptr, res: ptr, user_data: ptr) -> int
+
+extern aether_rewrite_opts_new() -> ptr
+extern aether_rewrite_add_rule(opts: ptr, from_prefix: string, to_prefix: string) -> int
+extern aether_middleware_rewrite(req: ptr, res: ptr, user_data: ptr) -> int
+
+extern aether_error_pages_opts_new() -> ptr
+extern aether_error_pages_register(opts: ptr, status: int, body: string, content_type: string) -> int
+extern aether_xform_error_pages(req: ptr, res: ptr, user_data: ptr)
 
 extern string_length(s: string) -> int
 
@@ -181,4 +203,85 @@ substring_trim(s: string, start: int, len: int) -> string {
         return ""
     }
     return string_substring(s, start, start + len)
+}
+
+// =================================================================
+// D2 wrappers — gzip / static_files / rewrite / error_pages
+// =================================================================
+
+// Install a response-side gzip compressor. Compresses bodies of
+// `min_size` bytes or larger when the client sends Accept-Encoding:
+// gzip; emits Content-Encoding: gzip + Vary: Accept-Encoding.
+// `level` is 1 (fastest) - 9 (best); pass 0 for default (6).
+//
+// Skipped (no compression) when:
+//   - the response body is shorter than min_size,
+//   - the response already has a Content-Encoding header,
+//   - the client did not advertise gzip in Accept-Encoding,
+//   - compression failed or didn't shrink the body.
+//
+// Returns "" on success; error string on allocation failure.
+use_gzip(server: ptr, min_size: int, level: int) -> {
+    opts = aether_gzip_opts_new(min_size, level)
+    if opts == null {
+        return "gzip: allocation failed"
+    }
+    http_server_use_response_transformer(server, aether_xform_gzip, opts)
+    return ""
+}
+
+// Mount a directory at a URL prefix. Path traversal (..) is
+// blocked at the middleware level. MIME type is auto-detected from
+// the file extension via http_mime_type. Returns "" on success.
+use_static_files(server: ptr, url_prefix: string, root: string) -> {
+    opts = aether_static_opts_new(url_prefix, root)
+    if opts == null {
+        return "static_files: allocation failed (root may be empty)"
+    }
+    http_server_use_middleware(server, aether_middleware_static, opts)
+    return ""
+}
+
+// Allocate a URL-rewrite opts struct. Use `rewrite_add_rule` to
+// install one or more prefix-rewrite rules, then pass the opts to
+// `use_rewrite`. Rules apply in registration order; first match wins.
+//
+// Idiom:
+//     opts = mw.aether_rewrite_opts_new()  // (or expose a wrapper)
+//     mw.rewrite_add_rule(opts, "/old/", "/new/")
+//     mw.rewrite_add_rule(opts, "/legacy/", "/api/v1/")
+//     mw.use_rewrite(server, opts)
+rewrite_add_rule(opts: ptr, from_prefix: string, to_prefix: string) -> {
+    rc = aether_rewrite_add_rule(opts, from_prefix, to_prefix)
+    if rc != 0 {
+        return "rewrite: rule registration failed"
+    }
+    return ""
+}
+
+use_rewrite(server: ptr, opts: ptr) -> {
+    if opts == null {
+        return "rewrite: opts is null (call aether_rewrite_opts_new first)"
+    }
+    http_server_use_middleware(server, aether_middleware_rewrite, opts)
+    return ""
+}
+
+// Register a custom error page. Body is served with the given
+// Content-Type when the route handler emits the matching status
+// code. Multiple registrations supported (one per status).
+error_pages_register(opts: ptr, status_code: int, body: string, content_type: string) -> {
+    rc = aether_error_pages_register(opts, status_code, body, content_type)
+    if rc != 0 {
+        return "error_pages: register failed"
+    }
+    return ""
+}
+
+use_error_pages(server: ptr, opts: ptr) -> {
+    if opts == null {
+        return "error_pages: opts is null (call aether_error_pages_opts_new first)"
+    }
+    http_server_use_response_transformer(server, aether_xform_error_pages, opts)
+    return ""
 }

@@ -76,6 +76,11 @@ typedef struct {
     // Middleware
     HttpMiddlewareNode* middleware_chain;
 
+    // Response transformers (#260 Tier 1). Run after the route
+    // handler, before serialization. See
+    // http_server_use_response_transformer above.
+    struct HttpResponseTransformerNode* response_transformer_chain;
+
     // Actor system
     Scheduler* scheduler;
 
@@ -186,6 +191,19 @@ void http_server_delete(HttpServer* server, const char* path, HttpHandler handle
 // Middleware
 void http_server_use_middleware(HttpServer* server, HttpMiddleware middleware, void* user_data);
 
+// Response-transformer chain (#260 Tier 1). Registered transformers
+// run AFTER the route handler emits a response and BEFORE the
+// response is serialized to the wire. Transformers may mutate the
+// response (compress body, swap error pages, attach headers).
+// Transformers run in registration order; each receives (req, res,
+// user_data) and has no return value (mutation is the only effect).
+typedef void (*HttpResponseTransformer)(HttpRequest* req,
+                                        HttpServerResponse* res,
+                                        void* user_data);
+void http_server_use_response_transformer(HttpServer* server,
+                                          HttpResponseTransformer xform,
+                                          void* user_data);
+
 // Request parsing
 HttpRequest* http_parse_request(const char* raw_request);
 const char* http_get_header(HttpRequest* req, const char* key);
@@ -200,6 +218,10 @@ void http_response_set_header(HttpServerResponse* res, const char* key, const ch
 void http_response_set_body(HttpServerResponse* res, const char* body);
 void http_response_json(HttpServerResponse* res, const char* json);
 char* http_response_serialize(HttpServerResponse* res);  // caller must free()
+// Length-aware variant — use this when the response body might contain
+// binary (e.g. gzip-compressed). The returned buffer is NOT NUL-
+// terminated as a string; pass *out_len bytes to send. Caller free()s.
+char* http_response_serialize_len(HttpServerResponse* res, size_t* out_len);
 void http_server_response_free(HttpServerResponse* res);
 
 // Helpers

@@ -101,4 +101,76 @@ int  aether_vhost_register_host(AetherVhostMap* map, const char* host);
 
 int aether_middleware_vhost(HttpRequest* req, HttpServerResponse* res, void* user_data);
 
+// -----------------------------------------------------------------
+// gzip — response body compression (#260 Tier 1, Phase D2)
+// -----------------------------------------------------------------
+typedef struct AetherGzipOpts AetherGzipOpts;
+
+// min_size: skip compression for bodies smaller than this many
+// bytes (compression overhead exceeds savings on tiny payloads).
+// level: 1-9 zlib level (1 fastest / 9 best, 6 default).
+//
+// The transformer checks request's Accept-Encoding header for
+// "gzip"; if absent, the response is left untouched. Otherwise the
+// body is compressed in place and Content-Encoding: gzip is added.
+AetherGzipOpts* aether_gzip_opts_new(int min_size, int level);
+void aether_gzip_opts_free(AetherGzipOpts* opts);
+
+// Registered as a RESPONSE TRANSFORMER (not a pre-handler) because
+// it operates on the response after the route handler emits it.
+void aether_xform_gzip(HttpRequest* req, HttpServerResponse* res, void* user_data);
+
+// -----------------------------------------------------------------
+// Static file serving (#260 Tier 1, Phase D2)
+// -----------------------------------------------------------------
+typedef struct AetherStaticOpts AetherStaticOpts;
+
+// Mount the directory at `root` under the URL prefix `url_prefix`
+// (e.g. mount /var/www/static at /assets means /assets/foo.css
+// reads /var/www/static/foo.css). Path traversal (`..`) is blocked.
+// Files are streamed in via http_serve_file with MIME type
+// auto-detected from the extension.
+AetherStaticOpts* aether_static_opts_new(const char* url_prefix, const char* root);
+void aether_static_opts_free(AetherStaticOpts* opts);
+
+int aether_middleware_static(HttpRequest* req, HttpServerResponse* res, void* user_data);
+
+// -----------------------------------------------------------------
+// URL rewriting (#260 Tier 1, Phase D2)
+// -----------------------------------------------------------------
+typedef struct AetherRewriteOpts AetherRewriteOpts;
+
+AetherRewriteOpts* aether_rewrite_opts_new(void);
+void aether_rewrite_opts_free(AetherRewriteOpts* opts);
+
+// Add a rewrite rule. `from_prefix` matched literally against the
+// request's path; if it matches, the prefix is replaced by
+// `to_prefix` in-place (the request struct's path field is
+// overwritten before route matching runs). Multiple rules apply in
+// registration order; the first matching rule wins.
+int aether_rewrite_add_rule(AetherRewriteOpts* opts,
+                            const char* from_prefix,
+                            const char* to_prefix);
+
+int aether_middleware_rewrite(HttpRequest* req, HttpServerResponse* res, void* user_data);
+
+// -----------------------------------------------------------------
+// Custom error pages (#260 Tier 1, Phase D2)
+// -----------------------------------------------------------------
+typedef struct AetherErrorPagesOpts AetherErrorPagesOpts;
+
+AetherErrorPagesOpts* aether_error_pages_opts_new(void);
+void aether_error_pages_opts_free(AetherErrorPagesOpts* opts);
+
+// Register a body string for a specific HTTP status code. When the
+// route handler emits that status, the response body is replaced
+// with this string before serialization.
+int aether_error_pages_register(AetherErrorPagesOpts* opts,
+                                int status_code,
+                                const char* body,
+                                const char* content_type);
+
+// Registered as a RESPONSE TRANSFORMER.
+void aether_xform_error_pages(HttpRequest* req, HttpServerResponse* res, void* user_data);
+
 #endif

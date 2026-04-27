@@ -396,3 +396,335 @@ int aether_middleware_vhost(HttpRequest* req, HttpServerResponse* res, void* use
     http_response_set_body(res, "Unknown host");
     return 0;
 }
+
+// =================================================================
+// D2 — gzip / static_files / rewrite / error_pages
+// =================================================================
+
+// -----------------------------------------------------------------
+// gzip response transformer
+// -----------------------------------------------------------------
+#ifdef AETHER_HAS_ZLIB
+#include <zlib.h>
+#endif
+
+struct AetherGzipOpts {
+    int min_size;
+    int level;
+};
+
+AetherGzipOpts* aether_gzip_opts_new(int min_size, int level) {
+    AetherGzipOpts* o = (AetherGzipOpts*)calloc(1, sizeof(AetherGzipOpts));
+    if (!o) return NULL;
+    o->min_size = min_size > 0 ? min_size : 256;
+    if (level < 1 || level > 9) level = 6;
+    o->level = level;
+    return o;
+}
+
+void aether_gzip_opts_free(AetherGzipOpts* o) { free(o); }
+
+#ifdef AETHER_HAS_ZLIB
+/* Compress `in_data` (in_len bytes) into a freshly allocated gzip
+ * stream. Returns the buffer (caller frees) and writes its length
+ * into *out_len. NULL on failure. Uses windowBits=15+16 to produce
+ * gzip framing (header + deflate + CRC + ISIZE). */
+static unsigned char* gzip_compress(const unsigned char* in_data, size_t in_len,
+                                    int level, size_t* out_len) {
+    z_stream strm;
+    memset(&strm, 0, sizeof(strm));
+    /* 15+16: max window + gzip wrapper. -15 alone would be raw
+     * deflate; +16 tells zlib to emit gzip framing. */
+    if (deflateInit2(&strm, level, Z_DEFLATED, 15 + 16, 8,
+                     Z_DEFAULT_STRATEGY) != Z_OK) {
+        return NULL;
+    }
+    uLong bound = deflateBound(&strm, (uLong)in_len);
+    unsigned char* out = (unsigned char*)malloc(bound > 0 ? bound : 1);
+    if (!out) { deflateEnd(&strm); return NULL; }
+    strm.next_in = (Bytef*)in_data;
+    strm.avail_in = (uInt)in_len;
+    strm.next_out = out;
+    strm.avail_out = (uInt)bound;
+    int rc = deflate(&strm, Z_FINISH);
+    if (rc != Z_STREAM_END) {
+        deflateEnd(&strm);
+        free(out);
+        return NULL;
+    }
+    *out_len = strm.total_out;
+    deflateEnd(&strm);
+    return out;
+}
+#endif
+
+void aether_xform_gzip(HttpRequest* req, HttpServerResponse* res, void* user_data) {
+    AetherGzipOpts* o = (AetherGzipOpts*)user_data;
+    if (!o || !res || !res->body || res->body_length < (size_t)o->min_size) return;
+    /* Don't double-encode if the handler already set Content-Encoding. */
+    for (int i = 0; i < res->header_count; i++) {
+        if (res->header_keys[i] &&
+            strcasecmp(res->header_keys[i], "Content-Encoding") == 0) {
+            return;
+        }
+    }
+    /* Client must accept gzip. Tolerant matching — Accept-Encoding can
+     * carry multiple tokens with q-values; a substring search for
+     * "gzip" is good enough for the common case. */
+    const char* ae = http_get_header(req, "Accept-Encoding");
+    if (!ae) return;
+    int wants_gzip = 0;
+    for (const char* p = ae; *p; p++) {
+        if ((p == ae || !isalnum((unsigned char)p[-1])) &&
+            strncasecmp(p, "gzip", 4) == 0) {
+            wants_gzip = 1;
+            break;
+        }
+    }
+    if (!wants_gzip) return;
+
+#ifdef AETHER_HAS_ZLIB
+    size_t out_len = 0;
+    unsigned char* compressed = gzip_compress((const unsigned char*)res->body,
+                                              res->body_length, o->level, &out_len);
+    if (!compressed) return;  /* leave response untouched on compression failure */
+    if (out_len >= res->body_length) {
+        /* Compression didn't help (already-compressed body, e.g.
+         * already-gzipped image). Discard and leave alone. */
+        free(compressed);
+        return;
+    }
+    /* Replace body in place. The response struct owns the body
+     * string via its own free path (http_server_response_free).
+     * Body is binary (deflate stream); the trailing NUL is
+     * defensive only — the wire path uses res->body_length, not
+     * strlen(res->body). */
+    free(res->body);
+    res->body = (char*)malloc(out_len + 1);
+    if (!res->body) {
+        free(compressed);
+        res->body_length = 0;
+        return;
+    }
+    memcpy(res->body, compressed, out_len);
+    res->body[out_len] = '\0';
+    res->body_length = out_len;
+    free(compressed);
+
+    /* Sync Content-Length to the post-compression size, replacing
+     * the value the route handler set via http_response_set_body.
+     * Without this, the wire response advertises the original
+     * length and the client either truncates or errors out. */
+    char clbuf[32];
+    snprintf(clbuf, sizeof(clbuf), "%zu", out_len);
+    http_response_set_header(res, "Content-Length",   clbuf);
+    http_response_set_header(res, "Content-Encoding", "gzip");
+    http_response_set_header(res, "Vary",             "Accept-Encoding");
+#else
+    (void)res;
+#endif
+}
+
+// -----------------------------------------------------------------
+// Static file serving
+// -----------------------------------------------------------------
+struct AetherStaticOpts {
+    char* url_prefix;   /* e.g. "/assets" or "" */
+    char* root;         /* e.g. "/var/www/static" */
+    size_t prefix_len;
+};
+
+AetherStaticOpts* aether_static_opts_new(const char* url_prefix, const char* root) {
+    if (!root || !*root) return NULL;
+    AetherStaticOpts* o = (AetherStaticOpts*)calloc(1, sizeof(AetherStaticOpts));
+    if (!o) return NULL;
+    o->url_prefix = strdup(url_prefix ? url_prefix : "");
+    o->root = strdup(root);
+    o->prefix_len = strlen(o->url_prefix);
+    return o;
+}
+
+void aether_static_opts_free(AetherStaticOpts* o) {
+    if (!o) return;
+    free(o->url_prefix);
+    free(o->root);
+    free(o);
+}
+
+extern const char* http_mime_type(const char* path);
+extern void http_serve_file(HttpServerResponse* res, const char* filepath);
+
+int aether_middleware_static(HttpRequest* req, HttpServerResponse* res, void* user_data) {
+    AetherStaticOpts* o = (AetherStaticOpts*)user_data;
+    if (!o) return 1;
+    const char* path = http_request_path(req);
+    if (!path) return 1;
+
+    /* Path must start with the configured prefix. Prefix "" matches
+     * everything (mount the static directory at root). */
+    if (o->prefix_len > 0 &&
+        strncmp(path, o->url_prefix, o->prefix_len) != 0) {
+        return 1;  /* not ours, continue chain */
+    }
+    const char* tail = path + o->prefix_len;
+    if (*tail == '\0') tail = "/";
+
+    /* Block path traversal — refuse any "/.." segment. */
+    if (strstr(tail, "/..") || strstr(tail, "../") ||
+        strcmp(tail, "..") == 0) {
+        http_response_set_status(res, 403);
+        http_response_set_body(res, "Forbidden");
+        return 0;
+    }
+
+    /* Build the filesystem path: <root> + <tail>. */
+    char fspath[1024];
+    int n = snprintf(fspath, sizeof(fspath), "%s%s%s",
+                     o->root,
+                     (tail[0] == '/' ? "" : "/"),
+                     tail);
+    if (n <= 0 || n >= (int)sizeof(fspath)) {
+        http_response_set_status(res, 414);
+        http_response_set_body(res, "URI too long");
+        return 0;
+    }
+
+    /* http_serve_file populates the response on success or sets a
+     * 404 / 500 on failure. Either way, short-circuit the chain
+     * once we've taken responsibility for the path. */
+    http_serve_file(res, fspath);
+    return 0;
+}
+
+// -----------------------------------------------------------------
+// URL rewriting
+// -----------------------------------------------------------------
+typedef struct RewriteRule {
+    char* from_prefix;
+    char* to_prefix;
+    size_t from_len;
+} RewriteRule;
+
+struct AetherRewriteOpts {
+    RewriteRule* rules;
+    int count;
+    int cap;
+};
+
+AetherRewriteOpts* aether_rewrite_opts_new(void) {
+    return (AetherRewriteOpts*)calloc(1, sizeof(AetherRewriteOpts));
+}
+
+void aether_rewrite_opts_free(AetherRewriteOpts* o) {
+    if (!o) return;
+    for (int i = 0; i < o->count; i++) {
+        free(o->rules[i].from_prefix);
+        free(o->rules[i].to_prefix);
+    }
+    free(o->rules);
+    free(o);
+}
+
+int aether_rewrite_add_rule(AetherRewriteOpts* o,
+                            const char* from_prefix,
+                            const char* to_prefix) {
+    if (!o || !from_prefix || !to_prefix) return -1;
+    if (o->count >= o->cap) {
+        int new_cap = o->cap > 0 ? o->cap * 2 : 4;
+        RewriteRule* nr = (RewriteRule*)realloc(o->rules, new_cap * sizeof(RewriteRule));
+        if (!nr) return -1;
+        o->rules = nr;
+        o->cap = new_cap;
+    }
+    o->rules[o->count].from_prefix = strdup(from_prefix);
+    o->rules[o->count].to_prefix = strdup(to_prefix);
+    o->rules[o->count].from_len = strlen(from_prefix);
+    o->count++;
+    return 0;
+}
+
+/* Mutate req->path in place via free + strdup. The HttpRequest
+ * struct owns its path via http_request_free's free(req->path). */
+int aether_middleware_rewrite(HttpRequest* req, HttpServerResponse* res, void* user_data) {
+    (void)res;
+    AetherRewriteOpts* o = (AetherRewriteOpts*)user_data;
+    if (!o || !req || !req->path) return 1;
+
+    for (int i = 0; i < o->count; i++) {
+        RewriteRule* r = &o->rules[i];
+        if (strncmp(req->path, r->from_prefix, r->from_len) == 0) {
+            const char* tail = req->path + r->from_len;
+            size_t need = strlen(r->to_prefix) + strlen(tail) + 1;
+            char* np = (char*)malloc(need);
+            if (!np) return 1;  /* fail open on OOM */
+            snprintf(np, need, "%s%s", r->to_prefix, tail);
+            free(req->path);
+            req->path = np;
+            return 1;  /* first match wins; continue chain */
+        }
+    }
+    return 1;
+}
+
+// -----------------------------------------------------------------
+// Custom error pages
+// -----------------------------------------------------------------
+typedef struct ErrorPage {
+    int    status;
+    char*  body;
+    char*  content_type;
+} ErrorPage;
+
+struct AetherErrorPagesOpts {
+    ErrorPage* pages;
+    int count;
+    int cap;
+};
+
+AetherErrorPagesOpts* aether_error_pages_opts_new(void) {
+    return (AetherErrorPagesOpts*)calloc(1, sizeof(AetherErrorPagesOpts));
+}
+
+void aether_error_pages_opts_free(AetherErrorPagesOpts* o) {
+    if (!o) return;
+    for (int i = 0; i < o->count; i++) {
+        free(o->pages[i].body);
+        free(o->pages[i].content_type);
+    }
+    free(o->pages);
+    free(o);
+}
+
+int aether_error_pages_register(AetherErrorPagesOpts* o,
+                                int status_code,
+                                const char* body,
+                                const char* content_type) {
+    if (!o || status_code < 100 || status_code > 599 || !body) return -1;
+    if (o->count >= o->cap) {
+        int new_cap = o->cap > 0 ? o->cap * 2 : 4;
+        ErrorPage* np = (ErrorPage*)realloc(o->pages, new_cap * sizeof(ErrorPage));
+        if (!np) return -1;
+        o->pages = np;
+        o->cap = new_cap;
+    }
+    o->pages[o->count].status = status_code;
+    o->pages[o->count].body = strdup(body);
+    o->pages[o->count].content_type = content_type && *content_type
+        ? strdup(content_type) : strdup("text/html; charset=utf-8");
+    o->count++;
+    return 0;
+}
+
+void aether_xform_error_pages(HttpRequest* req, HttpServerResponse* res, void* user_data) {
+    (void)req;
+    AetherErrorPagesOpts* o = (AetherErrorPagesOpts*)user_data;
+    if (!o || !res) return;
+    for (int i = 0; i < o->count; i++) {
+        if (o->pages[i].status == res->status_code) {
+            http_response_set_body(res, o->pages[i].body);
+            http_response_set_header(res, "Content-Type", o->pages[i].content_type);
+            return;
+        }
+    }
+}
+
