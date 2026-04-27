@@ -1,0 +1,149 @@
+#!/bin/sh
+# #260 Tier 1 / Phase D1: 4 middleware end-to-end.
+#
+# Verifies each middleware in turn against the running server:
+#   - vhost  : Host: foo.example -> 404 "Unknown host"
+#   - auth   : missing Authorization -> 401 with WWW-Authenticate
+#              wrong credentials -> 401
+#              correct credentials (alice:secret) -> 200
+#   - cors   : OPTIONS preflight -> 204 with Access-Control headers
+#              GET response carries the configured headers
+#   - rate   : 11th request inside the 5s window -> 429 with
+#              Retry-After
+#
+# Skips when curl(1) is missing.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+AE="$ROOT/build/ae"
+
+if ! command -v curl >/dev/null 2>&1; then
+    echo "  [SKIP] curl not on PATH"
+    exit 0
+fi
+
+TMPDIR="$(mktemp -d)"
+cleanup() {
+    if [ -n "${SRV_PID:-}" ]; then
+        kill "$SRV_PID" 2>/dev/null || true
+        wait "$SRV_PID" 2>/dev/null || true
+    fi
+    rm -rf "$TMPDIR"
+}
+trap cleanup EXIT
+
+AETHER_HOME="$ROOT" "$AE" run "$SCRIPT_DIR/server.ae" >"$TMPDIR/srv.log" 2>&1 &
+SRV_PID=$!
+
+deadline=$(($(date +%s) + 5))
+while [ "$(date +%s)" -lt "$deadline" ]; do
+    if grep -q READY "$TMPDIR/srv.log" 2>/dev/null; then break; fi
+    if ! kill -0 "$SRV_PID" 2>/dev/null; then
+        echo "  [FAIL] server died:"
+        head -20 "$TMPDIR/srv.log"
+        exit 1
+    fi
+    sleep 0.1
+done
+sleep 0.3
+
+URL="http://127.0.0.1:18105/"
+
+# --- vhost: unknown host -> 404 ---
+status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+    -H "Host: foo.example" "$URL")
+if [ "$status" != "404" ]; then
+    echo "  [FAIL] vhost: expected 404 for foo.example; got $status"
+    exit 1
+fi
+
+# --- auth: missing creds -> 401 + WWW-Authenticate ---
+HEADERS="$TMPDIR/h1"
+curl -s -D "$HEADERS" -o /dev/null --max-time 5 -H "Host: localhost" "$URL"
+if ! grep -qi "^HTTP/1.1 401" "$HEADERS"; then
+    echo "  [FAIL] auth: expected 401 without creds"
+    cat "$HEADERS"
+    exit 1
+fi
+if ! grep -qi "WWW-Authenticate: Basic realm=" "$HEADERS"; then
+    echo "  [FAIL] auth: missing WWW-Authenticate header"
+    cat "$HEADERS"
+    exit 1
+fi
+
+# --- auth: wrong creds -> 401 ---
+status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+    -u "alice:wrong" -H "Host: localhost" "$URL")
+if [ "$status" != "401" ]; then
+    echo "  [FAIL] auth: wrong creds expected 401; got $status"
+    exit 1
+fi
+
+# --- auth: correct creds -> 200 ---
+HEADERS="$TMPDIR/h2"
+BODY="$TMPDIR/b2"
+curl -s -D "$HEADERS" -o "$BODY" --max-time 5 \
+    -u "alice:secret" -H "Host: localhost" "$URL"
+if ! grep -qi "^HTTP/1.1 200" "$HEADERS"; then
+    echo "  [FAIL] auth: alice:secret expected 200"
+    cat "$HEADERS"
+    exit 1
+fi
+if [ "$(cat "$BODY")" != "ok-mw" ]; then
+    echo "  [FAIL] auth: body wrong; got '$(cat "$BODY")'"
+    exit 1
+fi
+
+# --- cors: GET response carries Access-Control-Allow-Origin ---
+if ! grep -qi "Access-Control-Allow-Origin: \\*" "$HEADERS"; then
+    echo "  [FAIL] cors: missing Access-Control-Allow-Origin on GET response"
+    cat "$HEADERS"
+    exit 1
+fi
+
+# --- cors: OPTIONS preflight short-circuits with 204 + Max-Age ---
+HEADERS="$TMPDIR/h3"
+curl -s -D "$HEADERS" -o /dev/null --max-time 5 -X OPTIONS \
+    -H "Host: localhost" -u "alice:secret" "$URL"
+if ! grep -qi "^HTTP/1.1 204" "$HEADERS"; then
+    echo "  [FAIL] cors: OPTIONS preflight expected 204"
+    cat "$HEADERS"
+    exit 1
+fi
+if ! grep -qi "Access-Control-Max-Age: 600" "$HEADERS"; then
+    echo "  [FAIL] cors: missing Access-Control-Max-Age: 600"
+    cat "$HEADERS"
+    exit 1
+fi
+
+# --- rate_limit: budget is 10 per 5s; the auth-success + OPTIONS
+# preflight runs above already consumed ~2 tokens (auth-failed
+# requests are short-circuited BEFORE rate_limit, so they don't
+# count). Burst 15 more — past the 10-token budget — and expect
+# at least one 429 with a Retry-After header.
+got_429=0
+for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+    status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+        -u "alice:secret" -H "Host: localhost" "$URL")
+    if [ "$status" = "429" ]; then
+        got_429=1
+        # Verify Retry-After is present.
+        H="$TMPDIR/hr"
+        curl -s -D "$H" -o /dev/null --max-time 5 \
+            -u "alice:secret" -H "Host: localhost" "$URL" >/dev/null
+        if ! grep -qi "Retry-After:" "$H"; then
+            echo "  [FAIL] rate_limit: 429 without Retry-After header"
+            cat "$H"
+            exit 1
+        fi
+        break
+    fi
+done
+if [ "$got_429" -ne 1 ]; then
+    echo "  [FAIL] rate_limit: budget never exhausted across 8 extra requests"
+    exit 1
+fi
+
+echo "  [PASS] http_middleware_d1: vhost / basic_auth / cors / rate_limit all enforced"

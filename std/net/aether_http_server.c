@@ -747,8 +747,21 @@ void http_server_use_middleware(HttpServer* server, HttpMiddleware middleware, v
     HttpMiddlewareNode* node = (HttpMiddlewareNode*)malloc(sizeof(HttpMiddlewareNode));
     node->middleware = middleware;
     node->user_data = user_data;
-    node->next = server->middleware_chain;
-    server->middleware_chain = node;
+    node->next = NULL;
+    /* Append to the end of the chain so registration order matches
+     * execution order — what every HTTP framework does, what the
+     * std.http.middleware factories assume, and what the
+     * documentation will say. (The earlier prepend-to-head shape
+     * silently reversed the order, which only matters when more
+     * than one middleware is installed; #260 Tier 1 is the first
+     * caller that ever installs more than one.) */
+    if (!server->middleware_chain) {
+        server->middleware_chain = node;
+    } else {
+        HttpMiddlewareNode* tail = server->middleware_chain;
+        while (tail->next) tail = tail->next;
+        tail->next = node;
+    }
 }
 
 // Route matching with parameter extraction
