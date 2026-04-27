@@ -22,6 +22,7 @@ void http_request_free_raw(HttpRequest* r) { (void)r; }
 HttpResponse* http_send_raw(HttpRequest* r) { (void)r; return NULL; }
 const char* http_response_header_raw(HttpResponse* r, const char* n) { (void)r; (void)n; return ""; }
 const char* http_response_effective_url_raw(HttpResponse* r) { (void)r; return ""; }
+const char* http_response_redirect_error_raw(HttpResponse* r) { (void)r; return ""; }
 #else
 
 #include <stdio.h>
@@ -425,6 +426,8 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
     response->body = NULL;
     response->headers = NULL;
     response->error = NULL;
+    response->redirect_error = NULL;
+    response->effective_url = NULL;
 
     char host[256];
     char path[1024];
@@ -838,11 +841,16 @@ static char* http_resolve_location(const char* base_url, const char* location) {
     if (!base_url || !location || !*location) return NULL;
     /* Absolute URL — Location starts with a scheme. */
     if (strstr(location, "://")) return strdup(location);
-    /* Need to extract scheme + host[:port] from base_url. */
+    /* Need to extract scheme + host[:port] from base_url.
+     * parse_url returns 1 on success, 0 on failure — bail when it
+     * fails. The earlier round-1 implementation had the check
+     * inverted, which produced a bogus "malformed Location header"
+     * for every well-formed base URL. Caught by the cases-8-10
+     * end-to-end test in test_http_client_v2.ae. */
     char base_host[256], base_path[1024];
     int base_port = 0, base_use_tls = 0;
     if (parse_url(base_url, base_host, sizeof(base_host),
-                  &base_port, base_path, sizeof(base_path), &base_use_tls) != 0) {
+                  &base_port, base_path, sizeof(base_path), &base_use_tls) == 0) {
         return NULL;
     }
     const char* scheme = base_use_tls ? "https" : "http";
@@ -945,8 +953,11 @@ HttpResponse* http_send_raw(HttpRequest* req) {
         char* next_url = http_resolve_location(current_url, location);
         free(location);
         if (!next_url) {
-            if (resp->error) string_release(resp->error);
-            resp->error = string_new("malformed Location header");
+            /* Redirect-class error — record on redirect_error so the
+             * v2 send_request wrapper preserves the response and the
+             * caller can still inspect the terminal 3xx. Issue #239. */
+            if (resp->redirect_error) string_release(resp->redirect_error);
+            resp->redirect_error = string_new("malformed Location header");
             break;
         }
 
@@ -954,8 +965,9 @@ HttpResponse* http_send_raw(HttpRequest* req) {
         int curr_https = strncmp(current_url, "https://", 8) == 0;
         int next_https = strncmp(next_url, "https://", 8) == 0;
         if (curr_https && !next_https) {
-            if (resp->error) string_release(resp->error);
-            resp->error = string_new("redirect rejected: scheme downgrade (https → http)");
+            if (resp->redirect_error) string_release(resp->redirect_error);
+            resp->redirect_error = string_new(
+                "redirect rejected: scheme downgrade (https -> http)");
             free(next_url);
             break;
         }
@@ -969,19 +981,24 @@ HttpResponse* http_send_raw(HttpRequest* req) {
             }
         }
         if (looped) {
-            if (resp->error) string_release(resp->error);
-            resp->error = string_new("redirect loop detected (hop limit may have been exceeded)");
+            if (resp->redirect_error) string_release(resp->redirect_error);
+            resp->redirect_error = string_new(
+                "redirect loop detected (hop limit may have been exceeded)");
             free(next_url);
             break;
         }
 
-        /* Strip cross-host auth headers if the host changed. */
+        /* Strip cross-host auth headers if the host changed.
+         * parse_url returns 1 on success — same inverted-check bug
+         * as http_resolve_location had above; without this fix the
+         * strip path never fired in practice (because parse_url
+         * always succeeds for well-formed URLs). */
         char curr_host[256], next_host[256], dummy_path[1024];
         int curr_port = 0, next_port = 0, curr_tls = 0, next_tls = 0;
         if (parse_url(current_url, curr_host, sizeof(curr_host), &curr_port,
-                      dummy_path, sizeof(dummy_path), &curr_tls) == 0 &&
+                      dummy_path, sizeof(dummy_path), &curr_tls) != 0 &&
             parse_url(next_url, next_host, sizeof(next_host), &next_port,
-                      dummy_path, sizeof(dummy_path), &next_tls) == 0) {
+                      dummy_path, sizeof(dummy_path), &next_tls) != 0) {
             if (strcmp(curr_host, next_host) != 0) {
                 http_strip_cross_host_headers(req);
             }
@@ -1006,11 +1023,12 @@ HttpResponse* http_send_raw(HttpRequest* req) {
     }
 
     /* If we exited the loop because we ran out of hops while still
-     * looking at a 3xx response, surface that as an error string for
-     * caller-side discrimination. */
+     * looking at a 3xx response, surface that as a redirect_error so
+     * the caller can inspect the terminal 3xx status / body without
+     * the v2 wrapper auto-freeing the response. */
     if (resp && hops_remaining == 0 && resp->status_code >= 300 && resp->status_code < 400) {
-        if (resp->error) string_release(resp->error);
-        resp->error = string_new("redirect hop limit reached");
+        if (resp->redirect_error) string_release(resp->redirect_error);
+        resp->redirect_error = string_new("redirect hop limit reached");
     }
 
     /* Stash the final URL as the effective URL on the response. */
@@ -1071,6 +1089,7 @@ void http_response_free(HttpResponse* response) {
     if (response->body) string_release(response->body);
     if (response->headers) string_release(response->headers);
     if (response->error) string_release(response->error);
+    if (response->redirect_error) string_release(response->redirect_error);
     if (response->effective_url) string_release(response->effective_url);
     free(response);
 }
@@ -1212,6 +1231,12 @@ const char* http_response_header_raw(HttpResponse* response, const char* name) {
 const char* http_response_effective_url_raw(HttpResponse* response) {
     if (!response || !response->effective_url) return "";
     const char* s = string_to_cstr(response->effective_url);
+    return s ? s : "";
+}
+
+const char* http_response_redirect_error_raw(HttpResponse* response) {
+    if (!response || !response->redirect_error) return "";
+    const char* s = string_to_cstr(response->redirect_error);
     return s ? s : "";
 }
 

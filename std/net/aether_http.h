@@ -7,7 +7,28 @@ typedef struct {
     int status_code;
     AetherString* body;
     AetherString* headers;
+    /* Transport-level failure: DNS resolution failed, TCP connect
+     * refused, TLS handshake error, recv timeout, OOM, etc. When set,
+     * status_code is 0 and body/headers/effective_url may be NULL.
+     * Callers (and the v2 send_request wrapper) should treat a
+     * non-empty error here as "the request didn't make it to a
+     * useful response — discard the rest". */
     AetherString* error;
+    /* Redirect-loop failure: the request DID get a usable response
+     * (status_code is set to the last 3xx, body/headers populated)
+     * but the chain couldn't reach a 2xx within the rules. Distinct
+     * from `error` so callers that opt into automatic redirects via
+     * set_follow_redirects() can still inspect the terminal 3xx
+     * status / body to decide whether the chain failure is fatal.
+     * Reasons the field gets populated:
+     *   - "redirect hop limit reached"
+     *   - "redirect loop detected (...)"
+     *   - "redirect rejected: scheme downgrade (https → http)"
+     *   - "malformed Location header"
+     * The v2 send_request wrapper does NOT auto-free the response
+     * when only `redirect_error` is set — `error` remains the
+     * single signal for "no response is available". Issue #239. */
+    AetherString* redirect_error;
     /* The URL that produced this response. For requests where redirects
      * were not followed (max_redirects == 0, the default), this equals
      * the URL the caller passed to http_send_raw. For requests that
@@ -138,6 +159,14 @@ const char* http_response_header_raw(HttpResponse* response, const char* name);
 // to discover where the chain landed without re-parsing Location
 // headers from response->headers. NULL/free-safe.
 const char* http_response_effective_url_raw(HttpResponse* response);
+
+// Returns the redirect-class error (hop-limit / loop / scheme-downgrade /
+// malformed-Location) for a response produced by a request that opted
+// into automatic redirect-following. Returns "" when the chain
+// completed normally (or the request never opted in). Distinct from
+// http_response_error which signals transport-level failures only.
+// Issue #239.
+const char* http_response_redirect_error_raw(HttpResponse* response);
 
 #endif
 

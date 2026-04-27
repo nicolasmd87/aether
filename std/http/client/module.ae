@@ -55,7 +55,7 @@ import std.json
 exports (
     request, set_header, set_body, set_timeout, set_follow_redirects, request_free,
     send_request,
-    response_status, response_body, response_error,
+    response_status, response_body, response_error, response_redirect_error,
     response_header, response_headers, response_url, response_free,
     get_with_headers, post_with_status,
     post_json, response_body_json,
@@ -79,6 +79,7 @@ extern http_response_status(response: ptr) -> int
 extern http_response_body(response: ptr) -> string
 extern http_response_headers(response: ptr) -> string
 extern http_response_error(response: ptr) -> string
+extern http_response_redirect_error_raw(response: ptr) -> string
 extern http_response_header_raw(response: ptr, name: string) -> string
 extern http_response_effective_url_raw(response: ptr) -> string
 extern http_response_free(response: ptr)
@@ -184,6 +185,19 @@ send_request(req: ptr) -> {
 response_status(resp: ptr) -> int { return http_response_status(resp) }
 response_body  (resp: ptr) -> string { return http_response_body(resp) }
 response_error (resp: ptr) -> string { return http_response_error(resp) }
+
+// Redirect-class error string. Set when a request opted into automatic
+// redirect-following (set_follow_redirects(req, N>0)) and the chain
+// ended without reaching a 2xx response — hop-limit reached, loop
+// detected, scheme downgrade, or malformed Location header. Returns
+// "" when the chain completed normally or the request never opted in.
+//
+// Distinct from response_error (transport-level: DNS, connect, TLS,
+// timeout). The v2 send_request wrapper auto-frees the response when
+// response_error is set, but PRESERVES the response when only
+// response_redirect_error is set — so the caller can still inspect
+// the terminal 3xx status / body for retry logic. Issue #239.
+response_redirect_error(resp: ptr) -> string { return http_response_redirect_error_raw(resp) }
 
 // Case-insensitive lookup of a single response header. Returns ""
 // if the header isn't present. Multiple values for the same header
