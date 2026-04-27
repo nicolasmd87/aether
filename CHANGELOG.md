@@ -5,9 +5,23 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.95.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Added
+
+- **`string.format(fmt, args)` — Aether-callable formatter** (`std/string/{aether_string.c,aether_string.h,module.ae}`, `docs/stdlib-reference.md`, `tests/regression/test_string_format.ae`). Issue #272. The C-side `string_format(fmt, ...)` already existed but wasn't reachable from Aether (externs don't support varargs). New `string_format_list(fmt, args)` C primitive walks the format string substituting `{}` placeholders with entries from an `std.list` of strings. `{{` / `}}` are literal braces. The Aether wrapper `string.format(fmt, args)` is a one-liner over the new primitive. `{}`-placeholder choice (rather than `%s`) composes more cleanly with Aether's existing `${...}` interpolation surface and leaves `%`-prefix open for typed printf-style formatters if they land later. Non-string args (ints, floats) need explicit conversion via `string.from_int(...)` before being added to the list. Replaces nested `string.concat(string.concat(...))` patterns common in callers building runtime-formatted log lines or message templates. Regression test: 5 cases covering single-placeholder, multiple-placeholder, literal braces, missing-arg-silently-dropped, and int-via-from_int marshalling.
+
+### Fixed
+
+- **`response_header` snapshots its return value, no longer aliases prior calls** (`std/http/client/module.ae`, `tests/integration/test_http_client_v2.ae`). Issue #269. The underlying `http_response_header_raw` returns a borrowed pointer into a per-thread buffer that the next call overwrites. Pre-fix, calling `client.response_header` twice and holding both results gave you two pointers into the same (clobbered) slot — `string.length(tag)` read the second header's length, `string.equals(tag, "alpha")` returned false even though `tag` was the alpha-header at fetch time. The wrapper now snapshots via `string.copy` so each call's result is independent. The C-side `http_response_header_raw` is unchanged; the documented "thread-local buffer overwritten on next call" caveat is now an implementation detail of the C function rather than a footgun the Aether-level surface inherits. Regression: the existing v2 HTTP-client test gains a Test 2b that fetches two headers from one response, holds both vars, and asserts neither length nor equality was clobbered by the second call.
+
+- **`string + string` rejected at typecheck with helpful hint** (`compiler/analysis/typechecker.c`, `tests/integration/string_plus_reject/`). Issue #276. Previously, `s = "hello" + " world"` compiled in Aether and emitted `(const char*) + (const char*)` C, which the C compiler rejected with a pointer-arithmetic error pointing at generated C — useless to the .ae author. The typechecker now catches the case directly and reports `'+' is not defined for strings — use "${a}${b}" interpolation or string.concat(a, b)` at the .ae source location. `int + int`, `float + float`, and other non-string `+` uses are unchanged. Regression test confirms the diagnostic fires for both `literal + literal` and `var + literal`, and that `int + int` still works.
+
+- **Docs: `as` reserved keyword now in the language reference table** (`docs/language-reference.md`). Issue #275. `as` is reserved by the lexer for import aliasing (`import std.string as str`) but was missing from the Keywords table — a user trying to use `as` as a variable name got a clean compile error but couldn't front-load the check by reading the docs. One-line addition to the table.
 
 ## [0.95.0]
 

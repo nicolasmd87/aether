@@ -46,6 +46,10 @@ handle_echo_header(req: ptr, res: ptr, ud: ptr) {
 handle_sets_header(req: ptr, res: ptr, ud: ptr) {
     http.response_set_status(res, 200)
     http.response_set_header(res, "X-Server-Tag", "alpha")
+    // Second header used by the #269 multi-header-snapshot regression
+    // (Test 2b below). The two values have different lengths so the
+    // bug — both vars reading the same TLS slot — is observable.
+    http.response_set_header(res, "X-Other-Tag", "longer-different-value")
     http.response_set_body(res, "ok")
 }
 
@@ -246,8 +250,36 @@ main() {
         println("  FAIL: header lookup mismatched; got '${tag}', want 'alpha'")
         exit(1)
     }
-    client.response_free(resp2)
     print("  PASS\n")
+
+    // ---- Test 2b: response_header doesn't alias prior return (#269) ----
+    // Pre-fix the underlying http_response_header_raw returned a
+    // borrowed pointer into a thread-local buffer that the next call
+    // overwrote — `tag` and `other` would both point to the same
+    // (clobbered) slot, and `string.length(tag)` would report the
+    // length of `other`'s value rather than `tag`'s. The fix in
+    // std/http/client/module.ae snapshots via string.copy on return.
+    other = client.response_header(resp2, "x-other-tag")
+    if string.equals(other, "longer-different-value") != 1 {
+        println("  FAIL: second header mismatched; got '${other}'")
+        exit(1)
+    }
+    // Critical: re-read `tag` — pre-fix this would now read the
+    // clobbered slot and return "longer-different-value".
+    if string.equals(tag, "alpha") != 1 {
+        println("  FAIL: tag aliased after second response_header call (#269); got '${tag}'")
+        exit(1)
+    }
+    if string.length(tag) != 5 {
+        println("  FAIL: tag length aliased; got ${string.length(tag)}, want 5")
+        exit(1)
+    }
+    if string.length(other) != 22 {
+        println("  FAIL: other length wrong; got ${string.length(other)}, want 22")
+        exit(1)
+    }
+    client.response_free(resp2)
+    print("  PASS: response_header snapshot — concurrent values don't alias (#269)\n")
 
     // ---- Test 3: status discrimination — 200 / 404 / 403 / 500 ----
     print("\nTest 3: status discrimination\n")

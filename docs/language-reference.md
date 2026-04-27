@@ -1212,6 +1212,7 @@ The following identifiers are reserved:
 | `message`, `struct` | Type definitions |
 | `state` | Actor state (only reserved inside actor bodies) |
 | `import`, `extern` | Modules and C interop |
+| `as` | Import aliasing (`import std.string as str`) |
 | `const` | Top-level constants |
 | `defer` | Scope-exit cleanup |
 | `hide`, `seal`, `except` | Scope-level name denial (see [hide-and-seal.md](hide-and-seal.md)) |

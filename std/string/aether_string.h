@@ -129,7 +129,12 @@ float  string_get_float(const void* s);
 int    string_try_double(const void* s);
 double string_get_double(const void* s);
 
-// Formatting (printf-style)
+// Formatting (printf-style — C-only, varargs)
 AetherString* string_format(const char* fmt, ...);
+
+// Aether-callable formatter. Walks `fmt` substituting `{}` with each
+// entry of `args` (an Aether ArrayList of strings). `{{` and `}}`
+// are literal braces. Returns a refcounted AetherString. Closes #272.
+AetherString* string_format_list(const char* fmt, void* args);
 
 #endif // AETHER_STRING_H
