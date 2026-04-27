@@ -1515,9 +1515,22 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
 
                 int is_assignment = (expr->value && strcmp(expr->value, "=") == 0);
 
-                // String comparison: emit strcmp instead of pointer ==
-                // Applies to ==, !=, <, >, <=, >= when BOTH sides are strings.
-                // NOT when comparing to 0/NULL (null check, not string compare).
+                // String comparison: emit strcmp instead of pointer ==.
+                // Applies to ==, !=, <, >, <=, >= when:
+                //   - both sides are strings, OR
+                //   - one side is a string literal / string-typed value
+                //     and the other is a `ptr`-typed value that may
+                //     carry an AetherString header (string.from_int,
+                //     fs.read_binary, string_concat_wrapped, …).
+                // NOT when either side is a null literal — that's a
+                // null check, not a string compare.
+                //
+                // The ptr-vs-string case fixes #267: an Aether comparison
+                // like `string.from_int(42) != "42"` would otherwise
+                // emit a bare pointer compare and always evaluate true.
+                // Routing through _aether_safe_str + strcmp dispatches
+                // on the magic header so wrapped strings are read by
+                // their payload bytes.
                 int is_string_cmp = 0;
                 if (expr->value && (strcmp(expr->value, "==") == 0 || strcmp(expr->value, "!=") == 0
                     || strcmp(expr->value, "<") == 0 || strcmp(expr->value, ">") == 0
@@ -1530,11 +1543,23 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                    || (rhs->type == AST_IDENTIFIER && rhs->value && strcmp(rhs->value, "NULL") == 0);
                     int lhs_is_null = (lhs_node->type == AST_LITERAL && lhs_node->value && strcmp(lhs_node->value, "0") == 0)
                                    || (lhs_node->type == AST_IDENTIFIER && lhs_node->value && strcmp(lhs_node->value, "NULL") == 0);
-                    // Both sides must be strings and neither can be a null literal
+                    int lhs_is_string = (lhs_type && lhs_type->kind == TYPE_STRING);
                     int rhs_is_string = (rhs_type && rhs_type->kind == TYPE_STRING);
-                    if (lhs_type && lhs_type->kind == TYPE_STRING && rhs_is_string
-                        && !rhs_is_null && !lhs_is_null) {
-                        is_string_cmp = 1;
+                    int lhs_is_ptr_t  = (lhs_type && lhs_type->kind == TYPE_PTR);
+                    int rhs_is_ptr_t  = (rhs_type && rhs_type->kind == TYPE_PTR);
+                    if (!rhs_is_null && !lhs_is_null) {
+                        if (lhs_is_string && rhs_is_string) {
+                            is_string_cmp = 1;
+                        } else if ((lhs_is_string && rhs_is_ptr_t) ||
+                                   (lhs_is_ptr_t && rhs_is_string)) {
+                            // ptr vs string-literal / string-typed value:
+                            // assume the ptr is an AetherString-bearing
+                            // payload and dispatch via _aether_safe_str.
+                            // Pure ptr-vs-ptr opaque-handle comparisons
+                            // still go through bare pointer eq (handled
+                            // by the else-branch below).
+                            is_string_cmp = 1;
+                        }
                     }
                 }
 
