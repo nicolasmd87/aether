@@ -1423,10 +1423,18 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             // `__func__` substitute literal AST-node line, source-file path,
             // and C-side function name (which mirrors the Aether function
             // name in most cases). No call syntax — they're spelled as
-            // identifiers but produce literal values at codegen. Caller-site
-            // capture via default arguments is deferred to a follow-up;
-            // today callers pass them explicitly:
-            //     my_log(msg, __LINE__, __FILE__, __func__)
+            // identifiers but produce literal values at codegen.
+            //
+            // Caller-site capture (Phase A2.2): when used as a default
+            // function argument — `f(msg, line: int = __LINE__)` —
+            // `f(msg)` substitutes the call site's line, not the
+            // function definition's. The typechecker's default-fill
+            // path clones the default expression at the call site and
+            // calls rewrite_caller_site_intrinsics() on the clone to
+            // overwrite `expr->line` with the call's line BEFORE
+            // codegen sees it. So this codegen path always emits the
+            // right number whether the intrinsic is at an explicit
+            // call site or substituted from a default.
             if (strcmp(expr->value, "__LINE__") == 0) {
                 fprintf(gen->output, "%d", expr->line);
                 break;

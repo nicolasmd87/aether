@@ -603,6 +603,34 @@ static int param_has_default(ASTNode* param) {
            param->child_count > 0 && param->children[0] != NULL;
 }
 
+// Phase A2.2 (issue #265 close): rewrite source-location intrinsic
+// AST nodes inside a cloned default expression to reflect the
+// caller's location instead of the function-definition's. Called on
+// the clone before it is appended to the call's child list.
+//
+//   __LINE__  — codegen emits `expr->line`. Overwrite with the
+//               call site's line so the caller's site is captured.
+//   __FILE__  — codegen reads `gen->source_file` (per-TU global), not
+//               `expr->line`, so no per-node rewrite needed; the
+//               value is naturally the file holding the call.
+//   __func__  — codegen emits the literal C99 `__func__` keyword,
+//               which the C compiler resolves to the enclosing C
+//               function. Since codegen mirrors Aether function
+//               names, this is the calling Aether function's name —
+//               exactly the caller-site semantics we want. No
+//               rewrite needed.
+static void rewrite_caller_site_intrinsics(ASTNode* node, int call_line, int call_column) {
+    if (!node) return;
+    if (node->type == AST_IDENTIFIER && node->value &&
+        strcmp(node->value, "__LINE__") == 0) {
+        node->line = call_line;
+        node->column = call_column;
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        rewrite_caller_site_intrinsics(node->children[i], call_line, call_column);
+    }
+}
+
 // Counts required (non-defaulted) parameters. Defaults trail required
 // (Python rule: once a default appears, every subsequent parameter
 // must also have one). The rule is enforced separately at function-
@@ -2959,6 +2987,10 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
                                call->line, call->column);
                     return 0;
                 }
+                // Phase A2.2: rewrite source-location intrinsics in
+                // the clone so they capture the caller's location
+                // rather than the function definition's. Closes #265.
+                rewrite_caller_site_intrinsics(default_clone, call->line, call->column);
                 add_child(call, default_clone);
                 param_idx++;
             }
