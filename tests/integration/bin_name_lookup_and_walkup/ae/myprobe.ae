@@ -1,0 +1,9 @@
+// Probe binary referenced by the [[bin]] entry in aether.toml. Prints
+// 42 if shim.c was linked (proves extra_sources reached the build),
+// or fails to compile if it wasn't.
+
+extern shim_value() -> int
+
+main() {
+    println(shim_value())
+}

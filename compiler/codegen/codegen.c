@@ -784,6 +784,15 @@ static void emit_lib_alias_stubs(CodeGenerator* gen, ASTNode* program) {
         // are an implementation detail of the importer).
         if (fn->is_imported) continue;
 
+        // Skip trailing-underscore "private helper" convention: `foo_`
+        // means file-local. Emitting an aether_<name> alias for it
+        // (a) leaks an internal name into the public ABI, and
+        // (b) causes a duplicate-symbol link error when two .ae files
+        //     in the same --namespace bundle pick the same helper
+        //     name (they each generate their own alias). Closes #279.
+        size_t name_len = strlen(fn->value);
+        if (name_len > 0 && fn->value[name_len - 1] == '_') continue;
+
         // Check that every param type is ABI-representable.
         // The last non-guard, non-block child is the body; everything before
         // is parameters (plus optional guard clauses).
@@ -824,8 +833,26 @@ static void emit_lib_alias_stubs(CodeGenerator* gen, ASTNode* program) {
         // Return type. If the function has a return-with-value but node_type
         // is void/unknown, fall back to int32_t (mirrors the internal rule
         // of defaulting unknown returns to int).
+        //
+        // EXCEPT: if the return type is non-NULL but a *tuple*, the
+        // alias would emit a signature that doesn't match the function
+        // (`int32_t aether_helper(...)` calling a `_tuple_int_int`
+        // returner). Skip the alias entirely with the same warning the
+        // parameter-side check uses. Closes #277.
         const char* ret_abi = get_abi_type(fn->node_type);
         int returns_value = has_return_value(fn);
+        int return_is_tuple = (fn->node_type && fn->node_type->kind == TYPE_TUPLE);
+        if (return_is_tuple) {
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                     "function '%s' returns a tuple; --emit=lib alias stub skipped (tuples aren't part of the public ABI)",
+                     fn->value);
+            AetherError w = {NULL, NULL, fn->line, fn->column, msg,
+                             "wrap the tuple-returning function with one that returns a single ABI-safe value if it should be exposed across the library boundary",
+                             NULL, AETHER_ERR_NONE};
+            aether_warning_report(&w);
+            continue;
+        }
         if (!ret_abi) {
             if (returns_value) {
                 ret_abi = "int32_t";
@@ -1509,8 +1536,14 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         // otherwise C rejects the file with "static declaration follows
         // non-static declaration". `@c_callback` (#235) opts the function
         // out of `static` so it stays externally addressable; the forward
-        // declaration follows suit.
-        if (child->is_imported && !is_c_callback(child)) {
+        // declaration follows suit. Trailing-underscore private helpers
+        // (#279) match the same `static` rule.
+        int fwd_trailing_private = 0;
+        if (child->value && !is_c_callback(child)) {
+            size_t nlen = strlen(child->value);
+            if (nlen > 0 && child->value[nlen - 1] == '_') fwd_trailing_private = 1;
+        }
+        if ((child->is_imported || fwd_trailing_private) && !is_c_callback(child)) {
             fprintf(gen->output, "static ");
         }
 

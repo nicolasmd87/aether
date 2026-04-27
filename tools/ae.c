@@ -1001,6 +1001,135 @@ static const char* get_cflags(void) {
 // linker a mangled partial path ("ae/.../handler_copy_generat" was
 // the real-world symptom that prompted this signature change) and
 // the error message won't point at extra_sources as the culprit.
+// Walk up from the current working directory looking for an
+// `aether.toml`. If found in some ancestor directory `D`, chdir
+// there and adjust the positional `*file_inout` (when relative) to
+// resolve against `D`. Returns 1 on chdir, 0 when nothing was found
+// or cwd already has the toml. Closes #280 (2).
+//
+// The cargo rule: only walk up when there's no toml in cwd. Users
+// running `ae build foo.ae` from a subdirectory of a project get
+// the project's toml found automatically and `foo.ae` re-resolved
+// relative to the project root. Users with no project toml at all
+// see no behaviour change.
+static int find_and_chdir_to_aether_toml(const char** file_inout) {
+    if (path_exists("aether.toml")) return 0;  /* already present */
+
+    char start_cwd[1024];
+    if (!getcwd(start_cwd, sizeof(start_cwd))) return 0;
+
+    char walk[1024];
+    strncpy(walk, start_cwd, sizeof(walk) - 1);
+    walk[sizeof(walk) - 1] = '\0';
+
+    /* Walk up to /. POSIX `dirname` mutates; compose by truncating
+     * at the last '/'. Stop when we either find aether.toml or hit
+     * the root. */
+    while (1) {
+        char probe[1024];
+        snprintf(probe, sizeof(probe), "%s/aether.toml", walk);
+        if (path_exists(probe)) {
+            if (chdir(walk) != 0) return 0;
+            /* Adjust the positional file argument: if it was a
+             * relative path, prepend the original cwd's relationship
+             * to the new cwd. e.g. starting at /home/p/proj/ae, after
+             * chdir to /home/p/proj, a positional `myprobe.ae`
+             * becomes `ae/myprobe.ae`. */
+            if (file_inout && *file_inout) {
+                const char* f = *file_inout;
+                if (f[0] != '/' && f[0] != '\\') {
+                    /* relative — splice the subdir we walked out of */
+                    size_t walk_len = strlen(walk);
+                    if (strncmp(start_cwd, walk, walk_len) == 0 &&
+                        start_cwd[walk_len] == '/') {
+                        const char* sub = start_cwd + walk_len + 1;
+                        static char rebased[1024];
+                        snprintf(rebased, sizeof(rebased), "%s/%s", sub, f);
+                        *file_inout = rebased;
+                    }
+                }
+            }
+            return 1;
+        }
+        /* Step up one directory by truncating at the last '/'. Stop
+         * when we hit the root marker (just "/" or empty). */
+        char* slash = strrchr(walk, '/');
+        if (!slash) break;
+        if (slash == walk) {
+            /* At "/X" — the parent is "/". One more probe at "/". */
+            walk[1] = '\0';
+            char root_probe[1024];
+            snprintf(root_probe, sizeof(root_probe), "%s/aether.toml", walk);
+            if (path_exists(root_probe) && chdir(walk) == 0) return 1;
+            break;
+        }
+        *slash = '\0';
+    }
+    return 0;
+}
+
+// Look up a [[bin]] entry by `name = "..."`. If found, copy its
+// `path = "..."` value into `out` and return 1. Returns 0 when no
+// aether.toml exists in cwd, or when no [[bin]] matches the name.
+//
+// Lets users invoke `ae build <bin-name>` instead of having to type
+// the underlying file path. Closes #280 (1).
+static int find_bin_path_by_name(const char* bin_name, char* out, size_t out_size) {
+    out[0] = '\0';
+    if (!bin_name || !path_exists("aether.toml")) return 0;
+
+    FILE* f = fopen("aether.toml", "r");
+    if (!f) return 0;
+
+    char line[1024];
+    int in_bin = 0;
+    int matched_name = 0;
+    int found = 0;
+
+    while (fgets(line, sizeof(line), f)) {
+        char* s = line;
+        while (*s == ' ' || *s == '\t') s++;
+        size_t ln = strlen(s);
+        while (ln > 0 && (s[ln-1] == '\n' || s[ln-1] == '\r' || s[ln-1] == ' ')) s[--ln] = '\0';
+        if (!s[0] || s[0] == '#') continue;
+
+        if (strncmp(s, "[[bin]]", 7) == 0) {
+            in_bin = 1;
+            matched_name = 0;
+            continue;
+        }
+        if (s[0] == '[' && s[1] != '[') {
+            in_bin = 0;
+            matched_name = 0;
+            continue;
+        }
+        if (!in_bin) continue;
+
+        if (strncmp(s, "name", 4) == 0 && strchr(s, '=')) {
+            char* eq = strchr(s, '=') + 1;
+            while (*eq == ' ') eq++;
+            if (*eq == '"') eq++;
+            char* end = strrchr(eq, '"');
+            if (end) *end = '\0';
+            if (strcmp(eq, bin_name) == 0) matched_name = 1;
+            continue;
+        }
+        if (matched_name && strncmp(s, "path", 4) == 0 && strchr(s, '=')) {
+            char* eq = strchr(s, '=') + 1;
+            while (*eq == ' ') eq++;
+            if (*eq == '"') eq++;
+            char* end = strrchr(eq, '"');
+            if (end) *end = '\0';
+            strncpy(out, eq, out_size - 1);
+            out[out_size - 1] = '\0';
+            found = 1;
+            break;
+        }
+    }
+    fclose(f);
+    return found;
+}
+
 static int get_extra_sources_for_bin(const char* ae_file, char* out, size_t out_size) {
     out[0] = '\0';
     if (!ae_file || !path_exists("aether.toml")) return 0;
@@ -3301,6 +3430,12 @@ static int cmd_build(int argc, char** argv) {
         }
     }
 
+    // aether.toml walk-up: if cwd has no toml but an ancestor does,
+    // chdir there so [[bin]] / extra_sources / cflags resolution
+    // works the same as if the user had run `ae build` from the
+    // project root. Closes #280 (2).
+    find_and_chdir_to_aether_toml(&file);
+
     // Read target from aether.toml if not specified on CLI
     if (!target && path_exists("aether.toml")) {
         static char toml_target[64];
@@ -3355,6 +3490,18 @@ static int cmd_build(int argc, char** argv) {
         fprintf(stderr, "Error: No input file specified.\n");
         fprintf(stderr, "Usage: ae build <file.ae> [-o output] [--extra file.c]\n");
         return 1;
+    }
+
+    // [[bin]] name → path resolution. If the positional argument
+    // doesn't exist as a file but matches the `name = "..."` of a
+    // [[bin]] entry in aether.toml, treat it as that bin's path.
+    // Cargo's rule: `cargo build --bin foo` requires the name; we
+    // accept it as a positional for shorter typing. Closes #280 (1).
+    static char bin_resolved_path[1024];
+    if (!path_exists(file)) {
+        if (find_bin_path_by_name(file, bin_resolved_path, sizeof(bin_resolved_path))) {
+            file = bin_resolved_path;
+        }
     }
 
     if (!path_exists(file)) {
