@@ -287,10 +287,15 @@ jobs:
         # out-of-the-box for downstream Windows users. Without them
         # AETHER_HAS_ZLIB / AETHER_HAS_OPENSSL stay undefined and the
         # shipped binary silently falls into the "unavailable" stubs.
+        # ca-certificates ships /mingw64/etc/ssl/certs/ca-bundle.crt —
+        # required for HTTPS in std.net (without it the OpenSSL handshake
+        # completes but cert verification fails for lack of a trust
+        # anchor on Windows). Mirrors ci.yml::ci-windows.
         install: >-
           mingw-w64-x86_64-gcc
           mingw-w64-x86_64-zlib
           mingw-w64-x86_64-openssl
+          mingw-w64-x86_64-ca-certificates
           pkg-config
           make
           zip
@@ -328,7 +333,17 @@ jobs:
     - name: Test (Windows)
       if: matrix.os == 'windows-latest'
       shell: msys2 {0}
+      # The hardcoded `C:\msys64\...` probe in aether_http.c::load_windows_ca_bundle
+      # doesn't match the GitHub runner's MSYS2 path (it's installed under a
+      # temp dir, not C:\msys64). Export SSL_CERT_FILE explicitly using
+      # cygpath -w so the first probe in get_ssl_ctx() hits regardless of
+      # where MSYS2 lives on this runner. Without this, `tests/regression/
+      # test_https_client.ae` fails with "certificate verify failed".
+      # Mirrors ci.yml::ci-windows.
       run: |
+        export SSL_CERT_FILE="$(cygpath -w /mingw64/etc/ssl/certs/ca-bundle.crt)"
+        echo "SSL_CERT_FILE=$SSL_CERT_FILE"
+        ls -la "$(cygpath -u "$SSL_CERT_FILE")"
         make test
         make test-ae
         make test-install
