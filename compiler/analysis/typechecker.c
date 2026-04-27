@@ -2880,6 +2880,53 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
         }
     }
 
+    // Phase A3 (foundation for #260 D pure-Aether middleware): if the
+    // call's target name resolves to a local variable whose type is
+    // TYPE_FUNCTION (a closure / function-typed value), this is a
+    // direct invocation of a function-typed local — `handler(req, res)`
+    // where `handler` is a local variable. Transparently rewrite the
+    // AST to flow through the existing `call(fn, args...)` codegen
+    // path (codegen_expr.c:~2155). This lets users write the natural
+    // form rather than the workaround `call(handler, req, res)`.
+    if (symbol && !symbol->is_function && symbol->type &&
+        symbol->type->kind == TYPE_FUNCTION && call->value) {
+        // Build a new child list: [fn_ref, original_args...]
+        ASTNode* fn_ref = create_ast_node(AST_IDENTIFIER, call->value,
+                                          call->line, call->column);
+        fn_ref->node_type = clone_type(symbol->type);
+
+        int old_count = call->child_count;
+        ASTNode** new_children = malloc(sizeof(ASTNode*) * (old_count + 1));
+        new_children[0] = fn_ref;
+        for (int i = 0; i < old_count; i++) {
+            new_children[i + 1] = call->children[i];
+        }
+        if (call->children) free(call->children);
+        call->children = new_children;
+        call->child_count = old_count + 1;
+
+        // Rename the call from <varname> to "call" so codegen routes
+        // through the existing closure-invocation path.
+        free(call->value);
+        call->value = strdup("call");
+
+        // Type-check argument expressions (skip the new fn_ref at
+        // index 0; its type is already set above).
+        for (int i = 1; i < call->child_count; i++) {
+            typecheck_expression(call->children[i], table);
+        }
+
+        // The call's return type is the function-type's return slot,
+        // when known. Otherwise leave UNKNOWN — type inference may
+        // refine it later.
+        if (symbol->type->return_type) {
+            call->node_type = clone_type(symbol->type->return_type);
+        } else {
+            call->node_type = create_type(TYPE_UNKNOWN);
+        }
+        return 1;
+    }
+
     if (!symbol || !symbol->is_function) {
         char error_msg[256];
         // Check if this is a visibility rejection (not-exported) rather than truly undefined
