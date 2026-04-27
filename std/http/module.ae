@@ -19,6 +19,7 @@ exports (
     http_server_stop, http_server_free,
     http_server_set_tls_raw, server_set_tls,
     http_server_set_keepalive_raw, server_set_keepalive,
+    http_server_drain_connection,
     server_bind, server_start,
     http_server_add_route, http_server_get, http_server_post,
     http_server_put, http_server_delete,
@@ -218,6 +219,17 @@ extern http_server_set_keepalive_raw(server: ptr, enabled: int, max_requests: in
 server_set_keepalive(server: ptr, enabled: int, max_requests: int, idle_ms: int) -> {
     return http_server_set_keepalive_raw(server, enabled, max_requests, idle_ms)
 }
+
+// Drain a single accepted connection through the full HTTP lifecycle:
+// optional TLS handshake, request parsing loop with keep-alive, route
+// dispatch, response emission, socket close. This is the building
+// block that user-side actor step functions plug into when running
+// the server in actor-dispatch mode (set via
+// http_server_set_actor_handler) — the actor's step receives a
+// MSG_HTTP_CONNECTION with a client_fd and should call this helper
+// to get the same TLS / keep-alive / route-dispatch behaviour the
+// thread-pool worker path uses. (#260 Tier 0 / Phase C3.)
+extern http_server_drain_connection(server: ptr, client_fd: int)
 
 // Go-style wrappers for server lifecycle. Return "" on success, error
 // string on failure.

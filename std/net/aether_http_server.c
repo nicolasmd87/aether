@@ -14,6 +14,7 @@ const char* http_server_set_tls_raw(HttpServer* s, const char* c, const char* k)
 const char* http_server_set_keepalive_raw(HttpServer* s, int e, int m, int i) {
     (void)s; (void)e; (void)m; (void)i; return "keep-alive unavailable: networking not built in";
 }
+void http_server_drain_connection(HttpServer* s, int fd) { (void)s; (void)fd; }
 void http_server_add_route(HttpServer* s, const char* m, const char* p, HttpHandler h, void* u) { (void)s; (void)m; (void)p; (void)h; (void)u; }
 void http_server_get(HttpServer* s, const char* p, HttpHandler h, void* u) { (void)s; (void)p; (void)h; (void)u; }
 void http_server_post(HttpServer* s, const char* p, HttpHandler h, void* u) { (void)s; (void)p; (void)h; (void)u; }
@@ -93,6 +94,14 @@ const char* http_request_query(HttpRequest* r) { (void)r; return ""; }
 #include <openssl/err.h>
 #endif
 
+/* Per-connection read buffer. Persists across requests on a
+ * keep-alive connection so that pipelined bytes (the start of
+ * request N+1 already received while reading request N) are not
+ * lost between handle_one_request calls. Without this, the
+ * single-request implementation's "read up to \r\n\r\n then free"
+ * pattern silently drops anything past the first request's body
+ * boundary in the same recv. */
+#define HTTP_CONN_BUF_CAP (16 * 1024)
 typedef struct {
     int fd;
 #ifdef AETHER_HAS_OPENSSL
@@ -100,6 +109,14 @@ typedef struct {
 #else
     void* ssl;    /* layout-stable placeholder for the no-TLS build */
 #endif
+    /* Read-side ring: [read_pos, write_pos) holds bytes already
+     * received but not yet consumed by a request parse. Bytes
+     * before read_pos are spent and may be discarded by compaction;
+     * bytes after write_pos are unallocated. */
+    char* buf;
+    int   buf_cap;
+    int   read_pos;
+    int   write_pos;
 } HttpConn;
 
 static int conn_recv(HttpConn* c, void* buf, int len) {
@@ -139,6 +156,38 @@ static void conn_close(HttpConn* c) {
         close(c->fd);
         c->fd = -1;
     }
+    if (c->buf) {
+        free(c->buf);
+        c->buf = NULL;
+        c->buf_cap = 0;
+        c->read_pos = 0;
+        c->write_pos = 0;
+    }
+}
+
+/* Compact the read buffer: shift unconsumed bytes [read_pos,
+ * write_pos) down to position 0 so the tail is available for a
+ * fresh recv. Cheap when read_pos is large relative to write_pos. */
+static void conn_buf_compact(HttpConn* c) {
+    if (c->read_pos == 0) return;
+    int unread = c->write_pos - c->read_pos;
+    if (unread > 0) {
+        memmove(c->buf, c->buf + c->read_pos, (size_t)unread);
+    }
+    c->write_pos = unread;
+    c->read_pos = 0;
+}
+
+/* Grow the read buffer to at least the given capacity. */
+static int conn_buf_ensure(HttpConn* c, int needed) {
+    if (c->buf_cap >= needed) return 0;
+    int new_cap = c->buf_cap > 0 ? c->buf_cap : HTTP_CONN_BUF_CAP;
+    while (new_cap < needed) new_cap *= 2;
+    char* nb = realloc(c->buf, (size_t)new_cap);
+    if (!nb) return -1;
+    c->buf = nb;
+    c->buf_cap = new_cap;
+    return 0;
 }
 
 #ifdef AETHER_HAS_OPENSSL
@@ -783,56 +832,88 @@ static int http_request_wants_keepalive(HttpRequest* req) {
  *    1 — request was processed; caller may loop for another request
  *        on the same connection (subject to keep-alive policy).
  *    0 — connection should close (parse failure, EOF, client asked
- *        for close, or the response status mandates close). */
+ *        for close, or the response status mandates close).
+ *
+ * Uses the conn's persistent read buffer so that bytes the previous
+ * request's recv loop pulled past its own boundary (HTTP pipelining,
+ * or just two requests in one TCP packet) are not dropped. */
 static int handle_one_request(HttpServer* server, HttpConn* conn,
                               int requests_served, int max_requests) {
-    // Read headers first (up to 8KB), then read body up to Content-Length
-    int capacity = 8192;
-    char* buffer = malloc(capacity);
-    if (!buffer) return 0;
-
-    int total = 0;
-    // Read until we see the header/body separator \r\n\r\n
-    while (total < capacity - 1) {
-        int n = conn_recv(conn, buffer + total, capacity - 1 - total);
-        if (n <= 0) break;
-        total += n;
-        buffer[total] = '\0';
-        if (strstr(buffer, "\r\n\r\n")) break;
+    /* Lazy-allocate the read buffer on first use. */
+    if (!conn->buf) {
+        if (conn_buf_ensure(conn, HTTP_CONN_BUF_CAP) != 0) return 0;
+        conn->read_pos = 0;
+        conn->write_pos = 0;
     }
-    if (total <= 0) { free(buffer); return 0; }
-    buffer[total] = '\0';
+    /* Reclaim space at the head if the previous request consumed it. */
+    conn_buf_compact(conn);
 
-    // Find Content-Length header if present and read remaining body
-    const char* cl_hdr = http_strcasestr(buffer, "Content-Length:");
-    if (cl_hdr) {
-        long content_length = strtol(cl_hdr + 15, NULL, 10);
-        const char* header_end = strstr(buffer, "\r\n\r\n");
-        if (header_end && content_length > 0) {
-            int header_size = (int)(header_end - buffer) + 4;
-            int body_received = total - header_size;
-            long body_needed = content_length - body_received;
-            if (body_needed > 0) {
-                // Grow buffer to fit full body
-                int new_cap = header_size + (int)content_length + 1;
-                char* nb = realloc(buffer, new_cap);
-                if (nb) {
-                    buffer = nb;
-                    while (body_needed > 0) {
-                        int n = conn_recv(conn, buffer + total, (int)body_needed);
-                        if (n <= 0) break;
-                        total += n;
-                        body_needed -= n;
-                    }
-                    buffer[total] = '\0';
-                }
-            }
+    /* Read until \r\n\r\n appears in the unconsumed portion. The
+     * scan starts from read_pos so already-buffered pipelined bytes
+     * count toward the header boundary. */
+    char* hdr_end = NULL;
+    while (1) {
+        if (conn->write_pos > conn->read_pos) {
+            /* NUL-terminate the unconsumed slice in place — we have
+             * one byte of slack reserved at the end of the buffer. */
+            conn->buf[conn->write_pos] = '\0';
+            hdr_end = strstr(conn->buf + conn->read_pos, "\r\n\r\n");
+            if (hdr_end) break;
         }
+        if (conn->write_pos + 1 >= conn->buf_cap) {
+            /* Header section exceeded buffer capacity; bail. */
+            return 0;
+        }
+        int n = conn_recv(conn, conn->buf + conn->write_pos,
+                          conn->buf_cap - conn->write_pos - 1);
+        if (n <= 0) return 0;  /* EOF / timeout / error */
+        conn->write_pos += n;
     }
 
-    // Parse request
-    HttpRequest* req = http_parse_request(buffer);
-    free(buffer);
+    int header_size = (int)(hdr_end - conn->buf) + 4 - conn->read_pos;
+    int request_total = header_size;
+
+    /* Resolve Content-Length and ensure the full body is buffered. */
+    const char* cl_hdr = http_strcasestr(conn->buf + conn->read_pos,
+                                         "Content-Length:");
+    long content_length = 0;
+    if (cl_hdr && cl_hdr < hdr_end) {
+        content_length = strtol(cl_hdr + 15, NULL, 10);
+        if (content_length < 0) content_length = 0;
+    }
+    if (content_length > 0) {
+        int needed_total = header_size + (int)content_length;
+        /* Make sure the buffer can hold (read_pos + needed_total)
+         * bytes plus a NUL. */
+        if (conn_buf_ensure(conn, conn->read_pos + needed_total + 1) != 0) {
+            return 0;
+        }
+        while (conn->write_pos - conn->read_pos < needed_total) {
+            int want = needed_total - (conn->write_pos - conn->read_pos);
+            int avail = conn->buf_cap - conn->write_pos - 1;
+            int chunk = want < avail ? want : avail;
+            if (chunk <= 0) return 0;
+            int n = conn_recv(conn, conn->buf + conn->write_pos, chunk);
+            if (n <= 0) return 0;
+            conn->write_pos += n;
+        }
+        request_total = needed_total;
+    }
+
+    /* Carve out the request slice. http_parse_request expects a
+     * NUL-terminated C string; restore the byte we overwrite after
+     * parsing so the next request's bytes (already in the buffer
+     * from a pipelined recv) survive. */
+    char* req_start = conn->buf + conn->read_pos;
+    char saved = req_start[request_total];
+    req_start[request_total] = '\0';
+    HttpRequest* req = http_parse_request(req_start);
+    req_start[request_total] = saved;
+
+    /* Advance past the parsed bytes regardless of parse outcome —
+     * a malformed request shouldn't make the same bytes parse again
+     * on the next iteration. */
+    conn->read_pos += request_total;
     if (!req) return 0;
 
     // Create response
@@ -918,12 +999,28 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
     return will_keep_alive;
 }
 
-static void handle_client_connection(HttpServer* server, int client_fd) {
+/* Public reusable helper. Owns the full per-connection lifecycle:
+ * optional TLS handshake, request-parsing loop with keep-alive,
+ * route dispatch, response emission, socket close. Used by both the
+ * thread-pool worker path inside this file AND user actor step
+ * functions registered via http_server_set_actor_handler — both
+ * call here to get identical TLS / keep-alive / route-dispatch
+ * behaviour. (#260 Tier 0 / Phase C3.) */
+void http_server_drain_connection(HttpServer* server, int client_fd) {
+    if (!server || client_fd < 0) return;
+
     /* Connection transport — plain by default; SSL-wrapped when the
      * server has TLS enabled. The conn_recv/conn_send/conn_close
      * helpers polymorphise over both shapes so handle_one_request
      * reads the same regardless. */
-    HttpConn conn = { .fd = client_fd, .ssl = NULL };
+    HttpConn conn = {
+        .fd = client_fd,
+        .ssl = NULL,
+        .buf = NULL,
+        .buf_cap = 0,
+        .read_pos = 0,
+        .write_pos = 0,
+    };
 #ifdef AETHER_HAS_OPENSSL
     if (server->tls_enabled && server->tls_ctx) {
         if (conn_tls_accept(&conn, (SSL_CTX*)server->tls_ctx) != 0) {
@@ -963,6 +1060,12 @@ static void handle_client_connection(HttpServer* server, int client_fd) {
     }
 
     conn_close(&conn);
+}
+
+static void handle_client_connection(HttpServer* server, int client_fd) {
+    /* Thread-pool path — defers to the public drain helper so the
+     * keep-alive / TLS / route-dispatch logic lives in one place. */
+    http_server_drain_connection(server, client_fd);
 }
 
 // ============================================================================

@@ -223,6 +223,23 @@ void http_server_set_actor_handler(HttpServer* server, void (*step_fn)(void*),
                                     void* (*spawn_fn)(int, void (*)(void*), size_t),
                                     void (*release_fn)(void*));
 
+// Drain an accepted connection through the full HTTP lifecycle: TLS
+// handshake (when enabled), parse request, run middleware, dispatch
+// to the matching route, emit response, then loop for the next
+// request when keep-alive is enabled. Closes the socket when the
+// connection terminates. Idempotent on a closed/invalid fd
+// (returns immediately).
+//
+// This is the building block that power callers — actor step
+// functions, custom thread-pool workers, embedding hosts —
+// use to plug a single connection into the standard server
+// machinery. The thread-pool worker path inside this file calls it
+// internally; user actor step functions registered via
+// http_server_set_actor_handler should call it on the
+// MSG_HTTP_CONNECTION message's client_fd to get the same
+// keep-alive / TLS / route-dispatch behaviour. (#260 Tier 0)
+void http_server_drain_connection(HttpServer* server, int client_fd);
+
 // Request accessors (for use from Aether .ae code via opaque ptr)
 const char* http_request_method(HttpRequest* req);
 const char* http_request_path(HttpRequest* req);
