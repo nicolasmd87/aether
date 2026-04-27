@@ -121,11 +121,21 @@ probe_tinygo() {
     # bridge itself is dlopen-only (no Go runtime in-process), so the
     # only requirement at link time is libdl on Linux. macOS ships
     # dlopen in libc — no extra -l flag.
+    #
+    # If libffi is present, also enable AETHER_HAS_LIBFFI so the
+    # tinygo.call_dynamic escape hatch is exposed for unusual
+    # signatures the fixed wrappers don't cover.
     if command -v tinygo >/dev/null 2>&1; then
-        echo ""   # no -I beyond the std.dl include
+        ffi_cflags=""
+        ffi_libs=""
+        if pkg-config --exists libffi 2>/dev/null; then
+            ffi_cflags="-DAETHER_HAS_LIBFFI $(pkg-config --cflags libffi 2>/dev/null)"
+            ffi_libs="$(pkg-config --libs libffi 2>/dev/null)"
+        fi
+        echo "$ffi_cflags"
         case "$(uname -s)" in
-            Linux)  echo "-ldl" ;;
-            *)      echo "" ;;
+            Linux)  echo "-ldl $ffi_libs" ;;
+            *)      echo "$ffi_libs" ;;
         esac
         return 0
     fi
