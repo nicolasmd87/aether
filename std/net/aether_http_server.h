@@ -3,6 +3,7 @@
 
 #include "../string/aether_string.h"
 #include "../../runtime/scheduler/multicore_scheduler.h"
+#include <stdatomic.h>
 
 // HTTP Request
 typedef struct {
@@ -55,8 +56,15 @@ typedef struct HttpMiddlewareNode {
     struct HttpMiddlewareNode* next;
 } HttpMiddlewareNode;
 
+// Forward declare these so the HttpServer struct can hold them as
+// fields. Their full type definitions appear with the related
+// public functions below.
+struct HttpServer; /* forward, for hook signatures */
+typedef void (*HttpLifecycleHook)(struct HttpServer* server, void* user_data);
+typedef int  (*HttpReadyCheck)(void* user_data);
+
 // HTTP Server
-typedef struct {
+typedef struct HttpServer {
     int socket_fd;
     int port;
     char* host;
@@ -80,6 +88,24 @@ typedef struct {
     // handler, before serialization. See
     // http_server_use_response_transformer above.
     struct HttpResponseTransformerNode* response_transformer_chain;
+
+    // Lifecycle hooks (#260 Tier 3). NULL == not installed.
+    HttpLifecycleHook on_start;
+    void* on_start_user_data;
+    HttpLifecycleHook on_stop;
+    void* on_stop_user_data;
+
+    // Health probes (#260 Tier 3). When non-zero, the route table
+    // will already have routes registered for live/ready_path — the
+    // health-probe handlers are stateless functions that close
+    // over `ready_check` via the route's user_data slot.
+    HttpReadyCheck ready_check;
+    void* ready_check_user_data;
+
+    // In-flight connection tracker for graceful shutdown (#260 Tier 3).
+    // Incremented at the top of http_server_drain_connection and
+    // decremented at the bottom; the shutdown helper waits on this.
+    _Atomic int inflight_connections;
 
     // Actor system
     Scheduler* scheduler;
@@ -244,6 +270,33 @@ void http_server_set_actor_handler(HttpServer* server, void (*step_fn)(void*),
                                     void (*send_fn)(void*, void*, size_t),
                                     void* (*spawn_fn)(int, void (*)(void*), size_t),
                                     void (*release_fn)(void*));
+
+// Graceful shutdown (#260 Tier 3). Stops accepting new connections,
+// then waits up to `timeout_ms` for in-flight connections to finish
+// naturally. Returns "" on clean drain, "timeout" if the deadline
+// passed with connections still active. Callers typically install
+// this on SIGTERM in their entry point.
+const char* http_server_shutdown_graceful_raw(HttpServer* server, int timeout_ms);
+
+// Lifecycle hooks (#260 Tier 3). on_start fires once after the
+// listen socket is bound but before the accept loop runs (good
+// place to log "ready" or set readiness probes). on_stop fires
+// after the accept loop exits but before sockets close (good place
+// to flush logs, snapshot metrics). HttpLifecycleHook typedef
+// declared earlier so the HttpServer struct could carry the field.
+void http_server_set_on_start(HttpServer* server, HttpLifecycleHook hook, void* user_data);
+void http_server_set_on_stop (HttpServer* server, HttpLifecycleHook hook, void* user_data);
+
+// Health-probe endpoints (#260 Tier 3). Registers two routes:
+//   `live_path`  always returns 200 "ok"  (process is up)
+//   `ready_path` calls `ready_check` (returns 1 = 200, 0 = 503)
+// Either path may be NULL/"" to skip registration. ready_check may
+// be NULL — in that case `ready_path` always returns 200 too.
+const char* http_server_set_health_probes_raw(HttpServer* server,
+                                              const char* live_path,
+                                              const char* ready_path,
+                                              HttpReadyCheck ready_check,
+                                              void* user_data);
 
 // Drain an accepted connection through the full HTTP lifecycle: TLS
 // handshake (when enabled), parse request, run middleware, dispatch

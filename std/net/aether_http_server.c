@@ -15,6 +15,13 @@ const char* http_server_set_keepalive_raw(HttpServer* s, int e, int m, int i) {
     (void)s; (void)e; (void)m; (void)i; return "keep-alive unavailable: networking not built in";
 }
 void http_server_drain_connection(HttpServer* s, int fd) { (void)s; (void)fd; }
+const char* http_server_shutdown_graceful_raw(HttpServer* s, int t) { (void)s; (void)t; return ""; }
+void http_server_set_on_start(HttpServer* s, HttpLifecycleHook h, void* u) { (void)s; (void)h; (void)u; }
+void http_server_set_on_stop (HttpServer* s, HttpLifecycleHook h, void* u) { (void)s; (void)h; (void)u; }
+const char* http_server_set_health_probes_raw(HttpServer* s, const char* lp, const char* rp,
+                                              HttpReadyCheck rc, void* ud) {
+    (void)s; (void)lp; (void)rp; (void)rc; (void)ud; return "";
+}
 void http_server_add_route(HttpServer* s, const char* m, const char* p, HttpHandler h, void* u) { (void)s; (void)m; (void)p; (void)h; (void)u; }
 void http_server_get(HttpServer* s, const char* p, HttpHandler h, void* u) { (void)s; (void)p; (void)h; (void)u; }
 void http_server_post(HttpServer* s, const char* p, HttpHandler h, void* u) { (void)s; (void)p; (void)h; (void)u; }
@@ -288,6 +295,13 @@ HttpServer* http_server_create(int port) {
     server->keep_alive_max = 0;
     server->keep_alive_idle_ms = 0;
     server->response_transformer_chain = NULL;
+    server->on_start = NULL;
+    server->on_start_user_data = NULL;
+    server->on_stop = NULL;
+    server->on_stop_user_data = NULL;
+    server->ready_check = NULL;
+    server->ready_check_user_data = NULL;
+    atomic_init(&server->inflight_connections, 0);
 
     return server;
 }
@@ -300,6 +314,101 @@ const char* http_server_set_keepalive_raw(HttpServer* server,
     server->keep_alive_enabled = enabled ? 1 : 0;
     server->keep_alive_max = max_requests < 0 ? 0 : max_requests;
     server->keep_alive_idle_ms = idle_ms < 0 ? 0 : idle_ms;
+    return "";
+}
+
+// =================================================================
+// #260 Tier 3: graceful shutdown + lifecycle hooks + health probes
+// =================================================================
+
+void http_server_set_on_start(HttpServer* server, HttpLifecycleHook hook, void* user_data) {
+    if (!server) return;
+    server->on_start = hook;
+    server->on_start_user_data = user_data;
+}
+
+void http_server_set_on_stop(HttpServer* server, HttpLifecycleHook hook, void* user_data) {
+    if (!server) return;
+    server->on_stop = hook;
+    server->on_stop_user_data = user_data;
+}
+
+const char* http_server_shutdown_graceful_raw(HttpServer* server, int timeout_ms) {
+    if (!server) return "server is null";
+
+    /* Stop accepting new connections — this unblocks the accept
+     * loop's poll() and lets it exit. The thread-pool destructor
+     * (or actor scheduler shutdown) handles in-flight connections;
+     * we just wait for the inflight counter to drain. */
+    http_server_stop(server);
+
+    if (timeout_ms <= 0) timeout_ms = 5000;
+
+    /* Spin-wait with an exponential-ish back-off, capped at 50ms.
+     * The connection counter is updated atomically by every
+     * http_server_drain_connection invocation (Tier 0 / Phase C3
+     * helper); when it reaches zero, all in-flight responses have
+     * completed naturally. */
+    int waited = 0;
+    int sleep_us = 1000;  /* 1 ms */
+    while (waited < timeout_ms) {
+        int n = atomic_load(&server->inflight_connections);
+        if (n <= 0) return "";
+#ifdef _WIN32
+        Sleep(sleep_us / 1000 ? sleep_us / 1000 : 1);
+#else
+        struct timespec ts = { .tv_sec = 0, .tv_nsec = (long)sleep_us * 1000L };
+        nanosleep(&ts, NULL);
+#endif
+        waited += sleep_us / 1000;
+        if (sleep_us < 50000) sleep_us *= 2;
+    }
+    return "timeout";
+}
+
+/* Shared stateless handler for /healthz — always 200. */
+static void health_live_handler(HttpRequest* req, HttpServerResponse* res, void* ud) {
+    (void)req; (void)ud;
+    http_response_set_status(res, 200);
+    http_response_set_header(res, "Content-Type", "text/plain");
+    http_response_set_body(res, "ok");
+}
+
+/* Shared stateless handler for /readyz — calls server->ready_check
+ * (passed via the route's user_data slot — we stash the
+ * server pointer there). */
+static void health_ready_handler(HttpRequest* req, HttpServerResponse* res, void* ud) {
+    (void)req;
+    HttpServer* server = (HttpServer*)ud;
+    int ok = 1;
+    if (server && server->ready_check) {
+        ok = server->ready_check(server->ready_check_user_data);
+    }
+    if (ok) {
+        http_response_set_status(res, 200);
+        http_response_set_header(res, "Content-Type", "text/plain");
+        http_response_set_body(res, "ready");
+    } else {
+        http_response_set_status(res, 503);
+        http_response_set_header(res, "Content-Type", "text/plain");
+        http_response_set_body(res, "not ready");
+    }
+}
+
+const char* http_server_set_health_probes_raw(HttpServer* server,
+                                              const char* live_path,
+                                              const char* ready_path,
+                                              HttpReadyCheck ready_check,
+                                              void* user_data) {
+    if (!server) return "server is null";
+    server->ready_check = ready_check;
+    server->ready_check_user_data = user_data;
+    if (live_path && *live_path) {
+        http_server_get(server, live_path, health_live_handler, NULL);
+    }
+    if (ready_path && *ready_path) {
+        http_server_get(server, ready_path, health_ready_handler, server);
+    }
     return "";
 }
 
@@ -1082,9 +1191,14 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
  * thread-pool worker path inside this file AND user actor step
  * functions registered via http_server_set_actor_handler — both
  * call here to get identical TLS / keep-alive / route-dispatch
- * behaviour. (#260 Tier 0 / Phase C3.) */
+ * behaviour. (#260 Tier 0 / Phase C3.)
+ *
+ * The inflight_connections counter (#260 Tier 3 graceful shutdown)
+ * tracks active drains so http_server_shutdown_graceful can wait
+ * for them to complete naturally before forcing close. */
 void http_server_drain_connection(HttpServer* server, int client_fd) {
     if (!server || client_fd < 0) return;
+    atomic_fetch_add(&server->inflight_connections, 1);
 
     /* Connection transport — plain by default; SSL-wrapped when the
      * server has TLS enabled. The conn_recv/conn_send/conn_close
@@ -1137,6 +1251,7 @@ void http_server_drain_connection(HttpServer* server, int client_fd) {
     }
 
     conn_close(&conn);
+    atomic_fetch_sub(&server->inflight_connections, 1);
 }
 
 static void handle_client_connection(HttpServer* server, int client_fd) {
@@ -1474,6 +1589,13 @@ int http_server_start_raw(HttpServer* server) {
         printf("Press Ctrl+C to stop\n\n");
         fflush(stdout);
 
+        /* on_start lifecycle hook (#260 Tier 3). Fires once after
+         * the listen socket is bound, before the accept loop runs.
+         * Typical use: log "ready", flip a readiness probe to 200. */
+        if (server->on_start) {
+            server->on_start(server, server->on_start_user_data);
+        }
+
 #if AETHER_HAS_THREADS && !defined(_WIN32)
         HttpConnectionPool* pool = http_pool_create(server);
 #endif
@@ -1506,6 +1628,14 @@ int http_server_start_raw(HttpServer* server) {
 #if AETHER_HAS_THREADS && !defined(_WIN32)
         http_pool_destroy(pool);
 #endif
+
+        /* on_stop lifecycle hook fires after the accept loop exits
+         * but BEFORE socket cleanup (so the hook still sees a live
+         * server struct). Typical use: flush logs, snapshot
+         * metrics, flip readiness probe to 503. */
+        if (server->on_stop) {
+            server->on_stop(server, server->on_stop_user_data);
+        }
     }
 
     return 0;
