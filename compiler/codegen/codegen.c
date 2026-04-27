@@ -1172,9 +1172,16 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "    va_end(args2);");
     print_line(gen, "    return (void*)str;");
     print_line(gen, "}");
-    /* NULL-safe string helper for print/println — avoids double-evaluating the expression */
+    /* NULL-safe string helper for print/println — avoids double-evaluating
+     * the expression. Goes through aether_string_data() which dispatches
+     * on the AetherString magic header so values returned by length-
+     * bearing primitives (string_from_int, string_concat_wrapped,
+     * fs.read_binary, …) print their payload bytes rather than the
+     * struct header. Plain char* values pass through unchanged. */
+    print_line(gen, "extern const char* aether_string_data(const void* s);");
     print_line(gen, "static inline const char* _aether_safe_str(const void* s) {");
-    print_line(gen, "    return s ? (const char*)s : \"(null)\";");
+    print_line(gen, "    if (!s) return \"(null)\";");
+    print_line(gen, "    return aether_string_data(s);");
     print_line(gen, "}");
     // Built-in `sleep(ms)` lowers to aether_sleep_ms — a runtime helper
     // with a stable, prefixed name so user `extern sleep(...)` doesn't
@@ -1348,6 +1355,13 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
             merge_return_tuple_types(child, child->node_type);
             ensure_tuple_typedef(gen, child->node_type);
         }
+        // Externs with `-> (T1, T2, ...)` need the same typedef. The
+        // return type is parsed directly (no inference from a body), so
+        // no merge step is needed. Issue #271.
+        if (child && child->type == AST_EXTERN_FUNCTION && child->node_type &&
+            child->node_type->kind == TYPE_TUPLE) {
+            ensure_tuple_typedef(gen, child->node_type);
+        }
     }
     // Propagate merged return types to all function call sites in the program
     // (call node_types may have UNKNOWN elements from before the merge)
@@ -1358,6 +1372,14 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         if ((child->type == AST_FUNCTION_DEFINITION || child->type == AST_BUILDER_FUNCTION) && child->node_type &&
             child->node_type->kind == TYPE_TUPLE && child->value) {
             // Find all calls to this function in the program and update their node_type
+            extern void propagate_tuple_type_to_calls(ASTNode* node, const char* func_name, Type* type);
+            propagate_tuple_type_to_calls(program, child->value, child->node_type);
+        }
+        // Same propagation for tuple-returning externs — call sites
+        // need to know they're consuming a `_tuple_T1_T2` struct so
+        // the destructure (`a, b = extern_fn(...)`) emits correctly.
+        if (child->type == AST_EXTERN_FUNCTION && child->node_type &&
+            child->node_type->kind == TYPE_TUPLE && child->value) {
             extern void propagate_tuple_type_to_calls(ASTNode* node, const char* func_name, Type* type);
             propagate_tuple_type_to_calls(program, child->value, child->node_type);
         }

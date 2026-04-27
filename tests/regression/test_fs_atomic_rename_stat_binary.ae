@@ -208,7 +208,10 @@ main() {
         println("  FAIL: length should be 0 on error, got ${n_m}")
         exit(1)
     }
-    if data_m != "" {
+    // string.equals dispatches via str_data, so it works on both
+    // `""` literals and empty AetherString*. Bare `!=` is the
+    // codegen-strcmp path (#267) — broken for AetherString* operands.
+    if string.equals(data_m, "") == 0 {
         println("  FAIL: data should be empty on error")
         exit(1)
     }

@@ -5,7 +5,7 @@ exports (
     string_new, string_from_cstr, string_from_literal,
     string_new_with_length, string_empty,
     string_retain, string_release, string_free,
-    string_concat, string_length, string_char_at,
+    string_concat, string_concat_wrapped, string_length, string_char_at,
     string_equals, string_compare,
     string_starts_with, string_ends_with, string_contains,
     string_index_of, string_index_of_from, string_substring,
@@ -33,6 +33,12 @@ extern string_free(str: string)
 
 // String operations
 extern string_concat(a: string, b: string) -> string
+// Length-bearing concat. Returns a refcounted AetherString; downstream
+// string.length() honours the stored length rather than falling
+// through to strlen() and silently truncating at the first NUL. Use
+// when joining inputs that may contain binary bytes (base64-decoded
+// payloads, fs.read_binary output, …). Issue #270.
+extern string_concat_wrapped(a: string, b: string) -> ptr
 extern string_length(str: string) -> int
 extern string_char_at(str: string, index: int) -> int
 extern string_equals(a: string, b: string) -> int

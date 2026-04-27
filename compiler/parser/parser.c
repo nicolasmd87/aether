@@ -138,9 +138,42 @@ static void parser_message(Parser* parser, const char* message) {
 Type* parse_type(Parser* parser) {
     Token* token = peek_token(parser);
     if (!token) return NULL;
-    
+
     Type* type = NULL;
-    
+
+    // Tuple type: `(T1, T2, ...)` — used in extern return positions for
+    // C functions that return a struct by value with the matching shape.
+    // See `compiler/codegen/codegen_func.c` for the `_tuple_T1_T2`
+    // typedef the codegen synthesises. Issue #271.
+    if (token->type == TOKEN_LEFT_PAREN) {
+        advance_token(parser);
+        Type* tup = create_type(TYPE_TUPLE);
+        tup->tuple_count = 0;
+        tup->tuple_types = NULL;
+        do {
+            Type* elem = parse_type(parser);
+            if (!elem) {
+                parser_error(parser, "Expected type inside tuple");
+                free_type(tup);
+                return NULL;
+            }
+            tup->tuple_count++;
+            tup->tuple_types = realloc(tup->tuple_types,
+                                       (size_t)tup->tuple_count * sizeof(Type*));
+            tup->tuple_types[tup->tuple_count - 1] = elem;
+        } while (match_token(parser, TOKEN_COMMA));
+        if (!expect_token(parser, TOKEN_RIGHT_PAREN)) {
+            free_type(tup);
+            return NULL;
+        }
+        if (tup->tuple_count < 2) {
+            parser_error(parser, "tuple type requires at least two element types");
+            free_type(tup);
+            return NULL;
+        }
+        return tup;
+    }
+
     switch (token->type) {
         case TOKEN_INT:
             advance_token(parser);
