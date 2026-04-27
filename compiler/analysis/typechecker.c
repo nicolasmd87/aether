@@ -592,6 +592,38 @@ static int count_function_params(ASTNode* func) {
     return count;
 }
 
+// Returns 1 if the parameter has a default expression attached
+// (Phase A2.1 — default function arguments). Default expressions are
+// stored as the first child of an AST_PATTERN_VARIABLE / AST_VARIABLE_
+// DECLARATION node by the parser, with annotation="has_default" so
+// they are distinguishable from struct/list-pattern children.
+static int param_has_default(ASTNode* param) {
+    return param && param->annotation &&
+           strcmp(param->annotation, "has_default") == 0 &&
+           param->child_count > 0 && param->children[0] != NULL;
+}
+
+// Counts required (non-defaulted) parameters. Defaults trail required
+// (Python rule: once a default appears, every subsequent parameter
+// must also have one). The rule is enforced separately at function-
+// declaration time; this helper just counts.
+static int count_required_params(ASTNode* func) {
+    if (!func || func->child_count == 0) return 0;
+    int count = 0;
+    for (int i = 0; i < func->child_count - 1; i++) {
+        ASTNode* child = func->children[i];
+        if (child->type == AST_GUARD_CLAUSE) continue;
+        if (child->type != AST_VARIABLE_DECLARATION &&
+            child->type != AST_PATTERN_VARIABLE &&
+            child->type != AST_PATTERN_LITERAL) continue;
+        if (param_has_default(child)) {
+            return count;  // first defaulted param ends the required prefix
+        }
+        count++;
+    }
+    return count;
+}
+
 // Returns 1 if the function's first parameter is _ctx: ptr. Such functions
 // can be called either with _ctx passed explicitly (got == expected) or with
 // _ctx auto-injected by the builder-DSL runtime (got == expected - 1).
@@ -2846,6 +2878,7 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
     // Arity check: user-defined functions have their AST node stored
     if (symbol->node && (symbol->node->type == AST_FUNCTION_DEFINITION || symbol->node->type == AST_BUILDER_FUNCTION)) {
         int expected = count_function_params(symbol->node);
+        int required = count_required_params(symbol->node);
         int ctx_first = has_ctx_first_param(symbol->node);
         int got = call->child_count;
         // If mismatch, try excluding trailing closures (for functions that
@@ -2865,15 +2898,70 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
         // Functions with _ctx as the first param accept either:
         //   - expected args (caller passed _ctx explicitly), or
         //   - expected-1 args (builder DSL auto-injects _ctx at the call site)
+        // Phase A2.1 default arguments: a call with `got` between
+        // `required` and `expected` (inclusive) is also OK — the
+        // missing trailing args get filled in below from the
+        // declared defaults.
         int arity_ok = (got == expected) ||
-                       (ctx_first && got == expected - 1);
+                       (ctx_first && got == expected - 1) ||
+                       (got >= required && got < expected);
         if (!arity_ok) {
             char error_msg[256];
-            snprintf(error_msg, sizeof(error_msg),
-                     "Function '%s' expects %d argument(s), got %d",
-                     call->value, expected, got);
+            if (required < expected) {
+                snprintf(error_msg, sizeof(error_msg),
+                         "Function '%s' expects %d-%d argument(s), got %d",
+                         call->value, required, expected, got);
+            } else {
+                snprintf(error_msg, sizeof(error_msg),
+                         "Function '%s' expects %d argument(s), got %d",
+                         call->value, expected, got);
+            }
             type_error(error_msg, call->line, call->column);
             return 0;
+        }
+
+        // Phase A2.1 default-arg fill: if the caller passed fewer
+        // args than the callee declared (within the required..total
+        // window allowed above), append clones of the declared
+        // default expressions to the call's child list. After this
+        // codegen sees a fully-populated call and emits the right C.
+        // Defaults trail required, so the missing slots are always
+        // the trailing tail.
+        if (got >= required && got < expected) {
+            int param_idx = 0;
+            for (int i = 0; i < symbol->node->child_count - 1 &&
+                            call->child_count < expected; i++) {
+                ASTNode* p = symbol->node->children[i];
+                if (!p) continue;
+                if (p->type == AST_GUARD_CLAUSE) continue;
+                if (p->type != AST_VARIABLE_DECLARATION &&
+                    p->type != AST_PATTERN_VARIABLE &&
+                    p->type != AST_PATTERN_LITERAL) continue;
+                // Skip param indexes the caller already supplied.
+                if (param_idx < got) {
+                    param_idx++;
+                    continue;
+                }
+                if (!param_has_default(p)) {
+                    // Should be unreachable given the trailing-default
+                    // rule, but defensively: error instead of silently
+                    // filling with an undefined value.
+                    char err[256];
+                    snprintf(err, sizeof(err),
+                             "Function '%s' parameter %d has no default — caller must supply it",
+                             call->value, param_idx + 1);
+                    type_error(err, call->line, call->column);
+                    return 0;
+                }
+                ASTNode* default_clone = clone_ast_node(p->children[0]);
+                if (!default_clone) {
+                    type_error("internal: failed to clone default expression",
+                               call->line, call->column);
+                    return 0;
+                }
+                add_child(call, default_clone);
+                param_idx++;
+            }
         }
     }
 

@@ -2800,7 +2800,7 @@ ASTNode* parse_pattern(Parser* parser) {
             advance_token(parser);
             ASTNode* pattern = create_ast_node(AST_PATTERN_VARIABLE, token->value,
                                               token->line, token->column);
-            
+
             // Optional type annotation: param: type
             if (match_token(parser, TOKEN_COLON)) {
                 Type* param_type = parse_type(parser);
@@ -2812,7 +2812,24 @@ ASTNode* parse_pattern(Parser* parser) {
             } else {
                 pattern->node_type = create_type(TYPE_UNKNOWN);
             }
-            
+
+            // Optional default value: param: type = expr  (issue #265
+            // / Phase A2.1 — default function arguments). The default
+            // expression is stored as the first child of the
+            // pattern, with annotation="has_default" so consumers
+            // (typechecker, codegen) can distinguish it from
+            // pattern-children used by struct/list patterns elsewhere.
+            // Default expressions that reference other parameters are
+            // not yet supported; document with a v1 restriction.
+            if (match_token(parser, TOKEN_ASSIGN)) {
+                ASTNode* default_expr = parse_expression(parser);
+                if (default_expr) {
+                    add_child(pattern, default_expr);
+                    if (pattern->annotation) free(pattern->annotation);
+                    pattern->annotation = strdup("has_default");
+                }
+            }
+
             return pattern;
         }
         
@@ -2837,6 +2854,16 @@ ASTNode* parse_pattern(Parser* parser) {
                 ASTNode* pattern = create_ast_node(AST_PATTERN_VARIABLE, pname->value,
                                                    pname->line, pname->column);
                 pattern->node_type = param_type ? param_type : create_type(TYPE_UNKNOWN);
+                // Default value (Phase A2.1) — same shape as the
+                // identifier-with-type-annotation branch above.
+                if (match_token(parser, TOKEN_ASSIGN)) {
+                    ASTNode* default_expr = parse_expression(parser);
+                    if (default_expr) {
+                        add_child(pattern, default_expr);
+                        if (pattern->annotation) free(pattern->annotation);
+                        pattern->annotation = strdup("has_default");
+                    }
+                }
                 return pattern;
             }
             // Fall through to expression parsing
