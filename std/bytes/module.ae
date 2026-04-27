@@ -1,0 +1,90 @@
+// std.bytes — mutable byte buffer with random-access write and
+// overlap-safe forward copy_within.
+//
+// Aether's `string` is immutable. For workloads that need to write
+// bytes at arbitrary indices (binary codec output buffers, varint
+// emit, frame layout, output accumulation), reach for std.bytes.
+// Lifecycle: bytes.new() → set / copy_from_string / copy_within →
+// bytes.finish(b, len) to hand off to a refcounted AetherString,
+// or bytes.free(b) to discard. Issue #288.
+//
+// Why not just use repeated string.concat?
+// Concat is allocate-and-copy on every step (O(n²) for n appends),
+// and there's no way to "set byte at index 2 to whatever's at index 0
+// after writing index 2 myself" — concat reads from a snapshot.
+// std.bytes is the answer for any algorithm whose write at offset i
+// depends on a write the caller just made at offset i - run_length
+// (RLE expansion is the canonical case).
+
+import std.string
+
+exports (
+    aether_bytes_new, aether_bytes_set, aether_bytes_length,
+    aether_bytes_copy_from_string, aether_bytes_copy_within,
+    aether_bytes_finish, aether_bytes_free,
+    new, set, length, copy_from_string, copy_within, finish, free
+)
+
+// ---- Raw externs ----
+extern aether_bytes_new(initial_capacity: int) -> ptr
+extern aether_bytes_length(b: ptr) -> int
+extern aether_bytes_set(b: ptr, index: int, byte: int) -> int
+extern aether_bytes_copy_from_string(b: ptr, dst: int, src: string, src_len: int) -> int
+// `length` here is the count of bytes to copy, not a buffer length.
+extern aether_bytes_copy_within(b: ptr, dst: int, src: int, length: int) -> int
+extern aether_bytes_finish(b: ptr, length: int) -> ptr
+extern aether_bytes_free(b: ptr)
+
+// ---- Aether-side wrappers ----
+// Allocate a new mutable byte buffer with at least `initial_capacity`
+// bytes reserved. Returns null on allocation failure or negative
+// capacity. Initial logical length is 0.
+new(initial_capacity: int) -> ptr {
+    return aether_bytes_new(initial_capacity)
+}
+
+// Number of bytes the buffer logically contains. Returns -1 if `b`
+// is null.
+length(b: ptr) -> int {
+    return aether_bytes_length(b)
+}
+
+// Write a single byte at `index`. The buffer grows if needed; gaps
+// between the previous tail and `index` are zero-filled. Returns
+// 1 on success, 0 on failure.
+set(b: ptr, index: int, byte: int) -> int {
+    return aether_bytes_set(b, index, byte)
+}
+
+// Copy `src_len` bytes from `src` into the buffer starting at offset
+// `dst`. `src` may be either a plain `string` literal or an
+// AetherString-bearing value (binary-safe via aether_string_data on
+// the C side). Returns 1 on success, 0 on failure.
+copy_from_string(b: ptr, dst: int, src: string, src_len: int) -> int {
+    return aether_bytes_copy_from_string(b, dst, src, src_len)
+}
+
+// Copy `length` bytes from offset `src` to offset `dst` *within the
+// same buffer*, forward byte-by-byte. Bytes written earlier in the
+// same call are visible to later reads — the RLE-overlap behaviour.
+// Returns 1 on success, 0 on failure (NULL buffer, negative offsets,
+// or src + length > current buffer length).
+copy_within(b: ptr, dst: int, src: int, length: int) -> int {
+    return aether_bytes_copy_within(b, dst, src, length)
+}
+
+// Hand the buffer off to a refcounted AetherString and destroy the
+// AetherBytes wrapper. After this call, `b` is invalid. The string
+// carries the explicit length so embedded NULs survive end-to-end.
+// Pass the prefix you actually want to keep (use bytes.length(b) to
+// take the whole buffer).
+finish(b: ptr, length: int) -> string {
+    return aether_bytes_finish(b, length)
+}
+
+// Discard the buffer without converting to a string. Idempotent on
+// null. Use this for error paths that mid-way decide the buffer
+// isn't needed.
+free(b: ptr) {
+    aether_bytes_free(b)
+}

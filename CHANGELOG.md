@@ -5,9 +5,19 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.92.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Added
+
+- **`std.bytes` — mutable byte buffer with overlap-safe forward `copy_within`** (`std/bytes/{aether_bytes.c,aether_bytes.h,module.ae}`, `Makefile`, `docs/stdlib-reference.md`, `tests/regression/test_std_bytes.ae`). Issue #288. Aether's `string` is immutable; `std.bytes` fills the gap any binary-codec / streaming-buffer workload needs — random-access write at arbitrary indices, overlap-safe forward `copy_within` for RLE expansion, hand-off to a refcounted `AetherString` via `bytes.finish(b, n)`. The headline use case is the RLE-overlap pattern that `string.concat` can't express: when `dst > src`, each iteration of the forward-byte-by-byte loop reads bytes earlier iterations of the same call have just written. `memmove()` would defeat the purpose by choosing a safe direction. Surface: `bytes.new(initial_capacity)`, `bytes.set(b, index, byte)` (gaps zero-fill), `bytes.copy_from_string(b, dst, src, src_len)` (binary-safe via `aether_string_data` — works on AetherString and plain `char*`), `bytes.copy_within(b, dst, src, length)` (forward byte-by-byte), `bytes.length(b)`, `bytes.finish(b, length)` (consumes the buffer), `bytes.free(b)` (discard). Regression test: `tests/regression/test_std_bytes.ae` — six cases covering basic set+finish, gap zero-fill, copy_from_string, RLE expansion (`[A,B]` → `ABABAB` via `copy_within(2, 0, 4)`), non-overlapping copy, free-without-finish.
+
+### Changed
+
+- **`os.run_capture(prog, argv, env)` now returns `(stdout, status, err)`** (`std/os/{aether_os.c,aether_os.h,module.ae}`, `tests/regression/test_run_capture_status.ae`). Issue #289. The previous `(stdout, err)` shape discarded the child's exit code, leaving callers unable to distinguish "ran cleanly" from "ran but exited non-zero" — load-bearing for any tool that signals success/failure via exit code separately from stdout (`diff3 -m` returning 1 for conflicts, `grep` returning 1 for no-match, `gcc` returning non-zero on compile errors). New shape: `output, status, err = os.run_capture(...)`. Status is `WEXITSTATUS` on normal exit; `-1` when killed by signal or when the spawn itself failed. `err == ""` on successful spawn regardless of exit code; non-empty only when the fork/exec couldn't run. Underneath: a new tuple-returning extern `os_run_capture_status_raw(prog, argv, env) -> (string, int, string)` (built on the FFI tuple-return work from #271/#281). The original `os_run_capture_raw` C function stays in place for callers built directly against it; the Aether-level `run_capture` wrapper switches to the new tuple form. **Breaking** for any pre-1.0 caller that was destructuring the old `(stdout, err)` tuple — migration is `output, _, err = os.run_capture(...)` (one extra `_` slot). No `.ae` callers in the tree needed updating; the change is internal-stdlib-only at this point. Regression test: `tests/regression/test_run_capture_status.ae` — three cases: `/bin/true` (status 0), `/bin/false` (status 1), missing binary (status 127, the POSIX exec-in-child convention).
 
 ## [0.92.0]
 

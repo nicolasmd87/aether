@@ -1362,6 +1362,26 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
             child->node_type->kind == TYPE_TUPLE) {
             ensure_tuple_typedef(gen, child->node_type);
         }
+        // Imported modules' externs that have tuple return types also
+        // need the typedef synthesised here, even when the user didn't
+        // selectively import them — the import-handling path below
+        // forward-declares every extern in the module, which would
+        // otherwise reference an undeclared `_tuple_T1_T2` typedef.
+        // See `case AST_IMPORT_STATEMENT` in the main loop. Issue #289.
+        if (child && child->type == AST_IMPORT_STATEMENT && child->value) {
+            AetherModule* mod_entry = module_find(child->value);
+            ASTNode* mod_ast = mod_entry ? mod_entry->ast : NULL;
+            if (mod_ast) {
+                for (int j = 0; j < mod_ast->child_count; j++) {
+                    ASTNode* decl = mod_ast->children[j];
+                    if (decl && decl->type == AST_EXTERN_FUNCTION &&
+                        decl->node_type &&
+                        decl->node_type->kind == TYPE_TUPLE) {
+                        ensure_tuple_typedef(gen, decl->node_type);
+                    }
+                }
+            }
+        }
     }
     // Propagate merged return types to all function call sites in the program
     // (call node_types may have UNKNOWN elements from before the merge)

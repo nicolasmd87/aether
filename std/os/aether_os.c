@@ -18,6 +18,12 @@ int os_execv(const char* p, void* a) { (void)p; (void)a; return -1; }
 char* os_which(const char* n) { (void)n; return NULL; }
 int os_run(const char* p, void* a, void* e) { (void)p; (void)a; (void)e; return -1; }
 char* os_run_capture_raw(const char* p, void* a, void* e) { (void)p; (void)a; (void)e; return NULL; }
+typedef struct { const char* _0; int _1; const char* _2; } _tuple_string_int_string;
+_tuple_string_int_string os_run_capture_status_raw(const char* p, void* a, void* e) {
+    (void)p; (void)a; (void)e;
+    _tuple_string_int_string out = { "", -1, "os.run_capture unavailable" };
+    return out;
+}
 char* os_now_utc_iso8601_raw(void) { return NULL; }
 #else
 
@@ -558,6 +564,130 @@ char* os_run_capture_raw(const char* prog, void* argv_list, void* env_list) {
     return result;
 }
 
+/* Tuple-returning sibling of os_run_capture_raw — captures stdout AND
+ * exposes the child's exit code. Returns (stdout, status, err):
+ *   - stdout: same shape os_run_capture_raw returns. Empty string
+ *             when the spawn fails.
+ *   - status: WEXITSTATUS(st) on normal exit, -1 when the child was
+ *             killed by a signal or the spawn itself failed.
+ *   - err:    "" on successful spawn (regardless of exit code);
+ *             non-empty only when the fork/exec couldn't run.
+ *
+ * This is the canonical entry point for callers that need to
+ * distinguish "ran cleanly" from "ran but exited non-zero" (diff3,
+ * grep, gcc, etc.). The plain `os_run_capture_raw` stays for callers
+ * that don't care about status. Issue #289. */
+typedef struct { const char* _0; int _1; const char* _2; } _tuple_string_int_string;
+
+_tuple_string_int_string os_run_capture_status_raw(const char* prog, void* argv_list, void* env_list) {
+    _tuple_string_int_string out = { "", -1, "" };
+    if (!prog) {
+        out._2 = "null prog";
+        return out;
+    }
+    if (!aether_sandbox_check("exec", prog)) {
+        out._2 = "denied by sandbox";
+        return out;
+    }
+
+    int pipefd[2];
+    if (pipe(pipefd) != 0) {
+        out._2 = "pipe failed";
+        return out;
+    }
+
+    char** av = build_argv_array(prog, argv_list);
+    if (!av) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        out._2 = "argv build failed";
+        return out;
+    }
+    char** envp = build_envp_array(env_list);
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        free(av);
+        free(envp);
+        out._2 = "fork failed";
+        return out;
+    }
+    if (pid == 0) {
+        close(pipefd[0]);
+        if (dup2(pipefd[1], 1) < 0) _exit(127);
+        close(pipefd[1]);
+        if (envp) execve(prog, av, envp);
+        else      execvp(prog, av);
+        _exit(127);
+    }
+    close(pipefd[1]);
+    free(av);
+    free(envp);
+
+    size_t cap = 4096;
+    size_t len = 0;
+    char* result = (char*)malloc(cap);
+    if (!result) {
+        close(pipefd[0]);
+        int st = 0;
+        waitpid(pid, &st, 0);
+        out._2 = "alloc failed";
+        return out;
+    }
+    char buf[4096];
+    for (;;) {
+        ssize_t n = read(pipefd[0], buf, sizeof(buf));
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            free(result);
+            close(pipefd[0]);
+            int st = 0;
+            waitpid(pid, &st, 0);
+            out._2 = "read failed";
+            return out;
+        }
+        if (n == 0) break;
+        if (len + (size_t)n + 1 > cap) {
+            while (len + (size_t)n + 1 > cap) cap *= 2;
+            char* bigger = (char*)realloc(result, cap);
+            if (!bigger) {
+                free(result);
+                close(pipefd[0]);
+                int st = 0;
+                waitpid(pid, &st, 0);
+                out._2 = "realloc failed";
+                return out;
+            }
+            result = bigger;
+        }
+        memcpy(result + len, buf, (size_t)n);
+        len += (size_t)n;
+    }
+    result[len] = '\0';
+    close(pipefd[0]);
+
+    int st = 0;
+    if (waitpid(pid, &st, 0) < 0) {
+        out._0 = result;
+        out._1 = -1;
+        out._2 = "waitpid failed";
+        return out;
+    }
+    out._0 = result;
+    if (WIFEXITED(st)) {
+        out._1 = WEXITSTATUS(st);
+    } else {
+        /* Killed by signal, stopped, or otherwise abnormal — surface
+         * as -1 and non-empty err so the caller can distinguish from
+         * a real-but-non-zero exit code. */
+        out._1 = -1;
+        out._2 = "child terminated abnormally";
+    }
+    return out;
+}
+
 #else // _WIN32
 
 // -----------------------------------------------------------------
@@ -883,6 +1013,29 @@ char* os_run_capture_raw(const char* prog, void* argv_list, void* env_list) {
     // returns the captured stdout so the caller can inspect it.
     (void)exit_code;
     return capture ? capture : strdup("");
+}
+
+/* Tuple sibling — exposes exit status. See the POSIX branch for the
+ * full contract. Issue #289. */
+typedef struct { const char* _0; int _1; const char* _2; } _tuple_string_int_string;
+
+_tuple_string_int_string os_run_capture_status_raw(const char* prog, void* argv_list, void* env_list) {
+    _tuple_string_int_string out = { "", -1, "" };
+    if (!prog) { out._2 = "null prog"; return out; }
+    if (!aether_sandbox_check("exec", prog)) { out._2 = "denied by sandbox"; return out; }
+
+    char* capture = NULL;
+    int exit_code = 0;
+    if (win_launch(prog, argv_list, env_list, 1, &exit_code, &capture) != 0) {
+        free(capture);
+        out._2 = "spawn failed";
+        return out;
+    }
+    out._0 = capture ? capture : strdup("");
+    out._1 = exit_code;
+    /* err stays "" — Win32 win_launch already returned 0 here, so
+     * the spawn itself succeeded. */
+    return out;
 }
 
 #endif // !_WIN32
