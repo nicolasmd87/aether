@@ -245,99 +245,44 @@ libc wrapper to hook. Defence-in-depth story: Aether covers
 cooperative containment for normal-code paths; seccomp-bpf closes
 adversarial kernel-level bypasses.
 
-## HTTP server — Apache-class capability gap (#260)
+## HTTP server — remaining Tier 2 protocols (HTTP/2 + WebSocket)
 
-Issue #260 catalogues the gap between Aether's current HTTP server
-(`std/net/aether_http_server.c` — routing, middleware function-pointer
-chain, multi-accept with SO_REUSEPORT, optional actor dispatch via
-`MSG_HTTP_CONNECTION`) and what Apache httpd offers as a baseline.
-Closing the gap is multi-week work that didn't fit the current
-issue-pack PR; tracking the planned slices below so the work can land
-incrementally without losing the inventory.
+#260's Tier 0 (TLS / keep-alive / per-connection actor dispatch),
+Tier 1 (8 middleware: cors / basic_auth / rate_limit / vhost /
+gzip / static_files / rewrite / error_pages), Tier 3 (graceful
+shutdown / lifecycle hooks / health probes / structured access
+logs / Prometheus metrics) and Tier 2 SSE (Server-Sent Events) all
+shipped in the round-2 issue-pack PR. The two remaining protocols
+are tracked here for follow-up PRs:
 
-### Tier 0 — protocol-level fundamentals
+- **HTTP/2** — Multiplexed streams, server push, HPACK header
+  compression. The right approach is to wrap nghttp2 (mature,
+  audited, used by NGINX / curl / Apache) rather than hand-rolling
+  the frame layer. New `std/net/aether_http2.{c,h}` housing the
+  nghttp2 callbacks; ALPN negotiation in the existing TLS path
+  hands off to the HTTP/2 session loop when the peer selects
+  `h2`. Build-time guard: `AETHER_HAS_NGHTTP2` auto-detected via
+  `pkg-config nghttp2`; without it, `http.server_set_http2` returns
+  `"HTTP/2 unavailable: nghttp2 not installed"`. Realistic
+  estimate: 1–2 weeks including end-to-end testing with `curl
+  --http2` and parallel-stream coverage.
 
-The minimum a "production" HTTP server needs that Aether is missing
-today:
-
-- **TLS termination** — OpenSSL-based TLS context wired into the
-  accept loop. Reuses the existing `AETHER_HAS_OPENSSL` guard pattern
-  from `std.cryptography`. New API surface:
-  `http.server_set_tls(server, cert_path, key_path) -> int`. Graceful
-  "TLS unavailable" error when not built with OpenSSL. Test fixture
-  uses a self-signed cert generated in test setup. Realistic estimate:
-  3–4 days of focused work including the SNI / ALPN edges.
-- **HTTP/1.1 keep-alive** — current server is one-request-per-socket
-  even though `keep_alive_timeout` is in the struct. Wire the
-  `Connection:` header parse, hold sockets open across requests,
-  honor `max_requests_per_connection` and `idle_timeout`. New API:
-  `http.server_set_keepalive(server, enabled, max_requests, idle_ms)`.
-  Realistic estimate: 2–3 days.
-- **Per-connection actor dispatch** — replace the request-per-actor
-  spawn with one actor per accepted connection, draining requests on
-  that connection until close. Lets long-lived connections (keep-alive,
-  future SSE / WebSocket) coexist with short ones without burning a
-  worker. The scheduler integration is already there
-  (`MSG_HTTP_CONNECTION`, `scheduler_spawn_pooled`); the change is
-  the dispatch loop inside the actor. Realistic estimate: 3–4 days
-  including soak testing under parallel keep-alive sessions.
-
-### Tier 1 — stdlib middleware (`std.http.middleware`)
-
-A composable middleware module exposing eight wrappers as the canonical
-"Apache-feature" set:
-
-```aether
-import std.http.middleware
-handler = middleware.gzip(my_handler)
-handler = middleware.cors(opts, handler)
-handler = middleware.basic_auth(realm, verify_fn, handler)
-handler = middleware.rate_limit(n, window_ms, handler)
-handler = middleware.vhost(host_to_handler_map)
-handler = middleware.rewrite(rules, handler)
-handler = middleware.static_files(root, prefix)
-handler = middleware.error_pages(code_to_handler_map, handler)
-```
-
-`gzip` builds on the existing `std.zlib` dep; `rate_limit` uses an
-in-memory token bucket (per-process, single-tier — distributed rate
-limiting is a separate problem). Realistic estimate: 4–5 days for all
-eight including one fixture per middleware. Splittable into two PRs
-of four if review fatigue is a concern (suggested split:
-gzip / cors / basic_auth / rate_limit first, then vhost / rewrite /
-static_files / error_pages).
-
-### Tier 2 — modern protocols (deferred)
-
-Out of scope for the first cut. Tracking here so the next pass starts
-with the inventory:
-
-- **HTTP/2** — multiplexed streams, server push, HPACK header
-  compression. Significant new surface (~3–4k LOC of frame handling)
-  unless we wrap nghttp2.
 - **WebSocket** — RFC 6455 framing on top of the keep-alive socket
-  pump. Easier than HTTP/2 since the framing is straightforward; the
-  hard part is the per-connection message-pump actor model.
-- **Server-Sent Events (SSE)** — single direction text-event-stream
-  over HTTP/1.1. Simplest of the three protocols; depends only on
-  Tier 0 keep-alive being shipped first.
+  pump (Tier 0 / Phase C2 + C3 already shipped). API shape mirrors
+  the SSE handler model that landed in this PR — handler owns the
+  connection, pushes messages directly via
+  `http.ws_send_text(ws, text)` / `http.ws_send_binary(ws, data,
+  len)` / `http.ws_close(ws, code, reason)`. Upgrade handshake
+  computes `Sec-WebSocket-Accept` via the existing
+  `std.cryptography` SHA-1 + Base64 (already in tree). Frame
+  encoding/decoding handled in C. Realistic estimate: 1 week
+  including ping/pong heartbeat, fragmented-message reassembly,
+  control-frame handling, and end-to-end coverage with a Python
+  or Node WebSocket client (skipping in CI when neither is on
+  PATH, mirroring how `tests/integration/host_tinygo` skips).
 
-### Tier 3 — operational features (deferred)
-
-Production ops surface area:
-
-- Access / error logging with structured format options (JSON,
-  combined log format, custom)
-- Per-route metrics (request count, latency histogram, error rate)
-  exported via Prometheus / OpenTelemetry-compatible endpoints
-- Graceful shutdown (drain in-flight, refuse new accepts, exit when
-  drained or timeout)
-- Worker lifecycle hooks for pre-fork / post-fork / shutdown handlers
-- HTTP health probe surface (`/healthz`, `/readyz`) that integrates
-  with the actor scheduler's quiescence detection
-
-The umbrella issue (#260) is the canonical tracker; per-tier sub-issues
-should be filed when the tier picks up scheduling.
+The umbrella issue #260 stays open until both ship; per-tier
+sub-issues should be filed when each protocol picks up scheduling.
 
 ## Type system
 

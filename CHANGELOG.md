@@ -11,6 +11,49 @@ next version number before tagging the release.
 
 ## [current]
 
+### Closing this PR
+
+This issue-pack PR closes **5 of 6** open issues and ships **3 of 4
+Tiers + SSE** of #260's Apache-class HTTP server umbrella:
+
+- **Closes #243** — module merger transitive imports + per-module
+  sealed namespace visibility. Round-1 shipped the BFS pass; round-2
+  closes the encapsulation hole that allowed user code to call
+  transitively-pulled-in namespaces directly.
+- **Closes #250** — string-interp accumulator-loop. Bug doesn't
+  reproduce on current main (silently fixed by other codegen
+  changes); regression test pins the correct behaviour across five
+  shapes.
+- **Closes #239** — `std.http.client` redirect support + end-to-end
+  verification. Round-2 added cases 8–11 from the issue's
+  acceptance criteria (3-hop chain / hop-limit / loop detection /
+  absolute Location URL); the end-to-end test caught two real bugs
+  in the round-1 code (inverted parse_url result check + redirect_
+  error vs error field collision) which are also fixed in this PR.
+- **Closes #265** — source-location intrinsics. Round-1 shipped
+  the bare `__LINE__` / `__FILE__` / `__func__`; round-2 ships
+  default-argument syntax + caller-site capture so
+  `f(msg, line: int = __LINE__)` substitutes the call site's line.
+- **Closes #261** — TinyGo host. Round-1 shipped 5 fixed wrapper
+  signatures; round-2 expands to 30 covering common arg/return
+  permutations + adds libffi-backed `tinygo.call_dynamic` for
+  signatures the fixed set doesn't cover.
+- **Addresses #260 (Tier 0 + Tier 1 + Tier 3 + SSE shipped;
+  HTTP/2 + WebSocket follow up)**:
+  - Tier 0 — TLS termination, HTTP/1.1 keep-alive, per-connection
+    actor dispatch with reusable drain helper.
+  - Tier 1 — 8 middleware (cors / basic_auth / rate_limit / vhost
+    / gzip / static_files / rewrite / error_pages).
+  - Tier 3 — graceful shutdown, on_start/on_stop hooks, health
+    probes (live + ready), structured access logging
+    (combined / JSON), per-route Prometheus metrics.
+  - Tier 2 — Server-Sent Events with real streaming dispatch.
+  - **HTTP/2 (via nghttp2 wrapping) and WebSocket (RFC 6455
+    framing) are deferred to follow-up PRs** — full implementation
+    estimates and design notes recorded in
+    [`docs/next-steps.md`](docs/next-steps.md). The umbrella issue
+    #260 stays open until both ship; everything else is fully closed.
+
 ### Added
 
 - **Server-Sent Events (#260 Tier 2 / E3)** (`std/net/aether_http_server.{c,h}`, `std/http/module.ae`, regression test `tests/integration/http_server_sse/`). Real streaming SSE — handler owns the connection lifetime and pushes events directly to the wire. New API:
