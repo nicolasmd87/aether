@@ -8,6 +8,9 @@ int http_server_bind_raw(HttpServer* s, const char* h, int p) { (void)s; (void)h
 int http_server_start_raw(HttpServer* s) { (void)s; return -1; }
 void http_server_stop(HttpServer* s) { (void)s; }
 void http_server_free(HttpServer* s) { (void)s; }
+const char* http_server_set_tls_raw(HttpServer* s, const char* c, const char* k) {
+    (void)s; (void)c; (void)k; return "TLS unavailable: networking not built in";
+}
 void http_server_add_route(HttpServer* s, const char* m, const char* p, HttpHandler h, void* u) { (void)s; (void)m; (void)p; (void)h; (void)u; }
 void http_server_get(HttpServer* s, const char* p, HttpHandler h, void* u) { (void)s; (void)p; (void)h; (void)u; }
 void http_server_post(HttpServer* s, const char* p, HttpHandler h, void* u) { (void)s; (void)p; (void)h; (void)u; }
@@ -70,6 +73,107 @@ const char* http_request_query(HttpRequest* r) { (void)r; return ""; }
     // I/O polling is handled by aether_io_poller (included via multicore_scheduler.h)
 #endif
 
+// -----------------------------------------------------------------------------
+// Server-side TLS (#260 Tier 0)
+// -----------------------------------------------------------------------------
+// Connection-level transport abstraction so the rest of the server doesn't
+// need to know whether each fd is plain or TLS-wrapped. plain_recv/plain_send
+// when ssl == NULL; SSL_read/SSL_write when ssl is non-NULL. SSL_accept is
+// driven once per accepted connection at the top of handle_client_connection
+// before the HTTP parse begins.
+//
+// Built only when the project links OpenSSL. AETHER_HAS_OPENSSL is defined
+// by Makefile when pkg-config finds the library — same gate std.cryptography
+// and the http client (TLS) already use.
+#ifdef AETHER_HAS_OPENSSL
+#include <openssl/ssl.h>
+#include <openssl/err.h>
+#endif
+
+typedef struct {
+    int fd;
+#ifdef AETHER_HAS_OPENSSL
+    SSL* ssl;     /* non-NULL when this connection is TLS-wrapped */
+#else
+    void* ssl;    /* layout-stable placeholder for the no-TLS build */
+#endif
+} HttpConn;
+
+static int conn_recv(HttpConn* c, void* buf, int len) {
+#ifdef AETHER_HAS_OPENSSL
+    if (c->ssl) {
+        int n = SSL_read(c->ssl, buf, len);
+        if (n <= 0) return -1;
+        return n;
+    }
+#endif
+    return (int)recv(c->fd, buf, len, 0);
+}
+
+static int conn_send(HttpConn* c, const void* buf, int len) {
+#ifdef AETHER_HAS_OPENSSL
+    if (c->ssl) {
+        int n = SSL_write(c->ssl, buf, len);
+        if (n <= 0) return -1;
+        return n;
+    }
+#endif
+    return (int)send(c->fd, buf, len, 0);
+}
+
+static void conn_close(HttpConn* c) {
+#ifdef AETHER_HAS_OPENSSL
+    if (c->ssl) {
+        /* Best-effort graceful shutdown — ignore the result; we're
+         * about to close the fd anyway and a half-closed peer is
+         * not a server-side problem. */
+        SSL_shutdown(c->ssl);
+        SSL_free(c->ssl);
+        c->ssl = NULL;
+    }
+#endif
+    if (c->fd >= 0) {
+        close(c->fd);
+        c->fd = -1;
+    }
+}
+
+#ifdef AETHER_HAS_OPENSSL
+/* TLS-wrap an accepted fd. Returns 0 on success (conn->ssl set), -1 on
+ * handshake failure (caller should close conn->fd and discard). */
+static int conn_tls_accept(HttpConn* conn, SSL_CTX* ctx) {
+    SSL* ssl = SSL_new(ctx);
+    if (!ssl) return -1;
+    if (SSL_set_fd(ssl, conn->fd) != 1) {
+        SSL_free(ssl);
+        return -1;
+    }
+    int r = SSL_accept(ssl);
+    if (r <= 0) {
+        /* Handshake failed — peer probably spoke plain HTTP at a TLS
+         * port, or sent an unsupported cipher. Drain OpenSSL's error
+         * queue so the next handshake on this thread starts clean. */
+        ERR_clear_error();
+        SSL_free(ssl);
+        return -1;
+    }
+    conn->ssl = ssl;
+    return 0;
+}
+
+/* OpenSSL global init — called once on first http_server_set_tls. The
+ * defaults (TLS 1.2 minimum, all known ciphers) match the existing
+ * client-side context in std/net/aether_http.c. */
+static void server_openssl_init_once(void) {
+    static int done = 0;
+    if (done) return;
+    SSL_library_init();
+    SSL_load_error_strings();
+    OpenSSL_add_all_algorithms();
+    done = 1;
+}
+#endif
+
 // Portable case-insensitive substring search (strcasestr is a GNU extension)
 static const char* http_strcasestr(const char* haystack, const char* needle) {
     if (!needle || !*needle) return haystack;
@@ -123,8 +227,56 @@ HttpServer* http_server_create(int port) {
     server->accept_threads = NULL;
     server->accept_listen_fds = NULL;
     server->accept_pollers = NULL;
+    server->tls_enabled = 0;
+    server->tls_ctx = NULL;
 
     return server;
+}
+
+const char* http_server_set_tls_raw(HttpServer* server,
+                                    const char* cert_path,
+                                    const char* key_path) {
+    if (!server) return "server is null";
+    if (!cert_path || !*cert_path) return "cert_path is empty";
+    if (!key_path  || !*key_path)  return "key_path is empty";
+#ifdef AETHER_HAS_OPENSSL
+    server_openssl_init_once();
+
+    SSL_CTX* ctx = SSL_CTX_new(TLS_server_method());
+    if (!ctx) return "SSL_CTX_new failed";
+    /* Match the client side: TLS 1.2+ only. Older versions are
+     * known-broken (POODLE, etc.) and there's no compat reason to
+     * keep them around for an in-process server. */
+    SSL_CTX_set_min_proto_version(ctx, TLS1_2_VERSION);
+    /* Disable legacy compression and renegotiation to remove the
+     * remaining historical attack surface. */
+    SSL_CTX_set_options(ctx, SSL_OP_NO_COMPRESSION |
+                              SSL_OP_NO_RENEGOTIATION);
+
+    if (SSL_CTX_use_certificate_file(ctx, cert_path, SSL_FILETYPE_PEM) != 1) {
+        SSL_CTX_free(ctx);
+        return "failed to load TLS certificate (check cert_path and PEM format)";
+    }
+    if (SSL_CTX_use_PrivateKey_file(ctx, key_path, SSL_FILETYPE_PEM) != 1) {
+        SSL_CTX_free(ctx);
+        return "failed to load TLS private key (check key_path and PEM format)";
+    }
+    if (SSL_CTX_check_private_key(ctx) != 1) {
+        SSL_CTX_free(ctx);
+        return "TLS cert and private key do not match";
+    }
+
+    /* Replace any prior context (idempotent re-load). */
+    if (server->tls_ctx) {
+        SSL_CTX_free((SSL_CTX*)server->tls_ctx);
+    }
+    server->tls_ctx = ctx;
+    server->tls_enabled = 1;
+    return "";
+#else
+    (void)cert_path; (void)key_path;
+    return "TLS unavailable: built without OpenSSL";
+#endif
 }
 
 int http_server_bind_raw(HttpServer* server, const char* host, int port) {
@@ -603,21 +755,37 @@ static void handle_client_connection(HttpServer* server, int client_fd) {
     setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &rcv_tv, sizeof(rcv_tv));
 #endif
 
+    /* Connection transport — plain by default; SSL-wrapped when the
+     * server has TLS enabled. The conn_recv/conn_send/conn_close
+     * helpers polymorphise over both shapes so the rest of this
+     * function reads the same regardless. */
+    HttpConn conn = { .fd = client_fd, .ssl = NULL };
+#ifdef AETHER_HAS_OPENSSL
+    if (server->tls_enabled && server->tls_ctx) {
+        if (conn_tls_accept(&conn, (SSL_CTX*)server->tls_ctx) != 0) {
+            /* Handshake failed. Close the fd and discard — no useful
+             * HTTP can come of this connection. */
+            close(client_fd);
+            return;
+        }
+    }
+#endif
+
     // Read headers first (up to 8KB), then read body up to Content-Length
     int capacity = 8192;
     char* buffer = malloc(capacity);
-    if (!buffer) { close(client_fd); return; }
+    if (!buffer) { conn_close(&conn); return; }
 
     int total = 0;
     // Read until we see the header/body separator \r\n\r\n
     while (total < capacity - 1) {
-        int n = recv(client_fd, buffer + total, capacity - 1 - total, 0);
+        int n = conn_recv(&conn, buffer + total, capacity - 1 - total);
         if (n <= 0) break;
         total += n;
         buffer[total] = '\0';
         if (strstr(buffer, "\r\n\r\n")) break;
     }
-    if (total <= 0) { free(buffer); close(client_fd); return; }
+    if (total <= 0) { free(buffer); conn_close(&conn); return; }
     buffer[total] = '\0';
 
     // Find Content-Length header if present and read remaining body
@@ -636,7 +804,7 @@ static void handle_client_connection(HttpServer* server, int client_fd) {
                 if (nb) {
                     buffer = nb;
                     while (body_needed > 0) {
-                        int n = recv(client_fd, buffer + total, (int)body_needed, 0);
+                        int n = conn_recv(&conn, buffer + total, (int)body_needed);
                         if (n <= 0) break;
                         total += n;
                         body_needed -= n;
@@ -651,7 +819,7 @@ static void handle_client_connection(HttpServer* server, int client_fd) {
     HttpRequest* req = http_parse_request(buffer);
     free(buffer);
     if (!req) {
-        close(client_fd);
+        conn_close(&conn);
         return;
     }
 
@@ -670,8 +838,8 @@ static void handle_client_connection(HttpServer* server, int client_fd) {
     // If middleware blocked, send response and return
     if (!should_continue) {
         char* response_str = http_response_serialize(res);
-        if (response_str) { send(client_fd, response_str, strlen(response_str), 0); free(response_str); }
-        close(client_fd);
+        if (response_str) { conn_send(&conn, response_str, (int)strlen(response_str)); free(response_str); }
+        conn_close(&conn);
         http_request_free(req);
         http_server_response_free(res);
         return;
@@ -701,10 +869,10 @@ static void handle_client_connection(HttpServer* server, int client_fd) {
 
     // Send response
     char* response_str = http_response_serialize(res);
-    if (response_str) { send(client_fd, response_str, strlen(response_str), 0); free(response_str); }
+    if (response_str) { conn_send(&conn, response_str, (int)strlen(response_str)); free(response_str); }
 
     // Cleanup
-    close(client_fd);
+    conn_close(&conn);
     http_request_free(req);
     http_server_response_free(res);
 }
@@ -1130,7 +1298,15 @@ void http_server_free(HttpServer* server) {
         free(middleware);
         middleware = next;
     }
-    
+
+    /* Free TLS context if one was loaded via http_server_set_tls_raw. */
+#ifdef AETHER_HAS_OPENSSL
+    if (server->tls_ctx) {
+        SSL_CTX_free((SSL_CTX*)server->tls_ctx);
+        server->tls_ctx = NULL;
+    }
+#endif
+
     free(server);
 }
 

@@ -17,6 +17,7 @@ exports (
     get, post, put, delete,
     http_server_create, http_server_bind_raw, http_server_start_raw,
     http_server_stop, http_server_free,
+    http_server_set_tls_raw, server_set_tls,
     server_bind, server_start,
     http_server_add_route, http_server_get, http_server_post,
     http_server_put, http_server_delete,
@@ -182,6 +183,29 @@ extern http_server_bind_raw(server: ptr, host: string, port: int) -> int
 extern http_server_start_raw(server: ptr) -> int
 extern http_server_stop(server: ptr)
 extern http_server_free(server: ptr)
+// TLS termination (#260 Tier 0). Loads the cert+key (PEM-encoded);
+// after this call every accepted connection completes a TLS handshake
+// before the HTTP parse runs. Returns "" on success, error string
+// otherwise. See server_set_tls below for the Aether-side wrapper.
+extern http_server_set_tls_raw(server: ptr, cert_path: string, key_path: string) -> string
+
+// Enable TLS termination on an HTTP server. Both paths must point at
+// PEM-encoded files; the cert and key are validated to match before
+// the server is marked TLS-enabled. Returns "" on success, an error
+// string on failure (file unreadable, parse error, mismatched key,
+// build without OpenSSL).
+//
+// Idempotent — calling twice with the same files is a no-op success;
+// calling with different files re-loads.
+//
+// Example:
+//     server = http.server_create(443)
+//     err = http.server_set_tls(server, "/etc/ssl/cert.pem", "/etc/ssl/key.pem")
+//     if err != "" { println("TLS setup failed: ${err}"); exit(1) }
+//     http.server_start(server)
+server_set_tls(server: ptr, cert_path: string, key_path: string) -> {
+    return http_server_set_tls_raw(server, cert_path, key_path)
+}
 
 // Go-style wrappers for server lifecycle. Return "" on success, error
 // string on failure.

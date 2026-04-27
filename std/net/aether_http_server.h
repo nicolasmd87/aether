@@ -62,6 +62,14 @@ typedef struct {
     char* host;
     int is_running;
 
+    // Server-side TLS (#260 Tier 0). When tls_enabled == 1, every
+    // accepted connection is wrapped in SSL_accept before the HTTP
+    // parse begins. tls_ctx is an SSL_CTX*, declared here as void*
+    // so this header doesn't pull in <openssl/ssl.h> for callers
+    // that don't need it. Lazy-allocated by http_server_set_tls.
+    int tls_enabled;
+    void* tls_ctx;
+
     // Routing
     HttpRoute* routes;
 
@@ -122,6 +130,22 @@ int http_server_bind_raw(HttpServer* server, const char* host, int port);
 int http_server_start_raw(HttpServer* server);
 void http_server_stop(HttpServer* server);
 void http_server_free(HttpServer* server);
+
+// Enable TLS termination on this server (#260 Tier 0). Loads the cert
+// and private key from the given file paths (PEM-encoded), verifies
+// they match, and configures the server's SSL_CTX. Returns "" on
+// success; an error string on failure (file unreadable, parse error,
+// cert/key mismatch, OpenSSL not built in). After this call, every
+// accepted connection completes a TLS handshake before the HTTP parse
+// begins; clients connecting plain-HTTP get rejected with a TLS
+// handshake error. Idempotent — calling twice with the same files is
+// a no-op success; calling with different files re-loads.
+//
+// When the build does not include OpenSSL (AETHER_HAS_OPENSSL undef),
+// returns "TLS unavailable: built without OpenSSL".
+const char* http_server_set_tls_raw(HttpServer* server,
+                                    const char* cert_path,
+                                    const char* key_path);
 
 // Routing
 void http_server_add_route(HttpServer* server, const char* method, const char* path, HttpHandler handler, void* user_data);
