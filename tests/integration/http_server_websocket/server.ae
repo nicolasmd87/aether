@@ -12,21 +12,21 @@ extern http_server_start_raw(server: ptr) -> int
 const PORT = 18110
 
 @c_callback echo_handler(req: ptr, ws: ptr, ud: ptr) {
-    // Receive one message, send one echo, repeat 3 times.
-    kind1 = http.ws_recv(ws)
-    if kind1 != -1 {
-        m1 = http.ws_message(ws)
-        http.ws_send_text(ws, "echo: ${m1}")
-    }
-    kind2 = http.ws_recv(ws)
-    if kind2 != -1 {
-        m2 = http.ws_message(ws)
-        http.ws_send_text(ws, "echo: ${m2}")
-    }
-    kind3 = http.ws_recv(ws)
-    if kind3 != -1 {
-        m3 = http.ws_message(ws)
-        http.ws_send_text(ws, "echo: ${m3}")
+    // Echo every message until the peer closes (ws_recv returns -1)
+    // or the loop has served 5 messages. Use a `done` flag rather
+    // than `return` because the inferred return type of a handler
+    // with a bare `return` doesn't unify with the implicit void.
+    n = 0
+    done = 0
+    while n < 5 && done == 0 {
+        kind = http.ws_recv(ws)
+        if kind == -1 {
+            done = 1
+        } else {
+            msg = http.ws_message(ws)
+            http.ws_send_text(ws, "echo: ${msg}")
+            n = n + 1
+        }
     }
 }
 

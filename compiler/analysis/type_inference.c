@@ -767,23 +767,21 @@ Type* infer_return_type_from_body(ASTNode* body, SymbolTable* symbols) {
 // definitions, externs, imports) are added by other code paths before any
 // function body is visited, so they sit beneath the snapshot and are
 // unaffected.
-// Forward decls for the merged-body walk-counter (issue #243 sealed
-// scopes). Defined in typechecker.c; we use them here so type
-// inference's per-function walk picks the relaxed namespace-visibility
-// path inside cloned merged-module bodies.
-extern void typechecker_enter_merged_body(void);
-extern void typechecker_leave_merged_body(void);
-
 void collect_function_constraints(ASTNode* node, InferenceContext* ctx) {
     if (!node || (node->type != AST_FUNCTION_DEFINITION && node->type != AST_BUILDER_FUNCTION)) return;
 
     Symbol* saved_head = ctx->symbols ? ctx->symbols->symbols : NULL;
 
-    // Issue #243 sealed scopes: relax qualified-call visibility while
-    // walking the body of a cloned merged-module function so internal
-    // calls into transitively-merged namespaces (e.g. `json.parse`
-    // inside a merged http.client function) resolve correctly.
-    if (node->is_imported) typechecker_enter_merged_body();
+    /* Issue #243 sealed scopes: relax qualified-call visibility
+     * while walking the body of a cloned merged-module function so
+     * internal calls into transitively-merged namespaces (e.g.
+     * `json.parse` inside a merged http.client function) resolve
+     * correctly. Save/restore the SymbolTable flag — same channel
+     * the typechecker uses, just transient over this walk. */
+    int saved_inside_merged = ctx->symbols ? ctx->symbols->inside_merged_body : 0;
+    if (node->is_imported && ctx->symbols) {
+        ctx->symbols->inside_merged_body = 1;
+    }
 
     // Add parameters to symbol table so identifiers in function body can look them up
     int body_index = node->child_count - 1;
@@ -826,7 +824,7 @@ void collect_function_constraints(ASTNode* node, InferenceContext* ctx) {
         ctx->symbols->symbols = saved_head;
     }
 
-    if (node->is_imported) typechecker_leave_merged_body();
+    if (ctx->symbols) ctx->symbols->inside_merged_body = saved_inside_merged;
 }
 
 // Main constraint collection

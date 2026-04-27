@@ -282,22 +282,6 @@ static int is_user_explicit_namespace(const char* name) {
 // Forward decl — defined below alongside the global registry it gates.
 int is_imported_namespace(const char* name);
 
-// Module-walk context for sealed-namespace gating. Set non-zero by
-// the typechecker / type-inference pass while it walks the body of a
-// function whose AST node has `is_imported == 1` (cloned in by
-// module_merge_into_program). Read by `is_visible_namespace` to pick
-// between the strict user-explicit set and the relaxed
-// transitively-merged set. A module-scope walk-counter rather than a
-// SymbolTable flag because type_inference doesn't construct
-// per-function tables — it walks the AST directly with the global
-// symbol table.
-static int g_inside_merged_body = 0;
-
-void typechecker_enter_merged_body(void) { g_inside_merged_body++; }
-void typechecker_leave_merged_body(void) {
-    if (g_inside_merged_body > 0) g_inside_merged_body--;
-}
-
 // Gate for qualified-call resolution. A qualified call `mod.fn()` is
 // allowed if either:
 //   - The caller is inside a merged-module body (typechecker propagates
@@ -314,18 +298,13 @@ void typechecker_leave_merged_body(void) {
 // as user-context (the strict path) — early registration paths don't
 // resolve qualified user calls, so this is safe.
 int is_visible_namespace(const char* name, SymbolTable* table) {
-    // Two channels feed into the merged-body check:
-    //   - SymbolTable::inside_merged_body — set when the typechecker
-    //     creates a function-local table for a `is_imported` function.
-    //     Covers expressions resolved via typecheck_expression that
-    //     receive the function-local table.
-    //   - g_inside_merged_body counter — set/unset by the
-    //     typechecker / type_inference walker when it descends into a
-    //     `is_imported` function body. Covers paths that resolve
-    //     against the global symbol table (e.g., type inference's
-    //     constraint-collection, which doesn't construct per-function
-    //     tables).
-    if (g_inside_merged_body > 0) return is_imported_namespace(name);
+    /* Single channel: the SymbolTable's inside_merged_body flag.
+     * Both walkers (the typechecker — which creates per-function
+     * child tables — and the type-inference pass — which walks
+     * against the global symbol table directly) flip this flag
+     * transiently while inside a `is_imported` function body, then
+     * restore it on exit. Save/restore is the standard scope-
+     * stack pattern; no global mutable state required. */
     if (table && table->inside_merged_body) {
         return is_imported_namespace(name);
     }
@@ -1905,14 +1884,11 @@ int typecheck_function_definition(ASTNode* func, SymbolTable* table) {
     // Issue #243 sealed scopes: cloned function bodies from
     // module_merge_into_program's BFS transitive-merge pass need
     // relaxed qualified-call resolution so they can reach into other
-    // transitively-merged namespaces (the dependencies the original
-    // module declared in its own source). Mark both the body's
-    // table AND the global walk-counter so every resolution site —
-    // table-based or global-symbol-table-based — picks the relaxed
-    // path while inside this body.
+    // transitively-merged namespaces. The flag propagates from
+    // parent in create_symbol_table, so nested scopes inside this
+    // body inherit it; on function exit we just free func_table.
     if (func->is_imported) {
         func_table->inside_merged_body = 1;
-        typechecker_enter_merged_body();
     }
 
     // Add parameters to function's symbol table
@@ -1932,10 +1908,6 @@ int typecheck_function_definition(ASTNode* func, SymbolTable* table) {
     // Type check function body
     ASTNode* body = func->children[func->child_count - 1];
     typecheck_statement(body, func_table);
-
-    if (func->is_imported) {
-        typechecker_leave_merged_body();
-    }
 
     free_symbol_table(func_table);
     return 1;

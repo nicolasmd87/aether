@@ -793,10 +793,25 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
         
         if (op->type == TOKEN_DOT) {
             // Member access: expr.field
+            //
+            // Accept reserved keywords as field names — `io.print(...)`
+            // calls a method named `print` (TOKEN_PRINT in the lexer)
+            // on the `io` namespace; same for `obj.match`, `actor.send`,
+            // etc. Without this allowance, expect_token(TOKEN_IDENTIFIER)
+            // hits the reserved-keyword path (parser.c:71) and emits a
+            // spurious "rename it" error for every method call that
+            // shares a name with an Aether keyword.
             advance_token(parser);
-            Token* field = expect_token(parser, TOKEN_IDENTIFIER);
+            Token* field = peek_token(parser);
             if (!field) return NULL;
-            
+            int field_ok = (field->type == TOKEN_IDENTIFIER) ||
+                           token_is_reserved_keyword(field);
+            if (!field_ok) {
+                expect_token(parser, TOKEN_IDENTIFIER);  /* trigger the standard error */
+                return NULL;
+            }
+            advance_token(parser);
+
             ASTNode* member_access = create_ast_node(AST_MEMBER_ACCESS, field->value, op->line, op->column);
             add_child(member_access, expr);
             expr = member_access;
@@ -2991,16 +3006,39 @@ ASTNode* parse_struct_definition(Parser* parser) {
             parser_error(parser, "Unexpected end of struct definition");
             return NULL;
         }
-        
+
+        /* Two field syntaxes accepted:
+         *   Aether-style: `name: type` (or just `name` for inferred)
+         *   C-style:      `int name`, `string name`, etc.
+         * The C-style form is convenient for users porting C/C++
+         * structs. Without this branch, parse expects an
+         * identifier first and `int x` triggers the reserved-
+         * keyword error. */
+        Token* peek = peek_token(parser);
+        Type* c_type = NULL;
+        if (peek && (peek->type == TOKEN_INT  || peek->type == TOKEN_INT64 ||
+                     peek->type == TOKEN_FLOAT || peek->type == TOKEN_BOOL  ||
+                     peek->type == TOKEN_STRING || peek->type == TOKEN_PTR)) {
+            Token* ahead = peek_ahead(parser, 1);
+            if (ahead && ahead->type == TOKEN_IDENTIFIER) {
+                c_type = parse_type(parser);
+            }
+        }
+
         Token* field_name = expect_token(parser, TOKEN_IDENTIFIER);
-        if (!field_name) return NULL;
-        
+        if (!field_name) {
+            if (c_type) free_type(c_type);
+            return NULL;
+        }
+
         // Create field node
-        ASTNode* field = create_ast_node(AST_STRUCT_FIELD, field_name->value, 
+        ASTNode* field = create_ast_node(AST_STRUCT_FIELD, field_name->value,
                                         field_name->line, field_name->column);
-        
-        // Optional type annotation: name: type
-        if (match_token(parser, TOKEN_COLON)) {
+
+        if (c_type) {
+            field->node_type = c_type;
+        } else if (match_token(parser, TOKEN_COLON)) {
+            // Aether-style: name: type
             Type* field_type = parse_type(parser);
             if (field_type) {
                 field->node_type = field_type;
@@ -3260,6 +3298,73 @@ ASTNode* parse_program(Parser* parser) {
                 break;
             }
             default:
+                /* If the token is a reserved keyword followed by `(`,
+                 * the user almost certainly tried to define a function
+                 * with that name (e.g. `send()`, `recv()`, `state()`,
+                 * `match()`). Without this check, the parser advances
+                 * past the keyword, the `(...)` then re-enters statement
+                 * parsing, and the function body is silently dropped at
+                 * codegen — call sites compile to expressions referring
+                 * to a nonexistent C function. Detect this case here
+                 * and emit a clear "reserved keyword" diagnostic that
+                 * matches the inner-block handling (parser.c:71). */
+                if (token_is_reserved_keyword(token)) {
+                    Token* nxt = peek_ahead(parser, 1);
+                    if (nxt && nxt->type == TOKEN_LEFT_PAREN) {
+                        char msg[256];
+                        snprintf(msg, sizeof(msg),
+                            "'%s' is a reserved keyword and cannot be used as a function name; rename it (e.g. '%s_' or 'do_%s')",
+                            token->value, token->value, token->value);
+                        char hint[128];
+                        snprintf(hint, sizeof(hint),
+                            "rename to '%s_' or another identifier",
+                            token->value);
+                        if (!parser->suppress_errors) {
+                            aether_error_full(msg, token->line, token->column,
+                                              hint, NULL, AETHER_ERR_SYNTAX);
+                        }
+                        /* Skip the bogus definition so we don't keep
+                         * erroring on every token in its body. */
+                        advance_token(parser);  /* the keyword */
+                        int paren_depth = 0;
+                        while (peek_token(parser)) {
+                            Token* t = peek_token(parser);
+                            if (t->type == TOKEN_LEFT_PAREN) paren_depth++;
+                            else if (t->type == TOKEN_RIGHT_PAREN) {
+                                paren_depth--;
+                                if (paren_depth == 0) {
+                                    advance_token(parser);
+                                    break;
+                                }
+                            }
+                            advance_token(parser);
+                        }
+                        /* Skip an optional `-> type` clause. */
+                        if (peek_token(parser) &&
+                            peek_token(parser)->type == TOKEN_ARROW) {
+                            advance_token(parser);
+                            parse_type(parser);
+                        }
+                        /* Skip the body block. */
+                        if (peek_token(parser) &&
+                            peek_token(parser)->type == TOKEN_LEFT_BRACE) {
+                            int brace_depth = 0;
+                            while (peek_token(parser)) {
+                                Token* t = peek_token(parser);
+                                if (t->type == TOKEN_LEFT_BRACE) brace_depth++;
+                                else if (t->type == TOKEN_RIGHT_BRACE) {
+                                    brace_depth--;
+                                    if (brace_depth == 0) {
+                                        advance_token(parser);
+                                        break;
+                                    }
+                                }
+                                advance_token(parser);
+                            }
+                        }
+                        continue;
+                    }
+                }
                 parser_error(parser, "Expected actor, struct, function, or main");
                 advance_token(parser);
                 continue;

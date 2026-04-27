@@ -512,6 +512,21 @@ int compile_source(const char* input_path, const char* output_path) {
         return 0;
     }
 
+    /* Parse can complete and return a partial program even when the
+     * parser recorded errors (e.g. reserved-keyword-as-function-name
+     * cases that we skip + diagnose rather than abort). Don't proceed
+     * to codegen in that case — the partial AST will silently drop
+     * the offending decl and downstream compilation produces a
+     * binary that calls a nonexistent C function. */
+    if (aether_error_count() > 0) {
+        report_compilation_failure();
+        free_ast_node(program);
+        for (int i = 0; i < token_count; i++) free_token(tokens[i]);
+        free_parser(parser);
+        free(source);
+        return 0;
+    }
+
     if (verbose_mode) printf("Parse successful\n");
 
     // --dump-ast: print the AST and exit (no codegen)
