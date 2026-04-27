@@ -245,15 +245,16 @@ libc wrapper to hook. Defence-in-depth story: Aether covers
 cooperative containment for normal-code paths; seccomp-bpf closes
 adversarial kernel-level bypasses.
 
-## HTTP server — remaining Tier 2 protocols (HTTP/2 + WebSocket)
+## HTTP server — remaining Tier 2 protocol (HTTP/2)
 
 #260's Tier 0 (TLS / keep-alive / per-connection actor dispatch),
 Tier 1 (8 middleware: cors / basic_auth / rate_limit / vhost /
 gzip / static_files / rewrite / error_pages), Tier 3 (graceful
 shutdown / lifecycle hooks / health probes / structured access
-logs / Prometheus metrics) and Tier 2 SSE (Server-Sent Events) all
-shipped in the round-2 issue-pack PR. The two remaining protocols
-are tracked here for follow-up PRs:
+logs / Prometheus metrics), and Tier 2 SSE (Server-Sent Events) +
+WebSocket (full RFC 6455 framing) all shipped in the round-2
+issue-pack PR. The one remaining protocol is tracked here for a
+follow-up PR:
 
 - **HTTP/2** — Multiplexed streams, server push, HPACK header
   compression. The right approach is to wrap nghttp2 (mature,
@@ -267,22 +268,8 @@ are tracked here for follow-up PRs:
   estimate: 1–2 weeks including end-to-end testing with `curl
   --http2` and parallel-stream coverage.
 
-- **WebSocket** — RFC 6455 framing on top of the keep-alive socket
-  pump (Tier 0 / Phase C2 + C3 already shipped). API shape mirrors
-  the SSE handler model that landed in this PR — handler owns the
-  connection, pushes messages directly via
-  `http.ws_send_text(ws, text)` / `http.ws_send_binary(ws, data,
-  len)` / `http.ws_close(ws, code, reason)`. Upgrade handshake
-  computes `Sec-WebSocket-Accept` via the existing
-  `std.cryptography` SHA-1 + Base64 (already in tree). Frame
-  encoding/decoding handled in C. Realistic estimate: 1 week
-  including ping/pong heartbeat, fragmented-message reassembly,
-  control-frame handling, and end-to-end coverage with a Python
-  or Node WebSocket client (skipping in CI when neither is on
-  PATH, mirroring how `tests/integration/host_tinygo` skips).
-
-The umbrella issue #260 stays open until both ship; per-tier
-sub-issues should be filed when each protocol picks up scheduling.
+The umbrella issue #260 stays open until HTTP/2 ships; a sub-issue
+should be filed when it picks up scheduling.
 
 ## Type system
 

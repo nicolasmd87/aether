@@ -47,14 +47,30 @@ Tiers + SSE** of #260's Apache-class HTTP server umbrella:
   - Tier 3 — graceful shutdown, on_start/on_stop hooks, health
     probes (live + ready), structured access logging
     (combined / JSON), per-route Prometheus metrics.
-  - Tier 2 — Server-Sent Events with real streaming dispatch.
-  - **HTTP/2 (via nghttp2 wrapping) and WebSocket (RFC 6455
-    framing) are deferred to follow-up PRs** — full implementation
-    estimates and design notes recorded in
-    [`docs/next-steps.md`](docs/next-steps.md). The umbrella issue
-    #260 stays open until both ship; everything else is fully closed.
+  - Tier 2 — Server-Sent Events (real streaming dispatch) +
+    WebSocket (full RFC 6455 framing, handshake, ping/pong,
+    close codes).
+  - **HTTP/2 (via nghttp2 wrapping) is deferred to a follow-up PR**
+    — full implementation estimate and design notes recorded in
+    [`docs/next-steps.md`](docs/next-steps.md). HTTP/2 is the
+    last remaining piece of Tier 2; the umbrella issue #260 stays
+    open until it ships. Everything else (Tier 0 / Tier 1 / Tier 3
+    / SSE / WebSocket) is fully closed.
 
 ### Added
+
+- **WebSocket (#260 Tier 2 / E2 — RFC 6455)** (`std/net/aether_http_server.{c,h}`, `std/http/module.ae`, regression test `tests/integration/http_server_websocket/`). Same handler-owns-the-connection shape as SSE: server completes the upgrade handshake (`Sec-WebSocket-Accept` = `Base64(SHA-1(client_key + magic-uuid))`, raw SHA-1 via OpenSSL + Base64 via `std.cryptography`), then hands an `HttpWsConn*` to the handler.
+    ```aether
+    @c_callback echo_handler(req: ptr, ws: ptr, ud: ptr) {
+        kind = http.ws_recv(ws)
+        if kind != -1 {
+            msg = http.ws_message(ws)
+            http.ws_send_text(ws, "echo: ${msg}")
+        }
+    }
+    http.server_websocket(server, "/echo", echo_handler, null)
+    ```
+  Frame coding implements the full RFC 6455 wire format: opcode + FIN, MASK bit, 7/16/64-bit payload-length, masking-key XOR. Server-to-client frames are unmasked per spec; incoming client-to-server frames have their masking-key applied during the read. Continuation frames (FIN=0) get reassembled into a single message before returning to the caller. Control frames (PING, PONG, CLOSE) are auto-handled inside `ws_recv` — pings get a pong with the same payload, close echoes the peer's close frame and returns -1 to the caller. Outgoing API: `ws_send_text`, `ws_send_binary` (binary-safe via explicit length), `ws_close` (with code + optional reason). The handler exits cleanly with a 1000 (normal closure) frame when it returns; the dispatch path also drains pre-buffered bytes from the connection's read buffer (some clients send the first frame in the same TCP packet as the upgrade headers — those bytes had to come from `conn->buf`, not a new `recv()`). Test fixture uses Python's `websockets` library to drive a 3-message text-echo round-trip via real RFC 6455 framing; skips when Python or the websockets library is missing.
 
 - **Server-Sent Events (#260 Tier 2 / E3)** (`std/net/aether_http_server.{c,h}`, `std/http/module.ae`, regression test `tests/integration/http_server_sse/`). Real streaming SSE — handler owns the connection lifetime and pushes events directly to the wire. New API:
     ```aether

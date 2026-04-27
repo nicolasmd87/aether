@@ -29,6 +29,11 @@ exports (
     http_server_sse, server_sse,
     http_sse_send_event, http_sse_send_event_id, http_sse_close,
     sse_send, sse_send_id, sse_close,
+    http_server_websocket, server_websocket,
+    http_ws_send_text, http_ws_send_binary, http_ws_recv,
+    http_ws_message_data, http_ws_message_length, http_ws_close,
+    ws_send_text, ws_send_binary, ws_recv,
+    ws_message, ws_message_length, ws_close,
     server_bind, server_start,
     http_server_add_route, http_server_get, http_server_post,
     http_server_put, http_server_delete,
@@ -323,6 +328,61 @@ sse_send_id(sse: ptr, event_name: string, data: string, id: string) -> int {
 
 sse_close(sse: ptr) {
     http_sse_close(sse)
+}
+
+// WebSocket (#260 Tier 2 / E2 — RFC 6455). The handler owns the
+// connection lifetime — the server completes the upgrade handshake
+// then hands control to the user.
+//
+// Handler signature (declared @c_callback on the Aether side):
+//     handler(req: ptr, ws: ptr, ud: ptr)
+//
+// Inside the handler:
+//   ws_recv(ws) -> (kind, data) where kind = 1 (text) / 2 (binary) /
+//                 -1 (closed)
+//   ws_send_text(ws, text) -> int (0 OK, -1 transport error)
+//   ws_send_binary(ws, data, len) -> int
+//   ws_close(ws, code, reason) — 1000 = normal, 1001 = going away, ...
+//
+// Control frames (ping/pong) are auto-handled inside ws_recv.
+extern http_server_websocket(server: ptr, path: string, handler: ptr, user_data: ptr)
+extern http_ws_send_text(ws: ptr, text: string) -> int
+extern http_ws_send_binary(ws: ptr, data: ptr, length: int) -> int
+extern http_ws_recv(ws: ptr) -> int
+extern http_ws_message_data(ws: ptr) -> string
+extern http_ws_message_length(ws: ptr) -> int
+extern http_ws_close(ws: ptr, code: int, reason: string)
+
+server_websocket(server: ptr, path: string, handler: ptr, user_data: ptr) {
+    http_server_websocket(server, path, handler, user_data)
+}
+
+ws_send_text(ws: ptr, text: string) -> int {
+    return http_ws_send_text(ws, text)
+}
+
+ws_send_binary(ws: ptr, data: ptr, length: int) -> int {
+    return http_ws_send_binary(ws, data, length)
+}
+
+// Returns: 1 = text frame, 2 = binary, -1 = closed.
+// After 1 or 2, the message is accessible via ws_message and
+// ws_message_length. Pointers are valid until the next ws_recv /
+// ws_send / ws_close call.
+ws_recv(ws: ptr) -> int {
+    return http_ws_recv(ws)
+}
+
+ws_message(ws: ptr) -> string {
+    return http_ws_message_data(ws)
+}
+
+ws_message_length(ws: ptr) -> int {
+    return http_ws_message_length(ws)
+}
+
+ws_close(ws: ptr, code: int, reason: string) {
+    http_ws_close(ws, code, reason)
 }
 
 // Drain a single accepted connection through the full HTTP lifecycle:

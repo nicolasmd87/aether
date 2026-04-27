@@ -163,6 +163,37 @@ the response. Order is registration order.
 
 ---
 
+## WebSocket (RFC 6455)
+
+```aether
+@c_callback echo_handler(req: ptr, ws: ptr, ud: ptr) {
+    kind = http.ws_recv(ws)         // 1 = text, 2 = binary, -1 = closed
+    if kind != -1 {
+        msg = http.ws_message(ws)
+        http.ws_send_text(ws, "echo: ${msg}")
+    }
+}
+
+http.server_websocket(server, "/echo", echo_handler, null)
+```
+
+Same handler-owns-the-connection shape as SSE. The server runs the
+upgrade handshake first (computes
+`Sec-WebSocket-Accept = Base64(SHA-1(client_key + magic-uuid))`),
+sends `101 Switching Protocols`, then hands an `HttpWsConn*` to the
+handler. Inside the handler:
+
+| Call | Behaviour |
+|---|---|
+| `ws_recv(ws)` | block for next data frame; returns `1` (text), `2` (binary), `-1` (closed). Auto-handles ping/pong; reassembles continuation frames. |
+| `ws_message(ws)` | the message contents from the most recent `ws_recv` (NUL-terminated for text). |
+| `ws_message_length(ws)` | byte length of the most recent message. |
+| `ws_send_text(ws, text)` | emit one text frame; `0` on success, `-1` on transport error. |
+| `ws_send_binary(ws, data, len)` | emit one binary frame, binary-safe via explicit length. |
+| `ws_close(ws, code, reason)` | emit a close frame; `1000` = normal, `1001` = going away, `1011` = internal error. |
+
+Returning from the handler closes with code `1000` automatically.
+
 ## Server-Sent Events
 
 ```aether

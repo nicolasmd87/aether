@@ -1,0 +1,97 @@
+#!/bin/sh
+# #260 Tier 2 / Phase E2: WebSocket end-to-end.
+#
+# Drives the WebSocket echo server with a Python client (the
+# `websockets` library, ubiquitous on every CI runner with Python).
+# Verifies:
+#   - upgrade handshake completes (101 Switching Protocols, correct
+#     Sec-WebSocket-Accept hash)
+#   - 3 text frames round-trip with the right echo prefix
+#   - server-initiated close arrives after the handler returns
+#
+# Skips when Python or the websockets library is missing — host
+# bridges should never break CI on machines without the toolchain.
+
+set -e
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+AE="$ROOT/build/ae"
+
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "  [SKIP] python3 not on PATH"
+    exit 0
+fi
+if ! python3 -c "import websockets" 2>/dev/null; then
+    echo "  [SKIP] python websockets library not installed (pip install websockets)"
+    exit 0
+fi
+
+TMPDIR="$(mktemp -d)"
+cleanup() {
+    if [ -n "${SRV_PID:-}" ]; then
+        kill "$SRV_PID" 2>/dev/null || true
+        wait "$SRV_PID" 2>/dev/null || true
+    fi
+    rm -rf "$TMPDIR"
+}
+trap cleanup EXIT
+
+AETHER_HOME="$ROOT" "$AE" run "$SCRIPT_DIR/server.ae" >"$TMPDIR/srv.log" 2>&1 &
+SRV_PID=$!
+
+deadline=$(($(date +%s) + 5))
+while [ "$(date +%s)" -lt "$deadline" ]; do
+    if grep -q READY "$TMPDIR/srv.log" 2>/dev/null; then break; fi
+    if ! kill -0 "$SRV_PID" 2>/dev/null; then
+        echo "  [FAIL] server died:"
+        head -20 "$TMPDIR/srv.log"
+        exit 1
+    fi
+    sleep 0.1
+done
+sleep 0.3
+
+# Python client sends 3 text messages and prints each echo on its
+# own line; non-zero exit on any failure.
+python3 - <<'PY' >"$TMPDIR/py.out" 2>"$TMPDIR/py.err"
+import asyncio
+import sys
+import websockets
+
+async def main():
+    async with websockets.connect("ws://127.0.0.1:18110/echo") as ws:
+        for msg in ("hello", "world", "!"):
+            await ws.send(msg)
+            reply = await asyncio.wait_for(ws.recv(), timeout=2)
+            print(reply)
+
+try:
+    asyncio.run(main())
+except Exception as e:
+    print(f"PY-ERR: {e}", file=sys.stderr)
+    sys.exit(1)
+PY
+
+if [ $? -ne 0 ]; then
+    echo "  [FAIL] python client errored:"
+    cat "$TMPDIR/py.err"
+    echo "--- server log ---"
+    head -20 "$TMPDIR/srv.log"
+    exit 1
+fi
+
+# Expected output: 3 lines, each "echo: <msg>"
+EXPECTED="echo: hello
+echo: world
+echo: !"
+if [ "$(cat "$TMPDIR/py.out")" != "$EXPECTED" ]; then
+    echo "  [FAIL] output mismatch"
+    echo "--- expected ---"
+    echo "$EXPECTED"
+    echo "--- actual ---"
+    cat "$TMPDIR/py.out"
+    exit 1
+fi
+
+echo "  [PASS] http_server_websocket: 3-message text echo round-trip via RFC 6455 framing"

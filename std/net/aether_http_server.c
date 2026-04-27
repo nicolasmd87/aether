@@ -39,6 +39,15 @@ int http_sse_send_event_id(HttpSseConn* c, const char* n, const char* d, const c
     (void)c; (void)n; (void)d; (void)i; return -1;
 }
 void http_sse_close(HttpSseConn* c) { (void)c; }
+void http_server_websocket(HttpServer* s, const char* p, HttpWsHandler h, void* u) {
+    (void)s; (void)p; (void)h; (void)u;
+}
+int http_ws_send_text(HttpWsConn* w, const char* t) { (void)w; (void)t; return -1; }
+int http_ws_send_binary(HttpWsConn* w, const void* d, int l) { (void)w; (void)d; (void)l; return -1; }
+int http_ws_recv(HttpWsConn* w) { (void)w; return -1; }
+const char* http_ws_message_data(HttpWsConn* w) { (void)w; return ""; }
+int http_ws_message_length(HttpWsConn* w) { (void)w; return 0; }
+void http_ws_close(HttpWsConn* w, int c, const char* r) { (void)w; (void)c; (void)r; }
 void http_server_add_route(HttpServer* s, const char* m, const char* p, HttpHandler h, void* u) { (void)s; (void)m; (void)p; (void)h; (void)u; }
 void http_server_get(HttpServer* s, const char* p, HttpHandler h, void* u) { (void)s; (void)p; (void)h; (void)u; }
 void http_server_post(HttpServer* s, const char* p, HttpHandler h, void* u) { (void)s; (void)p; (void)h; (void)u; }
@@ -321,6 +330,7 @@ HttpServer* http_server_create(int port) {
     atomic_init(&server->inflight_connections, 0);
     server->request_hook_chain = NULL;
     server->sse_routes = NULL;
+    server->ws_routes = NULL;
 
     return server;
 }
@@ -1227,6 +1237,42 @@ struct HttpSseConn {
     int       closed;
 };
 
+/* WebSocket route node (#260 Tier 2 / E2). */
+struct HttpWsRoute {
+    char* path;
+    HttpWsHandler handler;
+    void* user_data;
+    struct HttpWsRoute* next;
+};
+
+/* Public WebSocket-connection handle. Wraps the HttpConn plus a
+ * per-connection recv buffer for assembled message reassembly. */
+struct HttpWsConn {
+    HttpConn* conn;       /* not owned */
+    int       closed;
+    /* Reassembled message buffer — grown as needed. */
+    char*  msg_buf;
+    int    msg_cap;
+    int    msg_len;
+    /* For binary frames we don't NUL-terminate, so callers see
+     * (out_data, out_len). For text frames we NUL-terminate for
+     * convenience. The opcode of the in-progress message is
+     * carried across continuation frames. */
+    int    msg_opcode;    /* 0x1 text, 0x2 binary */
+};
+
+void http_server_websocket(HttpServer* server, const char* path,
+                           HttpWsHandler handler, void* user_data) {
+    if (!server || !path || !handler) return;
+    struct HttpWsRoute* r = (struct HttpWsRoute*)calloc(1, sizeof(*r));
+    if (!r) return;
+    r->path = strdup(path);
+    r->handler = handler;
+    r->user_data = user_data;
+    r->next = server->ws_routes;
+    server->ws_routes = r;
+}
+
 void http_server_sse(HttpServer* server, const char* path,
                      HttpSseHandler handler, void* user_data) {
     if (!server || !path || !handler) return;
@@ -1311,6 +1357,275 @@ int http_sse_send_event_id(HttpSseConn* sse,
 void http_sse_close(HttpSseConn* sse) {
     if (!sse) return;
     sse->closed = 1;
+}
+
+// =================================================================
+// WebSocket framing (RFC 6455) — #260 Tier 2 / E2
+// =================================================================
+//
+// Frame format (server-side perspective):
+//   Byte 0:  FIN (1) | RSV1-3 (3) | opcode (4)
+//   Byte 1:  MASK (1) | payload-length (7)
+//   Bytes 2-9 (variable): extended payload-length + masking-key (4 bytes if MASK=1)
+//   Bytes N+:            payload (XORed with mask if MASK=1)
+//
+// Client-to-server frames are always masked; server-to-client are
+// always unmasked. We honor that asymmetry on both sides.
+
+#define WS_OP_CONT   0x0
+#define WS_OP_TEXT   0x1
+#define WS_OP_BIN    0x2
+#define WS_OP_CLOSE  0x8
+#define WS_OP_PING   0x9
+#define WS_OP_PONG   0xA
+
+/* Read exactly N bytes from conn into buf, draining any pre-buffered
+ * bytes in conn->buf first (these accumulate when handle_one_request's
+ * recv pulled past the request's header boundary — for WebSocket
+ * upgrades, the client may have sent the first WS frame in the same
+ * TCP packet as the upgrade headers). Returns 0 on success, -1 on
+ * EOF / error. */
+static int ws_recv_exact(HttpConn* conn, void* buf, int n) {
+    char* p = (char*)buf;
+    /* Drain conn->buf first. */
+    int avail = conn->write_pos - conn->read_pos;
+    if (avail > 0) {
+        int take = (avail >= n) ? n : avail;
+        memcpy(p, conn->buf + conn->read_pos, (size_t)take);
+        conn->read_pos += take;
+        p += take;
+        n -= take;
+    }
+    /* Fall through to socket recv for the remainder. */
+    while (n > 0) {
+        int got = conn_recv(conn, p, n);
+        if (got <= 0) return -1;
+        p += got;
+        n -= got;
+    }
+    return 0;
+}
+
+/* Send a server-to-client frame (unmasked). opcode + payload bytes.
+ * Returns 0 on success, -1 on transport error. */
+static int ws_send_frame(HttpConn* conn, int opcode,
+                         const void* payload, int payload_len) {
+    unsigned char hdr[10];
+    int hlen = 0;
+    hdr[hlen++] = (unsigned char)(0x80 | (opcode & 0x0F));  /* FIN=1 */
+    if (payload_len < 126) {
+        hdr[hlen++] = (unsigned char)payload_len;
+    } else if (payload_len <= 0xFFFF) {
+        hdr[hlen++] = 126;
+        hdr[hlen++] = (unsigned char)((payload_len >> 8) & 0xFF);
+        hdr[hlen++] = (unsigned char)(payload_len & 0xFF);
+    } else {
+        hdr[hlen++] = 127;
+        unsigned long long pl = (unsigned long long)payload_len;
+        hdr[hlen++] = (unsigned char)((pl >> 56) & 0xFF);
+        hdr[hlen++] = (unsigned char)((pl >> 48) & 0xFF);
+        hdr[hlen++] = (unsigned char)((pl >> 40) & 0xFF);
+        hdr[hlen++] = (unsigned char)((pl >> 32) & 0xFF);
+        hdr[hlen++] = (unsigned char)((pl >> 24) & 0xFF);
+        hdr[hlen++] = (unsigned char)((pl >> 16) & 0xFF);
+        hdr[hlen++] = (unsigned char)((pl >> 8) & 0xFF);
+        hdr[hlen++] = (unsigned char)(pl & 0xFF);
+    }
+    if (conn_send(conn, hdr, hlen) != hlen) return -1;
+    if (payload_len > 0) {
+        if (conn_send(conn, payload, payload_len) != payload_len) return -1;
+    }
+    return 0;
+}
+
+int http_ws_send_text(HttpWsConn* ws, const char* text) {
+    if (!ws || !ws->conn || ws->closed) return -1;
+    int n = text ? (int)strlen(text) : 0;
+    return ws_send_frame(ws->conn, WS_OP_TEXT, text ? text : "", n);
+}
+
+int http_ws_send_binary(HttpWsConn* ws, const void* data, int len) {
+    if (!ws || !ws->conn || ws->closed) return -1;
+    return ws_send_frame(ws->conn, WS_OP_BIN, data, len);
+}
+
+void http_ws_close(HttpWsConn* ws, int code, const char* reason) {
+    if (!ws || ws->closed) return;
+    /* Close payload: 2 bytes status code (network order) + UTF-8
+     * reason. Reason capped at 123 bytes per spec. */
+    unsigned char payload[125];
+    payload[0] = (unsigned char)((code >> 8) & 0xFF);
+    payload[1] = (unsigned char)(code & 0xFF);
+    int rn = 0;
+    if (reason && *reason) {
+        rn = (int)strlen(reason);
+        if (rn > 123) rn = 123;
+        memcpy(payload + 2, reason, rn);
+    }
+    ws_send_frame(ws->conn, WS_OP_CLOSE, payload, 2 + rn);
+    ws->closed = 1;
+}
+
+/* Grow the message-reassembly buffer if needed. */
+static int ws_msg_grow(HttpWsConn* ws, int need) {
+    if (ws->msg_cap >= need) return 0;
+    int new_cap = ws->msg_cap > 0 ? ws->msg_cap : 4096;
+    while (new_cap < need) new_cap *= 2;
+    char* nb = (char*)realloc(ws->msg_buf, new_cap);
+    if (!nb) return -1;
+    ws->msg_buf = nb;
+    ws->msg_cap = new_cap;
+    return 0;
+}
+
+const char* http_ws_message_data(HttpWsConn* ws) {
+    if (!ws || !ws->msg_buf) return "";
+    return ws->msg_buf;
+}
+
+int http_ws_message_length(HttpWsConn* ws) {
+    return ws ? ws->msg_len : 0;
+}
+
+int http_ws_recv(HttpWsConn* ws) {
+    if (!ws || !ws->conn || ws->closed) return -1;
+    ws->msg_len = 0;  /* reset for this message */
+
+    for (;;) {
+        unsigned char hdr2[2];
+        if (ws_recv_exact(ws->conn, hdr2, 2) != 0) { ws->closed = 1; return -1; }
+        int fin    = (hdr2[0] >> 7) & 1;
+        int opcode = hdr2[0] & 0x0F;
+        int masked = (hdr2[1] >> 7) & 1;
+        long long pl = hdr2[1] & 0x7F;
+
+        if (pl == 126) {
+            unsigned char ext[2];
+            if (ws_recv_exact(ws->conn, ext, 2) != 0) { ws->closed = 1; return -1; }
+            pl = ((long long)ext[0] << 8) | ext[1];
+        } else if (pl == 127) {
+            unsigned char ext[8];
+            if (ws_recv_exact(ws->conn, ext, 8) != 0) { ws->closed = 1; return -1; }
+            pl = 0;
+            for (int i = 0; i < 8; i++) pl = (pl << 8) | ext[i];
+        }
+
+        unsigned char mask_key[4] = {0};
+        if (masked) {
+            if (ws_recv_exact(ws->conn, mask_key, 4) != 0) { ws->closed = 1; return -1; }
+        }
+
+        /* Sanity bound — refuse 1GB+ frames. */
+        if (pl < 0 || pl > (1LL << 30)) { ws->closed = 1; return -1; }
+
+        /* Read payload into a scratch buffer, unmasking on the fly. */
+        char* frame_buf = NULL;
+        if (pl > 0) {
+            frame_buf = (char*)malloc((size_t)pl);
+            if (!frame_buf) { ws->closed = 1; return -1; }
+            if (ws_recv_exact(ws->conn, frame_buf, (int)pl) != 0) {
+                free(frame_buf); ws->closed = 1; return -1;
+            }
+            if (masked) {
+                for (long long i = 0; i < pl; i++) {
+                    frame_buf[i] ^= (char)mask_key[i & 3];
+                }
+            }
+        }
+
+        if (opcode == WS_OP_PING) {
+            /* Respond with a pong carrying the same payload (RFC 6455
+             * §5.5.3). Free our buffer afterwards; caller doesn't see
+             * control frames. */
+            ws_send_frame(ws->conn, WS_OP_PONG, frame_buf, (int)pl);
+            free(frame_buf);
+            continue;
+        }
+        if (opcode == WS_OP_PONG) {
+            free(frame_buf);
+            continue;  /* unsolicited pong — discard */
+        }
+        if (opcode == WS_OP_CLOSE) {
+            /* Echo close frame back (RFC 6455 §5.5.1) and report
+             * to caller. */
+            ws_send_frame(ws->conn, WS_OP_CLOSE, frame_buf, (int)pl);
+            free(frame_buf);
+            ws->closed = 1;
+            return -1;
+        }
+
+        /* Data frame (text / binary / continuation). Append to
+         * the message buffer, then break out if FIN. */
+        if (opcode == WS_OP_TEXT || opcode == WS_OP_BIN) {
+            ws->msg_opcode = opcode;
+            ws->msg_len = 0;  /* fresh message */
+        }
+        if (pl > 0) {
+            if (ws_msg_grow(ws, ws->msg_len + (int)pl + 1) != 0) {
+                free(frame_buf); ws->closed = 1; return -1;
+            }
+            memcpy(ws->msg_buf + ws->msg_len, frame_buf, (size_t)pl);
+            ws->msg_len += (int)pl;
+        }
+        free(frame_buf);
+
+        if (fin) break;
+    }
+
+    /* NUL-terminate text messages for caller convenience; binary
+     * messages get the explicit length only. */
+    if (ws->msg_opcode == WS_OP_TEXT) {
+        if (ws_msg_grow(ws, ws->msg_len + 1) != 0) { ws->closed = 1; return -1; }
+        ws->msg_buf[ws->msg_len] = '\0';
+    }
+    return ws->msg_opcode == WS_OP_TEXT ? 1 : 2;
+}
+
+/* RFC 6455 handshake. Server responds 101 Switching Protocols with
+ * Sec-WebSocket-Accept = Base64(SHA-1(client_key + magic-uuid)). We
+ * call OpenSSL directly here for the raw 20-byte SHA-1 (the
+ * std.cryptography wrappers expose hex output, not raw bytes —
+ * adding raw to that surface is a separate cleanup). std-side
+ * Base64 is fine as-is (raw bytes in, base64 string out). */
+#ifdef AETHER_HAS_OPENSSL
+#include <openssl/sha.h>
+extern char* cryptography_base64_encode_raw(const char* data, int length);
+#endif
+
+static int ws_send_handshake(HttpConn* conn, const char* client_key) {
+#ifdef AETHER_HAS_OPENSSL
+    /* Magic GUID per RFC 6455 §1.3. */
+    static const char* GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+    char concat[256];
+    int n = snprintf(concat, sizeof(concat), "%s%s", client_key, GUID);
+    if (n <= 0 || n >= (int)sizeof(concat)) return -1;
+
+    unsigned char digest[SHA_DIGEST_LENGTH];  /* 20 bytes */
+    SHA1((const unsigned char*)concat, (size_t)n, digest);
+
+    char* accept_b64 = cryptography_base64_encode_raw((const char*)digest,
+                                                       SHA_DIGEST_LENGTH);
+    if (!accept_b64) return -1;
+
+    /* SHA-1 is 20 bytes -> 28 base64 chars + 1 padding '=' to reach
+     * a multiple of 4. The cryptography wrapper is documented as
+     * unpadded; append it ourselves. */
+    char resp[512];
+    int rn = snprintf(resp, sizeof(resp),
+        "HTTP/1.1 101 Switching Protocols\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Accept: %s=\r\n"
+        "\r\n",
+        accept_b64);
+    free(accept_b64);
+    if (rn <= 0 || rn >= (int)sizeof(resp)) return -1;
+    if (conn_send(conn, resp, rn) != rn) return -1;
+    return 0;
+#else
+    (void)conn; (void)client_key;
+    return -1;
+#endif
 }
 
 void http_server_use_request_hook(HttpServer* server,
@@ -1544,6 +1859,56 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
         http_request_free(req);
         http_server_response_free(res);
         return 0;
+    }
+
+    /* WebSocket dispatch (#260 Tier 2 / E2). Match before SSE +
+     * normal routes; require the Upgrade: websocket header to
+     * confirm the client actually wants to upgrade (otherwise the
+     * same path could serve a regular GET). */
+    {
+        const char* upgrade_hdr = http_get_header(req, "Upgrade");
+        if (upgrade_hdr && strcasecmp(upgrade_hdr, "websocket") == 0) {
+            struct HttpWsRoute* wr = server->ws_routes;
+            while (wr) {
+                if (req->path && wr->path && strcmp(wr->path, req->path) == 0) {
+                    const char* key = http_get_header(req, "Sec-WebSocket-Key");
+                    if (!key || !*key) {
+                        http_response_set_status(res, 400);
+                        http_response_set_body(res, "Sec-WebSocket-Key header missing");
+                        size_t resp_len = 0;
+                        char* response_str = http_response_serialize_len(res, &resp_len);
+                        if (response_str) {
+                            conn_send(conn, response_str, (int)resp_len);
+                            free(response_str);
+                        }
+                        http_request_free(req);
+                        http_server_response_free(res);
+                        return 0;
+                    }
+                    if (ws_send_handshake(conn, key) != 0) {
+                        http_request_free(req);
+                        http_server_response_free(res);
+                        return 0;  /* close */
+                    }
+                    HttpWsConn ws_handle = {
+                        .conn = conn, .closed = 0,
+                        .msg_buf = NULL, .msg_cap = 0,
+                        .msg_len = 0, .msg_opcode = 0,
+                    };
+                    wr->handler(req, &ws_handle, wr->user_data);
+                    /* If the handler returned without closing,
+                     * send a normal-closure frame. */
+                    if (!ws_handle.closed) {
+                        http_ws_close(&ws_handle, 1000, "");
+                    }
+                    free(ws_handle.msg_buf);
+                    http_request_free(req);
+                    http_server_response_free(res);
+                    return 0;
+                }
+                wr = wr->next;
+            }
+        }
     }
 
     /* SSE dispatch (#260 Tier 2). SSE routes own the connection
@@ -2217,6 +2582,17 @@ void http_server_free(HttpServer* server) {
         struct HttpSseRoute* r = server->sse_routes;
         while (r) {
             struct HttpSseRoute* next = r->next;
+            free(r->path);
+            free(r);
+            r = next;
+        }
+    }
+
+    // Free WebSocket routes (#260 Tier 2 / E2)
+    {
+        struct HttpWsRoute* r = server->ws_routes;
+        while (r) {
+            struct HttpWsRoute* next = r->next;
             free(r->path);
             free(r);
             r = next;

@@ -128,6 +128,10 @@ typedef struct HttpServer {
     // lifetime and emits events directly to the wire.
     struct HttpSseRoute* sse_routes;
 
+    // WebSocket routes (#260 Tier 2 / E2). Same dispatch shape as
+    // SSE routes; the upgrade handshake runs first.
+    struct HttpWsRoute* ws_routes;
+
     // Actor system
     Scheduler* scheduler;
 
@@ -318,6 +322,54 @@ const char* http_server_set_health_probes_raw(HttpServer* server,
                                               const char* ready_path,
                                               HttpReadyCheck ready_check,
                                               void* user_data);
+
+// WebSocket (#260 Tier 2 / E2 — RFC 6455). Like SSE, the handler
+// owns the connection lifetime: the server completes the upgrade
+// handshake then hands control to the user. Inside the handler,
+// ws_recv blocks for the next message (auto-handling ping/pong
+// control frames internally); ws_send_text / ws_send_binary push
+// outgoing messages. Returning from the handler closes the
+// connection cleanly with a 1000 (Normal Closure) frame.
+typedef struct HttpWsConn HttpWsConn;  /* opaque */
+typedef void (*HttpWsHandler)(HttpRequest* req, HttpWsConn* ws, void* user_data);
+
+void http_server_websocket(HttpServer* server, const char* path,
+                           HttpWsHandler handler, void* user_data);
+
+// Send a text frame (UTF-8). Returns 0 on success, -1 on transport
+// error.
+int http_ws_send_text(HttpWsConn* ws, const char* text);
+
+// Send a binary frame. `len` is explicit so binary payloads with
+// embedded NULs survive. Returns 0 on success, -1 on transport
+// error.
+int http_ws_send_binary(HttpWsConn* ws, const void* data, int len);
+
+// Receive the next data frame (text or binary). Auto-handles
+// fragmentation (assembles continuation frames) and control frames
+// (responds to ping with pong, returns -1 on close).
+//
+// Returns:
+//    1  — text frame received; data accessible via the helpers
+//          below (NUL-terminated for text, raw bytes for binary)
+//    2  — binary frame received; data via the helpers below
+//   -1  — connection closed
+//
+// The message data lives in the connection's internal buffer and
+// is valid until the next ws_recv / ws_send / ws_close call.
+int http_ws_recv(HttpWsConn* ws);
+
+// Accessors for the message read by the most recent ws_recv. Both
+// safe to call after ws_recv returned 1 or 2; undefined behaviour
+// otherwise.
+const char* http_ws_message_data(HttpWsConn* ws);
+int         http_ws_message_length(HttpWsConn* ws);
+
+// Send a close frame with the given code (1000 = normal,
+// 1001 = going away, 1002 = protocol error, 1008 = policy
+// violation, 1011 = internal error) and an optional reason.
+// Reason may be NULL/empty. Idempotent.
+void http_ws_close(HttpWsConn* ws, int code, const char* reason);
 
 // Server-Sent Events (#260 Tier 2). An SSE handler "owns" the
 // connection — the server writes the initial 200 response with
