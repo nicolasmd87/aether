@@ -42,9 +42,27 @@ int os_run(const char* prog, void* argv, void* env);
 
 // Same as os_run but captures the child's stdout into a heap-allocated
 // string the caller must free. Returns NULL on spawn failure. The
-// child's exit code is discarded — if you need it, use os_run instead
-// (or a future os_run_capture_with_status() if demand arises).
+// child's exit code is discarded — use `os_run_capture_status_raw`
+// below if you need both stdout and the exit code.
 char* os_run_capture_raw(const char* prog, void* argv, void* env);
+
+// Tuple-returning sibling of os_run_capture_raw — captures stdout AND
+// exposes the child's exit code. Issue #289.
+//
+// The C return shape is `_tuple_string_int_string` (same anonymous
+// struct typedef the codegen synthesises from
+// `extern os_run_capture_status_raw(...) -> (string, int, string)`).
+// The function itself is declared by the codegen-emitted typedef in
+// every translation unit that imports `std.os`; this header omits a
+// prototype to avoid duplicating the typedef across two definition
+// sites that don't see each other's tag.
+//
+// Layout: (stdout, status, err)
+//   - stdout: heap-allocated capture (caller frees), or "" on failure.
+//   - status: WEXITSTATUS on normal exit; -1 when killed by signal or
+//             when the spawn itself failed.
+//   - err:    "" on successful spawn (regardless of exit code);
+//             non-empty when the fork/exec couldn't run.
 
 // Current UTC time as an ISO-8601 timestamp: "YYYY-MM-DDThh:mm:ssZ"
 // (20 chars + NUL). Returns a heap-allocated string the caller must
