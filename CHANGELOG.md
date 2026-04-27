@@ -13,6 +13,16 @@ next version number before tagging the release.
 
 ### Added
 
+- **Server-Sent Events (#260 Tier 2 / E3)** (`std/net/aether_http_server.{c,h}`, `std/http/module.ae`, regression test `tests/integration/http_server_sse/`). Real streaming SSE — handler owns the connection lifetime and pushes events directly to the wire. New API:
+    ```aether
+    @c_callback events_handler(req: ptr, sse: ptr, ud: ptr) {
+        http.sse_send(sse, "tick", "1")
+        http.sse_send_id(sse, "tick", "3", "evt-3")
+    }
+    http.server_sse(server, "/events", events_handler, null)
+    ```
+  Routes registered via `http_server_sse` are matched ahead of normal routes; on hit, the server emits the standard SSE response head (`200 OK`, `Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: close`) and invokes the handler with an `HttpSseConn*` that wraps the underlying `HttpConn` (so TLS-wrapped connections work transparently — SSE over HTTPS gets the same handling). `http_sse_send_event` / `http_sse_send_event_id` format and write one event chunk per call (correctly splitting multi-line `data:` payloads on `\n` per the spec); they return -1 on transport error so the handler can stop emitting on disconnect. The connection closes when the handler returns. End-to-end test connects with `curl -N` and verifies the Content-Type header, three event chunks with the right names + data, and the third event's `id: evt-3` line.
+
 - **HTTP server observability: structured access logs + Prometheus metrics (#260 Tier 3 — F1 + F2)** (`std/net/aether_http_server.{c,h}`, `std/http/module.ae`, regression test `tests/integration/http_server_observability/`). Closes Tier 3 with a per-request observation hook chain on `HttpServer` plus two built-in consumers:
     - **Access log** — `http.server_set_access_log(server, format, output_path) -> string`. `format` is `"combined"` (NCSA Combined Log Format, Apache default) or `"json"` (one-object-per-line). `output_path` is a file path (opened with `"ab"` so process restarts append rather than truncate), `"-"` for stderr, or `""` to disable. The logger captures method, path, version, status, body bytes, duration in microseconds, and the `User-Agent` / `Referer` / `X-Forwarded-For` headers when present.
     - **Prometheus metrics** — `http.server_set_metrics(server, endpoint) -> string`. Tracks per-route counters (requests_total, errors_total ≥500, 4xx_total) and a latency histogram with buckets at 5ms / 25ms / 100ms / 500ms / 2s / 10s / +Inf. Exposes the standard Prometheus text format (`text/plain; version=0.0.4`) on the configured endpoint (default `/metrics`). All counters are `_Atomic long` updated lock-free; the route hashtable uses a single mutex for insertion-time growth only. Buckets follow Prometheus convention (cumulative — each bucket counts events ≤ upper bound). Sums emitted in seconds-as-double to match the histogram unit.

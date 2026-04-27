@@ -123,6 +123,11 @@ typedef struct HttpServer {
     // Hooks fire once per completed request with timing.
     struct HttpRequestHookNode* request_hook_chain;
 
+    // SSE routes (#260 Tier 2). Separate from `routes` because they
+    // dispatch differently — the handler owns the connection
+    // lifetime and emits events directly to the wire.
+    struct HttpSseRoute* sse_routes;
+
     // Actor system
     Scheduler* scheduler;
 
@@ -313,6 +318,40 @@ const char* http_server_set_health_probes_raw(HttpServer* server,
                                               const char* ready_path,
                                               HttpReadyCheck ready_check,
                                               void* user_data);
+
+// Server-Sent Events (#260 Tier 2). An SSE handler "owns" the
+// connection — the server writes the initial 200 response with
+// `Content-Type: text/event-stream`, then hands control to the
+// handler which calls `http_sse_send_event` repeatedly to push
+// events. The connection stays open until the handler returns or
+// `http_sse_close` is called explicitly. Underlying transport is
+// HTTP/1.1 with `Connection: close` (keep-alive doesn't apply —
+// the response is open-ended, no Content-Length).
+typedef struct HttpSseConn HttpSseConn;  /* opaque */
+typedef void (*HttpSseHandler)(HttpRequest* req, HttpSseConn* sse, void* user_data);
+
+void http_server_sse(HttpServer* server, const char* path,
+                     HttpSseHandler handler, void* user_data);
+
+// Send one event over the SSE connection. `event_name` may be NULL
+// or "" to omit the `event:` line (browsers default-listen on the
+// "message" event). Returns 0 on success, -1 on transport error
+// (connection closed by peer); the handler should treat -1 as
+// "stop emitting and return".
+int http_sse_send_event(HttpSseConn* sse,
+                        const char* event_name,
+                        const char* data);
+
+// Same as send_event but with an explicit event-id (browsers send
+// it back via Last-Event-ID after a reconnect).
+int http_sse_send_event_id(HttpSseConn* sse,
+                           const char* event_name,
+                           const char* data,
+                           const char* id);
+
+// Best-effort close. Idempotent. After this call, send_event
+// returns -1.
+void http_sse_close(HttpSseConn* sse);
 
 // Register a per-request observation hook (#260 Tier 3). Multiple
 // hooks may register; they run in registration order after the

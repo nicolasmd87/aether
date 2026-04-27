@@ -29,6 +29,16 @@ const char* http_server_set_access_log_raw(HttpServer* s, const char* f, const c
     (void)s; (void)f; (void)p; return "";
 }
 const char* http_server_set_metrics_raw(HttpServer* s, const char* e) { (void)s; (void)e; return ""; }
+void http_server_sse(HttpServer* s, const char* p, HttpSseHandler h, void* u) {
+    (void)s; (void)p; (void)h; (void)u;
+}
+int http_sse_send_event(HttpSseConn* c, const char* n, const char* d) {
+    (void)c; (void)n; (void)d; return -1;
+}
+int http_sse_send_event_id(HttpSseConn* c, const char* n, const char* d, const char* i) {
+    (void)c; (void)n; (void)d; (void)i; return -1;
+}
+void http_sse_close(HttpSseConn* c) { (void)c; }
 void http_server_add_route(HttpServer* s, const char* m, const char* p, HttpHandler h, void* u) { (void)s; (void)m; (void)p; (void)h; (void)u; }
 void http_server_get(HttpServer* s, const char* p, HttpHandler h, void* u) { (void)s; (void)p; (void)h; (void)u; }
 void http_server_post(HttpServer* s, const char* p, HttpHandler h, void* u) { (void)s; (void)p; (void)h; (void)u; }
@@ -310,6 +320,7 @@ HttpServer* http_server_create(int port) {
     server->ready_check_user_data = NULL;
     atomic_init(&server->inflight_connections, 0);
     server->request_hook_chain = NULL;
+    server->sse_routes = NULL;
 
     return server;
 }
@@ -1200,6 +1211,108 @@ struct HttpRequestHookNode {
     struct HttpRequestHookNode* next;
 };
 
+/* SSE route node (#260 Tier 2). */
+struct HttpSseRoute {
+    char* path;
+    HttpSseHandler handler;
+    void* user_data;
+    struct HttpSseRoute* next;
+};
+
+/* Public SSE-connection handle exposed to user handlers. Wraps the
+ * underlying HttpConn so http_sse_send_event can write directly to
+ * the wire (with TLS unwrap when applicable, via conn_send). */
+struct HttpSseConn {
+    HttpConn* conn;     /* not owned */
+    int       closed;
+};
+
+void http_server_sse(HttpServer* server, const char* path,
+                     HttpSseHandler handler, void* user_data) {
+    if (!server || !path || !handler) return;
+    struct HttpSseRoute* r = (struct HttpSseRoute*)calloc(1, sizeof(*r));
+    if (!r) return;
+    r->path = strdup(path);
+    r->handler = handler;
+    r->user_data = user_data;
+    r->next = server->sse_routes;
+    server->sse_routes = r;
+}
+
+int http_sse_send_event(HttpSseConn* sse,
+                        const char* event_name,
+                        const char* data) {
+    return http_sse_send_event_id(sse, event_name, data, NULL);
+}
+
+int http_sse_send_event_id(HttpSseConn* sse,
+                           const char* event_name,
+                           const char* data,
+                           const char* id) {
+    if (!sse || !sse->conn || sse->closed) return -1;
+
+    /* Build an SSE chunk:
+     *     id: <id>\n           (optional)
+     *     event: <name>\n      (optional)
+     *     data: <line1>\n
+     *     data: <line2>\n      (one line per \n in data)
+     *     \n                   (terminator)
+     */
+    /* Worst case: data is N bytes, every byte is \n -> N "data: \n"
+     * lines plus the constant overhead. Round generously to 4*N + 256. */
+    size_t data_len = data ? strlen(data) : 0;
+    size_t cap = data_len * 4 + 256
+               + (event_name ? strlen(event_name) + 16 : 0)
+               + (id ? strlen(id) + 16 : 0);
+    char* buf = (char*)malloc(cap);
+    if (!buf) return -1;
+    size_t off = 0;
+
+    if (id && *id) {
+        off += (size_t)snprintf(buf + off, cap - off, "id: %s\n", id);
+    }
+    if (event_name && *event_name) {
+        off += (size_t)snprintf(buf + off, cap - off, "event: %s\n", event_name);
+    }
+    if (data && *data) {
+        const char* line_start = data;
+        const char* p = data;
+        for (;;) {
+            if (*p == '\n' || *p == '\0') {
+                size_t line_len = (size_t)(p - line_start);
+                if (off + 7 + line_len + 1 >= cap) break;
+                memcpy(buf + off, "data: ", 6); off += 6;
+                memcpy(buf + off, line_start, line_len); off += line_len;
+                buf[off++] = '\n';
+                if (*p == '\0') break;
+                line_start = p + 1;
+            }
+            p++;
+        }
+    } else {
+        if (off + 8 < cap) {
+            memcpy(buf + off, "data: \n", 7);
+            off += 7;
+        }
+    }
+    if (off + 2 < cap) {
+        buf[off++] = '\n';   /* event terminator */
+    }
+
+    int n = conn_send(sse->conn, buf, (int)off);
+    free(buf);
+    if (n < (int)off) {
+        sse->closed = 1;
+        return -1;
+    }
+    return 0;
+}
+
+void http_sse_close(HttpSseConn* sse) {
+    if (!sse) return;
+    sse->closed = 1;
+}
+
 void http_server_use_request_hook(HttpServer* server,
                                   HttpRequestHook hook,
                                   void* user_data) {
@@ -1431,6 +1544,41 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
         http_request_free(req);
         http_server_response_free(res);
         return 0;
+    }
+
+    /* SSE dispatch (#260 Tier 2). SSE routes own the connection
+     * lifetime — the handler emits events directly to the wire and
+     * the response struct is not used. Match before normal routes
+     * so an /events SSE route takes precedence. */
+    {
+        struct HttpSseRoute* sr = server->sse_routes;
+        while (sr) {
+            if (req->path && sr->path && strcmp(sr->path, req->path) == 0) {
+                /* Emit the SSE response head directly to the wire
+                 * — bypassing http_response_set_body / serialize
+                 * because we don't have a Content-Length and the
+                 * body is open-ended. */
+                const char* head =
+                    "HTTP/1.1 200 OK\r\n"
+                    "Content-Type: text/event-stream\r\n"
+                    "Cache-Control: no-cache\r\n"
+                    "Connection: close\r\n"
+                    "\r\n";
+                conn_send(conn, head, (int)strlen(head));
+
+                HttpSseConn sse_handle = { .conn = conn, .closed = 0 };
+                sr->handler(req, &sse_handle, sr->user_data);
+
+                /* After the handler returns, flush whatever's
+                 * pending in the response struct (it's empty —
+                 * we never wrote to it) and tear down. SSE always
+                 * forces close. */
+                http_request_free(req);
+                http_server_response_free(res);
+                return 0;
+            }
+            sr = sr->next;
+        }
     }
 
     // Find matching route
@@ -2061,6 +2209,17 @@ void http_server_free(HttpServer* server) {
             struct HttpRequestHookNode* next = h->next;
             free(h);
             h = next;
+        }
+    }
+
+    // Free SSE routes (#260 Tier 2)
+    {
+        struct HttpSseRoute* r = server->sse_routes;
+        while (r) {
+            struct HttpSseRoute* next = r->next;
+            free(r->path);
+            free(r);
+            r = next;
         }
     }
 

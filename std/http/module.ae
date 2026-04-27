@@ -26,6 +26,9 @@ exports (
     http_server_set_health_probes_raw, server_set_health_probes,
     http_server_set_access_log_raw, server_set_access_log,
     http_server_set_metrics_raw, server_set_metrics,
+    http_server_sse, server_sse,
+    http_sse_send_event, http_sse_send_event_id, http_sse_close,
+    sse_send, sse_send_id, sse_close,
     server_bind, server_start,
     http_server_add_route, http_server_get, http_server_post,
     http_server_put, http_server_delete,
@@ -288,6 +291,38 @@ extern http_server_set_metrics_raw(server: ptr, metrics_endpoint: string) -> str
 
 server_set_metrics(server: ptr, metrics_endpoint: string) -> {
     return http_server_set_metrics_raw(server, metrics_endpoint)
+}
+
+// Server-Sent Events (#260 Tier 2). Register an SSE route — the
+// handler owns the connection lifetime and pushes events directly
+// to the client. The server sends `Content-Type: text/event-stream`
+// + `Connection: close` automatically before invoking the handler.
+//
+// Handler signature (declared as @c_callback on the Aether side):
+//     handler(req: ptr, sse: ptr, ud: ptr)
+//
+// Inside the handler, call sse_send / sse_send_id to push events,
+// or sse_close to terminate explicitly. The connection closes
+// when the handler returns.
+extern http_server_sse(server: ptr, path: string, handler: ptr, user_data: ptr)
+extern http_sse_send_event(sse: ptr, event_name: string, data: string) -> int
+extern http_sse_send_event_id(sse: ptr, event_name: string, data: string, id: string) -> int
+extern http_sse_close(sse: ptr)
+
+server_sse(server: ptr, path: string, handler: ptr, user_data: ptr) {
+    http_server_sse(server, path, handler, user_data)
+}
+
+sse_send(sse: ptr, event_name: string, data: string) -> int {
+    return http_sse_send_event(sse, event_name, data)
+}
+
+sse_send_id(sse: ptr, event_name: string, data: string, id: string) -> int {
+    return http_sse_send_event_id(sse, event_name, data, id)
+}
+
+sse_close(sse: ptr) {
+    http_sse_close(sse)
 }
 
 // Drain a single accepted connection through the full HTTP lifecycle:
