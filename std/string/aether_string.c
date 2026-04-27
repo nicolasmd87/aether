@@ -610,3 +610,78 @@ AetherString* string_format(const char* fmt, ...) {
     free(buffer);
     return result;
 }
+
+/* Aether-callable formatter — Aether externs don't support varargs,
+ * so the public surface takes an ArrayList of arguments and walks
+ * the format string substituting `{}` placeholders with each list
+ * entry. Closes #272.
+ *
+ * Placeholders: `{}` is replaced with the next arg (Rust-style).
+ * `{{` is a literal `{`; `}}` is a literal `}`. List entries are
+ * read as strings (AetherString* or plain char*); ints and other
+ * types should be converted via `string.from_int(...)` first.
+ *
+ * Why `{}` not `%s`: it composes more cleanly with Aether's existing
+ * `${...}` interpolation surface (interpolation is for callsite-
+ * literal substitution; format is for runtime-built strings) and it
+ * leaves the `%`-prefix open for typed printf-style formatters
+ * (`%d`, `%.3f`) without breaking compatibility if those land later.
+ */
+extern int   list_size(void* list);
+extern void* list_get_raw(void* list, int index);
+
+AetherString* string_format_list(const char* fmt, void* args) {
+    if (!fmt) return string_empty();
+    int n_args = args ? list_size(args) : 0;
+    int next_arg = 0;
+
+    /* First pass: compute total length so we can allocate exactly
+     * once. Read placeholders and arg lengths to size the buffer. */
+    size_t total = 0;
+    const char* p = fmt;
+    while (*p) {
+        if (p[0] == '{' && p[1] == '{') { total++; p += 2; continue; }
+        if (p[0] == '}' && p[1] == '}') { total++; p += 2; continue; }
+        if (p[0] == '{' && p[1] == '}') {
+            if (next_arg < n_args) {
+                void* a = list_get_raw(args, next_arg);
+                size_t alen = a ? str_len(a) : 0;
+                total += alen;
+                next_arg++;
+            }
+            p += 2; continue;
+        }
+        total++; p++;
+    }
+
+    char* out = (char*)malloc(total + 1);
+    if (!out) return string_empty();
+
+    /* Second pass: write the bytes. */
+    next_arg = 0;
+    size_t pos = 0;
+    p = fmt;
+    while (*p) {
+        if (p[0] == '{' && p[1] == '{') { out[pos++] = '{'; p += 2; continue; }
+        if (p[0] == '}' && p[1] == '}') { out[pos++] = '}'; p += 2; continue; }
+        if (p[0] == '{' && p[1] == '}') {
+            if (next_arg < n_args) {
+                void* a = list_get_raw(args, next_arg);
+                if (a) {
+                    size_t alen = str_len(a);
+                    const char* adata = str_data(a);
+                    if (alen > 0) memcpy(out + pos, adata, alen);
+                    pos += alen;
+                }
+                next_arg++;
+            }
+            p += 2; continue;
+        }
+        out[pos++] = *p++;
+    }
+    out[pos] = '\0';
+
+    AetherString* result = string_new_with_length(out, pos);
+    free(out);
+    return result;
+}

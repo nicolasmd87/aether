@@ -1,0 +1,68 @@
+// Regression test for #272 — `string.format(fmt, args)` exposes the
+// existing C `string_format` primitive at the Aether level.
+//
+// Why a wrapper rather than direct varargs: Aether externs don't
+// support varargs, so the public surface takes an std.list of args
+// and walks the format string substituting `{}` placeholders.
+// `{{` / `}}` are literal braces; non-string args (ints, floats)
+// must be converted via `string.from_int(...)` first.
+//
+// Cases:
+//   1. Single placeholder.
+//   2. Multiple placeholders, mixed argument lengths.
+//   3. Literal braces via `{{` and `}}`.
+//   4. Empty args list — placeholders with no matching arg are
+//      silently dropped (the wrapper's documented behaviour).
+//   5. Int-via-from_int marshalling.
+
+import std.string
+import std.list
+
+extern exit(code: int)
+
+main() {
+    // Case 1
+    a1 = list_new()
+    list_add(a1, "hello")
+    if string.format("[{}]", a1) != "[hello]" {
+        println("FAIL 1")
+        exit(1)
+    }
+
+    // Case 2
+    a2 = list_new()
+    list_add(a2, "PUT")
+    list_add(a2, "/foo/bar")
+    list_add(a2, "alice")
+    if string.format("{} {} by {}", a2) != "PUT /foo/bar by alice" {
+        println("FAIL 2")
+        exit(1)
+    }
+
+    // Case 3 — literal braces
+    a3 = list_new()
+    list_add(a3, "v1")
+    if string.format("{{{}}}", a3) != "{v1}" {
+        println("FAIL 3")
+        exit(1)
+    }
+
+    // Case 4 — extra placeholders → dropped
+    a4 = list_new()
+    list_add(a4, "only")
+    if string.format("{} and {}", a4) != "only and " {
+        println("FAIL 4")
+        exit(1)
+    }
+
+    // Case 5 — int via from_int
+    a5 = list_new()
+    list_add(a5, "x")
+    list_add(a5, string.from_int(42))
+    if string.format("{}={}", a5) != "x=42" {
+        println("FAIL 5")
+        exit(1)
+    }
+
+    println("OK")
+}
