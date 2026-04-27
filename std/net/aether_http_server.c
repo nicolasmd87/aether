@@ -22,6 +22,13 @@ const char* http_server_set_health_probes_raw(HttpServer* s, const char* lp, con
                                               HttpReadyCheck rc, void* ud) {
     (void)s; (void)lp; (void)rp; (void)rc; (void)ud; return "";
 }
+void http_server_use_request_hook(HttpServer* s, HttpRequestHook h, void* u) {
+    (void)s; (void)h; (void)u;
+}
+const char* http_server_set_access_log_raw(HttpServer* s, const char* f, const char* p) {
+    (void)s; (void)f; (void)p; return "";
+}
+const char* http_server_set_metrics_raw(HttpServer* s, const char* e) { (void)s; (void)e; return ""; }
 void http_server_add_route(HttpServer* s, const char* m, const char* p, HttpHandler h, void* u) { (void)s; (void)m; (void)p; (void)h; (void)u; }
 void http_server_get(HttpServer* s, const char* p, HttpHandler h, void* u) { (void)s; (void)p; (void)h; (void)u; }
 void http_server_post(HttpServer* s, const char* p, HttpHandler h, void* u) { (void)s; (void)p; (void)h; (void)u; }
@@ -302,6 +309,7 @@ HttpServer* http_server_create(int port) {
     server->ready_check = NULL;
     server->ready_check_user_data = NULL;
     atomic_init(&server->inflight_connections, 0);
+    server->request_hook_chain = NULL;
 
     return server;
 }
@@ -409,6 +417,289 @@ const char* http_server_set_health_probes_raw(HttpServer* server,
     if (ready_path && *ready_path) {
         http_server_get(server, ready_path, health_ready_handler, server);
     }
+    return "";
+}
+
+// =================================================================
+// #260 Tier 3 / F1: access logger
+// =================================================================
+
+typedef struct {
+    char* format;       /* "combined" or "json" */
+    FILE* fp;           /* not closed by us — that's set up below */
+    int   own_fp;       /* 1 if we opened it (need to fclose); 0 for stderr */
+} AccessLogState;
+
+static void access_log_hook(HttpRequest* req, HttpServerResponse* res,
+                            long duration_us, void* user_data) {
+    AccessLogState* st = (AccessLogState*)user_data;
+    if (!st || !st->fp) return;
+
+    /* Common fields. Avoid NULL-deref by substituting "-" the way
+     * NCSA log files traditionally do. */
+    const char* method = req && req->method ? req->method : "-";
+    const char* path   = req && req->path   ? req->path   : "-";
+    const char* version = req && req->http_version ? req->http_version : "HTTP/1.1";
+    const char* user_agent = req ? http_get_header(req, "User-Agent") : NULL;
+    const char* referer    = req ? http_get_header(req, "Referer")    : NULL;
+    int  status = res ? res->status_code : 0;
+    long body_len = res ? (long)res->body_length : 0;
+
+    /* RFC 1123 date for combined; ISO-8601 for json. Both via the
+     * same struct tm pull. */
+    time_t now = time(NULL);
+    struct tm tmv;
+#ifdef _WIN32
+    gmtime_s(&tmv, &now);
+#else
+    gmtime_r(&now, &tmv);
+#endif
+
+    if (strcmp(st->format, "json") == 0) {
+        char ts[32];
+        strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%SZ", &tmv);
+        fprintf(st->fp,
+                "{\"ts\":\"%s\",\"method\":\"%s\",\"path\":\"%s\","
+                "\"status\":%d,\"bytes\":%ld,\"dur_us\":%ld,"
+                "\"ua\":\"%s\",\"ref\":\"%s\"}\n",
+                ts, method, path, status, body_len, duration_us,
+                user_agent ? user_agent : "",
+                referer    ? referer    : "");
+    } else {
+        /* Combined: <ip> - - [DD/MMM/YYYY:HH:MM:SS +0000] "METHOD PATH HTTP/X.Y" status bytes "REF" "UA" */
+        char ts[64];
+        strftime(ts, sizeof(ts), "%d/%b/%Y:%H:%M:%S +0000", &tmv);
+        const char* ip = req ? http_get_header(req, "X-Forwarded-For") : NULL;
+        if (!ip) ip = "-";
+        fprintf(st->fp,
+                "%s - - [%s] \"%s %s %s\" %d %ld \"%s\" \"%s\"\n",
+                ip, ts, method, path, version, status, body_len,
+                referer    ? referer    : "-",
+                user_agent ? user_agent : "-");
+    }
+    fflush(st->fp);
+}
+
+const char* http_server_set_access_log_raw(HttpServer* server,
+                                           const char* format,
+                                           const char* output_path) {
+    if (!server) return "server is null";
+    if (!format || !*format) return "";  /* disabled */
+
+    int fmt_ok = strcmp(format, "combined") == 0 ||
+                 strcmp(format, "json")     == 0;
+    if (!fmt_ok) return "format must be \"combined\" or \"json\"";
+
+    AccessLogState* st = (AccessLogState*)calloc(1, sizeof(AccessLogState));
+    if (!st) return "out of memory";
+    st->format = strdup(format);
+
+    if (!output_path || !*output_path || strcmp(output_path, "-") == 0) {
+        st->fp = stderr;
+        st->own_fp = 0;
+    } else {
+        st->fp = fopen(output_path, "ab");
+        if (!st->fp) {
+            free(st->format);
+            free(st);
+            return "cannot open access-log output_path for append";
+        }
+        st->own_fp = 1;
+    }
+
+    http_server_use_request_hook(server, access_log_hook, st);
+    return "";
+}
+
+// =================================================================
+// #260 Tier 3 / F2: per-route metrics + Prometheus exposition
+// =================================================================
+
+typedef struct MetricsRoute {
+    char* method;
+    char* path_pattern;
+    _Atomic long total_requests;
+    _Atomic long total_errors;     /* status >= 500 */
+    _Atomic long total_4xx;
+    _Atomic long sum_duration_us;
+    _Atomic long max_duration_us;
+    /* Histogram buckets in microseconds. */
+    _Atomic long bucket_le_5ms;
+    _Atomic long bucket_le_25ms;
+    _Atomic long bucket_le_100ms;
+    _Atomic long bucket_le_500ms;
+    _Atomic long bucket_le_2s;
+    _Atomic long bucket_le_10s;
+    struct MetricsRoute* next;
+} MetricsRoute;
+
+typedef struct {
+    pthread_mutex_t lock;
+    MetricsRoute* head;
+} MetricsState;
+
+static MetricsRoute* metrics_route_for(MetricsState* st,
+                                       const char* method,
+                                       const char* pattern) {
+    MetricsRoute* r = st->head;
+    while (r) {
+        if (strcmp(r->method, method) == 0 &&
+            strcmp(r->path_pattern, pattern) == 0) return r;
+        r = r->next;
+    }
+    return NULL;
+}
+
+static void metrics_hook(HttpRequest* req, HttpServerResponse* res,
+                         long duration_us, void* user_data) {
+    MetricsState* st = (MetricsState*)user_data;
+    if (!st || !req || !res) return;
+
+    /* Look up by exact method+path. Production deployments would
+     * usually want path-pattern bucketing (e.g. /users/:id collapses
+     * across IDs), but the existing route table doesn't expose the
+     * matched pattern back to the dispatch path. v1 buckets by
+     * literal request path; the user can collapse via labels in a
+     * follow-up. */
+    const char* method = req->method ? req->method : "-";
+    const char* pattern = req->path ? req->path : "-";
+
+    pthread_mutex_lock(&st->lock);
+    MetricsRoute* r = metrics_route_for(st, method, pattern);
+    if (!r) {
+        r = (MetricsRoute*)calloc(1, sizeof(MetricsRoute));
+        if (!r) { pthread_mutex_unlock(&st->lock); return; }
+        r->method = strdup(method);
+        r->path_pattern = strdup(pattern);
+        r->next = st->head;
+        st->head = r;
+    }
+    pthread_mutex_unlock(&st->lock);
+
+    atomic_fetch_add(&r->total_requests, 1);
+    if (res->status_code >= 500) atomic_fetch_add(&r->total_errors, 1);
+    else if (res->status_code >= 400) atomic_fetch_add(&r->total_4xx, 1);
+    atomic_fetch_add(&r->sum_duration_us, duration_us);
+
+    /* Update max via CAS. */
+    long prev = atomic_load(&r->max_duration_us);
+    while (duration_us > prev &&
+           !atomic_compare_exchange_weak(&r->max_duration_us, &prev, duration_us)) {
+        /* prev is updated by CAS on failure; re-test loop condition. */
+    }
+
+    /* Cumulative histogram (Prometheus convention: each bucket
+     * counts events <= upper bound). */
+    if (duration_us <= 5000)    atomic_fetch_add(&r->bucket_le_5ms,    1);
+    if (duration_us <= 25000)   atomic_fetch_add(&r->bucket_le_25ms,   1);
+    if (duration_us <= 100000)  atomic_fetch_add(&r->bucket_le_100ms,  1);
+    if (duration_us <= 500000)  atomic_fetch_add(&r->bucket_le_500ms,  1);
+    if (duration_us <= 2000000) atomic_fetch_add(&r->bucket_le_2s,     1);
+    if (duration_us <= 10000000)atomic_fetch_add(&r->bucket_le_10s,    1);
+}
+
+/* Escape a pattern for use as a Prometheus label value. */
+static void metrics_escape(char* dst, size_t cap, const char* src) {
+    size_t n = 0;
+    for (; *src && n + 2 < cap; src++) {
+        if (*src == '"' || *src == '\\') {
+            if (n + 2 >= cap) break;
+            dst[n++] = '\\';
+            dst[n++] = *src;
+        } else if (*src == '\n') {
+            if (n + 2 >= cap) break;
+            dst[n++] = '\\';
+            dst[n++] = 'n';
+        } else {
+            dst[n++] = *src;
+        }
+    }
+    dst[n] = '\0';
+}
+
+/* Handler for the configured /metrics endpoint. Walks the
+ * per-route counters and emits Prometheus text format. */
+static void metrics_handler(HttpRequest* req, HttpServerResponse* res, void* user_data) {
+    (void)req;
+    MetricsState* st = (MetricsState*)user_data;
+    if (!st) {
+        http_response_set_status(res, 500);
+        http_response_set_body(res, "metrics: state missing");
+        return;
+    }
+
+    /* Build into a heap buffer; size grows with route count. 64KB
+     * suffices for hundreds of routes. */
+    size_t cap = 64 * 1024;
+    char* buf = (char*)malloc(cap);
+    if (!buf) {
+        http_response_set_status(res, 500);
+        http_response_set_body(res, "metrics: oom");
+        return;
+    }
+    size_t off = 0;
+    off += snprintf(buf + off, cap - off,
+        "# TYPE aether_http_requests_total counter\n"
+        "# TYPE aether_http_errors_total counter\n"
+        "# TYPE aether_http_4xx_total counter\n"
+        "# TYPE aether_http_request_duration_seconds histogram\n");
+
+    pthread_mutex_lock(&st->lock);
+    for (MetricsRoute* r = st->head; r; r = r->next) {
+        char m[64], p[256];
+        metrics_escape(m, sizeof(m), r->method);
+        metrics_escape(p, sizeof(p), r->path_pattern);
+        long total = atomic_load(&r->total_requests);
+        long errs  = atomic_load(&r->total_errors);
+        long c4xx  = atomic_load(&r->total_4xx);
+        long sum   = atomic_load(&r->sum_duration_us);
+        long b5    = atomic_load(&r->bucket_le_5ms);
+        long b25   = atomic_load(&r->bucket_le_25ms);
+        long b100  = atomic_load(&r->bucket_le_100ms);
+        long b500  = atomic_load(&r->bucket_le_500ms);
+        long b2    = atomic_load(&r->bucket_le_2s);
+        long b10   = atomic_load(&r->bucket_le_10s);
+        int wrote = snprintf(buf + off, cap - off,
+            "aether_http_requests_total{method=\"%s\",path=\"%s\"} %ld\n"
+            "aether_http_errors_total{method=\"%s\",path=\"%s\"} %ld\n"
+            "aether_http_4xx_total{method=\"%s\",path=\"%s\"} %ld\n"
+            "aether_http_request_duration_seconds_bucket{method=\"%s\",path=\"%s\",le=\"0.005\"} %ld\n"
+            "aether_http_request_duration_seconds_bucket{method=\"%s\",path=\"%s\",le=\"0.025\"} %ld\n"
+            "aether_http_request_duration_seconds_bucket{method=\"%s\",path=\"%s\",le=\"0.1\"} %ld\n"
+            "aether_http_request_duration_seconds_bucket{method=\"%s\",path=\"%s\",le=\"0.5\"} %ld\n"
+            "aether_http_request_duration_seconds_bucket{method=\"%s\",path=\"%s\",le=\"2\"} %ld\n"
+            "aether_http_request_duration_seconds_bucket{method=\"%s\",path=\"%s\",le=\"10\"} %ld\n"
+            "aether_http_request_duration_seconds_bucket{method=\"%s\",path=\"%s\",le=\"+Inf\"} %ld\n"
+            "aether_http_request_duration_seconds_sum{method=\"%s\",path=\"%s\"} %.6f\n"
+            "aether_http_request_duration_seconds_count{method=\"%s\",path=\"%s\"} %ld\n",
+            m, p, total,
+            m, p, errs,
+            m, p, c4xx,
+            m, p, b5, m, p, b25, m, p, b100, m, p, b500,
+            m, p, b2, m, p, b10, m, p, total,
+            m, p, (double)sum / 1e6,
+            m, p, total);
+        if (wrote < 0 || (size_t)wrote >= cap - off) break;
+        off += (size_t)wrote;
+    }
+    pthread_mutex_unlock(&st->lock);
+
+    http_response_set_status(res, 200);
+    http_response_set_header(res, "Content-Type", "text/plain; version=0.0.4");
+    http_response_set_body(res, buf);
+    free(buf);
+}
+
+const char* http_server_set_metrics_raw(HttpServer* server,
+                                        const char* metrics_endpoint) {
+    if (!server) return "server is null";
+    MetricsState* st = (MetricsState*)calloc(1, sizeof(MetricsState));
+    if (!st) return "out of memory";
+    pthread_mutex_init(&st->lock, NULL);
+    http_server_use_request_hook(server, metrics_hook, st);
+    const char* endpoint = (metrics_endpoint && *metrics_endpoint)
+        ? metrics_endpoint : "/metrics";
+    http_server_get(server, endpoint, metrics_handler, st);
     return "";
 }
 
@@ -902,6 +1193,31 @@ struct HttpResponseTransformerNode {
     struct HttpResponseTransformerNode* next;
 };
 
+/* Per-request observation hook chain node (#260 Tier 3 F1/F2). */
+struct HttpRequestHookNode {
+    HttpRequestHook hook;
+    void* user_data;
+    struct HttpRequestHookNode* next;
+};
+
+void http_server_use_request_hook(HttpServer* server,
+                                  HttpRequestHook hook,
+                                  void* user_data) {
+    if (!server || !hook) return;
+    struct HttpRequestHookNode* node =
+        (struct HttpRequestHookNode*)malloc(sizeof(*node));
+    node->hook = hook;
+    node->user_data = user_data;
+    node->next = NULL;
+    if (!server->request_hook_chain) {
+        server->request_hook_chain = node;
+    } else {
+        struct HttpRequestHookNode* tail = server->request_hook_chain;
+        while (tail->next) tail = tail->next;
+        tail->next = node;
+    }
+}
+
 void http_server_use_response_transformer(HttpServer* server,
                                           HttpResponseTransformer xform,
                                           void* user_data) {
@@ -980,6 +1296,15 @@ int http_route_matches(const char* pattern, const char* path, HttpRequest* req) 
 }
 
 // Handle a single client connection
+#include <time.h>
+
+/* Monotonic microsecond clock for per-request latency measurement. */
+static long http_now_us(void) {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (long)ts.tv_sec * 1000000L + ts.tv_nsec / 1000L;
+}
+
 /* HTTP/1.1 Connection-header inspection. Returns 1 if the client
  * asked to keep the connection open after this request, 0 if it asked
  * for close (explicitly or by HTTP/1.0 default). Used by the
@@ -1008,6 +1333,7 @@ static int http_request_wants_keepalive(HttpRequest* req) {
  * or just two requests in one TCP packet) are not dropped. */
 static int handle_one_request(HttpServer* server, HttpConn* conn,
                               int requests_served, int max_requests) {
+    long t_start = http_now_us();
     /* Lazy-allocate the read buffer on first use. */
     if (!conn->buf) {
         if (conn_buf_ensure(conn, HTTP_CONN_BUF_CAP) != 0) return 0;
@@ -1138,6 +1464,22 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
         while (xform) {
             xform->xform(req, res, xform->user_data);
             xform = xform->next;
+        }
+    }
+
+    /* Per-request observation hooks (#260 Tier 3). Fire after
+     * transformers (so hooks see the final response state, e.g.
+     * the gzip Content-Encoding) but before the wire send so the
+     * latency measurement includes everything except network
+     * write — the hooks are about server-side cost, not client-
+     * perceived round trip. Hooks may not mutate; they observe. */
+    if (server->request_hook_chain) {
+        long t_end = http_now_us();
+        long duration_us = t_end - t_start;
+        struct HttpRequestHookNode* h = server->request_hook_chain;
+        while (h) {
+            h->hook(req, res, duration_us, h->user_data);
+            h = h->next;
         }
     }
 
@@ -1704,6 +2046,21 @@ void http_server_free(HttpServer* server) {
             struct HttpResponseTransformerNode* next = xform->next;
             free(xform);
             xform = next;
+        }
+    }
+
+    // Free per-request observation hooks (#260 Tier 3 F1/F2). Note:
+    // we deliberately don't free the hook's user_data here — that's
+    // owned by the registering subsystem (access logger / metrics
+    // collector). Those leak across server free, which is fine for
+    // process-lifetime servers; a follow-up could add a destructor
+    // hook to clean them up too.
+    {
+        struct HttpRequestHookNode* h = server->request_hook_chain;
+        while (h) {
+            struct HttpRequestHookNode* next = h->next;
+            free(h);
+            h = next;
         }
     }
 

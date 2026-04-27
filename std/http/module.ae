@@ -24,6 +24,8 @@ exports (
     http_server_set_on_start, http_server_set_on_stop,
     server_on_start, server_on_stop,
     http_server_set_health_probes_raw, server_set_health_probes,
+    http_server_set_access_log_raw, server_set_access_log,
+    http_server_set_metrics_raw, server_set_metrics,
     server_bind, server_start,
     http_server_add_route, http_server_get, http_server_post,
     http_server_put, http_server_delete,
@@ -267,6 +269,25 @@ server_set_health_probes(server: ptr, live_path: string, ready_path: string,
                          ready_check: ptr, user_data: ptr) -> {
     return http_server_set_health_probes_raw(server, live_path, ready_path,
                                              ready_check, user_data)
+}
+
+// Built-in access logger (#260 Tier 3 / F1). format: "combined" or
+// "json". output_path: file path (opened with "ab" — appends),
+// "-" for stderr, or "" to disable. Returns "" on success.
+extern http_server_set_access_log_raw(server: ptr, format: string, output_path: string) -> string
+
+server_set_access_log(server: ptr, format: string, output_path: string) -> {
+    return http_server_set_access_log_raw(server, format, output_path)
+}
+
+// Built-in per-route metrics (#260 Tier 3 / F2). Tracks request
+// counts, error rates, latency histograms; exposes the standard
+// Prometheus text format on the configured endpoint (default
+// "/metrics"). Returns "" on success.
+extern http_server_set_metrics_raw(server: ptr, metrics_endpoint: string) -> string
+
+server_set_metrics(server: ptr, metrics_endpoint: string) -> {
+    return http_server_set_metrics_raw(server, metrics_endpoint)
 }
 
 // Drain a single accepted connection through the full HTTP lifecycle:

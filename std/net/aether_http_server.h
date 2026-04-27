@@ -63,6 +63,18 @@ struct HttpServer; /* forward, for hook signatures */
 typedef void (*HttpLifecycleHook)(struct HttpServer* server, void* user_data);
 typedef int  (*HttpReadyCheck)(void* user_data);
 
+// Per-request observation hook (#260 Tier 3 — F1 logging, F2
+// metrics). Fires once per completed request with the parsed
+// request, the populated response, and the duration in
+// microseconds. The hook may not mutate either argument; it's an
+// observation point. Used by the built-in access logger and the
+// per-route metrics collector. Multiple hooks may register; they
+// run in registration order.
+typedef void (*HttpRequestHook)(HttpRequest* req,
+                                HttpServerResponse* res,
+                                long duration_us,
+                                void* user_data);
+
 // HTTP Server
 typedef struct HttpServer {
     int socket_fd;
@@ -106,6 +118,10 @@ typedef struct HttpServer {
     // Incremented at the top of http_server_drain_connection and
     // decremented at the bottom; the shutdown helper waits on this.
     _Atomic int inflight_connections;
+
+    // Per-request observation hook chain (#260 Tier 3 F1 / F2).
+    // Hooks fire once per completed request with timing.
+    struct HttpRequestHookNode* request_hook_chain;
 
     // Actor system
     Scheduler* scheduler;
@@ -297,6 +313,35 @@ const char* http_server_set_health_probes_raw(HttpServer* server,
                                               const char* ready_path,
                                               HttpReadyCheck ready_check,
                                               void* user_data);
+
+// Register a per-request observation hook (#260 Tier 3). Multiple
+// hooks may register; they run in registration order after the
+// route handler emits the response and after any response
+// transformers have run. Used by the built-in access logger and
+// metrics collector below; user code can register custom hooks too.
+void http_server_use_request_hook(HttpServer* server,
+                                  HttpRequestHook hook,
+                                  void* user_data);
+
+// Built-in access logger (#260 Tier 3 / F1). Writes one log line
+// per completed request. `format` selects the wire format:
+//   "combined" — NCSA Combined Log Format (Apache default)
+//   "json"     — one-object-per-line JSON
+//   ""         — disabled
+// `output_path` is a file path (opened with "ab" — appends so
+// process restarts don't truncate), or "-" for stderr, or "" to
+// disable. Returns "" on success, error string on failure.
+const char* http_server_set_access_log_raw(HttpServer* server,
+                                           const char* format,
+                                           const char* output_path);
+
+// Built-in per-route metrics collector (#260 Tier 3 / F2). Tracks
+// request counts and latency histograms keyed by method+path-
+// pattern. Exposes the standard Prometheus text format on a
+// configurable endpoint (default "/metrics"). Returns "" on
+// success, error string on failure.
+const char* http_server_set_metrics_raw(HttpServer* server,
+                                        const char* metrics_endpoint);
 
 // Drain an accepted connection through the full HTTP lifecycle: TLS
 // handshake (when enabled), parse request, run middleware, dispatch
