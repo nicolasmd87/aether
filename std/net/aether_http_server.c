@@ -11,6 +11,9 @@ void http_server_free(HttpServer* s) { (void)s; }
 const char* http_server_set_tls_raw(HttpServer* s, const char* c, const char* k) {
     (void)s; (void)c; (void)k; return "TLS unavailable: networking not built in";
 }
+const char* http_server_set_keepalive_raw(HttpServer* s, int e, int m, int i) {
+    (void)s; (void)e; (void)m; (void)i; return "keep-alive unavailable: networking not built in";
+}
 void http_server_add_route(HttpServer* s, const char* m, const char* p, HttpHandler h, void* u) { (void)s; (void)m; (void)p; (void)h; (void)u; }
 void http_server_get(HttpServer* s, const char* p, HttpHandler h, void* u) { (void)s; (void)p; (void)h; (void)u; }
 void http_server_post(HttpServer* s, const char* p, HttpHandler h, void* u) { (void)s; (void)p; (void)h; (void)u; }
@@ -229,8 +232,22 @@ HttpServer* http_server_create(int port) {
     server->accept_pollers = NULL;
     server->tls_enabled = 0;
     server->tls_ctx = NULL;
+    server->keep_alive_enabled = 0;
+    server->keep_alive_max = 0;
+    server->keep_alive_idle_ms = 0;
 
     return server;
+}
+
+const char* http_server_set_keepalive_raw(HttpServer* server,
+                                          int enabled,
+                                          int max_requests,
+                                          int idle_ms) {
+    if (!server) return "server is null";
+    server->keep_alive_enabled = enabled ? 1 : 0;
+    server->keep_alive_max = max_requests < 0 ? 0 : max_requests;
+    server->keep_alive_idle_ms = idle_ms < 0 ? 0 : idle_ms;
+    return "";
 }
 
 const char* http_server_set_tls_raw(HttpServer* server,
@@ -745,47 +762,45 @@ int http_route_matches(const char* pattern, const char* path, HttpRequest* req) 
 }
 
 // Handle a single client connection
-static void handle_client_connection(HttpServer* server, int client_fd) {
-    // Set read timeout so a slow or dead client doesn't hold this thread forever
-#ifdef _WIN32
-    DWORD rcv_timeout = 30000;
-    setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&rcv_timeout, sizeof(rcv_timeout));
-#else
-    struct timeval rcv_tv = { .tv_sec = 30, .tv_usec = 0 };
-    setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &rcv_tv, sizeof(rcv_tv));
-#endif
-
-    /* Connection transport — plain by default; SSL-wrapped when the
-     * server has TLS enabled. The conn_recv/conn_send/conn_close
-     * helpers polymorphise over both shapes so the rest of this
-     * function reads the same regardless. */
-    HttpConn conn = { .fd = client_fd, .ssl = NULL };
-#ifdef AETHER_HAS_OPENSSL
-    if (server->tls_enabled && server->tls_ctx) {
-        if (conn_tls_accept(&conn, (SSL_CTX*)server->tls_ctx) != 0) {
-            /* Handshake failed. Close the fd and discard — no useful
-             * HTTP can come of this connection. */
-            close(client_fd);
-            return;
-        }
+/* HTTP/1.1 Connection-header inspection. Returns 1 if the client
+ * asked to keep the connection open after this request, 0 if it asked
+ * for close (explicitly or by HTTP/1.0 default). Used by the
+ * keep-alive loop in handle_client_connection. */
+static int http_request_wants_keepalive(HttpRequest* req) {
+    if (!req) return 0;
+    const char* conn_hdr = http_get_header(req, "Connection");
+    int is_http_1_0 = req->http_version &&
+                      strstr(req->http_version, "HTTP/1.0") != NULL;
+    if (conn_hdr) {
+        if (http_strcasestr(conn_hdr, "close") != NULL) return 0;
+        if (http_strcasestr(conn_hdr, "keep-alive") != NULL) return 1;
     }
-#endif
+    /* No header: HTTP/1.1 defaults to keep-alive, HTTP/1.0 to close. */
+    return is_http_1_0 ? 0 : 1;
+}
 
+/* Per-request slice of the connection lifecycle. Returns:
+ *    1 — request was processed; caller may loop for another request
+ *        on the same connection (subject to keep-alive policy).
+ *    0 — connection should close (parse failure, EOF, client asked
+ *        for close, or the response status mandates close). */
+static int handle_one_request(HttpServer* server, HttpConn* conn,
+                              int requests_served, int max_requests) {
     // Read headers first (up to 8KB), then read body up to Content-Length
     int capacity = 8192;
     char* buffer = malloc(capacity);
-    if (!buffer) { conn_close(&conn); return; }
+    if (!buffer) return 0;
 
     int total = 0;
     // Read until we see the header/body separator \r\n\r\n
     while (total < capacity - 1) {
-        int n = conn_recv(&conn, buffer + total, capacity - 1 - total);
+        int n = conn_recv(conn, buffer + total, capacity - 1 - total);
         if (n <= 0) break;
         total += n;
         buffer[total] = '\0';
         if (strstr(buffer, "\r\n\r\n")) break;
     }
-    if (total <= 0) { free(buffer); conn_close(&conn); return; }
+    if (total <= 0) { free(buffer); return 0; }
     buffer[total] = '\0';
 
     // Find Content-Length header if present and read remaining body
@@ -804,7 +819,7 @@ static void handle_client_connection(HttpServer* server, int client_fd) {
                 if (nb) {
                     buffer = nb;
                     while (body_needed > 0) {
-                        int n = conn_recv(&conn, buffer + total, (int)body_needed);
+                        int n = conn_recv(conn, buffer + total, (int)body_needed);
                         if (n <= 0) break;
                         total += n;
                         body_needed -= n;
@@ -818,10 +833,7 @@ static void handle_client_connection(HttpServer* server, int client_fd) {
     // Parse request
     HttpRequest* req = http_parse_request(buffer);
     free(buffer);
-    if (!req) {
-        conn_close(&conn);
-        return;
-    }
+    if (!req) return 0;
 
     // Create response
     HttpServerResponse* res = http_response_create();
@@ -835,14 +847,13 @@ static void handle_client_connection(HttpServer* server, int client_fd) {
         middleware = middleware->next;
     }
 
-    // If middleware blocked, send response and return
+    // If middleware blocked, send response and close.
     if (!should_continue) {
         char* response_str = http_response_serialize(res);
-        if (response_str) { conn_send(&conn, response_str, (int)strlen(response_str)); free(response_str); }
-        conn_close(&conn);
+        if (response_str) { conn_send(conn, response_str, (int)strlen(response_str)); free(response_str); }
         http_request_free(req);
         http_server_response_free(res);
-        return;
+        return 0;
     }
 
     // Find matching route
@@ -867,14 +878,91 @@ static void handle_client_connection(HttpServer* server, int client_fd) {
         http_response_set_body(res, "404 Not Found");
     }
 
+    /* Decide whether this response keeps the connection open.
+     * Three things can force close:
+     *   - keep-alive disabled on the server,
+     *   - client requested close (or HTTP/1.0 default),
+     *   - max_requests reached (caller passes the post-increment).
+     * We also force close on response statuses that semantically
+     * mandate it (408 Request Timeout, 426 Upgrade Required). */
+    int will_keep_alive = server->keep_alive_enabled
+                       && http_request_wants_keepalive(req)
+                       && (max_requests == 0 ||
+                           requests_served + 1 < max_requests)
+                       && res->status_code != 408
+                       && res->status_code != 426;
+
+    /* Emit the right Connection / Keep-Alive headers so the client
+     * knows what we're going to do. */
+    if (will_keep_alive) {
+        http_response_set_header(res, "Connection", "keep-alive");
+        if (max_requests > 0) {
+            char ka[64];
+            int remaining = max_requests - requests_served - 1;
+            int idle_sec = server->keep_alive_idle_ms > 0
+                ? server->keep_alive_idle_ms / 1000 : 30;
+            snprintf(ka, sizeof(ka), "timeout=%d, max=%d", idle_sec, remaining);
+            http_response_set_header(res, "Keep-Alive", ka);
+        }
+    } else {
+        http_response_set_header(res, "Connection", "close");
+    }
+
     // Send response
     char* response_str = http_response_serialize(res);
-    if (response_str) { conn_send(&conn, response_str, (int)strlen(response_str)); free(response_str); }
+    if (response_str) { conn_send(conn, response_str, (int)strlen(response_str)); free(response_str); }
 
     // Cleanup
-    conn_close(&conn);
     http_request_free(req);
     http_server_response_free(res);
+    return will_keep_alive;
+}
+
+static void handle_client_connection(HttpServer* server, int client_fd) {
+    /* Connection transport — plain by default; SSL-wrapped when the
+     * server has TLS enabled. The conn_recv/conn_send/conn_close
+     * helpers polymorphise over both shapes so handle_one_request
+     * reads the same regardless. */
+    HttpConn conn = { .fd = client_fd, .ssl = NULL };
+#ifdef AETHER_HAS_OPENSSL
+    if (server->tls_enabled && server->tls_ctx) {
+        if (conn_tls_accept(&conn, (SSL_CTX*)server->tls_ctx) != 0) {
+            close(client_fd);
+            return;
+        }
+    }
+#endif
+
+    /* Per-recv socket timeout. When keep-alive is off this is the
+     * existing 30-second guard that bounds slow-loris attacks; when
+     * keep-alive is on this doubles as the idle-timeout (the loop
+     * exits when conn_recv returns -1 from EAGAIN/timeout). */
+    int idle_ms = server->keep_alive_idle_ms > 0
+        ? server->keep_alive_idle_ms : 30000;
+#ifdef _WIN32
+    DWORD rcv_timeout = (DWORD)idle_ms;
+    setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO,
+               (const char*)&rcv_timeout, sizeof(rcv_timeout));
+#else
+    struct timeval rcv_tv = {
+        .tv_sec  = idle_ms / 1000,
+        .tv_usec = (idle_ms % 1000) * 1000
+    };
+    setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &rcv_tv, sizeof(rcv_tv));
+#endif
+
+    /* Drain loop. handle_one_request returns 1 to keep the connection
+     * open for another request, 0 to close. With keep-alive disabled
+     * (server->keep_alive_enabled == 0) the function always returns 0
+     * after the first request — no behavioural change vs. pre-#260. */
+    int requests_served = 0;
+    int max_requests = server->keep_alive_max;
+    while (handle_one_request(server, &conn, requests_served, max_requests)) {
+        requests_served++;
+        if (max_requests > 0 && requests_served >= max_requests) break;
+    }
+
+    conn_close(&conn);
 }
 
 // ============================================================================

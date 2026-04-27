@@ -89,7 +89,17 @@ typedef struct {
 
     // Configuration
     int max_connections;
-    int keep_alive_timeout;
+    int keep_alive_timeout;          // legacy field (was always 30, never read)
+    // HTTP/1.1 keep-alive (#260 Tier 0). When keep_alive_enabled is
+    // non-zero, handle_client_connection loops over the same socket,
+    // parsing successive requests until either:
+    //   - the client sends Connection: close,
+    //   - keep_alive_max requests have been served, or
+    //   - keep_alive_idle_ms elapses with no new bytes on the socket.
+    // The default is 0 (single-request, matches pre-#260 behaviour).
+    int keep_alive_enabled;
+    int keep_alive_max;              // 0 means "unlimited"
+    int keep_alive_idle_ms;          // 0 means "use SO_RCVTIMEO default (30s)"
 
     // Accept-side I/O poller: wait for client data before dispatching to worker
     AetherIoPoller accept_poller;   // Platform poller for single-accept mode
@@ -130,6 +140,25 @@ int http_server_bind_raw(HttpServer* server, const char* host, int port);
 int http_server_start_raw(HttpServer* server);
 void http_server_stop(HttpServer* server);
 void http_server_free(HttpServer* server);
+
+// Enable HTTP/1.1 keep-alive on this server (#260 Tier 0). When
+// `enabled` is non-zero, the connection handler reads multiple
+// requests off one socket instead of closing after the first. The
+// loop terminates when:
+//   - the client sends `Connection: close` (or HTTP/1.0 without
+//     `Connection: keep-alive`),
+//   - the response status is one that mandates close (e.g. 408,
+//     426),
+//   - max_requests requests have been served on this socket
+//     (0 = unlimited),
+//   - idle_ms elapses with no new bytes (0 = use the default
+//     30-second SO_RCVTIMEO already applied by the connection
+//     handler).
+// Returns "" on success; "server is null" on bad input.
+const char* http_server_set_keepalive_raw(HttpServer* server,
+                                          int enabled,
+                                          int max_requests,
+                                          int idle_ms);
 
 // Enable TLS termination on this server (#260 Tier 0). Loads the cert
 // and private key from the given file paths (PEM-encoded), verifies

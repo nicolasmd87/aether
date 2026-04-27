@@ -18,6 +18,7 @@ exports (
     http_server_create, http_server_bind_raw, http_server_start_raw,
     http_server_stop, http_server_free,
     http_server_set_tls_raw, server_set_tls,
+    http_server_set_keepalive_raw, server_set_keepalive,
     server_bind, server_start,
     http_server_add_route, http_server_get, http_server_post,
     http_server_put, http_server_delete,
@@ -205,6 +206,17 @@ extern http_server_set_tls_raw(server: ptr, cert_path: string, key_path: string)
 //     http.server_start(server)
 server_set_tls(server: ptr, cert_path: string, key_path: string) -> {
     return http_server_set_tls_raw(server, cert_path, key_path)
+}
+
+// HTTP/1.1 keep-alive (#260 Tier 0). When enabled, the server reads
+// multiple requests off one socket instead of closing after each.
+//   max_requests = 0  -> unlimited per connection
+//   idle_ms      = 0  -> use the default 30s SO_RCVTIMEO
+// Returns "" on success.
+extern http_server_set_keepalive_raw(server: ptr, enabled: int, max_requests: int, idle_ms: int) -> string
+
+server_set_keepalive(server: ptr, enabled: int, max_requests: int, idle_ms: int) -> {
+    return http_server_set_keepalive_raw(server, enabled, max_requests, idle_ms)
 }
 
 // Go-style wrappers for server lifecycle. Return "" on success, error
