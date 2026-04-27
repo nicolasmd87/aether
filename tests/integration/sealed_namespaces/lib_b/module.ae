@@ -1,0 +1,5 @@
+exports (shout)
+
+shout(s: string) -> string {
+    return s
+}

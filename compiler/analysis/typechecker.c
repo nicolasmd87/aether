@@ -29,6 +29,9 @@ SymbolTable* create_symbol_table(SymbolTable* parent) {
     table->hidden_names = NULL;
     table->seal_whitelist = NULL;
     table->is_sealed = 0;
+    // Inherit merged-body flag so nested scopes (loops, blocks, closures
+    // inside a merged function) keep the relaxed namespace visibility.
+    table->inside_merged_body = parent ? parent->inside_merged_body : 0;
     return table;
 }
 
@@ -194,9 +197,28 @@ Symbol* resolve_module_alias(SymbolTable* table, const char* name) {
     return NULL;
 }
 
-// Track imported namespaces for qualified function calls
+// Track imported namespaces for qualified function calls.
+//
+// Two parallel sets exist (issue #243 sealed-scope follow-up):
+//
+//   imported_namespaces[]      — every namespace registered during
+//     orchestration, including ones the user did not explicitly import
+//     but that were pulled in transitively by module_merge_into_program's
+//     BFS pass. Cloned function bodies of merged modules need this set
+//     to resolve their internal qualified calls (e.g. a cloned
+//     `client_post_json` calling `json.stringify(...)` even though the
+//     user only wrote `import std.http.client`).
+//
+//   user_explicit_namespaces[] — only namespaces the user explicitly
+//     wrote `import` for. Synthetic AST_IMPORT_STATEMENT nodes that
+//     module_merge_into_program injects (annotated "synthetic") are
+//     skipped. User-code qualified calls resolve against this stricter
+//     set so a user can't accidentally call into a transitively-pulled-
+//     in module they never asked for.
 static char* imported_namespaces[64];
 static int namespace_count = 0;
+static char* user_explicit_namespaces[64];
+static int user_explicit_namespace_count = 0;
 
 // Import alias table: maps short names to dotted qualified names
 // for selective imports (e.g. "release" -> "build.release")
@@ -232,6 +254,82 @@ void register_namespace(const char* ns) {
         }
         imported_namespaces[namespace_count++] = strdup(ns);
     }
+}
+
+// Issue #243 sealed-scope follow-up. Records that the user *explicitly*
+// wrote `import <module>` for the given namespace leaf. Called from the
+// AST_IMPORT_STATEMENT visitor only when the import is not flagged
+// synthetic (`annotation == "synthetic"`) — which means the import came
+// from the user's source rather than from the BFS transitive-merge
+// pass. Used by user-code qualified-call resolution to reject
+// `lib_b.shout()` when the user only wrote `import lib_a`.
+static void register_user_explicit_namespace(const char* ns) {
+    if (user_explicit_namespace_count < 64) {
+        for (int i = 0; i < user_explicit_namespace_count; i++) {
+            if (strcmp(user_explicit_namespaces[i], ns) == 0) return;
+        }
+        user_explicit_namespaces[user_explicit_namespace_count++] = strdup(ns);
+    }
+}
+
+static int is_user_explicit_namespace(const char* name) {
+    for (int i = 0; i < user_explicit_namespace_count; i++) {
+        if (strcmp(user_explicit_namespaces[i], name) == 0) return 1;
+    }
+    return 0;
+}
+
+// Forward decl — defined below alongside the global registry it gates.
+int is_imported_namespace(const char* name);
+
+// Module-walk context for sealed-namespace gating. Set non-zero by
+// the typechecker / type-inference pass while it walks the body of a
+// function whose AST node has `is_imported == 1` (cloned in by
+// module_merge_into_program). Read by `is_visible_namespace` to pick
+// between the strict user-explicit set and the relaxed
+// transitively-merged set. A module-scope walk-counter rather than a
+// SymbolTable flag because type_inference doesn't construct
+// per-function tables — it walks the AST directly with the global
+// symbol table.
+static int g_inside_merged_body = 0;
+
+void typechecker_enter_merged_body(void) { g_inside_merged_body++; }
+void typechecker_leave_merged_body(void) {
+    if (g_inside_merged_body > 0) g_inside_merged_body--;
+}
+
+// Gate for qualified-call resolution. A qualified call `mod.fn()` is
+// allowed if either:
+//   - The caller is inside a merged-module body (typechecker propagates
+//     SymbolTable::inside_merged_body from the cloned function decl);
+//     in that case ANY transitively-merged namespace is fair game,
+//     because cloned bodies need to call into their original module's
+//     transitive deps to compile.
+//   - The caller is user code (inside_merged_body == 0); in that case
+//     only namespaces the user explicitly imported are visible. This
+//     closes the encapsulation hole left after the round-1 BFS-merge
+//     fix for issue #243.
+//
+// `table` may be NULL during early symbol-table population; treat NULL
+// as user-context (the strict path) — early registration paths don't
+// resolve qualified user calls, so this is safe.
+int is_visible_namespace(const char* name, SymbolTable* table) {
+    // Two channels feed into the merged-body check:
+    //   - SymbolTable::inside_merged_body — set when the typechecker
+    //     creates a function-local table for a `is_imported` function.
+    //     Covers expressions resolved via typecheck_expression that
+    //     receive the function-local table.
+    //   - g_inside_merged_body counter — set/unset by the
+    //     typechecker / type_inference walker when it descends into a
+    //     `is_imported` function body. Covers paths that resolve
+    //     against the global symbol table (e.g., type inference's
+    //     constraint-collection, which doesn't construct per-function
+    //     tables).
+    if (g_inside_merged_body > 0) return is_imported_namespace(name);
+    if (table && table->inside_merged_body) {
+        return is_imported_namespace(name);
+    }
+    return is_user_explicit_namespace(name);
 }
 
 // Per-module selective-import filter.
@@ -394,9 +492,13 @@ Symbol* lookup_qualified_symbol(SymbolTable* table, const char* qualified_name) 
             return lookup_symbol(table, resolved_name);
         }
 
-        // Check if prefix is an imported namespace (e.g., "string" from import std.string)
+        // Check if prefix is a namespace visible from this scope.
+        // Issue #243: user code can only see namespaces it explicitly
+        // imported; merged-body code can see all transitively-merged
+        // namespaces. is_visible_namespace picks the right set based
+        // on the table's inside_merged_body flag.
         // Convert string.new -> string_new
-        if (is_imported_namespace(prefix)) {
+        if (is_visible_namespace(prefix, table)) {
             // Enforce export visibility
             if (is_export_blocked(prefix, suffix)) {
                 free(name_copy);
@@ -648,10 +750,14 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
             return expr->node_type ? clone_type(expr->node_type) : create_type(TYPE_UNKNOWN);
 
         case AST_MEMBER_ACCESS: {
-            // Enforce export visibility before resolving
+            // Enforce export visibility before resolving. Use the
+            // strict per-scope `is_visible_namespace` check (issue #243
+            // sealed scopes) so user code that did not import a
+            // transitively-pulled-in module gets a clear "not visible"
+            // error rather than the looser "not exported" message.
             if (expr->child_count > 0 && expr->children[0] &&
                 expr->children[0]->type == AST_IDENTIFIER && expr->children[0]->value &&
-                is_imported_namespace(expr->children[0]->value) && expr->value &&
+                is_visible_namespace(expr->children[0]->value, table) && expr->value &&
                 is_export_blocked(expr->children[0]->value, expr->value)) {
                 char msg[256];
                 snprintf(msg, sizeof(msg), "'%s' is not exported from module '%s'",
@@ -665,7 +771,7 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
             // Namespace-qualified constant access: mymath.PI_APPROX -> mymath_PI_APPROX
             if (expr->child_count > 0 && expr->children[0] &&
                 expr->children[0]->type == AST_IDENTIFIER && expr->children[0]->value &&
-                is_imported_namespace(expr->children[0]->value) && expr->value) {
+                is_visible_namespace(expr->children[0]->value, table) && expr->value) {
                 char qualified[512];
                 snprintf(qualified, sizeof(qualified), "%s_%s",
                          expr->children[0]->value, expr->value);
@@ -1055,6 +1161,7 @@ int typecheck_program(ASTNode* program) {
     error_count = 0;
     warning_count = 0;
     namespace_count = 0;  // Reset imported namespaces
+    user_explicit_namespace_count = 0;  // Reset user-explicit namespaces (issue #243)
     selective_import_reset();  // Reset per-module selective-import filters
 
     SymbolTable* global_table = create_symbol_table(NULL);
@@ -1292,6 +1399,16 @@ int typecheck_program(ASTNode* program) {
 
                     // Register namespace for qualified calls (e.g., string.new)
                     register_namespace(ns_leaf);
+                    // User-explicit registration (issue #243 sealed scopes):
+                    // skip if this import was synthesized by
+                    // module_merge_into_program's BFS transitive-merge
+                    // pass. Synthetic imports keep the namespace
+                    // resolvable for cloned merged-body callers but
+                    // hide it from user code that didn't ask for it.
+                    if (!child->annotation ||
+                        strcmp(child->annotation, "synthetic") != 0) {
+                        register_user_explicit_namespace(ns_leaf);
+                    }
 
                     // If this is a selective import, record the allow list
                     // so qualified calls to functions not in it get rejected.
@@ -1353,6 +1470,12 @@ int typecheck_program(ASTNode* program) {
                     // Handle local package imports: import mypackage.utils
                     const char* namespace = get_namespace_from_path(module_path);
                     register_namespace(namespace);
+                    // Same synthetic-skip gate as the std.* path above
+                    // (issue #243 sealed scopes).
+                    if (!child->annotation ||
+                        strcmp(child->annotation, "synthetic") != 0) {
+                        register_user_explicit_namespace(namespace);
+                    }
 
                     // Look up cached module from orchestrator
                     AetherModule* mod = module_find(module_path);
@@ -1502,6 +1625,8 @@ int typecheck_program(ASTNode* program) {
         // Clean up namespace strings to avoid leaks on re-runs
         for (int ns = 0; ns < namespace_count; ns++) free(imported_namespaces[ns]);
         namespace_count = 0;
+        for (int ns = 0; ns < user_explicit_namespace_count; ns++) free(user_explicit_namespaces[ns]);
+        user_explicit_namespace_count = 0;
         return 0;
     }
     
@@ -1552,6 +1677,8 @@ int typecheck_program(ASTNode* program) {
     // Clean up namespace strings
     for (int ns = 0; ns < namespace_count; ns++) free(imported_namespaces[ns]);
     namespace_count = 0;
+    for (int ns = 0; ns < user_explicit_namespace_count; ns++) free(user_explicit_namespaces[ns]);
+    user_explicit_namespace_count = 0;
 
     return 1;
 }
@@ -1715,6 +1842,19 @@ int typecheck_function_definition(ASTNode* func, SymbolTable* table) {
 
     SymbolTable* func_table = create_symbol_table(table);
 
+    // Issue #243 sealed scopes: cloned function bodies from
+    // module_merge_into_program's BFS transitive-merge pass need
+    // relaxed qualified-call resolution so they can reach into other
+    // transitively-merged namespaces (the dependencies the original
+    // module declared in its own source). Mark both the body's
+    // table AND the global walk-counter so every resolution site —
+    // table-based or global-symbol-table-based — picks the relaxed
+    // path while inside this body.
+    if (func->is_imported) {
+        func_table->inside_merged_body = 1;
+        typechecker_enter_merged_body();
+    }
+
     // Add parameters to function's symbol table
     for (int i = 0; i < func->child_count - 1; i++) { // Last child is body
         ASTNode* param = func->children[i];
@@ -1732,6 +1872,10 @@ int typecheck_function_definition(ASTNode* func, SymbolTable* table) {
     // Type check function body
     ASTNode* body = func->children[func->child_count - 1];
     typecheck_statement(body, func_table);
+
+    if (func->is_imported) {
+        typechecker_leave_merged_body();
+    }
 
     free_symbol_table(func_table);
     return 1;
@@ -2469,10 +2613,12 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
             
         case AST_MEMBER_ACCESS: {
             // Namespace-qualified constant access: mymath.PI_APPROX -> mymath_PI_APPROX
-            // Rewrite AST to AST_IDENTIFIER so codegen emits the C variable name directly
+            // Rewrite AST to AST_IDENTIFIER so codegen emits the C variable name directly.
+            // Issue #243: gate on the strict per-scope visibility check
+            // so user code can't reach into transitively-merged consts.
             if (expr->child_count > 0 && expr->children[0] &&
                 expr->children[0]->type == AST_IDENTIFIER && expr->children[0]->value &&
-                is_imported_namespace(expr->children[0]->value) && expr->value) {
+                is_visible_namespace(expr->children[0]->value, table) && expr->value) {
                 // Enforce export visibility for constants
                 if (is_export_blocked(expr->children[0]->value, expr->value)) {
                     char msg[256];

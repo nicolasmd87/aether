@@ -1,0 +1,27 @@
+// Issue #243 sealed-scope follow-up: encapsulation hole closure.
+//
+// User imports lib_a but NOT lib_b. lib_a internally imports and
+// uses lib_b. Calls into lib_a (which internally calls lib_b)
+// must work — that's the round-1 transitive_module_import fixture.
+//
+// THIS test asserts the inverse: user code attempting to call
+// lib_b.shout() DIRECTLY (without an explicit `import lib_b`)
+// must be REJECTED at typecheck time. Round-1's BFS pass leaked
+// the lib_b namespace into the global registry, accidentally
+// allowing such direct calls. This commit closes that hole.
+//
+// Expected typechecker error:
+//   error[E0301]: undefined function 'lib_b.shout'
+//                 (or an equivalent "namespace not visible" error)
+
+import lib_a
+
+main() {
+    // This call should FAIL to compile — lib_b was never imported
+    // by user code, only transitively pulled in by lib_a's
+    // dependency. The merger registers lib_b's symbols globally so
+    // lib_a's merged body can resolve `lib_b.shout`, but user code
+    // must not be able to.
+    msg = lib_b.shout("forbidden direct call")
+    println(msg)
+}

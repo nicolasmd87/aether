@@ -1399,8 +1399,17 @@ void module_merge_into_program(ASTNode* program) {
             // present in the program AST. Insert at insert_idx so it
             // lives between the existing imports and the main
             // function — same region as the merged decls below it.
+            //
+            // Issue #243 sealed-scope follow-up: tag the synthetic
+            // import with annotation="synthetic" so the typechecker
+            // can register the namespace globally (for cloned merged
+            // bodies that need to resolve their own internal
+            // qualified calls) BUT skip the user-explicit registry
+            // (so user code can't accidentally call into the
+            // transitively-pulled-in namespace it never imported).
             ASTNode* synth_import = create_ast_node(AST_IMPORT_STATEMENT,
                                                    dep_path, 0, 0);
+            synth_import->annotation = strdup("synthetic");
             insert_child_at(program, synth_import, insert_idx++);
 
             for (int j = 0; j < mod_ast->child_count; j++) {

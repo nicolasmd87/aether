@@ -30,6 +30,16 @@ typedef struct SymbolTable {
     NameNode* hidden_names;       // names blocked from outer scopes
     NameNode* seal_whitelist;     // if non-NULL, ONLY these names may resolve to outer scopes
     int is_sealed;                // 1 if a `seal except` directive is in effect (whitelist may be empty)
+    // Issue #243 sealed-scope follow-up: 1 when this scope (or any
+    // ancestor) is the body of a function that was cloned in from a
+    // transitively-merged module via module_merge_into_program. Such
+    // bodies legitimately need to call into other transitively-merged
+    // namespaces (e.g. a cloned `client_post_json` calls
+    // `json.stringify(...)`) even though the user never wrote
+    // `import std.json` themselves. User code (where this flag is 0)
+    // can only resolve qualified calls to namespaces it explicitly
+    // imported. Propagated from parent in create_symbol_table.
+    int inside_merged_body;
 } SymbolTable;
 
 // Symbol table functions
@@ -49,6 +59,13 @@ int  scope_name_in_whitelist(SymbolTable* table, const char* name);
 void add_module_alias(SymbolTable* table, const char* alias, const char* module_name);
 Symbol* resolve_module_alias(SymbolTable* table, const char* name);
 Symbol* lookup_qualified_symbol(SymbolTable* table, const char* qualified_name);
+
+// Namespace-visibility helper (issue #243). Returns 1 if a qualified
+// call `<name>.<member>` is allowed from a scope whose `table` is
+// passed in. Merged-body scopes (table->inside_merged_body) see all
+// transitively-merged namespaces; user code only sees explicit
+// imports.
+int is_visible_namespace(const char* name, SymbolTable* table);
 
 // Type checking functions
 int typecheck_program(ASTNode* program);

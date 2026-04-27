@@ -1,0 +1,7 @@
+exports (greet)
+
+import lib_b
+
+greet(name: string) -> string {
+    return lib_b.shout(name)
+}
