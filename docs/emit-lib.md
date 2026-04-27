@@ -96,6 +96,22 @@ Functions whose parameters or returns use types outside this table
 function. You can still use those types internally; they just can't
 cross the FFI boundary in v1.
 
+Two private-helper conventions also opt out of the `aether_<name>`
+surface:
+
+- **Trailing-underscore**: a function whose name ends in `_`
+  (e.g. `record_start_`, `helper_`, `parse_line_`) is treated as
+  file-local. It's emitted with C `static` storage and gets no
+  `aether_*` alias. This lets two `.ae` files in the same project
+  declare their own `record_start_` without colliding at link time
+  and without leaking either into the public ABI. The convention is
+  enforced by codegen, so adding the `_` is enough — no annotation.
+- **Tuple-returning helpers**: `helper(n: int) -> { return n, n+1 }`
+  returns a `_tuple_int_int` struct that doesn't fit the public ABI
+  table. The function itself is fine; the alias is skipped. Wrap
+  with a single-value-returning function if it needs to be exposed
+  across the library boundary.
+
 ## The `AetherValue*` accessor API
 
 Composite Aether values — maps, lists, generic `ptr`s — come back to the
@@ -217,6 +233,8 @@ different `.ae` sources are linked into one binary.
 | Function origin                     | `--emit=exe` | `--emit=lib`                            |
 |-------------------------------------|:------------:|:---------------------------------------:|
 | Local (defined in this `.ae`)       | external     | external + `aether_<name>` alias        |
+| Local with trailing `_` (`helper_`) | **`static`** | **`static`** (no `aether_<name>` alias) |
+| Local with tuple return type        | external     | external (no `aether_<name>` alias)     |
 | Imported Aether wrapper             | **`static`** | **`static`** (no `aether_<name>` alias) |
 | `extern` declaration (any module)   | declaration only — refers to external symbol from `libaether.a` or another TU |
 | Stdlib C externs (`std/*/aether_*.c`) | linked from `libaether.a`; no per-TU duplication |

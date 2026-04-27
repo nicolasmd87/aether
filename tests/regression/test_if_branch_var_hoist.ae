@@ -1,0 +1,52 @@
+// Regression test for #278 — variables first-declared inside an
+// `if` branch are now hoisted to function scope so a post-block read
+// can see them.
+//
+// Pre-fix shape that broke:
+//
+//     worker(name: string) -> string {
+//         if string.length(name) > 5 {
+//             disk = string.concat(name, "_long")
+//         }
+//         if string.length(name) <= 5 {
+//             disk = string.concat(name, "_short")
+//         }
+//         return disk     // <-- "disk undeclared" in generated C
+//     }
+//
+// The codegen scoped `disk` C-locally to each `if` branch, so the
+// function-scope `return disk` couldn't see it. The existing
+// hoist_if_else_common_vars only fired when both branches of *one*
+// if/else declared the same name; a sequence of two separate `if`s
+// (no else) bypassed it. Now hoist_if_branch_vars handles the
+// no-else case too.
+
+import std.string
+
+extern exit(code: int)
+
+worker(name: string) -> string {
+    if string.length(name) > 5 {
+        disk = string.concat(name, "_long")
+    }
+    if string.length(name) <= 5 {
+        disk = string.concat(name, "_short")
+    }
+    return disk
+}
+
+main() {
+    a = worker("hello world")
+    if a != "hello world_long" {
+        println("FAIL: worker(\"hello world\") = '${a}', expected 'hello world_long'")
+        exit(1)
+    }
+
+    b = worker("hi")
+    if b != "hi_short" {
+        println("FAIL: worker(\"hi\") = '${b}', expected 'hi_short'")
+        exit(1)
+    }
+
+    println("OK")
+}

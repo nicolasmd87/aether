@@ -643,6 +643,150 @@ static void hoist_loop_vars(CodeGenerator* gen, ASTNode* body) {
     }
 }
 
+// Pre-hoist variables first-declared inside if-statement branches at
+// the enclosing function-body scope, when:
+//   (a) the variable is referenced *outside* (after) the if-block, and
+//   (b) the existing hoist_if_else_common_vars hasn't already handled
+//       it (which only fires when both branches declare the variable
+//       and they have a common else).
+//
+// Without this, a sequence like
+//
+//     if cond1 { x = ... }
+//     if cond2 { x = ... }
+//     return x
+//
+// emits C where each branch C-scopes `x` inside its own `{ ... }`,
+// and the function-scope `return x` can't see it. Closes #278.
+//
+// This is over-hoisting: any variable first-written inside any if
+// gets a function-scope declaration. Harmless in C (just a tentative
+// definition); the inner branches' `Type x = expr` becomes an
+// assignment to the outer-scope `x`. The codegen's existing
+// is_var_declared check skips re-declaration in the inner branch.
+static void collect_if_branch_vars(ASTNode* body, const char** out, int* count, int max);
+
+static int has_identifier_ref(ASTNode* node, const char* name) {
+    if (!node || !name) return 0;
+    if (node->type == AST_IDENTIFIER && node->value &&
+        strcmp(node->value, name) == 0) return 1;
+    /* Don't treat a fresh declaration as a "ref" — only post-decl
+     * uses count. But we don't know declaration order from a single
+     * subtree, so treat any AST_IDENTIFIER as a use. The hoist is
+     * over-eager but safe. */
+    for (int i = 0; i < node->child_count; i++) {
+        if (has_identifier_ref(node->children[i], name)) return 1;
+    }
+    return 0;
+}
+
+void hoist_if_branch_vars(CodeGenerator* gen, ASTNode* body) {
+    if (!body) return;
+    /* First: collect names that appear as top-level declarations in
+     * the function body (outside any if). These already get a
+     * function-scope declaration via the regular generate_statement
+     * path AND its companion `_heap_<name>` tracker. Hoisting them
+     * here would emit a duplicate declaration AND skip the heap
+     * tracker — see the test_string_late_heap_reassign repro that
+     * exercises variant 2 (`line = ""` then if/else reassignment). */
+    const char* top_level_decls[64];
+    int top_count = 0;
+    for (int i = 0; i < body->child_count && top_count < 64; i++) {
+        ASTNode* child = body->children[i];
+        if (!child) continue;
+        if (child->type == AST_VARIABLE_DECLARATION && child->value) {
+            top_level_decls[top_count++] = child->value;
+        }
+    }
+
+    /* Walk top-level statements collecting names first-declared
+     * inside any if-branch. */
+    const char* names[64];
+    int count = 0;
+    for (int i = 0; i < body->child_count; i++) {
+        ASTNode* child = body->children[i];
+        if (!child || child->type != AST_IF_STATEMENT) continue;
+        /* Walk both then- and else- branches (children[1], [2] when
+         * present). children[0] is the condition. */
+        for (int j = 1; j < child->child_count && j < 3; j++) {
+            collect_if_branch_vars(child->children[j], names, &count, 64);
+        }
+    }
+    /* Filter out names already declared at top level. */
+    int kept = 0;
+    for (int n = 0; n < count; n++) {
+        int dup = 0;
+        for (int k = 0; k < top_count; k++) {
+            if (strcmp(names[n], top_level_decls[k]) == 0) { dup = 1; break; }
+        }
+        if (!dup) names[kept++] = names[n];
+    }
+    count = kept;
+    /* For each candidate, only hoist if it's referenced outside any
+     * if-block in the function body (i.e. in a top-level statement
+     * that isn't an AST_IF_STATEMENT, or as the controlling condition
+     * of an if). Otherwise the existing C-local scoping was correct. */
+    for (int n = 0; n < count; n++) {
+        const char* name = names[n];
+        if (is_var_declared(gen, name)) continue;
+        int referenced_outside = 0;
+        for (int i = 0; i < body->child_count; i++) {
+            ASTNode* child = body->children[i];
+            if (!child) continue;
+            if (child->type == AST_IF_STATEMENT) {
+                /* The condition (child[0]) counts as outside-the-branch. */
+                if (child->child_count > 0 &&
+                    has_identifier_ref(child->children[0], name)) {
+                    referenced_outside = 1;
+                    break;
+                }
+                continue;
+            }
+            if (has_identifier_ref(child, name)) {
+                referenced_outside = 1;
+                break;
+            }
+        }
+        if (!referenced_outside) continue;
+        /* Hoist: find the first declaration in any branch to recover
+         * the type, then emit a function-scope declaration. */
+        ASTNode* first_decl = NULL;
+        for (int i = 0; i < body->child_count && !first_decl; i++) {
+            ASTNode* child = body->children[i];
+            if (!child || child->type != AST_IF_STATEMENT) continue;
+            for (int j = 1; j < child->child_count && j < 3 && !first_decl; j++) {
+                first_decl = find_branch_decl(child->children[j], name);
+            }
+        }
+        if (!first_decl) continue;
+        Type* var_type = first_decl->node_type;
+        if ((!var_type || var_type->kind == TYPE_VOID || var_type->kind == TYPE_UNKNOWN)
+            && first_decl->child_count > 0 && first_decl->children[0]
+            && first_decl->children[0]->node_type) {
+            var_type = first_decl->children[0]->node_type;
+        }
+        const char* c_type = get_c_type(var_type);
+        print_indent(gen);
+        fprintf(gen->output, "%s %s;\n", c_type, name);
+        mark_var_declared(gen, name);
+    }
+}
+
+static void collect_if_branch_vars(ASTNode* body, const char** out, int* count, int max) {
+    if (!body || !out || !count) return;
+    for (int i = 0; i < body->child_count && *count < max; i++) {
+        ASTNode* child = body->children[i];
+        if (!child) continue;
+        if (child->type == AST_VARIABLE_DECLARATION && child->value) {
+            int dup = 0;
+            for (int k = 0; k < *count; k++) {
+                if (strcmp(out[k], child->value) == 0) { dup = 1; break; }
+            }
+            if (!dup) out[(*count)++] = child->value;
+        }
+    }
+}
+
 void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
     if (!stmt) return;
 

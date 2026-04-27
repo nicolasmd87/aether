@@ -1,0 +1,4 @@
+[[bin]]
+name = "myprobe"
+path = "ae/myprobe.ae"
+extra_sources = ["shim.c"]

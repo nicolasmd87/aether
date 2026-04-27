@@ -14,4 +14,21 @@ takes_closure(cb: fn) {
     return call(cb)
 }
 
+// Tuple return — also unsupported. The codegen used to fall through
+// to int32_t for unknown returns and emit a broken alias whose
+// signature didn't match the function's `_tuple_int_int` body. Now
+// it skips the alias with the same warning shape as the closure
+// case. Closes #277.
+returns_tuple(n: int) -> {
+    return n, n + 1
+}
+
+// Trailing-underscore convention — file-local helper. Should NOT get
+// an aether_helper_ alias even though its parameter and return types
+// are ABI-representable: the convention says "private, file-scope."
+// Closes #279.
+helper_(s: int) -> int {
+    return s * 2
+}
+
 main() { println("unused in lib mode") }
