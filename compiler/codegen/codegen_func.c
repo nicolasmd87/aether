@@ -266,6 +266,13 @@ void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext) {
             case TYPE_BOOL:
                 fprintf(gen->output, "int");
                 break;
+            case TYPE_TUPLE:
+                // `-> (T1, T2, ...)` — the C function returns a struct
+                // by value with the matching `_tuple_T1_T2` shape. The
+                // typedef was synthesised in codegen.c's pre-scan so
+                // it's already in scope here. Issue #271.
+                fprintf(gen->output, "%s", get_c_type(ext->node_type));
+                break;
             default:
                 generate_type(gen, ext->node_type);
                 break;

@@ -18,7 +18,7 @@ exports (
     fs_write_binary_raw, fs_write_atomic_raw, fs_rename_raw,
     fs_try_stat, fs_get_stat_kind, fs_get_stat_size, fs_get_stat_mtime,
     fs_try_read_binary, fs_get_read_binary, fs_get_read_binary_length,
-    fs_release_read_binary,
+    fs_release_read_binary, fs_read_binary_tuple,
     dir_list_count, dir_list_get, dir_list_free,
     path_join, path_dirname, path_basename, path_extension, path_is_absolute,
     fs_glob_raw, fs_glob_multi_raw,
@@ -97,6 +97,13 @@ extern fs_try_read_binary(path: string) -> int
 extern fs_get_read_binary() -> string
 extern fs_get_read_binary_length() -> int
 extern fs_release_read_binary()
+
+// Unified tuple-return shape (#271 + #273) — the canonical entry
+// point that fs.read_binary wraps. Returns (bytes, length, err):
+// (AetherString*, int, "") on success, (null, 0, "<reason>") on
+// failure. The bytes pointer owns its payload; no companion release
+// call needed.
+extern fs_read_binary_tuple(path: string) -> (ptr, int, string)
 
 extern dir_list_count(list: ptr) -> int
 extern dir_list_get(list: ptr, index: int) -> string
@@ -360,13 +367,10 @@ file_stat(path: string) -> {
 // the runtime is released after the copy completes, so the caller
 // doesn't have to manage lifetime.
 read_binary(path: string) -> {
-    ok = fs_try_read_binary(path)
-    if ok == 0 {
-        return "", 0, "cannot read file"
-    }
-    raw = fs_get_read_binary()
-    n = fs_get_read_binary_length()
-    owned = string_new_with_length(raw, n)
-    fs_release_read_binary()
-    return owned, n, ""
+    // Single tuple-returning extern (#271 + #273). The four-extern
+    // split-accessor pattern (fs_try_read_binary + fs_get_read_binary
+    // + fs_get_read_binary_length + fs_release_read_binary) that this
+    // wrapper used to orchestrate is still in place for callers built
+    // directly against it; new bindings reach for the unified shape.
+    return fs_read_binary_tuple(path)
 }

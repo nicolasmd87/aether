@@ -16,6 +16,32 @@ TEST_CATEGORY(string_concat_basic, TEST_CATEGORY_STDLIB) {
     free(result);
 }
 
+/* Sibling test for the wrapped variant added under #270. The wrapped
+ * form is the only one whose result honours the stored length when
+ * fed through `string.length()` — i.e., the only one that survives
+ * embedded NULs. The bare-char* form stays for print / interpolation
+ * paths. */
+TEST_CATEGORY(string_concat_wrapped_binary_safe, TEST_CATEGORY_STDLIB) {
+    /* Build a 5-byte payload with a NUL at offset 1. Using bare strcat
+     * here would truncate at the NUL; the wrapped form must preserve
+     * all five bytes. */
+    AetherString* s1 = string_new_with_length("a\0b", 3);
+    AetherString* s2 = string_new_with_length("c\0", 2);
+    AetherString* result = string_concat_wrapped(s1, s2);
+
+    ASSERT_NOT_NULL(result);
+    ASSERT_EQ(5, (int)aether_string_length(result));
+    ASSERT_EQ('a', aether_string_data(result)[0]);
+    ASSERT_EQ('\0', aether_string_data(result)[1]);
+    ASSERT_EQ('b', aether_string_data(result)[2]);
+    ASSERT_EQ('c', aether_string_data(result)[3]);
+    ASSERT_EQ('\0', aether_string_data(result)[4]);
+
+    string_free(s1);
+    string_free(s2);
+    string_release(result);
+}
+
 TEST_CATEGORY(string_length, TEST_CATEGORY_STDLIB) {
     AetherString* s = string_from_cstr("Hello");
     ASSERT_EQ(5, string_length(s));

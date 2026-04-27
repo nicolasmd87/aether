@@ -34,8 +34,14 @@ void string_retain(const void* str);
 void string_release(const void* str);
 void string_free(const void* str);  // Alias for release
 
-// String operations — accept both AetherString* and plain char*
+// String operations — accept both AetherString* and plain char*.
+// `string_concat` returns a plain char* payload (no AetherString
+// header). Use `string_concat_wrapped` instead when the inputs may
+// contain embedded NULs and you need length-aware downstream
+// behaviour — see #270 and docs/c-interop.md § AetherString
+// return-type contract.
 char* string_concat(const void* a, const void* b);
+AetherString* string_concat_wrapped(const void* a, const void* b);
 int string_length(const void* str);
 char string_char_at(const void* str, int index);
 int string_equals(const void* a, const void* b);

@@ -45,6 +45,10 @@ int fs_try_read_binary(const char* p) { (void)p; return 0; }
 const char* fs_get_read_binary(void) { return NULL; }
 int fs_get_read_binary_length(void) { return 0; }
 void fs_release_read_binary(void) {}
+typedef struct { void* _0; int _1; const char* _2; } _tuple_ptr_int_string;
+_tuple_ptr_int_string fs_read_binary_tuple(const char* p) {
+    (void)p; _tuple_ptr_int_string out = { NULL, 0, "fs unavailable" }; return out;
+}
 char* path_join(const char* a, const char* b) { (void)a; (void)b; return NULL; }
 char* path_dirname(const char* p) { (void)p; return NULL; }
 char* path_basename(const char* p) { (void)p; return NULL; }
@@ -551,6 +555,52 @@ int fs_try_read_binary(const char* path) {
 
 const char* fs_get_read_binary(void) { return s_read_binary_buf; }
 int fs_get_read_binary_length(void)  { return s_read_binary_len; }
+
+// Tuple-returning read_binary — the unified shape that the four-extern
+// split-accessor pattern (fs_try_read_binary + fs_get_read_binary +
+// fs_get_read_binary_length + fs_release_read_binary) was working
+// around. Closes #273.
+//
+// Returns (bytes, length, err). On success: (AetherString*, len, "").
+// On failure: (NULL, 0, "<reason>"). The bytes pointer is a refcounted
+// AetherString that owns its payload — no companion release call needed.
+//
+// The struct shape mirrors the codegen-emitted `_tuple_ptr_int_string`
+// typedef from `extern fs_read_binary_tuple(...) -> (ptr, int, string)`.
+typedef struct {
+    void* _0;          // AetherString* (cast to void* for the tuple ABI)
+    int _1;            // length in bytes
+    const char* _2;    // "" on success, error message on failure
+} _tuple_ptr_int_string;
+
+_tuple_ptr_int_string fs_read_binary_tuple(const char* path) {
+    _tuple_ptr_int_string out;
+    int len = 0;
+    char* buf = fs_read_binary_raw(path, &len);
+    if (!buf) {
+        // Return an empty AetherString rather than NULL to preserve
+        // the historical "" contract on the error path. Callers that
+        // pattern-match on `err != ""` see the error first; readers
+        // that touch `bytes` get a safe-to-print empty string instead
+        // of a null deref.
+        out._0 = (void*)string_empty();
+        out._1 = 0;
+        out._2 = "cannot read file";
+        return out;
+    }
+    AetherString* wrapped = string_new_with_length(buf, (size_t)len);
+    free(buf);
+    if (!wrapped) {
+        out._0 = (void*)string_empty();
+        out._1 = 0;
+        out._2 = "allocation failed";
+        return out;
+    }
+    out._0 = (void*)wrapped;
+    out._1 = len;
+    out._2 = "";
+    return out;
+}
 
 // Path operations
 char* path_join(const char* path1, const char* path2) {

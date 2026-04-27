@@ -117,6 +117,36 @@ char* string_concat(const void* a, const void* b) {
     return new_data;
 }
 
+// Length-bearing variant of string_concat. Returns an AetherString*
+// (refcounted, length-aware) rather than a bare char* — callers that
+// later run `string.length(result)` on this value read the stored
+// length from the magic-dispatch path rather than falling through to
+// strlen() and silently truncating at the first embedded NUL.
+//
+// Use this when the inputs may contain binary bytes (base64-decoded
+// payloads, file content from fs.read_binary, message frames with
+// length-prefix bytes, …). For ASCII-text accumulation in print /
+// interpolation contexts the plain `string_concat` is fine. See #270.
+AetherString* string_concat_wrapped(const void* a, const void* b) {
+    if (!a || !b) return NULL;
+    size_t la = str_len(a), lb = str_len(b);
+    const char* da = str_data(a);
+    const char* db = str_data(b);
+
+    if (la > SIZE_MAX - lb - 1) return NULL;
+    size_t new_length = la + lb;
+
+    char* joined = (char*)malloc(new_length + 1);
+    if (!joined) return NULL;
+    if (la) memcpy(joined, da, la);
+    if (lb) memcpy(joined + la, db, lb);
+    joined[new_length] = '\0';
+
+    AetherString* wrapped = string_new_with_length(joined, new_length);
+    free(joined);
+    return wrapped;
+}
+
 int string_length(const void* str) {
     return (int)str_len(str);
 }
