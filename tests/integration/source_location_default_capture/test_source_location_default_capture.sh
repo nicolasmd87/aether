@@ -33,7 +33,9 @@ L16: from-helper-a
 L17: from-helper-b
 L999: explicit-override'
 
-if [ "$(cat "$ACTUAL")" != "$EXPECTED" ]; then
+# Strip CR — Windows MinGW writes "\r\n" to redirected stdout.
+ACTUAL_NORM="$(tr -d '\r' < "$ACTUAL")"
+if [ "$ACTUAL_NORM" != "$EXPECTED" ]; then
     echo "  [FAIL] output mismatch"
     echo "--- expected ---"
     echo "$EXPECTED"

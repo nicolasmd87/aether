@@ -29,12 +29,18 @@ EXPECTED='m L26 F=.*uses_intrinsics.ae fn=main
 a L21 F=.*uses_intrinsics.ae fn=run
 b L22 F=.*uses_intrinsics.ae fn=run'
 
-# Verify each line matches its pattern (use grep -E line by line so
+# Strip CR — Windows MinGW writes "\r\n" to redirected stdout, which
+# would leave a trailing `\r` on each captured line and break the
+# case-pattern matches below.
+ACTUAL_NORM="$TMPDIR/actual.norm"
+tr -d '\r' < "$ACTUAL" > "$ACTUAL_NORM"
+
+# Verify each line matches its pattern (use case glob line by line so
 # the file-path suffix is wildcarded — different test runs may live
 # in different absolute paths).
-LINE1=$(sed -n '1p' "$ACTUAL")
-LINE2=$(sed -n '2p' "$ACTUAL")
-LINE3=$(sed -n '3p' "$ACTUAL")
+LINE1=$(sed -n '1p' "$ACTUAL_NORM")
+LINE2=$(sed -n '2p' "$ACTUAL_NORM")
+LINE3=$(sed -n '3p' "$ACTUAL_NORM")
 
 case "$LINE1" in
     "m L26 F="*"uses_intrinsics.ae fn=main") ;;

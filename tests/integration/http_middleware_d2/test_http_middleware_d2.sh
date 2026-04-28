@@ -23,22 +23,31 @@ if ! command -v curl >/dev/null 2>&1; then
     exit 0
 fi
 
-# Pre-create the static directory the server is mounted on.
-STATIC_DIR=/tmp/static-test
-mkdir -p "$STATIC_DIR"
-echo "static-hello-content" > "$STATIC_DIR/hello.txt"
-
 TMPDIR="$(mktemp -d)"
 cleanup() {
     if [ -n "${SRV_PID:-}" ]; then
         kill "$SRV_PID" 2>/dev/null || true
         wait "$SRV_PID" 2>/dev/null || true
     fi
-    rm -rf "$TMPDIR" "$STATIC_DIR"
+    rm -rf "$TMPDIR"
 }
 trap cleanup EXIT
 
-AETHER_HOME="$ROOT" "$AE" run "$SCRIPT_DIR/server.ae" >"$TMPDIR/srv.log" 2>&1 &
+# Pre-create the static directory inside TMPDIR. We pass the path to
+# the server via STATIC_ROOT so it works cross-platform — on MSYS the
+# native Windows binary doesn't understand /tmp/... paths, so we
+# convert the MSYS path with cygpath when available.
+STATIC_DIR="$TMPDIR/static-test"
+mkdir -p "$STATIC_DIR"
+echo "static-hello-content" > "$STATIC_DIR/hello.txt"
+if command -v cygpath >/dev/null 2>&1; then
+    STATIC_ROOT="$(cygpath -m "$STATIC_DIR")"
+else
+    STATIC_ROOT="$STATIC_DIR"
+fi
+
+AETHER_HOME="$ROOT" STATIC_ROOT="$STATIC_ROOT" \
+    "$AE" run "$SCRIPT_DIR/server.ae" >"$TMPDIR/srv.log" 2>&1 &
 SRV_PID=$!
 
 deadline=$(($(date +%s) + 5))
