@@ -438,6 +438,31 @@ extern parse_with_explicit_length(s: ptr) -> int
 
 The C function then takes `const void*` (or `const AetherString*`) and goes through the helpers manually. This is the escape hatch for any FFI shim that needs binary-safe length reads — declaring `s: string` would auto-unwrap and `aether_string_length` would fall back to `strlen`, truncating at the first NUL.
 
+**Length-clamp hazard for binary content.** Once the auto-unwrap has fired, a C shim that receives a `string`-typed parameter has only payload bytes — no header, no stored length. A common defensive pattern is fatal here:
+
+```c
+// HAZARD post-#297. `s` is auto-unwrapped payload; aether_string_length
+// falls through to strlen() on binary content and truncates at NUL.
+int shim(const char* s, int caller_len) {
+    int n = aether_string_length(s);   // falls through to strlen!
+    int safe = (caller_len < n) ? caller_len : n;  // wrong on binary
+    return process(s, safe);
+}
+```
+
+Pre-#297 the AetherString header leaked through into the shim, and the dispatch inside `aether_string_length` correctly returned the stored length. Post-#297 the header is stripped at the call site, the dispatch falls through to `strlen`, and binary content gets truncated at the first embedded NUL — silently producing corrupted output on disk / in messages / etc.
+
+**Rule:** when a C shim takes a `string` parameter from Aether AND an explicit length, **trust the length**. Don't re-derive via `aether_string_length(s)` — that path is now unreachable for header-bearing values (auto-unwrap stripped the header), and the strlen fallback corrupts binary content. The Aether-side caller knows the length; pass it across the boundary.
+
+```c
+// CORRECT — caller-supplied length is the source of truth.
+int shim(const char* s, int len) {
+    return process(s, len);
+}
+```
+
+If a shim genuinely needs to dispatch on the header (e.g. for a polymorphic API where the caller might pass either a literal or a wrapped string and the length isn't known to the caller), declare its parameter as `ptr` to opt out of auto-unwrap, and dispatch via `aether_string_data` / `aether_string_length` manually.
+
 ### Aether-side string-builder return types
 
 Aether-side primitives that build strings split into two camps:
