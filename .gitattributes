@@ -1,6 +1,18 @@
 # Aether language files — always LF (no CRLF) so the lexer sees consistent input
 *.ae linguist-language=Aether text eol=lf
 
+# Shell scripts that run under MSYS on Windows must stay LF; CRLF
+# triggers `\r: command not found` style failures from /bin/sh.
+*.sh text eol=lf
+
+# Integration-test fixtures that get byte-compared against program
+# output need committed LF to survive an autocrlf=true checkout on
+# Windows. Without eol=lf, expected_output.txt would land on disk
+# with CRLF and fail every comparison even when the program output
+# is byte-identical.
+tests/**/expected_output.txt text eol=lf
+tests/**/*.txt text eol=lf
+
 # Documentation
 *.md linguist-documentation
 
