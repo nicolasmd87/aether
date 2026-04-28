@@ -14,7 +14,18 @@ import std.fs
 import std.io
 
 extern ffi_shim_write_binary(path: string) -> int
-extern ffi_shim_check_bytes(s: string) -> int
+// `s: ptr` not `string` — this shim is a sophisticated C consumer
+// that *wants* the AetherString header pointer so its body can
+// call aether_string_data() / aether_string_length() to dispatch
+// on the magic. Declaring it as `string` would trigger the #297
+// auto-unwrap and the shim would receive only the payload pointer,
+// breaking aether_string_length on binary content (it would fall
+// through to strlen and truncate at the first NUL).
+//
+// As of #297: `s: string` means "I'm a naive consumer; give me
+// payload bytes." `s: ptr` means "I know what I'm doing; give me
+// the raw pointer and I'll handle dispatch myself."
+extern ffi_shim_check_bytes(s: ptr) -> int
 
 main() {
     print("=== aether_string_ffi_unwrap ===\n\n")

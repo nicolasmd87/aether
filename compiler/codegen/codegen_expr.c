@@ -1,6 +1,39 @@
 #include "codegen_internal.h"
 #include "../aether_error.h"
 
+/* Return 1 when `c_func_name` is a stdlib C function that already
+ * dispatches on the AetherString magic header internally (via
+ * `str_data` / `str_len` in std/string/aether_string.c). Such functions
+ * MUST receive the wrapped pointer — unwrapping at the call site
+ * defeats their length-aware path and falls back to strlen, which
+ * truncates binary content at the first NUL.
+ *
+ * The list is pragmatic: every stdlib C function whose param is
+ * declared `string` accepts both AetherString* and char* via the
+ * dispatch helpers. By contrast, user-defined C externs (the
+ * primary motivation for #297) typically just `memcpy` /  `strlen`
+ * the input and need the unwrapped payload pointer.
+ *
+ * Maintained as a name-prefix check for now. A cleaner alternative
+ * — annotating the extern declaration ("this param expects raw
+ * bytes" vs. "this param dispatches") — is deferred until the
+ * stdlib settles which extern shapes are part of the public ABI.
+ */
+static int is_stdlib_string_aware_extern(const char* c_func_name) {
+    if (!c_func_name) return 0;
+    /* The stdlib's string-aware C functions all live in
+     * std/string/aether_string.c and either start with "string_" or
+     * "aether_string_". A handful of other stdlib helpers also use
+     * str_data/str_len internally (json_*, http_*, fs_*, etc.) — but
+     * the safe default is "wrap unless prefix-matched." If a
+     * downstream wrapper turns out to need the unwrapped form, the
+     * fix is to add it here; if a user-defined function happens to
+     * match a prefix and wants the raw form, it can be renamed. */
+    if (strncmp(c_func_name, "string_", 7) == 0) return 1;
+    if (strncmp(c_func_name, "aether_string_", 14) == 0) return 1;
+    return 0;
+}
+
 // ---- Closure support ----
 
 // Collect identifiers (reads) referenced in an AST subtree. Does NOT
@@ -2436,6 +2469,35 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             // a string literal or const-char expression
                             // into a ptr parameter.
                             fprintf(gen->output, "(void*)(");
+                            generate_expression(gen, arg);
+                            fprintf(gen->output, ")");
+                        } else if (expected == TYPE_STRING && arg->node_type &&
+                                   (arg->node_type->kind == TYPE_STRING ||
+                                    arg->node_type->kind == TYPE_PTR) &&
+                                   is_extern_func(gen, func_name) &&
+                                   !is_stdlib_string_aware_extern(c_func_name)) {
+                            // The Aether-side value typed `string` may be a
+                            // wrapped AetherString* (from string.from_int,
+                            // string_concat_wrapped, fs.read_binary, etc.)
+                            // or a bare const char* (literal, string_concat).
+                            // A naive C extern's `const char*` parameter
+                            // expects payload bytes — passing the AetherString
+                            // header pointer leaks magic+refcount+lengths
+                            // into memcpy/strlen calls on the C side.
+                            //
+                            // aether_string_data() dispatches on the magic
+                            // header: returns ->data for wrapped strings,
+                            // the bare pointer for plain char*. Idempotent
+                            // on either shape.
+                            //
+                            // Skipped for stdlib externs that already go
+                            // through str_data/str_len internally — those
+                            // need the header pointer so their dispatch can
+                            // recover the stored length on binary content
+                            // (string_length, string_concat_wrapped, etc.).
+                            // See is_stdlib_string_aware_extern below.
+                            // Closes #297.
+                            fprintf(gen->output, "aether_string_data(");
                             generate_expression(gen, arg);
                             fprintf(gen->output, ")");
                         } else {

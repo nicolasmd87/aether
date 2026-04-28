@@ -17,6 +17,8 @@ exports (
     intarr_get_raw, intarr_set_raw,
     intarr_get_unchecked, intarr_set_unchecked,
     intarr_fill, intarr_free,
+    string_list_new, string_list_add, string_list_get, string_list_set,
+    string_list_size, string_list_remove, string_list_clear, string_list_free,
     list_add, list_get,
     map_put, map_get, map_keys
 )
@@ -59,6 +61,28 @@ extern intarr_get_unchecked(arr: ptr, i: int) -> int
 extern intarr_set_unchecked(arr: ptr, i: int, value: int)
 extern intarr_fill(arr: ptr, value: int)
 extern intarr_free(arr: ptr)
+
+// ---- StringList: refcount-aware list for AetherString values ----
+// The plain ArrayList stores items as raw `void*` and doesn't retain
+// on insert / release on remove. That works for caller-managed
+// lifetimes but silently dangles when the list is asked to hold
+// AetherString-bearing values whose refcount drops to zero before
+// the list itself is freed (the original variable goes out of
+// scope, the string frees, the list is left with a stale pointer).
+//
+// StringList wraps the same backing storage but takes a strong
+// reference on every insert and releases on remove / clear / free.
+// Plain `string` literals pass through unchanged — string_retain
+// is a no-op on values that don't bear the AetherString magic
+// header. Issue #274.
+extern string_list_new() -> ptr
+extern string_list_add(list: ptr, s: string) -> int
+extern string_list_get(list: ptr, index: int) -> string
+extern string_list_set(list: ptr, index: int, s: string)
+extern string_list_size(list: ptr) -> int
+extern string_list_remove(list: ptr, index: int)
+extern string_list_clear(list: ptr)
+extern string_list_free(list: ptr)
 
 // ---- Go-style wrappers ----
 

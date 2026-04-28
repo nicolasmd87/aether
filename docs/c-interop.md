@@ -407,6 +407,37 @@ Both helpers accept either an `AetherString*` (the common case) or a raw `char*`
 
 > **Historical note:** older shims open-coded this unwrap by pattern-matching the magic number themselves (`#define AETHER_STRING_MAGIC 0xAE57C0DE` + cast). `aether_string_data` / `aether_string_length` have replaced that pattern — downstream projects can delete the open-coded unwrap once they pick up the new headers.
 
+### Passing `string` values INTO C externs (auto-unwrap)
+
+The symmetric direction — Aether code passing a `string` value to a C extern declared `const char*` — is handled by the codegen automatically. When the call site has the form:
+
+```aether
+extern probe_consume(content: string, len: int) -> int
+
+main() {
+    raw, raw_len, _ = cryptography.base64_decode("QUI=")  // returns AetherString*
+    probe_consume(raw, raw_len)                            // C side gets payload, not header
+}
+```
+
+…the codegen emits `probe_consume(aether_string_data(raw), raw_len)` rather than passing `raw` straight through. `aether_string_data` dispatches on the AetherString magic header: returns `s->data` for wrapped strings, the bare pointer for plain `char*` values (literals, results of `string_concat`). Idempotent and safe on either shape.
+
+This means C shim authors don't have to remember to unwrap on the receiving side; the C function can `memcpy(...)` or `strlen(...)` on the `const char*` parameter and get the payload bytes regardless of what the Aether caller passed. Closes #297.
+
+**Stdlib exception:** C functions whose names start with `string_` or `aether_string_` are treated as "string-aware" and are *not* unwrapped at the call site. They use `str_data` / `str_len` internally and need the AetherString header to recover the stored length on binary content. If a downstream user-defined function happens to match those name prefixes, rename it (or expose it via a different namespace).
+
+**Sophisticated-consumer escape hatch.** A C function that *wants* the AetherString header pointer (e.g. so it can call `aether_string_data` / `aether_string_length` itself to recover the stored length on binary content) should declare its parameter as `ptr` rather than `string`:
+
+```aether
+// Naive consumer — receives payload bytes; codegen auto-unwraps:
+extern memcpy_into_buf(content: string, len: int) -> int
+
+// Sophisticated consumer — receives raw pointer; consumer dispatches:
+extern parse_with_explicit_length(s: ptr) -> int
+```
+
+The C function then takes `const void*` (or `const AetherString*`) and goes through the helpers manually. This is the escape hatch for any FFI shim that needs binary-safe length reads — declaring `s: string` would auto-unwrap and `aether_string_length` would fall back to `strlen`, truncating at the first NUL.
+
 ### Aether-side string-builder return types
 
 Aether-side primitives that build strings split into two camps:
