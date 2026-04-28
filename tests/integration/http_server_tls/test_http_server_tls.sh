@@ -51,8 +51,11 @@ AETHER_HOME="$ROOT" CERT_PATH="$CERT" KEY_PATH="$KEY" \
     "$AE" run "$SCRIPT_DIR/server.ae" >"$TMPDIR/srv.log" 2>&1 &
 SRV_PID=$!
 
-# Wait for the server to print READY (or die / time out at 5s).
-deadline=$(($(date +%s) + 5))
+# Wait for the server to print READY (or die / time out). The first
+# `ae run` invocation on a cold cache compiles the OpenSSL-linked
+# binary, which can take several seconds on a slow CI runner — give it
+# 30s to be safe.
+deadline=$(($(date +%s) + 30))
 while [ "$(date +%s)" -lt "$deadline" ]; do
     if grep -q READY "$TMPDIR/srv.log" 2>/dev/null; then
         break

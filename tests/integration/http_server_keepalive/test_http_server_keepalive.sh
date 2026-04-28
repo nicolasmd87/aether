@@ -74,9 +74,12 @@ for n in 1 2 3; do
 done
 
 # curl reuses the TCP connection when possible; check it didn't open
-# three. Verbose output reports "Connection #0" for the first and
-# "Re-using existing connection" for subsequent requests.
-reused=$(grep -c "Re-using existing connection" "$ERR" || true)
+# three. Verbose output reports "Connection #0" for the first and a
+# reuse message for subsequent requests. The exact wording varies:
+#   curl 7.x: "Re-using existing connection"
+#   curl 8.x: "Reusing existing http: connection"
+# Match both with a tolerant pattern.
+reused=$(grep -cE "Re-?using existing.* connection" "$ERR" || true)
 if [ "$reused" -lt 2 ]; then
     echo "  [FAIL] curl didn't reuse the connection ($reused reuses, want >= 2)"
     echo "--- curl verbose ---"
