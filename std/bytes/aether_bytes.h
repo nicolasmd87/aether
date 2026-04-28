@@ -1,0 +1,89 @@
+#ifndef AETHER_BYTES_H
+#define AETHER_BYTES_H
+
+#include <stddef.h>
+
+/* std.bytes — mutable byte buffer with random-access write and
+ * overlap-safe forward copy_within.
+ *
+ * Aether's `string` is immutable; every concat allocates fresh. This
+ * module fills the gap any binary-codec / streaming-buffer workload
+ * needs: a buffer where you can set a byte at an arbitrary index and
+ * read bytes that were written earlier in the same loop iteration.
+ *
+ * The canonical motivating case is the RLE overlap trick used by
+ * svndiff and similar codecs:
+ *
+ *     for (size_t i = 0; i < length; i++) {
+ *         dst[tpos + i] = dst[offset + i];   // offset < tpos
+ *     }
+ *
+ * The action-1 instruction reads from a position that may itself
+ * have just been written by a previous iteration of the same
+ * instruction. memmove() is wrong here — it deliberately handles
+ * overlap by choosing the safe direction; we want the unsafe forward
+ * direction so byte i sees the freshly-written byte (i - run_length).
+ *
+ * Lifecycle: bytes.new() / set / copy_* / length, then either
+ * bytes.finish(b, n) (hand off to a refcounted AetherString,
+ * destroying the buffer) or bytes.free(b) (discard without
+ * finishing). Issue #288.
+ */
+
+typedef struct AetherBytes AetherBytes;
+
+/* Allocate a new buffer with at least `initial_capacity` bytes
+ * reserved. Returns NULL on allocation failure or negative capacity.
+ * Initial length is 0. */
+AetherBytes* aether_bytes_new(int initial_capacity);
+
+/* Number of bytes the buffer logically contains. -1 if `b` is NULL. */
+int aether_bytes_length(AetherBytes* b);
+
+/* Write a single byte at `index`. Grows the buffer if needed. The
+ * logical length advances to max(length, index + 1) — gaps between
+ * the previous tail and `index` are zero-filled. No-op if `b` is
+ * NULL or `index` is negative. Returns 1 on success, 0 on failure. */
+int aether_bytes_set(AetherBytes* b, int index, int byte);
+
+/* Copy `src_len` bytes from `src` into the buffer starting at offset
+ * `dst`. Grows the buffer if needed. `src` may be either a plain
+ * `const char*` or an `AetherString*` (the function reads the payload
+ * via aether_string_data). Returns 1 on success, 0 on failure
+ * (NULL buffer / negative offsets / NULL src / OOM). */
+int aether_bytes_copy_from_string(AetherBytes* b, int dst,
+                                  const void* src, int src_len);
+
+/* Copy `length` bytes from offset `src` to offset `dst` *within the
+ * same buffer*, forward byte-by-byte. Bytes already written in this
+ * call are visible to subsequent reads inside it — the deliberate
+ * RLE-overlap behaviour. memmove() handles overlap differently and
+ * would defeat the purpose. Grows the buffer if `dst + length`
+ * exceeds capacity.
+ *
+ * Constraints:
+ *   - `src` must point into the buffer's current logical length
+ *     (need at least one valid byte to read).
+ *   - When `dst > src` (the RLE case), `src + length` may extend
+ *     past the current tail; the loop reads bytes it just wrote.
+ *   - When `dst <= src`, the full source range must already exist
+ *     (no overlap-from-future-bytes story).
+ *
+ * Returns 1 on success, 0 on failure (NULL buffer, negative offsets,
+ * src out of range, or dst<=src with src+length > current length). */
+int aether_bytes_copy_within(AetherBytes* b, int dst, int src, int length);
+
+/* Hand off the buffer to a refcounted AetherString and destroy the
+ * AetherBytes wrapper. After this call, `b` is invalid (do NOT free
+ * it). The string carries the explicit length so embedded NULs
+ * survive end-to-end. Returns NULL if `b` is NULL or `length` is
+ * negative; clamps `length` to the buffer's logical length if it's
+ * greater. */
+void* aether_bytes_finish(AetherBytes* b, int length);
+
+/* Discard the buffer without converting to a string. Idempotent on
+ * NULL. Use this when the caller decides mid-build that the buffer
+ * isn't needed (error path, etc.). */
+void aether_bytes_free(AetherBytes* b);
+
+#endif

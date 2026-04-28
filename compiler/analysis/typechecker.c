@@ -2809,6 +2809,23 @@ int typecheck_binary_expression(ASTNode* expr, SymbolTable* table) {
 
     AeTokenType operator = get_token_type_from_string(expr->value);
 
+    // Reject `string + string` at typecheck rather than emitting
+    // invalid C (`(const char*) + (const char*)` is a pointer-arith
+    // error, not a useful diagnostic to anyone). Aether doesn't
+    // overload `+` for strings; the idiomatic ways to join strings
+    // are interpolation `"${a}${b}"` (literal-time) or
+    // `string.concat(a, b)` / `string.format(fmt, args)` (runtime).
+    // Closes #276.
+    if (operator == TOKEN_PLUS &&
+        left_type && left_type->kind == TYPE_STRING &&
+        right_type && right_type->kind == TYPE_STRING) {
+        free_type(left_type);
+        free_type(right_type);
+        type_error("'+' is not defined for strings — use \"${a}${b}\" interpolation or string.concat(a, b)",
+                   expr->line, expr->column);
+        return 0;
+    }
+
     if (operator == TOKEN_ASSIGN) {
         if (!is_assignable(right_type, left_type)) {
             free_type(left_type);

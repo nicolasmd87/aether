@@ -266,6 +266,13 @@ void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext) {
             case TYPE_BOOL:
                 fprintf(gen->output, "int");
                 break;
+            case TYPE_TUPLE:
+                // `-> (T1, T2, ...)` — the C function returns a struct
+                // by value with the matching `_tuple_T1_T2` shape. The
+                // typedef was synthesised in codegen.c's pre-scan so
+                // it's already in scope here. Issue #271.
+                fprintf(gen->output, "%s", get_c_type(ext->node_type));
+                break;
             default:
                 generate_type(gen, ext->node_type);
                 break;
@@ -381,7 +388,20 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
     // symbol — the whole point of the annotation is that the function
     // can be referenced as a function pointer from across the linkage
     // boundary, so it must NOT be static even when imported.
-    if (func->is_imported && !is_c_callback(func)) {
+    // Trailing-underscore convention `foo_` marks a function as
+    // file-local — the same convention emit_lib_alias_stubs honours
+    // by skipping the aether_<name> alias. Emit as `static` so two
+    // .ae files in the same namespace bundle / [[bin]] can each
+    // declare their own `record_start_` / `helper_` without the
+    // generated C colliding at link time. Closes #279.
+    int trailing_underscore_private = 0;
+    if (func->value && !is_c_callback(func)) {
+        size_t nlen = strlen(func->value);
+        if (nlen > 0 && func->value[nlen - 1] == '_') {
+            trailing_underscore_private = 1;
+        }
+    }
+    if ((func->is_imported || trailing_underscore_private) && !is_c_callback(func)) {
         fprintf(gen->output, "static ");
     }
 
@@ -643,6 +663,13 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
 
     // Generate body
     if (body) {
+        // Pre-hoist variables first-declared inside if-statement
+        // branches whose use escapes the if-block. Without this, the
+        // generated C scopes them too tightly and post-block reads
+        // fail to compile. See #278.
+        if (body->type == AST_BLOCK) {
+            hoist_if_branch_vars(gen, body);
+        }
         // If body is a block, it handles its own scope
         // If not a block, we still need to generate the statements
         if (body->type == AST_BLOCK) {
@@ -996,7 +1023,13 @@ void generate_combined_function(CodeGenerator* gen, ASTNode** clauses, int claus
     // Imported clauses get the same `static` storage class — see
     // generate_function_definition for the full rationale. @c_callback
     // overrides this so the symbol is reachable from other TUs (#235).
-    if (first->is_imported && !is_c_callback(first)) {
+    // Trailing-underscore private helpers (#279) also get `static`.
+    int combined_trailing_private = 0;
+    if (first->value && !is_c_callback(first)) {
+        size_t nlen = strlen(first->value);
+        if (nlen > 0 && first->value[nlen - 1] == '_') combined_trailing_private = 1;
+    }
+    if ((first->is_imported || combined_trailing_private) && !is_c_callback(first)) {
         fprintf(gen->output, "static ");
     }
 

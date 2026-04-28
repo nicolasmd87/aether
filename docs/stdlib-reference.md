@@ -161,6 +161,47 @@ main() {
 - `intarr_get_raw(arr, i)` / `intarr_set_raw(arr, i, v)` - Safe on OOB (returns 0 / no-op), no error report
 - `intarr_get_unchecked(arr, i)` / `intarr_set_unchecked(arr, i, v)` - Undefined behaviour on OOB, for inner loops
 
+### Mutable byte buffer (`std.bytes`)
+
+Mutable random-access byte buffer with overlap-safe forward `copy_within`. Aether's `string` is immutable; reach for `std.bytes` when you need to write bytes at arbitrary indices and read bytes the loop just wrote (binary codec output buffers, varint emit, frame layout, RLE-style overlap copy).
+
+```aether
+import std.bytes
+
+main() {
+    // Build "[abc]" by writing one byte at a time.
+    b = bytes.new(8)
+    bytes.set(b, 0, 91)                    // '['
+    bytes.copy_from_string(b, 1, "abc", 3)
+    bytes.set(b, 4, 93)                    // ']'
+
+    // Hand off to a refcounted AetherString — buffer is consumed.
+    s = bytes.finish(b, 5)                 // "[abc]"
+}
+```
+
+The headline use case is the RLE-overlap pattern that immutable concat can't express:
+
+```aether
+// Pre-fill with [A, B], then expand to [A, B, A, B, A, B] in one call.
+b = bytes.new(8)
+bytes.set(b, 0, 65)
+bytes.set(b, 1, 66)
+bytes.copy_within(b, 2, 0, 4)             // dst=2, src=0, length=4
+out = bytes.finish(b, 6)                  // "ABABAB"
+```
+
+`copy_within` is **forward byte-by-byte** (deliberately not `memmove`-style). When `dst > src`, each iteration `i` reads `data[src + i]` — which earlier iterations of the same call may have just written. That's how runs of repeated bytes get encoded.
+
+**Functions:**
+- `bytes.new(initial_capacity)` → `ptr` - Allocate empty buffer with reserved capacity
+- `bytes.length(b)` → `int` - Logical byte count (-1 if null)
+- `bytes.set(b, index, byte)` → `int` - Write byte at index; gaps zero-fill; returns 1 on success
+- `bytes.copy_from_string(b, dst, src, src_len)` → `int` - Copy from a string into the buffer at offset
+- `bytes.copy_within(b, dst, src, length)` → `int` - Self-copy, forward byte-by-byte (RLE-safe)
+- `bytes.finish(b, length)` → `string` - Hand off to refcounted AetherString; buffer is consumed
+- `bytes.free(b)` - Discard without finishing (idempotent on null)
+
 ---
 
 ## Strings (`std.string`)
@@ -291,8 +332,11 @@ main() {
 - `string.array_free(arr)` - Free split result array
 - `string.strip_prefix(s, prefix)` → `(rest, stripped)` - If `s` starts with `prefix`, returns the remainder and 1. Otherwise returns `s` and 0. Cleaner than manual `starts_with` + `substring` length arithmetic.
 - `string.copy(s)` - Return an independently-owned copy of `s`. Equivalent to `string.concat(s, "")` but with a discoverable name; callers use it to snapshot a borrowed TLS buffer before the next C call overwrites it.
+- `string.format(fmt, args)` - Format a string by substituting `{}` placeholders with entries from an `std.list` of strings. `{{` and `}}` are literal braces. Use this for runtime-built strings of N parts where literal `${...}` interpolation isn't an option (e.g. when the format string itself comes from a config file or message-template lookup). Non-string values must be converted via `string.from_int(...)` etc. before being added to the list.
 
 For a `split_once`-style operation (find the first `sep` in `s`, return the halves), use `string.index_of(s, sep)` + two `string.substring` calls — two lines of code that avoid a tuple-unification foot-gun the typechecker currently has around three-string tuples.
+
+> **Note: `string + string` is not defined.** Use `"${a}${b}"` interpolation for literals or `string.concat(a, b)` / `string.format(fmt, args)` for runtime-built strings. The typechecker rejects `+` between two string operands at compile time with a hint pointing at these alternatives — it does NOT silently emit broken pointer arithmetic.
 
 **Conversion:**
 - `string.to_cstr(str)` - Get raw C string pointer

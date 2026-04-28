@@ -1,0 +1,87 @@
+// Regression test for #289 — os.run_capture returns (stdout, status, err).
+//
+// Pre-fix the wrapper returned only (stdout, err); the child's exit
+// code was discarded by the C side. Callers that needed to
+// distinguish "ran cleanly" from "ran but exited non-zero" couldn't.
+// Now the third slot exposes WEXITSTATUS for normal exits and -1 for
+// abnormal termination / spawn failure.
+//
+// Uses /bin/sh -c "exit N" rather than /bin/true / /bin/false directly
+// because the layout of those binaries varies by host: macOS has
+// /usr/bin/true but /bin/true is shadowed in some shells; some
+// minimal Linux containers ship only /usr/bin/true. POSIX guarantees
+// /bin/sh is present on every Unix, and `sh -c "exit N"` lets the
+// test pick the exit code explicitly.
+//
+// Cases:
+//   1. /bin/sh -c "exit 0" — status reads 0, err is "".
+//   2. /bin/sh -c "exit 1" — status reads 1, err is "" (spawn ok,
+//      child exits non-zero).
+//   3. /no/such/binary — execvp inside the child fails with 127.
+//      err stays empty (the fork itself succeeded; the convention
+//      is that the parent sees status 127).
+
+import std.os
+import std.list
+
+extern exit(code: int)
+
+main() {
+    println("=== os.run_capture status ===")
+
+    // Skip on Windows — /bin/sh isn't shaped this way under MSYS2.
+    if os_getenv("OS") == "Windows_NT" {
+        println("  SKIP: /bin/sh -c is POSIX-shaped")
+        return
+    }
+
+    // Case 1: clean exit (status 0).
+    av0 = list_new()
+    list_add(av0, "-c")
+    list_add(av0, "exit 0")
+    out0, status0, err0 = os.run_capture("/bin/sh", av0, null)
+    if err0 != "" {
+        println("  FAIL 1: spawn /bin/sh: err=${err0}")
+        exit(1)
+    }
+    if status0 != 0 {
+        println("  FAIL 1: sh -c 'exit 0' status=${status0}, expected 0")
+        exit(1)
+    }
+    println("  PASS: sh -c 'exit 0' → status 0, no err")
+
+    // Case 2: non-zero exit, but spawn succeeded.
+    av1 = list_new()
+    list_add(av1, "-c")
+    list_add(av1, "exit 1")
+    out1, status1, err1 = os.run_capture("/bin/sh", av1, null)
+    if err1 != "" {
+        println("  FAIL 2: spawn /bin/sh: err=${err1}")
+        exit(1)
+    }
+    if status1 != 1 {
+        println("  FAIL 2: sh -c 'exit 1' status=${status1}, expected 1")
+        exit(1)
+    }
+    println("  PASS: sh -c 'exit 1' → status 1, no err (clean exit-non-zero)")
+
+    // Case 3: missing binary — POSIX execvp reports failure inside the
+    // *child* process via _exit(127), so the parent sees a normal-exit
+    // status of 127. err stays empty (the fork itself succeeded).
+    // Callers that want to distinguish "binary exited 127" from "exec
+    // failed" need something stronger than os.run_capture today; this
+    // test just pins down the current contract.
+    av2 = list_new()
+    out2, status2, err2 = os.run_capture("/no/such/binary", av2, null)
+    if err2 != "" {
+        println("  FAIL 3: missing-binary err=${err2}, expected empty")
+        exit(1)
+    }
+    if status2 != 127 {
+        println("  FAIL 3: missing-binary status=${status2}, expected 127")
+        exit(1)
+    }
+    println("  PASS: missing binary → status 127 (POSIX exec-in-child convention)")
+
+    println("=== All cases passed ===")
+}

@@ -1,0 +1,65 @@
+// Regression test for #271 — extern declarations with tuple return
+// types. Three forms exercised:
+//
+//   1. (int, int)        — minimum smoke test for the tuple ABI
+//   2. (int, string)     — Go-style (value, err) shape
+//   3. (ptr, int, string) — three-element tuple, the canonical shape
+//                           for binary-FFI return paths after #273
+//
+// Each one calls a C function that returns a struct-by-value with the
+// matching layout. Aether destructures the result (`a, b = foo(...)`)
+// at the call site.
+
+extern divmod_pair(n: int, d: int) -> (int, int)
+extern parse_int_safe(s: string) -> (int, string)
+extern echo_bytes(s: string, len: int) -> (ptr, int, string)
+
+extern exit(code: int)
+
+main() {
+    // Case 1: (int, int)
+    q, r = divmod_pair(17, 5)
+    if q != 3 {
+        println("FAIL: divmod q=${q}, want 3")
+        exit(1)
+    }
+    if r != 2 {
+        println("FAIL: divmod r=${r}, want 2")
+        exit(1)
+    }
+
+    // Case 2a: (int, string) — success
+    val, err = parse_int_safe("42")
+    if err != "" {
+        println("FAIL: parse_int_safe(\"42\") err=${err}")
+        exit(1)
+    }
+    if val != 42 {
+        println("FAIL: parse_int_safe(\"42\") val=${val}")
+        exit(1)
+    }
+
+    // Case 2b: (int, string) — failure
+    val2, err2 = parse_int_safe("xyz")
+    if err2 == "" {
+        println("FAIL: parse_int_safe(\"xyz\") expected error")
+        exit(1)
+    }
+    if val2 != 0 {
+        println("FAIL: parse_int_safe(\"xyz\") val=${val2} on error path")
+        exit(1)
+    }
+
+    // Case 3: (ptr, int, string) — three-element tuple
+    bytes, n, err3 = echo_bytes("hello", 5)
+    if err3 != "" {
+        println("FAIL: echo_bytes err=${err3}")
+        exit(1)
+    }
+    if n != 5 {
+        println("FAIL: echo_bytes n=${n}, want 5")
+        exit(1)
+    }
+
+    println("OK")
+}

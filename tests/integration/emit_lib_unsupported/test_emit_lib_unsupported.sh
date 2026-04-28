@@ -56,6 +56,47 @@ else
         cat "$TMPDIR/stderr.log"
         fail=$((fail + 1))
     fi
+
+    # Check (d) — tuple return: no aether_returns_tuple alias (#277).
+    if grep -q "aether_returns_tuple" "$TMPDIR/config.c"; then
+        echo "  [FAIL] aether_returns_tuple alias should NOT have been emitted"
+        fail=$((fail + 1))
+    else
+        echo "  [PASS] tuple-return helper correctly skipped (#277)"
+        pass=$((pass + 1))
+    fi
+
+    # Check (e) — tuple-return warning mentions the function.
+    if grep -q "returns_tuple" "$TMPDIR/stderr.log" && \
+       grep -q "tuple" "$TMPDIR/stderr.log"; then
+        echo "  [PASS] warning emitted for tuple return type (#277)"
+        pass=$((pass + 1))
+    else
+        echo "  [FAIL] expected warning about tuple return not emitted"
+        cat "$TMPDIR/stderr.log"
+        fail=$((fail + 1))
+    fi
+
+    # Check (f) — trailing-underscore helper: no alias even though its
+    # parameter and return types ARE ABI-representable. Marks file-local
+    # by convention. Closes #279.
+    if grep -q "aether_helper_" "$TMPDIR/config.c"; then
+        echo "  [FAIL] aether_helper_ alias should NOT have been emitted (trailing-_ convention)"
+        fail=$((fail + 1))
+    else
+        echo "  [PASS] trailing-underscore helper correctly skipped (#279)"
+        pass=$((pass + 1))
+    fi
+
+    # Check (g) — trailing-underscore helper is emitted as `static`.
+    if grep -qE "static (int|const char\*|void) helper_\(" "$TMPDIR/config.c"; then
+        echo "  [PASS] helper_ emitted with static linkage (#279)"
+        pass=$((pass + 1))
+    else
+        echo "  [FAIL] helper_ not emitted with static linkage"
+        grep " helper_(" "$TMPDIR/config.c" | head -3
+        fail=$((fail + 1))
+    fi
 fi
 
 echo ""

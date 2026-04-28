@@ -1,0 +1,92 @@
+// Regression test for #267 — `ptr ==/!= "literal"` codegen footgun.
+//
+// Pre-fix: an Aether comparison like `string.from_int(42) != "42"`
+// emitted a bare pointer compare in the generated C — two pointers
+// (one to the AetherString header, one to a `.rodata` string literal)
+// were never equal, so the != branch fired every time. ASCII content
+// looked fine when printed but `==`/`!=` returned wrong answers.
+//
+// Post-fix: the codegen recognises `ptr` vs `string-literal` (and vice
+// versa) as a string comparison and routes through `_aether_safe_str`
+// + strcmp, dispatching on the AetherString magic header so the
+// payload bytes are read.
+//
+// Cases covered:
+//   1. AetherString* (string.from_int) vs string literal — equal.
+//   2. AetherString* vs string literal — not equal.
+//   3. ptr == null still works (not converted to string-cmp).
+//   4. Plain literal == literal still works.
+//   5. fs.read_binary result vs string literal — wrapped result eq.
+//   6. string_concat_wrapped result vs string literal — wrapped eq.
+
+import std.string
+import std.fs
+
+extern exit(code: int)
+
+main() {
+    println("=== #267 regression: ptr ==/!= literal ===")
+
+    // Case 1: AetherString* == string literal
+    s = string.from_int(42)
+    if s == "42" {
+        println("  PASS: string.from_int(42) == \"42\"")
+    } else {
+        println("  FAIL: string.from_int(42) == \"42\" returned false")
+        exit(1)
+    }
+
+    // Case 2: AetherString* != different literal
+    s2 = string.from_int(99)
+    if s2 != "42" {
+        println("  PASS: string.from_int(99) != \"42\"")
+    } else {
+        println("  FAIL: string.from_int(99) != \"42\" returned false")
+        exit(1)
+    }
+
+    // Case 3: ptr == null stays a null check, not a string cmp.
+    p = null
+    if p == null {
+        println("  PASS: null ptr == null preserved")
+    } else {
+        println("  FAIL: null check broken")
+        exit(1)
+    }
+
+    // Case 4: plain literal vs literal
+    if "abc" == "abc" {
+        println("  PASS: \"abc\" == \"abc\" preserved")
+    } else {
+        println("  FAIL: literal-vs-literal broken")
+        exit(1)
+    }
+
+    // Case 5: fs.read_binary result vs literal. Write a known file and
+    // round-trip; the wrapped bytes must compare equal to the literal.
+    tmp = "/tmp/aether_267_regression"
+    fs.write(tmp, "hello")
+    bytes, _, err = fs.read_binary(tmp)
+    if err != "" {
+        println("  SKIP: fs.write/read_binary unavailable: ${err}")
+    } else {
+        if bytes == "hello" {
+            println("  PASS: fs.read_binary result == \"hello\"")
+        } else {
+            println("  FAIL: fs.read_binary result != \"hello\"")
+            exit(1)
+        }
+    }
+    fs.delete(tmp)
+
+    // Case 6: string_concat_wrapped result vs literal.
+    j = string_concat_wrapped("foo", "bar")
+    if j == "foobar" {
+        println("  PASS: string_concat_wrapped(\"foo\",\"bar\") == \"foobar\"")
+    } else {
+        println("  FAIL: wrapped concat result != \"foobar\"")
+        exit(1)
+    }
+
+    println("=== All cases passed ===")
+}

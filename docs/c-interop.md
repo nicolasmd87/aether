@@ -110,6 +110,71 @@ gcc -I$HOME/.aether/include/aether/runtime main.c my_math.o \
 ./myapp
 ```
 
+## Tuple Return Types — `extern foo(...) -> (T1, T2, ...)`
+
+C functions that return more than one logical value typically pack the results into a struct returned by value. Aether mirrors this on the FFI side: declare the extern with a parenthesised tuple return type, and the codegen synthesises the matching C struct typedef so the call site can destructure the result like any Aether-side tuple-returning function:
+
+```aether
+extern parse_int_safe(s: string) -> (int, string)
+
+main() {
+    val, err = parse_int_safe("42")
+    if err != "" {
+        // …handle error…
+    }
+    println(val)
+}
+```
+
+The C side provides a function returning a struct with the matching layout. The struct's fields are named `_0`, `_1`, … in declaration order, and the typedef name is `_tuple_<T1>_<T2>` (e.g. `_tuple_int_string`):
+
+```c
+#include <stdlib.h>
+#include <string.h>
+
+typedef struct { int _0; const char* _1; } _tuple_int_string;
+
+_tuple_int_string parse_int_safe(const char* s) {
+    _tuple_int_string t;
+    if (!s || !*s) { t._0 = 0; t._1 = "empty"; return t; }
+    char* end;
+    long n = strtol(s, &end, 10);
+    if (end == s) { t._0 = 0; t._1 = "not a number"; return t; }
+    t._0 = (int)n;
+    t._1 = "";
+    return t;
+}
+```
+
+Three or more elements work the same way:
+
+```aether
+extern fs_read_binary_tuple(path: string) -> (ptr, int, string)
+
+read_binary(path: string) -> {
+    return fs_read_binary_tuple(path)   // Aether destructures into (bytes, length, err)
+}
+```
+
+The struct-by-value ABI matches what Aether-side multi-return functions emit, so an Aether-defined `-> { return a, b }` and a C-side `-> (T1, T2)` extern are interchangeable from the caller's perspective.
+
+### Type-name mangling
+
+The codegen builds the typedef name from the element types' lowercase Aether names:
+
+| Aether tuple                  | C typedef name                |
+|-------------------------------|-------------------------------|
+| `(int, int)`                  | `_tuple_int_int`              |
+| `(int, string)`               | `_tuple_int_string`           |
+| `(ptr, int, string)`          | `_tuple_ptr_int_string`       |
+| `(int, float, string)`        | `_tuple_int_float_string`     |
+
+Element types use `string` for `const char*` and `ptr` for `void*`. The typedef is emitted once per unique tuple shape — multiple externs returning the same tuple share the typedef.
+
+### When to reach for it
+
+Tuple returns are the natural shape for any C function that produces a value plus an error message, a value plus a length, or any other small product type. Before this form was available, FFI authors worked around the single-scalar return by either packing values into a delimited string or splitting the operation into 4+ split-accessor externs (`<op>_raw` + `<op>_get` + `<op>_get_length` + `<op>_release` with TLS-backed storage). The tuple form replaces both patterns with a single declaration.
+
 ## Renaming a C Symbol — `@extern("c_name")`
 
 Sometimes the C symbol you want to bind has a name that clashes with a wrapper you'd like to expose, or that doesn't fit the module's naming style. Use the `@extern` annotation to bind an Aether-side name to a chosen C symbol:
@@ -340,7 +405,24 @@ void load(const char* path, char* out, size_t cap) {
 
 Both helpers accept either an `AetherString*` (the common case) or a raw `char*` (legacy TLS-arena externs whose names end in `_raw`), so shims can be agnostic about which flavour they got. Both are safe on NULL.
 
-> **Historical note:** older shims open-coded this unwrap by pattern-matching the magic number themselves (`#define AETHER_STRING_MAGIC 0xAE57C0DE` + cast). `aether_string_data` / `aether_string_length` have replaced that pattern — downstream projects (including the svn-aether port) can delete the open-coded unwrap once they pick up the new headers.
+> **Historical note:** older shims open-coded this unwrap by pattern-matching the magic number themselves (`#define AETHER_STRING_MAGIC 0xAE57C0DE` + cast). `aether_string_data` / `aether_string_length` have replaced that pattern — downstream projects can delete the open-coded unwrap once they pick up the new headers.
+
+### Aether-side string-builder return types
+
+Aether-side primitives that build strings split into two camps:
+
+| Returns `AetherString*` (length-aware, binary-safe)        | Returns plain `char*` (NUL-terminated, strlen-bounded) |
+|------------------------------------------------------------|--------------------------------------------------------|
+| `string_new`, `string_new_with_length`, `string_empty`     | `string_concat`                                        |
+| `string_from_int`, `string_from_long`, `string_from_float` | `string_substring`, `string_to_upper`, `string_to_lower` |
+| `string_format`                                            | `string_trim`                                          |
+| `string_concat_wrapped`                                    |                                                        |
+
+The split exists because Aether's `string` type is `void*`-shaped at the C level and the runtime helpers (`str_data`, `str_len`) auto-dispatch on the AetherString magic header. Code that calls `string.length(value)` on a *plain `char*`* result falls through to `strlen()` — which silently truncates at the first embedded NUL.
+
+For ASCII-text accumulation in print / interpolation contexts, `string_concat` is fine. For inputs that may contain binary bytes (base64-decoded payloads, file content from `fs.read_binary`, message frames with length-prefix bytes, …), use `string_concat_wrapped` instead — the wrapped result honors its stored length even on inputs with embedded NULs.
+
+> **Historical bug (#270):** prior to this docs entry, `string_concat` was the only Aether-side string-builder, and downstream callers built `string.length(string.concat(a, b))` patterns that worked for text and silently truncated binary content. The `_wrapped` variant closes the gap; existing call sites that operate on text don't need to change.
 
 ## Embedding Aether in C Applications
 

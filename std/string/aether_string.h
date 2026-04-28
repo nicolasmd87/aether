@@ -34,8 +34,14 @@ void string_retain(const void* str);
 void string_release(const void* str);
 void string_free(const void* str);  // Alias for release
 
-// String operations — accept both AetherString* and plain char*
+// String operations — accept both AetherString* and plain char*.
+// `string_concat` returns a plain char* payload (no AetherString
+// header). Use `string_concat_wrapped` instead when the inputs may
+// contain embedded NULs and you need length-aware downstream
+// behaviour — see #270 and docs/c-interop.md § AetherString
+// return-type contract.
 char* string_concat(const void* a, const void* b);
+AetherString* string_concat_wrapped(const void* a, const void* b);
 int string_length(const void* str);
 char string_char_at(const void* str, int index);
 int string_equals(const void* a, const void* b);
@@ -123,7 +129,12 @@ float  string_get_float(const void* s);
 int    string_try_double(const void* s);
 double string_get_double(const void* s);
 
-// Formatting (printf-style)
+// Formatting (printf-style — C-only, varargs)
 AetherString* string_format(const char* fmt, ...);
+
+// Aether-callable formatter. Walks `fmt` substituting `{}` with each
+// entry of `args` (an Aether ArrayList of strings). `{{` and `}}`
+// are literal braces. Returns a refcounted AetherString. Closes #272.
+AetherString* string_format_list(const char* fmt, void* args);
 
 #endif // AETHER_STRING_H

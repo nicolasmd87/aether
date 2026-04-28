@@ -51,6 +51,7 @@
 // on it — callers that don't touch JSON pay no cost beyond the
 // import.
 import std.json
+import std.string
 
 exports (
     request, set_header, set_body, set_timeout, set_follow_redirects, request_free,
@@ -201,12 +202,20 @@ response_redirect_error(resp: ptr) -> string { return http_response_redirect_err
 
 // Case-insensitive lookup of a single response header. Returns ""
 // if the header isn't present. Multiple values for the same header
-// name are joined with ", " (RFC 7230 §3.2.2). The returned pointer
-// is into a thread-local buffer that's overwritten on the next call —
-// callers that need to keep the value past another response_header
-// call should string_concat-copy it.
+// name are joined with ", " (RFC 7230 §3.2.2). Returns an owned
+// AetherString — each call's result is independent, so callers can
+// hold multiple header values across calls without aliasing.
+//
+// Pre-fix the underlying `http_response_header_raw` returned a
+// borrowed pointer into a per-thread buffer that the next call
+// would clobber, leaving any held variable referring to the
+// clobbered slot. Calling `response_header` twice and reading both
+// lengths reported the same (clobbered) length for both. Snapshot
+// here via `string.copy` so the returned bytes are owned end-to-
+// end. Closes #269.
 response_header(resp: ptr, name: string) -> string {
-    return http_response_header_raw(resp, name)
+    raw = http_response_header_raw(resp, name)
+    return string.copy(raw)
 }
 
 // Raw header block (status line + every "Name: value" line, \r\n-

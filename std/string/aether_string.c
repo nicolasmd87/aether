@@ -117,6 +117,36 @@ char* string_concat(const void* a, const void* b) {
     return new_data;
 }
 
+// Length-bearing variant of string_concat. Returns an AetherString*
+// (refcounted, length-aware) rather than a bare char* — callers that
+// later run `string.length(result)` on this value read the stored
+// length from the magic-dispatch path rather than falling through to
+// strlen() and silently truncating at the first embedded NUL.
+//
+// Use this when the inputs may contain binary bytes (base64-decoded
+// payloads, file content from fs.read_binary, message frames with
+// length-prefix bytes, …). For ASCII-text accumulation in print /
+// interpolation contexts the plain `string_concat` is fine. See #270.
+AetherString* string_concat_wrapped(const void* a, const void* b) {
+    if (!a || !b) return NULL;
+    size_t la = str_len(a), lb = str_len(b);
+    const char* da = str_data(a);
+    const char* db = str_data(b);
+
+    if (la > SIZE_MAX - lb - 1) return NULL;
+    size_t new_length = la + lb;
+
+    char* joined = (char*)malloc(new_length + 1);
+    if (!joined) return NULL;
+    if (la) memcpy(joined, da, la);
+    if (lb) memcpy(joined + la, db, lb);
+    joined[new_length] = '\0';
+
+    AetherString* wrapped = string_new_with_length(joined, new_length);
+    free(joined);
+    return wrapped;
+}
+
 int string_length(const void* str) {
     return (int)str_len(str);
 }
@@ -578,5 +608,80 @@ AetherString* string_format(const char* fmt, ...) {
 
     AetherString* result = string_new_with_length(buffer, size);
     free(buffer);
+    return result;
+}
+
+/* Aether-callable formatter — Aether externs don't support varargs,
+ * so the public surface takes an ArrayList of arguments and walks
+ * the format string substituting `{}` placeholders with each list
+ * entry. Closes #272.
+ *
+ * Placeholders: `{}` is replaced with the next arg (Rust-style).
+ * `{{` is a literal `{`; `}}` is a literal `}`. List entries are
+ * read as strings (AetherString* or plain char*); ints and other
+ * types should be converted via `string.from_int(...)` first.
+ *
+ * Why `{}` not `%s`: it composes more cleanly with Aether's existing
+ * `${...}` interpolation surface (interpolation is for callsite-
+ * literal substitution; format is for runtime-built strings) and it
+ * leaves the `%`-prefix open for typed printf-style formatters
+ * (`%d`, `%.3f`) without breaking compatibility if those land later.
+ */
+extern int   list_size(void* list);
+extern void* list_get_raw(void* list, int index);
+
+AetherString* string_format_list(const char* fmt, void* args) {
+    if (!fmt) return string_empty();
+    int n_args = args ? list_size(args) : 0;
+    int next_arg = 0;
+
+    /* First pass: compute total length so we can allocate exactly
+     * once. Read placeholders and arg lengths to size the buffer. */
+    size_t total = 0;
+    const char* p = fmt;
+    while (*p) {
+        if (p[0] == '{' && p[1] == '{') { total++; p += 2; continue; }
+        if (p[0] == '}' && p[1] == '}') { total++; p += 2; continue; }
+        if (p[0] == '{' && p[1] == '}') {
+            if (next_arg < n_args) {
+                void* a = list_get_raw(args, next_arg);
+                size_t alen = a ? str_len(a) : 0;
+                total += alen;
+                next_arg++;
+            }
+            p += 2; continue;
+        }
+        total++; p++;
+    }
+
+    char* out = (char*)malloc(total + 1);
+    if (!out) return string_empty();
+
+    /* Second pass: write the bytes. */
+    next_arg = 0;
+    size_t pos = 0;
+    p = fmt;
+    while (*p) {
+        if (p[0] == '{' && p[1] == '{') { out[pos++] = '{'; p += 2; continue; }
+        if (p[0] == '}' && p[1] == '}') { out[pos++] = '}'; p += 2; continue; }
+        if (p[0] == '{' && p[1] == '}') {
+            if (next_arg < n_args) {
+                void* a = list_get_raw(args, next_arg);
+                if (a) {
+                    size_t alen = str_len(a);
+                    const char* adata = str_data(a);
+                    if (alen > 0) memcpy(out + pos, adata, alen);
+                    pos += alen;
+                }
+                next_arg++;
+            }
+            p += 2; continue;
+        }
+        out[pos++] = *p++;
+    }
+    out[pos] = '\0';
+
+    AetherString* result = string_new_with_length(out, pos);
+    free(out);
     return result;
 }

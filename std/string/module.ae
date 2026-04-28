@@ -5,7 +5,7 @@ exports (
     string_new, string_from_cstr, string_from_literal,
     string_new_with_length, string_empty,
     string_retain, string_release, string_free,
-    string_concat, string_length, string_char_at,
+    string_concat, string_concat_wrapped, string_length, string_char_at,
     string_equals, string_compare,
     string_starts_with, string_ends_with, string_contains,
     string_index_of, string_index_of_from, string_substring,
@@ -16,7 +16,8 @@ exports (
     string_try_int, string_get_int, string_try_long, string_get_long,
     string_try_float, string_get_float, string_try_double, string_get_double,
     to_int, to_long, to_float, to_double,
-    strip_prefix, copy
+    strip_prefix, copy,
+    string_format_list, format
 )
 
 // String creation
@@ -33,6 +34,12 @@ extern string_free(str: string)
 
 // String operations
 extern string_concat(a: string, b: string) -> string
+// Length-bearing concat. Returns a refcounted AetherString; downstream
+// string.length() honours the stored length rather than falling
+// through to strlen() and silently truncating at the first NUL. Use
+// when joining inputs that may contain binary bytes (base64-decoded
+// payloads, fs.read_binary output, …). Issue #270.
+extern string_concat_wrapped(a: string, b: string) -> ptr
 extern string_length(str: string) -> int
 extern string_char_at(str: string, index: int) -> int
 extern string_equals(a: string, b: string) -> int
@@ -149,4 +156,27 @@ strip_prefix(s: string, prefix: string) -> {
 // discoverable name.
 copy(s: string) -> string {
     return string_concat(s, "")
+}
+
+// Format a string by substituting `{}` placeholders with the
+// corresponding entries of `args` (an `std.list` of strings).
+// `{{` and `}}` are literal braces. Returns a refcounted
+// AetherString. Closes #272.
+//
+// Use this for runtime-built strings of N parts where literal
+// `${...}` interpolation isn't usable (e.g. when the format string
+// itself comes from a config file or message-template lookup):
+//
+//     args = list_new()
+//     list_add(args, "PUT")
+//     list_add(args, "/foo/bar")
+//     list_add(args, "alice")
+//     msg = string.format("{} {} by {}", args)   // "PUT /foo/bar by alice"
+//
+// Non-string values (ints, floats) need explicit conversion via
+// `string.from_int(n)` etc. before being added to the list.
+extern string_format_list(fmt: string, args: ptr) -> ptr
+
+format(fmt: string, args: ptr) -> string {
+    return string_format_list(fmt, args)
 }

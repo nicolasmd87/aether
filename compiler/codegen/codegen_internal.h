@@ -46,6 +46,11 @@ void emit_message_array_hoists(CodeGenerator* gen, ASTNode* message, MessageDef*
 
 /* Statement generation (codegen_stmt.c) */
 void generate_statement(CodeGenerator* gen, ASTNode* stmt);
+/* Hoist variables first-declared inside if-statement branches at the
+   enclosing function-body scope when they're referenced outside the
+   if-block. Closes #278. Called from codegen_func.c before iterating
+   the body's top-level statements. */
+void hoist_if_branch_vars(CodeGenerator* gen, ASTNode* body);
 
 /* Actor generation (codegen_actor.c) */
 void generate_actor_definition(CodeGenerator* gen, ASTNode* actor);

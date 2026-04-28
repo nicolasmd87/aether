@@ -58,6 +58,19 @@ Both add C files to the build — they are additive when both are present.
 | **Good for** | C helpers your program always needs | Renderer backends, platform variants |
 | **Works with** | `ae build` and `ae run` | `ae build` and `ae run` |
 
+### Resolving the build target
+
+`ae build` accepts either a path to a `.ae` file or a `[[bin]]` name from `aether.toml`. The two are equivalent:
+
+```sh
+ae build src/main.ae   # explicit path
+ae build myapp         # [[bin]] name = "myapp"
+```
+
+When the positional argument doesn't exist as a file, `ae` checks `aether.toml`'s `[[bin]]` entries for a matching `name = "..."` and uses that bin's `path` field. Cargo and similar build systems work the same way.
+
+If you run `ae build` from a subdirectory and there's no `aether.toml` in the current directory, `ae` walks up the directory tree looking for one. When it finds an ancestor `aether.toml`, it switches to that directory before resolving paths — so `cd src && ae build main.ae` works as if you had run `ae build src/main.ae` from the project root, and `extra_sources` declared in the toml are still applied. Walk-up only happens when there's no toml in the current directory; a project with a local `aether.toml` always wins.
+
 ---
 
 ## Build Cache

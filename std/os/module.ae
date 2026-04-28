@@ -2,7 +2,7 @@
 // Import with: import std.os
 
 exports (
-    os_system, os_exec_raw, os_run, os_run_capture_raw,
+    os_system, os_exec_raw, os_run, os_run_capture_raw, os_run_capture_status_raw,
     os_getenv, os_which,
     aether_args_count, aether_args_get, aether_argv0,
     os_execv, os_now_utc_iso8601_raw,
@@ -30,9 +30,14 @@ extern os_run(prog: string, argv: ptr, env: ptr) -> int
 
 // Same as os_run but captures the child's stdout. Raw extern returns
 // null on spawn failure. Use the Go-style wrapper `os.run_capture` in
-// most code. The child's exit code is discarded — use os_run if you
-// need both.
+// most code. The child's exit code is discarded — use os_run, or the
+// tuple-returning `os_run_capture_status_raw` below, if you need both.
 extern os_run_capture_raw(prog: string, argv: ptr, env: ptr) -> string
+
+// Tuple sibling that exposes the child's exit code. Returns
+// (stdout, status, err) — see the Aether-side `run_capture` wrapper
+// for the per-slot semantics. Issue #289.
+extern os_run_capture_status_raw(prog: string, argv: ptr, env: ptr) -> (string, int, string)
 
 // Get environment variable, returns string or NULL if not set
 extern os_getenv(name: string) -> string
@@ -76,16 +81,21 @@ exec(cmd: string) -> {
     return output_copy, ""
 }
 
-// Run a child process and capture its stdout. Returns (output, "") on
-// success, ("", error) on spawn failure. Argv-based — no shell, no
-// quoting issues. Use os_run if you need the exit code instead.
+// Run a child process and capture its stdout. Returns
+// `(output, status, err)`:
+//   - output: child's stdout. Empty string on spawn failure.
+//   - status: child's exit code (WEXITSTATUS) on normal exit;
+//             -1 when killed by signal or the spawn itself failed.
+//   - err:    "" on successful spawn regardless of exit code;
+//             non-empty only when the fork/exec couldn't run.
+//
+// Argv-based — no shell, no quoting issues. The status slot lets
+// callers distinguish "ran cleanly" (status == 0) from "ran but
+// exited non-zero" (e.g. `diff3 -m` returning 1 to signal conflicts,
+// `grep` returning 1 for no-match, `gcc` returning non-zero on
+// compile errors). Issue #289.
 run_capture(prog: string, argv: ptr, env: ptr) -> {
-    output = os_run_capture_raw(prog, argv, env)
-    if output == null {
-        return "", "spawn failed"
-    }
-    output_copy = string_concat(output, "")
-    return output_copy, ""
+    return os_run_capture_status_raw(prog, argv, env)
 }
 
 // argv[0] — path the OS launched the current process with. Returns "" if

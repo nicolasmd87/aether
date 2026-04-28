@@ -784,6 +784,15 @@ static void emit_lib_alias_stubs(CodeGenerator* gen, ASTNode* program) {
         // are an implementation detail of the importer).
         if (fn->is_imported) continue;
 
+        // Skip trailing-underscore "private helper" convention: `foo_`
+        // means file-local. Emitting an aether_<name> alias for it
+        // (a) leaks an internal name into the public ABI, and
+        // (b) causes a duplicate-symbol link error when two .ae files
+        //     in the same --namespace bundle pick the same helper
+        //     name (they each generate their own alias). Closes #279.
+        size_t name_len = strlen(fn->value);
+        if (name_len > 0 && fn->value[name_len - 1] == '_') continue;
+
         // Check that every param type is ABI-representable.
         // The last non-guard, non-block child is the body; everything before
         // is parameters (plus optional guard clauses).
@@ -824,8 +833,26 @@ static void emit_lib_alias_stubs(CodeGenerator* gen, ASTNode* program) {
         // Return type. If the function has a return-with-value but node_type
         // is void/unknown, fall back to int32_t (mirrors the internal rule
         // of defaulting unknown returns to int).
+        //
+        // EXCEPT: if the return type is non-NULL but a *tuple*, the
+        // alias would emit a signature that doesn't match the function
+        // (`int32_t aether_helper(...)` calling a `_tuple_int_int`
+        // returner). Skip the alias entirely with the same warning the
+        // parameter-side check uses. Closes #277.
         const char* ret_abi = get_abi_type(fn->node_type);
         int returns_value = has_return_value(fn);
+        int return_is_tuple = (fn->node_type && fn->node_type->kind == TYPE_TUPLE);
+        if (return_is_tuple) {
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                     "function '%s' returns a tuple; --emit=lib alias stub skipped (tuples aren't part of the public ABI)",
+                     fn->value);
+            AetherError w = {NULL, NULL, fn->line, fn->column, msg,
+                             "wrap the tuple-returning function with one that returns a single ABI-safe value if it should be exposed across the library boundary",
+                             NULL, AETHER_ERR_NONE};
+            aether_warning_report(&w);
+            continue;
+        }
         if (!ret_abi) {
             if (returns_value) {
                 ret_abi = "int32_t";
@@ -1172,9 +1199,16 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "    va_end(args2);");
     print_line(gen, "    return (void*)str;");
     print_line(gen, "}");
-    /* NULL-safe string helper for print/println — avoids double-evaluating the expression */
+    /* NULL-safe string helper for print/println — avoids double-evaluating
+     * the expression. Goes through aether_string_data() which dispatches
+     * on the AetherString magic header so values returned by length-
+     * bearing primitives (string_from_int, string_concat_wrapped,
+     * fs.read_binary, …) print their payload bytes rather than the
+     * struct header. Plain char* values pass through unchanged. */
+    print_line(gen, "extern const char* aether_string_data(const void* s);");
     print_line(gen, "static inline const char* _aether_safe_str(const void* s) {");
-    print_line(gen, "    return s ? (const char*)s : \"(null)\";");
+    print_line(gen, "    if (!s) return \"(null)\";");
+    print_line(gen, "    return aether_string_data(s);");
     print_line(gen, "}");
     // Built-in `sleep(ms)` lowers to aether_sleep_ms — a runtime helper
     // with a stable, prefixed name so user `extern sleep(...)` doesn't
@@ -1348,6 +1382,33 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
             merge_return_tuple_types(child, child->node_type);
             ensure_tuple_typedef(gen, child->node_type);
         }
+        // Externs with `-> (T1, T2, ...)` need the same typedef. The
+        // return type is parsed directly (no inference from a body), so
+        // no merge step is needed. Issue #271.
+        if (child && child->type == AST_EXTERN_FUNCTION && child->node_type &&
+            child->node_type->kind == TYPE_TUPLE) {
+            ensure_tuple_typedef(gen, child->node_type);
+        }
+        // Imported modules' externs that have tuple return types also
+        // need the typedef synthesised here, even when the user didn't
+        // selectively import them — the import-handling path below
+        // forward-declares every extern in the module, which would
+        // otherwise reference an undeclared `_tuple_T1_T2` typedef.
+        // See `case AST_IMPORT_STATEMENT` in the main loop. Issue #289.
+        if (child && child->type == AST_IMPORT_STATEMENT && child->value) {
+            AetherModule* mod_entry = module_find(child->value);
+            ASTNode* mod_ast = mod_entry ? mod_entry->ast : NULL;
+            if (mod_ast) {
+                for (int j = 0; j < mod_ast->child_count; j++) {
+                    ASTNode* decl = mod_ast->children[j];
+                    if (decl && decl->type == AST_EXTERN_FUNCTION &&
+                        decl->node_type &&
+                        decl->node_type->kind == TYPE_TUPLE) {
+                        ensure_tuple_typedef(gen, decl->node_type);
+                    }
+                }
+            }
+        }
     }
     // Propagate merged return types to all function call sites in the program
     // (call node_types may have UNKNOWN elements from before the merge)
@@ -1358,6 +1419,14 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         if ((child->type == AST_FUNCTION_DEFINITION || child->type == AST_BUILDER_FUNCTION) && child->node_type &&
             child->node_type->kind == TYPE_TUPLE && child->value) {
             // Find all calls to this function in the program and update their node_type
+            extern void propagate_tuple_type_to_calls(ASTNode* node, const char* func_name, Type* type);
+            propagate_tuple_type_to_calls(program, child->value, child->node_type);
+        }
+        // Same propagation for tuple-returning externs — call sites
+        // need to know they're consuming a `_tuple_T1_T2` struct so
+        // the destructure (`a, b = extern_fn(...)`) emits correctly.
+        if (child->type == AST_EXTERN_FUNCTION && child->node_type &&
+            child->node_type->kind == TYPE_TUPLE && child->value) {
             extern void propagate_tuple_type_to_calls(ASTNode* node, const char* func_name, Type* type);
             propagate_tuple_type_to_calls(program, child->value, child->node_type);
         }
@@ -1467,8 +1536,14 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         // otherwise C rejects the file with "static declaration follows
         // non-static declaration". `@c_callback` (#235) opts the function
         // out of `static` so it stays externally addressable; the forward
-        // declaration follows suit.
-        if (child->is_imported && !is_c_callback(child)) {
+        // declaration follows suit. Trailing-underscore private helpers
+        // (#279) match the same `static` rule.
+        int fwd_trailing_private = 0;
+        if (child->value && !is_c_callback(child)) {
+            size_t nlen = strlen(child->value);
+            if (nlen > 0 && child->value[nlen - 1] == '_') fwd_trailing_private = 1;
+        }
+        if ((child->is_imported || fwd_trailing_private) && !is_c_callback(child)) {
             fprintf(gen->output, "static ");
         }
 

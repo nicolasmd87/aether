@@ -1,0 +1,53 @@
+// Regression test for #270 — `string_concat_wrapped` preserves length
+// across embedded NULs.
+//
+// The plain `string.concat` returns a bare char* (no AetherString
+// header), so downstream `string.length()` falls through to strlen()
+// and silently truncates at the first NUL. The wrapped variant
+// returns an AetherString* whose stored length is honoured by the
+// magic-dispatch path in `str_len`.
+//
+// This test confirms:
+//   1. Binary content (here: cryptography.base64_decode of an input
+//      that decodes to bytes with embedded NULs) round-trips through
+//      `string_concat_wrapped` without loss.
+//   2. The plain `string.concat` is still useful for ASCII-text use.
+//   3. `println` of an AetherString* (returned from string.from_int)
+//      prints the payload, not the magic header — confirms the
+//      codegen `_aether_safe_str` fix paired with #270.
+
+import std.string
+import std.cryptography
+
+extern exit(code: int)
+
+main() {
+    // Case 1: wrapped concat with binary content — embedded NULs survive.
+    raw, raw_len, _ = cryptography.base64_decode("AABCAA==")  // 4 bytes: 0x00 0x00 0x42 0x00
+    if raw_len != 4 {
+        println("FAIL: base64_decode raw_len=${raw_len}, expected 4")
+        exit(1)
+    }
+    joined = string_concat_wrapped("[", raw)
+    n = string.length(joined)
+    if n != 5 {
+        println("FAIL: string.length(wrapped concat) = ${n}, expected 5")
+        exit(1)
+    }
+
+    // Case 2: plain string.concat still works for text.
+    plain = string.concat("hello", " world")
+    if string.length(plain) != 11 {
+        println("FAIL: plain concat length = ${string.length(plain)}, expected 11")
+        exit(1)
+    }
+
+    // Case 3: println of an AetherString* prints the payload, not the
+    // magic header. Pre-fix, this printed garbage bytes.
+    a = string.from_int(42)
+    // Just verify it doesn't crash; visible-output check is in the
+    // shell test that wraps this.
+    println(a)
+
+    println("OK")
+}
