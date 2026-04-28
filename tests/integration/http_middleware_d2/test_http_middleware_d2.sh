@@ -50,19 +50,30 @@ AETHER_HOME="$ROOT" STATIC_ROOT="$STATIC_ROOT" \
     "$AE" run "$SCRIPT_DIR/server.ae" >"$TMPDIR/srv.log" 2>&1 &
 SRV_PID=$!
 
-deadline=$(($(date +%s) + 5))
+URL_BASE="http://127.0.0.1:18106"
+
+# Wait for the server to actually accept connections, not just print
+# READY. server.ae prints READY before the SrvActor receives StartSrv
+# and calls http_server_start_raw — on slow runners (Windows GHA)
+# that gap can be ~hundreds of ms. Probe the port until any HTTP
+# response comes back.
+deadline=$(($(date +%s) + 15))
 while [ "$(date +%s)" -lt "$deadline" ]; do
-    if grep -q READY "$TMPDIR/srv.log" 2>/dev/null; then break; fi
     if ! kill -0 "$SRV_PID" 2>/dev/null; then
         echo "  [FAIL] server died:"
         head -30 "$TMPDIR/srv.log"
         exit 1
     fi
+    if curl -s -o /dev/null --max-time 1 "$URL_BASE/" 2>/dev/null; then
+        break
+    fi
     sleep 0.1
 done
-sleep 0.3
-
-URL_BASE="http://127.0.0.1:18106"
+if [ "$(date +%s)" -ge "$deadline" ]; then
+    echo "  [FAIL] server never accepted connections within 15s"
+    head -30 "$TMPDIR/srv.log"
+    exit 1
+fi
 
 # --- rewrite: /old/data should hit the /api/data handler ---
 status=$(curl -s -o "$TMPDIR/rw.body" -w '%{http_code}' --max-time 5 \

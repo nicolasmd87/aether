@@ -37,19 +37,30 @@ trap cleanup EXIT
 AETHER_HOME="$ROOT" "$AE" run "$SCRIPT_DIR/server.ae" >"$TMPDIR/srv.log" 2>&1 &
 SRV_PID=$!
 
-deadline=$(($(date +%s) + 5))
+URL="http://127.0.0.1:18105/"
+
+# Wait for the server to actually accept connections, not just print
+# READY. server.ae prints READY before the SrvActor receives StartSrv
+# and calls http_server_start_raw — on slow runners (Windows GHA)
+# that gap can be ~hundreds of ms. Probe the port until any HTTP
+# response comes back (auth-middleware 401 still means we're in).
+deadline=$(($(date +%s) + 15))
 while [ "$(date +%s)" -lt "$deadline" ]; do
-    if grep -q READY "$TMPDIR/srv.log" 2>/dev/null; then break; fi
     if ! kill -0 "$SRV_PID" 2>/dev/null; then
         echo "  [FAIL] server died:"
         head -20 "$TMPDIR/srv.log"
         exit 1
     fi
+    if curl -s -o /dev/null --max-time 1 "$URL" 2>/dev/null; then
+        break
+    fi
     sleep 0.1
 done
-sleep 0.3
-
-URL="http://127.0.0.1:18105/"
+if [ "$(date +%s)" -ge "$deadline" ]; then
+    echo "  [FAIL] server never accepted connections within 15s"
+    head -20 "$TMPDIR/srv.log"
+    exit 1
+fi
 
 # --- vhost: unknown host -> 404 ---
 status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
@@ -123,16 +134,17 @@ fi
 # requests are short-circuited BEFORE rate_limit, so they don't
 # count). Burst 15 more — past the 10-token budget — and expect
 # at least one 429 with a Retry-After header.
+# Capture headers on every request so when we hit the first 429 we
+# can verify Retry-After is on THAT response — firing a second curl
+# to fetch the headers would race the bucket refill window, which on
+# slower runners is enough for the next request to pass.
 got_429=0
 for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
-    status=$(curl -s -o /dev/null -w '%{http_code}' --max-time 5 \
+    H="$TMPDIR/hr.$n"
+    status=$(curl -s -D "$H" -o /dev/null -w '%{http_code}' --max-time 5 \
         -u "alice:secret" -H "Host: localhost" "$URL")
     if [ "$status" = "429" ]; then
         got_429=1
-        # Verify Retry-After is present.
-        H="$TMPDIR/hr"
-        curl -s -D "$H" -o /dev/null --max-time 5 \
-            -u "alice:secret" -H "Host: localhost" "$URL" >/dev/null
         if ! grep -qi "Retry-After:" "$H"; then
             echo "  [FAIL] rate_limit: 429 without Retry-After header"
             cat "$H"
@@ -142,7 +154,7 @@ for n in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
     fi
 done
 if [ "$got_429" -ne 1 ]; then
-    echo "  [FAIL] rate_limit: budget never exhausted across 8 extra requests"
+    echo "  [FAIL] rate_limit: budget never exhausted across 15 extra requests"
     exit 1
 fi
 
