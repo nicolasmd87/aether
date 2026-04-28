@@ -1,0 +1,129 @@
+// Regression test for #274 — std.collections.string_list_*
+// retains AetherString refcounts so a value pushed into a list
+// survives even when the original variable's scope ends.
+//
+// The plain std.list (ArrayList) stores items as raw void* and
+// doesn't bump the refcount. If the caller relied on it, an
+// AetherString pushed and held would silently dangle once its
+// original ref dropped to zero. string_list takes a strong
+// reference on insert and releases on remove / clear / free.
+//
+// Cases:
+//   1. Add + get: round-trip a wrapped AetherString.
+//   2. Locality survival: build a list inside a function whose
+//      local string variable goes out of scope, then read from
+//      the list under simulated allocator pressure (a loop that
+//      allocates many unrelated strings to clobber slots a naive
+//      list would have left dangling).
+//   3. set: replacing an entry releases the old + retains the new.
+//   4. remove: releases the entry's refcount.
+//   5. clear: releases every entry but keeps the backing alloc.
+//   6. Plain string literal: passes through (string_retain is a
+//      no-op on values that don't bear the magic header).
+
+import std.string
+import std.collections
+
+extern exit(code: int)
+
+build_with_local() -> ptr {
+    L = string_list_new()
+    s = string.copy("ephemeral")  // wrapped AetherString*
+    string_list_add(L, s)
+    // `s` goes out of scope on return — the list's retain is what
+    // keeps the bytes alive.
+    return L
+}
+
+main() {
+    // Case 1: add + get round-trip.
+    L1 = string_list_new()
+    string_list_add(L1, string.copy("alpha"))
+    string_list_add(L1, string.copy("beta"))
+    if string_list_size(L1) != 2 {
+        println("FAIL 1: size=${string_list_size(L1)}, want 2")
+        exit(1)
+    }
+    a = string_list_get(L1, 0)
+    if string.equals(a, "alpha") == 0 {
+        println("FAIL 1: get(0)='${a}', want 'alpha'")
+        exit(1)
+    }
+    b = string_list_get(L1, 1)
+    if string.equals(b, "beta") == 0 {
+        println("FAIL 1: get(1)='${b}', want 'beta'")
+        exit(1)
+    }
+    string_list_free(L1)
+    println("  PASS 1: add + get round-trip")
+
+    // Case 2: locality survival under allocator pressure.
+    L2 = build_with_local()
+    // Force allocator pressure: build many unrelated strings.
+    i = 0
+    while i < 100 {
+        x = string.copy("filler-padding-padding")
+        i = i + 1
+    }
+    got = string_list_get(L2, 0)
+    if string.equals(got, "ephemeral") == 0 {
+        println("FAIL 2: locality lost; got '${got}', want 'ephemeral'")
+        exit(1)
+    }
+    string_list_free(L2)
+    println("  PASS 2: value survives caller's scope under allocator pressure")
+
+    // Case 3: set releases old + retains new.
+    L3 = string_list_new()
+    string_list_add(L3, string.copy("first"))
+    string_list_set(L3, 0, string.copy("second"))
+    if string.equals(string_list_get(L3, 0), "second") == 0 {
+        println("FAIL 3: set didn't replace")
+        exit(1)
+    }
+    string_list_free(L3)
+    println("  PASS 3: set replaces")
+
+    // Case 4: remove releases.
+    L4 = string_list_new()
+    string_list_add(L4, string.copy("a"))
+    string_list_add(L4, string.copy("b"))
+    string_list_add(L4, string.copy("c"))
+    string_list_remove(L4, 1)
+    if string_list_size(L4) != 2 {
+        println("FAIL 4: post-remove size=${string_list_size(L4)}, want 2")
+        exit(1)
+    }
+    if string.equals(string_list_get(L4, 1), "c") == 0 {
+        println("FAIL 4: get(1) after remove")
+        exit(1)
+    }
+    string_list_free(L4)
+    println("  PASS 4: remove shifts and releases")
+
+    // Case 5: clear empties the list.
+    L5 = string_list_new()
+    string_list_add(L5, string.copy("x"))
+    string_list_add(L5, string.copy("y"))
+    string_list_clear(L5)
+    if string_list_size(L5) != 0 {
+        println("FAIL 5: post-clear size=${string_list_size(L5)}, want 0")
+        exit(1)
+    }
+    string_list_free(L5)
+    println("  PASS 5: clear empties")
+
+    // Case 6: plain string literal — string_retain is a no-op so
+    // the literal passes through unchanged.
+    L6 = string_list_new()
+    string_list_add(L6, "literal")
+    got6 = string_list_get(L6, 0)
+    if string.equals(got6, "literal") == 0 {
+        println("FAIL 6: literal pass-through")
+        exit(1)
+    }
+    string_list_free(L6)
+    println("  PASS 6: literal passes through")
+
+    println("OK")
+}

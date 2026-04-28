@@ -1,0 +1,75 @@
+// Regression test for #297 — AetherString* values typed `string`
+// are unwrapped to their payload bytes before being passed to a
+// naive C extern declared `const char*`.
+//
+// Pre-fix, calling
+//
+//     probe_consume(string_concat_wrapped("AB", ""), 2)
+//
+// would hand the C side the AetherString **struct header** address.
+// memcpy/strlen on that pointer read the magic+refcount bytes
+// (0xDE 0xC0 0x57 0xAE little-endian) instead of the payload "AB".
+// The fix in compiler/codegen/codegen_expr.c emits
+// `aether_string_data(value)` at the call site for any TYPE_STRING
+// arg crossing into a non-stdlib-aware C extern.
+
+import std.string
+import std.bytes
+import std.cryptography
+
+extern read_first4_as_int(content: string) -> int
+extern memcpy_into(dst: string, src: string, n: int) -> int
+
+extern exit(code: int)
+
+main() {
+    // Case 1: AetherString* from string_concat_wrapped — first 4
+    // bytes the C side sees should be 'A','B','0','0' (the second
+    // two are the malloc'd buffer's tail past the payload — could
+    // be anything, but the FIRST two MUST be the payload).
+    wrapped = string_concat_wrapped("AB", "")
+    if string.length(wrapped) != 2 {
+        println("FAIL: wrapped length=${string.length(wrapped)}, want 2")
+        exit(1)
+    }
+    v = read_first4_as_int(wrapped)
+    /* Bytes "AB\0\0" little-endian → 0x00004241 = 16961 */
+    if (v & 0xFFFF) != 16961 {
+        println("FAIL: read_first4 saw bytes=${v & 0xFFFF}, want 16961 (\"AB\\0\\0\")")
+        println("      (pre-fix this would be 0xC0DE = 49374, the AetherString magic)")
+        exit(1)
+    }
+
+    // Case 2: cryptography.base64_decode returns an AetherString*
+    // with embedded NULs. The C side memcpys 4 bytes; the buffer
+    // we receive should contain those 4 bytes verbatim.
+    raw, raw_len, _ = cryptography.base64_decode("AABCAA==")  // 0x00 0x00 0x42 0x00
+    if raw_len != 4 {
+        println("FAIL: base64 raw_len=${raw_len}, want 4")
+        exit(1)
+    }
+    b = bytes.new(8)
+    bytes.set(b, 0, 0)
+    bytes.set(b, 1, 0)
+    bytes.set(b, 2, 0)
+    bytes.set(b, 3, 0)
+    out = bytes.finish(b, 4)
+    memcpy_into(out, raw, 4)
+    /* Read back as int — bytes 0x00 0x00 0x42 0x00 little-endian
+     * → 0x00420000 = 4325376. Pre-fix this would have been the
+     * magic/refcount bytes ≈ 0x000001AE57C0DE — nothing close. */
+    v2 = read_first4_as_int(out)
+    if v2 != 4325376 {
+        println("FAIL: memcpy result=${v2}, want 4325376 (0x00420000)")
+        exit(1)
+    }
+
+    // Case 3: plain string literal — must still pass through correctly.
+    v3 = read_first4_as_int("AB")
+    if (v3 & 0xFFFF) != 16961 {
+        println("FAIL: literal read=${v3 & 0xFFFF}, want 16961")
+        exit(1)
+    }
+
+    println("OK")
+}

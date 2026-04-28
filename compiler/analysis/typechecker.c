@@ -1361,6 +1361,27 @@ int typecheck_program(ASTNode* program) {
                 if (func_sym) func_sym->node = child;
                 break;
             }
+            case AST_EXPORT_STATEMENT: {
+                // `export X(...) { ... }` wraps the function definition
+                // in AST_EXPORT_STATEMENT. Unwrap and register the inner
+                // function so same-file callers can resolve it via the
+                // ordinary lexical-scope path. The export modifier is a
+                // visibility annotation for cross-module qualified
+                // calls; it shouldn't gate intra-module bare calls.
+                // Closes #287.
+                if (child->child_count > 0) {
+                    ASTNode* inner = child->children[0];
+                    if (inner && (inner->type == AST_FUNCTION_DEFINITION ||
+                                  inner->type == AST_BUILDER_FUNCTION) &&
+                        inner->value) {
+                        add_symbol(global_table, inner->value,
+                                   clone_type(inner->node_type), 0, 1, 0);
+                        Symbol* sym = lookup_symbol(global_table, inner->value);
+                        if (sym) sym->node = inner;
+                    }
+                }
+                break;
+            }
             case AST_EXTERN_FUNCTION: {
                 // Register extern C function in symbol table
                 add_symbol(global_table, child->value, clone_type(child->node_type), 0, 1, 0);
@@ -1731,6 +1752,14 @@ int typecheck_node(ASTNode* node, SymbolTable* table) {
         case AST_BUILDER_FUNCTION:
         case AST_FUNCTION_DEFINITION:
             return typecheck_function_definition(node, table);
+        case AST_EXPORT_STATEMENT:
+            // Type-check the inner declaration. The wrapper is purely a
+            // visibility annotation; any same-file caller went through
+            // the unwrap-and-register path in the first pass (#287).
+            if (node->child_count > 0) {
+                return typecheck_node(node->children[0], table);
+            }
+            return 1;
         case AST_EXTERN_FUNCTION:
             // Extern functions have no body to check - just a declaration
             return 1;

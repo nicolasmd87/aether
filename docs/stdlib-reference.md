@@ -77,6 +77,43 @@ main() {
 
 Raw extern: `list_add_raw` (returns 1/0).
 
+### String list (`string_list_*`)
+
+Refcount-aware list for `AetherString` values. Use this instead of plain `list_*` when the list is meant to hold strings — the plain list stores items as raw `void*` and doesn't bump the refcount, so a string pushed and held while its original variable goes out of scope silently dangles.
+
+```aether
+import std.collections
+import std.string
+
+build() -> ptr {
+    L = string_list_new()
+    s = string.copy("ephemeral")   // wrapped AetherString*
+    string_list_add(L, s)          // takes a strong reference
+    return L
+    // `s` goes out of scope; the list's retain keeps the bytes alive.
+}
+
+main() {
+    L = build()
+    println(string_list_get(L, 0))  // "ephemeral"
+    string_list_free(L)             // releases every entry
+}
+```
+
+Plain string literals pass through unchanged — `string_retain` is a no-op on values that don't bear the AetherString magic header.
+
+**Functions:**
+- `string_list_new()` → `ptr` - Allocate an empty list
+- `string_list_add(list, s)` → `int` - Append; takes a strong reference; returns 1 on success, 0 on OOM
+- `string_list_get(list, index)` → `string` - Borrowed read; null on OOB
+- `string_list_set(list, index, s)` - Replace at index; releases old + retains new
+- `string_list_size(list)` → `int` - -1 on null
+- `string_list_remove(list, index)` - Remove + release the entry
+- `string_list_clear(list)` - Drop every entry, keep the backing alloc
+- `string_list_free(list)` - Release every entry then free
+
+For a similar `string_map`, file an issue — same pattern would apply. Issue #274.
+
 ### Map (`std.map`)
 
 Hash map implementation.
