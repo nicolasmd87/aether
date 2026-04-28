@@ -15,11 +15,36 @@ typedef struct AetherString {
     char* data;
 } AetherString;
 
-// Check if a pointer is an AetherString (vs raw char*)
+// Check if a pointer is an AetherString (vs raw char*).
+//
+// Reads bytes from the pointer to look for the magic header. Done
+// byte-by-byte with short-circuit so that for the 99.6% of inputs
+// whose first byte mismatches, we read exactly one byte — keeping
+// the dispatch ASan-clean on short string allocations like "hi" (2
+// bytes) or "x" (1 byte) where a naive `s->magic` 4-byte read
+// overshoots the allocation.
+//
+// On a confirmed magic match, also validate that the rest of the
+// header looks like a real AetherString — non-negative ref_count,
+// capacity ≥ length, non-NULL data — to harden against the 1-in-2^32
+// chance that arbitrary content happens to begin with the magic
+// bytes. This catches spurious dispatch before we deref s->data.
 static inline int is_aether_string(const void* ptr) {
     if (!ptr) return 0;
+    const unsigned char* p = (const unsigned char*)ptr;
+    /* Magic 0xAE57C0DE in little-endian = DE C0 57 AE. */
+    if (p[0] != 0xDE) return 0;
+    if (p[1] != 0xC0) return 0;
+    if (p[2] != 0x57) return 0;
+    if (p[3] != 0xAE) return 0;
+    /* All four bytes matched. Validate the header for plausibility
+     * to reject coincidental magic-bytes-in-payload before any
+     * downstream s->data deref. */
     const AetherString* s = (const AetherString*)ptr;
-    return s->magic == AETHER_STRING_MAGIC;
+    if (s->ref_count < 0) return 0;
+    if (s->capacity < s->length) return 0;
+    if (!s->data) return 0;
+    return 1;
 }
 
 // String creation

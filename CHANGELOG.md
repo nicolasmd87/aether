@@ -5,9 +5,19 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.98.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Fixed
+
+- **`is_aether_string` no longer reads past the end of short string allocations** (`std/string/aether_string.h`, `tests/runtime/test_runtime_strings.c`). Pre-fix, the magic-byte check did a 4-byte read at offset 0 — on a 1- or 2-byte malloc'd `char*` (the kind `_aether_interp` produces for short interpolation pieces) that overshoots the allocation and trips ASan. Real-world impact was nil (allocators round small mallocs up to 16-byte blocks, so the OOB read landed in mapped memory and the magic check returned false correctly), but it prevented clean ASan builds for any binary that handles short strings — i.e. most of them. Fix: short-circuit byte-by-byte. The first byte of the magic (`0xDE` little-endian) mismatches for ~99.6% of arbitrary inputs, so the dispatch reads exactly one byte and returns. On the rare 1/256 case where byte 0 matches, validate that the rest of the header looks plausible (non-negative ref_count, capacity ≥ length, non-NULL data) — this also catches the 1-in-2^32 chance of arbitrary content beginning with the full magic before any downstream `s->data` deref. Found by ASan run on a downstream port (svn-aether) chasing a different bug; the OOB was incidental but worth fixing on its own.
+
+### Documentation
+
+- **`docs/c-interop.md` — length-clamp hazard for C shims taking `string` parameters** (`docs/c-interop.md`). The auto-unwrap from #297 means a C shim's `string` parameter arrives as payload bytes, not the AetherString header. A common defensive pattern — `min(caller_len, aether_string_length(s))` to clamp the length "to be safe" — is fatal post-#297: `aether_string_length` falls through to `strlen` on the unwrapped pointer and silently truncates at the first embedded NUL. The downstream svn-aether port hit this in `aether_pristine_concat_binary`, producing corrupted pristine files on disk. Documented the hazard and the correct rule (trust the caller's length; don't re-derive). Cross-references the existing `ptr`-typed-parameter escape hatch for shims that genuinely need to dispatch on the header.
 
 ## [0.98.0]
 

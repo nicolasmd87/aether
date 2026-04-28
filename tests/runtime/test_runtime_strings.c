@@ -121,3 +121,35 @@ TEST_CATEGORY(string_large, TEST_CATEGORY_STDLIB) {
     ASSERT_EQ(999, string_length(s));
     string_free(s);
 }
+
+/* Regression test: is_aether_string must NOT read past the end of a
+ * short allocation. Pre-fix, a 4-byte magic read on a 1- or 2-byte
+ * malloc tripped ASan even though the result was correct. The fix
+ * short-circuits on the first non-magic byte (DE in little-endian),
+ * which is the case for ~99.6% of arbitrary inputs. Validated with
+ * `gcc -fsanitize=address` — see PR notes. Without instrumentation,
+ * the previous code worked by accident: most allocators round small
+ * mallocs up to a 16-byte block, so the OOB read landed in mapped
+ * memory. Under ASan with byte-precise tracking, it aborted. */
+TEST_CATEGORY(is_aether_string_short_alloc_safe, TEST_CATEGORY_STDLIB) {
+    /* 1-byte allocation that doesn't start with 0xDE. */
+    char* one = (char*)malloc(1);
+    one[0] = 'x';
+    ASSERT_EQ(0, is_aether_string(one));
+    free(one);
+
+    /* 2-byte allocation. */
+    char* two = (char*)malloc(2);
+    two[0] = 'h';
+    two[1] = 'i';
+    ASSERT_EQ(0, is_aether_string(two));
+    free(two);
+
+    /* NULL pointer must short-circuit before any read. */
+    ASSERT_EQ(0, is_aether_string(NULL));
+
+    /* A real AetherString must still be detected. */
+    AetherString* s = string_from_cstr("hello");
+    ASSERT_EQ(1, is_aether_string(s));
+    string_free(s);
+}
