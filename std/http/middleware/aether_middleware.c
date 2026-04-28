@@ -19,7 +19,11 @@
 #include <string.h>
 #include <ctype.h>
 #include <time.h>
-#include <pthread.h>
+// pthread types (pthread_mutex_t / lock / unlock / init / destroy) come
+// in transitively via aether_middleware.h -> aether_http_server.h ->
+// multicore_scheduler.h -> runtime/utils/aether_thread.h. That header
+// provides a Win32 shim on MinGW; including <pthread.h> directly here
+// would conflict with that shim. Do NOT add #include <pthread.h>.
 
 // Borrow string accessors from the existing http surface.
 extern const char* http_get_header(HttpRequest*, const char*);
