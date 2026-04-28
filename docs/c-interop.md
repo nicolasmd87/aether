@@ -156,7 +156,7 @@ read_binary(path: string) -> {
 }
 ```
 
-The struct-by-value ABI matches what Aether-side multi-return functions emit, so an Aether-defined `-> { return a, b }` and a C-side `-> (T1, T2)` extern are interchangeable from the caller's perspective.
+The struct-by-value ABI matches what Aether-side multi-return functions emit, so an Aether-defined `-> { return a, b }` (inferred) or `-> (T1, T2) { ... }` (explicit) and a C-side `-> (T1, T2)` extern are interchangeable from the caller's perspective.
 
 ### Type-name mangling
 

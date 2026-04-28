@@ -2741,6 +2741,37 @@ ASTNode* parse_function_definition(Parser* parser) {
                     }
                     break;
                 }
+                case TOKEN_LEFT_PAREN: {
+                    // `-> (T1, T2, ...) { ... }` — parenthesised tuple
+                    // return type. Mirrors the form already accepted on
+                    // `extern f(...) -> (T1, T2)`. Disambiguate from a
+                    // parenthesised arrow-body expression `-> (a + b)` by
+                    // requiring a type keyword (or identifier-as-typename)
+                    // followed by a comma — only the tuple-type form has
+                    // that shape.
+                    // peek (offset 0) = `(`, so the first inside-paren
+                    // token is offset 1, and the comma after it is offset 2.
+                    Token* inner = peek_ahead(parser, 1);
+                    Token* after_inner = peek_ahead(parser, 2);
+                    if (inner && after_inner && after_inner->type == TOKEN_COMMA) {
+                        switch (inner->type) {
+                            case TOKEN_INT:
+                            case TOKEN_INT64:
+                            case TOKEN_FLOAT:
+                            case TOKEN_BOOL:
+                            case TOKEN_STRING:
+                            case TOKEN_MESSAGE:
+                            case TOKEN_PTR:
+                            case TOKEN_ACTOR_REF:
+                            case TOKEN_IDENTIFIER:
+                                is_typed_return = 1;
+                                break;
+                            default:
+                                break;
+                        }
+                    }
+                    break;
+                }
                 default:
                     break;
             }

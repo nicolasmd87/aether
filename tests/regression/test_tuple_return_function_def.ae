@@ -1,0 +1,78 @@
+// Regression test for #285 — `name(...) -> (T1, T2, ...) { ... }` tuple
+// return type accepted on plain function definitions, mirroring the
+// shipped form for `extern f(...) -> (T1, T2)` (#271).
+//
+// Pre-fix, the parser switch that disambiguated `-> Type { body }` from
+// `-> expr` had no arm for TOKEN_LEFT_PAREN, so the parenthesised tuple
+// form was rejected. Worse, when the same function used `return a, b`
+// without annotation, the codegen emitted `return (_tuple_T1_T2){a,b};`
+// in the body but declared the function with the scalar return type
+// (picked from the first slot), producing a C compile error or — in
+// the path through the comma operator — a silent miscompile that
+// dropped every slot but the last.
+//
+// Cases:
+//   1. Explicit `-> (int, int)` parses; round-trips both slots.
+//   2. Explicit `-> (string, int)` — mixed types, the crypto-passthrough
+//      shape from the issue body.
+//   3. Inferred form — `name(...) -> { return a, b }` with no
+//      annotation. The typechecker already builds TYPE_TUPLE from the
+//      body; the fix is on the codegen side, ensuring the function
+//      signature is rendered as `_tuple_T1_T2` (and the typedef is in
+//      scope before the signature uses it).
+//   4. Erlang-arrow regression guard — `name(x) -> (x + 1)` with a
+//      parenthesised expression body must still parse as an expression,
+//      not a typed-return annotation.
+
+import std.string
+
+extern exit(code: int)
+
+// Case 1 — explicit (int, int).
+pair_int(a: int, b: int) -> (int, int) {
+    return a, b
+}
+
+// Case 2 — explicit (string, int), the shape that motivated the issue.
+decode_or_default(s: string) -> (string, int) {
+    if string.length(s) == 0 { return "fallback", 99 }
+    return s, 42
+}
+
+// Case 3 — no annotation, typechecker infers (int, int).
+pair_inferred(a: int, b: int) -> {
+    return a, b
+}
+
+// Case 4 — guard: parenthesised arrow-body expression must still work.
+incr_arrow(x: int) -> (x + 1)
+
+main() {
+    // Case 1
+    a, b = pair_int(7, 11)
+    if a != 7 { println("FAIL 1a: a=${a}"); exit(1) }
+    if b != 11 { println("FAIL 1b: b=${b}"); exit(1) }
+    println("  PASS 1: explicit -> (int, int)")
+
+    // Case 2 — non-empty input
+    text, n = decode_or_default("hello")
+    if string.equals(text, "hello") == 0 { println("FAIL 2a: text='${text}'"); exit(1) }
+    if n != 42 { println("FAIL 2b: n=${n}"); exit(1) }
+    // Case 2 — fallback
+    text2, n2 = decode_or_default("")
+    if string.equals(text2, "fallback") == 0 { println("FAIL 2c: text2='${text2}'"); exit(1) }
+    if n2 != 99 { println("FAIL 2d: n2=${n2}"); exit(1) }
+    println("  PASS 2: explicit -> (string, int)")
+
+    // Case 3
+    c, d = pair_inferred(3, 4)
+    if c != 3 { println("FAIL 3a: c=${c}"); exit(1) }
+    if d != 4 { println("FAIL 3b: d=${d}"); exit(1) }
+    println("  PASS 3: inferred tuple from `return a, b`")
+
+    // Case 4
+    if incr_arrow(5) != 6 { println("FAIL 4: incr_arrow(5)=${incr_arrow(5)}"); exit(1) }
+    println("  PASS 4: parenthesised arrow-body expression unchanged")
+
+    println("OK")
+}
