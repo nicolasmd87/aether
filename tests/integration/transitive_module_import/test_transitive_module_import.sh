@@ -27,8 +27,7 @@ if ! AETHER_HOME="$ROOT" "$AE" run main.ae >"$ACTUAL" 2>"$TMPDIR/err.log"; then
 fi
 
 EXPECTED="hello"
-# Strip CR — Windows MinGW writes "\r\n" to redirected stdout.
-ACTUAL_TXT="$(tr -d '\r' < "$ACTUAL")"
+ACTUAL_TXT=$(cat "$ACTUAL")
 if [ "$ACTUAL_TXT" != "$EXPECTED" ]; then
     echo "  [FAIL] expected '$EXPECTED', got '$ACTUAL_TXT'"
     exit 1

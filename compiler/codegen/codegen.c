@@ -1008,6 +1008,13 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
     print_line(gen, "#ifdef _WIN32");
     print_line(gen, "SetConsoleOutputCP(65001);  // CP_UTF8");
     print_line(gen, "SetConsoleCP(65001);");
+    // Force stdout/stderr to binary mode on Windows so printf does not
+    // translate every "\n" into "\r\n" on the way to a redirected file.
+    // Aether programs already emit explicit "\n" terminators; the CRT
+    // translation makes byte-exact output comparisons (and any binary
+    // data piped through stdout) unreliable.
+    print_line(gen, "_setmode(_fileno(stdout), _O_BINARY);");
+    print_line(gen, "_setmode(_fileno(stderr), _O_BINARY);");
     print_line(gen, "#endif");
     // Initialize command-line arguments
     print_line(gen, "aether_args_init(argc, argv);");
@@ -1121,6 +1128,8 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "#ifdef _WIN32");
     print_line(gen, "#define NOMINMAX");
     print_line(gen, "#include <windows.h>");
+    print_line(gen, "#include <io.h>      // _setmode, _fileno");
+    print_line(gen, "#include <fcntl.h>   // _O_BINARY");
     print_line(gen, "#elif defined(__EMSCRIPTEN__)");
     print_line(gen, "#include <emscripten.h>");
     print_line(gen, "#else");

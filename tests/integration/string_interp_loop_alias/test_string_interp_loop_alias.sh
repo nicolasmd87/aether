@@ -30,32 +30,19 @@ if ! AETHER_HOME="$ROOT" "$AE" run "$SRC" >"$ACTUAL" 2>"$TMPDIR/err.log"; then
     exit 1
 fi
 
-# Compare stdout content. Use a CR-stripped temp copy of actual so
-# Windows MinGW's `\r\n` translation doesn't make a byte-identical
-# output look different. `diff` isn't available on every CI runner
-# (some Windows shells lack it), so fall back to a portable byte
-# comparison.
-ACTUAL_NORM="$TMPDIR/actual.norm"
-EXPECTED_NORM="$TMPDIR/expected.norm"
-tr -d '\r' < "$ACTUAL"   > "$ACTUAL_NORM"
-tr -d '\r' < "$EXPECTED" > "$EXPECTED_NORM"
-
-if command -v diff >/dev/null 2>&1; then
-    if ! diff -u "$EXPECTED_NORM" "$ACTUAL_NORM" >"$TMPDIR/diff.log"; then
-        echo "  [FAIL] string-interp accumulator loops produced wrong output"
-        echo "  --- expected vs actual diff ---"
-        cat "$TMPDIR/diff.log"
-        exit 1
-    fi
-else
-    if ! cmp -s "$EXPECTED_NORM" "$ACTUAL_NORM"; then
-        echo "  [FAIL] string-interp accumulator loops produced wrong output"
-        echo "  --- expected ---"
-        cat "$EXPECTED_NORM"
-        echo "  --- actual ---"
-        cat "$ACTUAL_NORM"
-        exit 1
-    fi
+# Compare stdout against the recorded expected output. The runtime
+# emits LF on every platform (Windows main() puts stdout in binary
+# mode), so a plain shell string compare suffices — no diff/cmp
+# dependency, which the CI Windows shell does not ship with.
+ACTUAL_TXT="$(cat "$ACTUAL")"
+EXPECTED_TXT="$(cat "$EXPECTED")"
+if [ "$ACTUAL_TXT" != "$EXPECTED_TXT" ]; then
+    echo "  [FAIL] string-interp accumulator loops produced wrong output"
+    echo "  --- expected ---"
+    printf '%s\n' "$EXPECTED_TXT"
+    echo "  --- actual ---"
+    printf '%s\n' "$ACTUAL_TXT"
+    exit 1
 fi
 
 echo "  [PASS] string_interp_loop_alias: 5 accumulator-loop shapes round-trip clean"

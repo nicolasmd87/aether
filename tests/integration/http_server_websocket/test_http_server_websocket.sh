@@ -85,9 +85,7 @@ fi
 EXPECTED="echo: hello
 echo: world
 echo: !"
-# Strip CR — Python on Windows may emit "\r\n" line endings.
-PY_OUT_NORM="$(tr -d '\r' < "$TMPDIR/py.out")"
-if [ "$PY_OUT_NORM" != "$EXPECTED" ]; then
+if [ "$(cat "$TMPDIR/py.out")" != "$EXPECTED" ]; then
     echo "  [FAIL] output mismatch"
     echo "--- expected ---"
     echo "$EXPECTED"
