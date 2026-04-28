@@ -1,0 +1,24 @@
+// Issue #265 (round 2): caller-site capture for source-location
+// intrinsics in default arguments.
+//
+// `__LINE__` (and `__FILE__` / `__func__`) used as a default value
+// substitute the CALLER's location, not the function definition's.
+// Three call sites in two distinct enclosing functions verify:
+//   - Each call site captures its own line.
+//   - Different lines yield different numbers (sanity).
+//   - An explicit override at a call site wins over the default.
+
+logme(msg: string, line: int = __LINE__) {
+    println("L${line}: ${msg}")
+}
+
+helper() {
+    logme("from-helper-a")
+    logme("from-helper-b")
+}
+
+main() {
+    logme("from-main")
+    helper()
+    logme("explicit-override", 999)
+}

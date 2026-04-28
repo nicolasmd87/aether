@@ -54,10 +54,10 @@ import std.json
 import std.string
 
 exports (
-    request, set_header, set_body, set_timeout, request_free,
+    request, set_header, set_body, set_timeout, set_follow_redirects, request_free,
     send_request,
-    response_status, response_body, response_error,
-    response_header, response_headers, response_free,
+    response_status, response_body, response_error, response_redirect_error,
+    response_header, response_headers, response_url, response_free,
     get_with_headers, post_with_status,
     post_json, response_body_json,
     head, patch
@@ -72,6 +72,7 @@ extern http_request_raw(method: string, url: string) -> ptr
 extern http_request_set_header_raw(req: ptr, name: string, value: string) -> int
 extern http_request_set_body_raw(req: ptr, body: string, length: int, content_type: string) -> int
 extern http_request_set_timeout_raw(req: ptr, seconds: int) -> int
+extern http_request_set_follow_redirects_raw(req: ptr, max_hops: int) -> int
 extern http_request_free_raw(req: ptr)
 extern http_send_raw(req: ptr) -> ptr
 
@@ -79,7 +80,9 @@ extern http_response_status(response: ptr) -> int
 extern http_response_body(response: ptr) -> string
 extern http_response_headers(response: ptr) -> string
 extern http_response_error(response: ptr) -> string
+extern http_response_redirect_error_raw(response: ptr) -> string
 extern http_response_header_raw(response: ptr, name: string) -> string
+extern http_response_effective_url_raw(response: ptr) -> string
 extern http_response_free(response: ptr)
 
 // String helpers for the wrappers below.
@@ -125,6 +128,29 @@ set_timeout(req: ptr, seconds: int) -> string {
     return ""
 }
 
+// Configure automatic redirect-following on this request. `max_hops`
+// of 0 (the default) keeps the v1/v2 behaviour: 30x responses come
+// back to the caller for inspection. `max_hops > 0` follows up to
+// that many redirect responses; the loop stops when:
+//   - a non-3xx status comes back (success path)
+//   - the hop limit is reached (returns the last 3xx with an error
+//     string mentioning the hop limit)
+//   - the redirect points back to a URL already visited in this
+//     chain (returns the last 3xx with a "redirect loop" error)
+//   - an HTTPS origin tries to redirect to HTTP (returns the last
+//     3xx with a "scheme downgrade" error)
+//
+// Authorisation / Cookie / Proxy-Authorization headers are stripped
+// when the redirect target's host differs from the previous host —
+// callers that need cross-host auth re-`set_header` between sends.
+//
+// Returns "" on success, error string on failure.
+set_follow_redirects(req: ptr, max_hops: int) -> string {
+    rc = http_request_set_follow_redirects_raw(req, max_hops)
+    if rc != 0 { return "set_follow_redirects failed (negative max_hops or null req)" }
+    return ""
+}
+
 // Free the request. No-op on null. Safe to call even after send().
 request_free(req: ptr) { http_request_free_raw(req) }
 
@@ -161,6 +187,19 @@ response_status(resp: ptr) -> int { return http_response_status(resp) }
 response_body  (resp: ptr) -> string { return http_response_body(resp) }
 response_error (resp: ptr) -> string { return http_response_error(resp) }
 
+// Redirect-class error string. Set when a request opted into automatic
+// redirect-following (set_follow_redirects(req, N>0)) and the chain
+// ended without reaching a 2xx response — hop-limit reached, loop
+// detected, scheme downgrade, or malformed Location header. Returns
+// "" when the chain completed normally or the request never opted in.
+//
+// Distinct from response_error (transport-level: DNS, connect, TLS,
+// timeout). The v2 send_request wrapper auto-frees the response when
+// response_error is set, but PRESERVES the response when only
+// response_redirect_error is set — so the caller can still inspect
+// the terminal 3xx status / body for retry logic. Issue #239.
+response_redirect_error(resp: ptr) -> string { return http_response_redirect_error_raw(resp) }
+
 // Case-insensitive lookup of a single response header. Returns ""
 // if the header isn't present. Multiple values for the same header
 // name are joined with ", " (RFC 7230 §3.2.2). Returns an owned
@@ -184,6 +223,15 @@ response_header(resp: ptr, name: string) -> string {
 // caller wants to do its own parsing. Same content the v1 wrappers
 // have always exposed.
 response_headers(resp: ptr) -> string { return http_response_headers(resp) }
+
+// The URL of the response. For requests where redirects were not
+// followed (the default), this equals the URL the caller passed to
+// `request(method, url)`. For requests configured via
+// `set_follow_redirects(req, max_hops)` with `max_hops > 0`, this is
+// the URL of the FINAL hop — letting the caller distinguish where
+// the chain landed without re-parsing Location headers themselves.
+// Returns "" if response is null. Issue #239.
+response_url(resp: ptr) -> string { return http_response_effective_url_raw(resp) }
 
 // Free the response. No-op on null.
 response_free(resp: ptr) { http_response_free(resp) }

@@ -159,6 +159,74 @@ void print_hello() {
 
 Functions can return values or `void`. The `main()` function is the entry point.
 
+### Default arguments
+
+Parameters can carry a default expression:
+
+```aether
+greet(name: string, greeting: string = "Hello") -> string {
+    return "${greeting}, ${name}!"
+}
+
+greet("Ada")        // -> "Hello, Ada!"
+greet("Ada", "Hi")  // -> "Hi, Ada!"
+```
+
+Rules:
+- Defaults trail required parameters (Python rule). Once a default
+  appears, every subsequent parameter must also have one.
+- The default expression is evaluated at the **call site**, not the
+  declaration site. Default expressions cannot reference other
+  parameters of the same function (they're typechecked in the
+  caller's scope where parameter values aren't visible).
+- The default-fill happens at typecheck time — codegen sees a
+  fully-populated call.
+
+### Source-location intrinsics
+
+Three globally-visible identifiers expand at codegen time:
+
+| Intrinsic | Type | Substitutes to |
+|---|---|---|
+| `__LINE__` | `int` | The literal source line of the AST node |
+| `__FILE__` | `string` | The source-file path |
+| `__func__` | `string` | The enclosing C/Aether function name |
+
+Used at an explicit call site, the values reflect that site:
+
+```aether
+my_log(msg: string, line: int, file: string, fn: string) {
+    println("[${file}:${line} ${fn}] ${msg}")
+}
+
+main() {
+    my_log("hello", __LINE__, __FILE__, __func__)
+    // -> [/path/main.ae:6 main] hello
+}
+```
+
+Used as **default values**, they substitute the caller's location —
+the killer ergonomic for logging / assertion frameworks:
+
+```aether
+my_log(msg: string,
+       line: int    = __LINE__,
+       file: string = __FILE__,
+       fn: string   = __func__) {
+    println("[${file}:${line} ${fn}] ${msg}")
+}
+
+main() {
+    my_log("compact form")
+    // -> [/path/main.ae:9 main] compact form
+}
+```
+
+The substitution happens at typecheck time: the typechecker clones
+the default expression into the call's argument list and rewrites
+any embedded `__LINE__` / `__FILE__` / `__func__` to use the call
+site's metadata.
+
 ---
 
 ## Pattern Matching Functions

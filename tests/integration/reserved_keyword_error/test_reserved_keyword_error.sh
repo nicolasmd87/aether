@@ -78,5 +78,6 @@ check_case() {
 check_case "$SCRIPT_DIR/message_as_param.ae"  "reserved_keyword_error: extern parameter name (message)" "message"
 check_case "$SCRIPT_DIR/message_as_local.ae"  "reserved_keyword_error: local variable name (message)"   "message"
 check_case "$SCRIPT_DIR/state_as_param.ae"    "reserved_keyword_error: extern parameter name (state)"   "state"
+check_case "$SCRIPT_DIR/send_as_function.ae"  "reserved_keyword_error: top-level function name (send)"  "send"
 
 exit $fail

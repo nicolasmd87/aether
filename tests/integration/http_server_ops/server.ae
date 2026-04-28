@@ -1,0 +1,90 @@
+// #260 Tier 3 (Phase F3+F4+F5): graceful shutdown + lifecycle hooks +
+// health probes test driver.
+//
+// Server on port 18107. Installs:
+//   - on_start hook -> writes "STARTED" to a marker file (the test
+//     runner watches it to know when the accept loop is live —
+//     tighter than the older grep-for-"READY"-in-srv.log pattern).
+//   - on_stop hook  -> writes "STOPPED" to the marker file.
+//   - health probes /healthz + /readyz; ready_check toggles based
+//     on a simple env var so the runner can flip it.
+//   - one normal route /work that takes ~200ms (the runner triggers
+//     graceful shutdown while a request is in flight to verify
+//     it drains).
+
+import std.http
+import std.os
+import std.fs
+
+extern exit(code: int)
+extern http_server_start_raw(server: ptr) -> int
+
+const PORT = 18107
+
+// Marker-file paths come from env so the runner can tee into a tmp dir.
+@c_callback on_started(server: ptr, ud: ptr) {
+    path = os_getenv("MARKER_PATH")
+    if path != 0 {
+        fs.write(path, "STARTED\n")
+    }
+}
+
+@c_callback on_stopped(server: ptr, ud: ptr) {
+    path = os_getenv("MARKER_PATH")
+    if path != 0 {
+        fs.write(path, "STOPPED\n")
+    }
+}
+
+@c_callback ready_check(ud: ptr) -> int {
+    flag = os_getenv("READY_FLAG")
+    if flag == 0 {
+        return 1
+    }
+    if flag == "0" {
+        return 0
+    }
+    return 1
+}
+
+handle_work(req: ptr, res: ptr, ud: ptr) {
+    // Simulate slow work — the runner triggers graceful shutdown
+    // mid-flight to verify it drains rather than truncates.
+    sleep(200)
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_body(res, "work-done")
+}
+
+message StartSrv { raw: ptr }
+message Noop {}
+actor SrvActor {
+    state s = 0
+    receive { StartSrv(raw) -> { s = raw; http_server_start_raw(raw) } }
+}
+actor SchedHelper {
+    state x = 0
+    receive { Noop() -> { x = 1 } }
+}
+
+main() {
+    raw = http.server_create(PORT)
+    if raw == 0 { println("FAIL: server_create"); exit(1) }
+
+    http.server_on_start(raw, on_started, null)
+    http.server_on_stop (raw, on_stopped, null)
+
+    e = http.server_set_health_probes(raw, "/healthz", "/readyz", ready_check, null)
+    if e != "" { println("FAIL: probes: ${e}"); exit(1) }
+
+    println("READY")
+
+    http.server_get(raw, "/work", handle_work, 0)
+
+    spawn(SchedHelper())
+    a = spawn(SrvActor())
+    a ! StartSrv { raw: raw }
+
+    sleep(60000)
+    exit(0)
+}

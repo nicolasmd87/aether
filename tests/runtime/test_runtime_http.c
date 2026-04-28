@@ -3,7 +3,7 @@
 #include "../../std/string/aether_string.h"
 
 TEST_CATEGORY(http_response_structure, TEST_CATEGORY_NETWORK) {
-    HttpResponse* resp = (HttpResponse*)malloc(sizeof(HttpResponse));
+    HttpResponse* resp = (HttpResponse*)calloc(1, sizeof(HttpResponse));
     resp->status_code = 200;
     resp->body = string_new("test body");
     resp->headers = string_new("Content-Type: text/html");
@@ -26,7 +26,7 @@ TEST_CATEGORY(http_url_parsing, TEST_CATEGORY_NETWORK) {
 }
 
 TEST_CATEGORY(http_response_cleanup, TEST_CATEGORY_NETWORK) {
-    HttpResponse* resp = (HttpResponse*)malloc(sizeof(HttpResponse));
+    HttpResponse* resp = (HttpResponse*)calloc(1, sizeof(HttpResponse));
     resp->status_code = 404;
     resp->body = string_new("Not Found");
     resp->headers = NULL;
@@ -48,7 +48,7 @@ TEST_CATEGORY(http_response_cleanup, TEST_CATEGORY_NETWORK) {
 // null response, partial fields).
 
 TEST_CATEGORY(http_accessors_success_response, TEST_CATEGORY_NETWORK) {
-    HttpResponse* resp = (HttpResponse*)malloc(sizeof(HttpResponse));
+    HttpResponse* resp = (HttpResponse*)calloc(1, sizeof(HttpResponse));
     resp->status_code = 200;
     resp->body = string_new("Hello, world");
     resp->headers = string_new("Content-Type: text/plain");
@@ -65,7 +65,7 @@ TEST_CATEGORY(http_accessors_success_response, TEST_CATEGORY_NETWORK) {
 
 TEST_CATEGORY(http_accessors_http_error_status, TEST_CATEGORY_NETWORK) {
     // 404 is not ok even though there's no transport error.
-    HttpResponse* resp = (HttpResponse*)malloc(sizeof(HttpResponse));
+    HttpResponse* resp = (HttpResponse*)calloc(1, sizeof(HttpResponse));
     resp->status_code = 404;
     resp->body = string_new("Not Found");
     resp->headers = NULL;
@@ -82,7 +82,7 @@ TEST_CATEGORY(http_accessors_http_error_status, TEST_CATEGORY_NETWORK) {
 
 TEST_CATEGORY(http_accessors_transport_error, TEST_CATEGORY_NETWORK) {
     // Matches the shape produced by http_request() on DNS failure.
-    HttpResponse* resp = (HttpResponse*)malloc(sizeof(HttpResponse));
+    HttpResponse* resp = (HttpResponse*)calloc(1, sizeof(HttpResponse));
     resp->status_code = 0;
     resp->body = NULL;
     resp->headers = NULL;
@@ -109,7 +109,7 @@ TEST_CATEGORY(http_accessors_null_response_safe, TEST_CATEGORY_NETWORK) {
 
 TEST_CATEGORY(http_accessors_boundary_status_codes, TEST_CATEGORY_NETWORK) {
     // http_response_ok is defined as 2xx. Walk the boundaries.
-    HttpResponse* resp = (HttpResponse*)malloc(sizeof(HttpResponse));
+    HttpResponse* resp = (HttpResponse*)calloc(1, sizeof(HttpResponse));
     resp->body = NULL;
     resp->headers = NULL;
     resp->error = NULL;

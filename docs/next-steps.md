@@ -245,6 +245,32 @@ libc wrapper to hook. Defence-in-depth story: Aether covers
 cooperative containment for normal-code paths; seccomp-bpf closes
 adversarial kernel-level bypasses.
 
+## HTTP server — remaining Tier 2 protocol (HTTP/2)
+
+#260's Tier 0 (TLS / keep-alive / per-connection actor dispatch),
+Tier 1 (8 middleware: cors / basic_auth / rate_limit / vhost /
+gzip / static_files / rewrite / error_pages), Tier 3 (graceful
+shutdown / lifecycle hooks / health probes / structured access
+logs / Prometheus metrics), and Tier 2 SSE (Server-Sent Events) +
+WebSocket (full RFC 6455 framing) all shipped in the round-2
+issue-pack PR. The one remaining protocol is tracked here for a
+follow-up PR:
+
+- **HTTP/2** — Multiplexed streams, server push, HPACK header
+  compression. The right approach is to wrap nghttp2 (mature,
+  audited, used by NGINX / curl / Apache) rather than hand-rolling
+  the frame layer. New `std/net/aether_http2.{c,h}` housing the
+  nghttp2 callbacks; ALPN negotiation in the existing TLS path
+  hands off to the HTTP/2 session loop when the peer selects
+  `h2`. Build-time guard: `AETHER_HAS_NGHTTP2` auto-detected via
+  `pkg-config nghttp2`; without it, `http.server_set_http2` returns
+  `"HTTP/2 unavailable: nghttp2 not installed"`. Realistic
+  estimate: 1–2 weeks including end-to-end testing with `curl
+  --http2` and parallel-stream coverage.
+
+The umbrella issue #260 stays open until HTTP/2 ships; a sub-issue
+should be filed when it picks up scheduling.
+
 ## Type system
 
 ### Type inference propagation through `select()`

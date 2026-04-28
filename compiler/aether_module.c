@@ -1301,6 +1301,157 @@ void module_merge_into_program(ASTNode* program) {
         }
     } while (progressed);
 
+    // Transitive cross-module merge (#243). When user code does
+    // `import std.http.client` and that module's body internally does
+    // `import std.json` and calls `json.stringify(...)`, the cloned
+    // `client_post_json` body still contains `json.stringify(...)`
+    // after the main loop above. The orchestrator already loaded
+    // `std.json` into the registry (see orchestrate_module's recursive
+    // step), but this merger only iterated the user's direct imports,
+    // so json's exported functions never got cloned into the program
+    // AST. The typechecker then can't resolve `json.stringify` and
+    // forces the user to write `import std.json` themselves — a leak
+    // of internal dependencies analogous to C/C++'s `#include`-style
+    // dependency exposure rather than encapsulation.
+    //
+    // Fix: BFS from the user's directly imported modules through
+    // each module's `imports` list, merging every transitively-
+    // reachable module that hasn't been merged yet. Treat them as
+    // non-selective (pull all exported names) since the user's direct
+    // import implies they want the whole transitive closure to work.
+    // No selection list applies; the typechecker still gates names
+    // via is_export_blocked at qualified-call sites, so a user who
+    // didn't write `import std.json` can't directly call
+    // `json.stringify` from their own code — only the merged
+    // `client_post_json` body can, which is exactly what we want.
+    {
+        // Collect direct imports as the BFS frontier.
+        const char* visited[256];
+        int visited_count = 0;
+        const char* queue[256];
+        int q_head = 0, q_tail = 0;
+
+        for (int i = 0; i < orig_count; i++) {
+            ASTNode* child = program->children[i];
+            if (!child || child->type != AST_IMPORT_STATEMENT || !child->value) continue;
+            if (visited_count >= 256) break;
+            visited[visited_count++] = child->value;
+            if (q_tail < 256) queue[q_tail++] = child->value;
+        }
+
+        // BFS: for each enqueued module, look at its `imports` list and
+        // enqueue any not yet visited.
+        while (q_head < q_tail) {
+            const char* mod_path = queue[q_head++];
+            AetherModule* mod = module_find(mod_path);
+            if (!mod) continue;
+
+            for (int i = 0; i < mod->import_count; i++) {
+                const char* dep = mod->imports[i];
+                if (!dep) continue;
+                int seen = 0;
+                for (int v = 0; v < visited_count; v++) {
+                    if (strcmp(visited[v], dep) == 0) { seen = 1; break; }
+                }
+                if (seen) continue;
+                if (visited_count >= 256) break;
+                visited[visited_count++] = dep;
+                if (q_tail < 256) queue[q_tail++] = dep;
+            }
+        }
+
+        // For each transitively-reachable module that wasn't a direct
+        // user import, merge its exported functions and constants the
+        // same way the main loop merged direct imports.
+        for (int v = 0; v < visited_count; v++) {
+            const char* dep_path = visited[v];
+
+            // Skip direct imports — they were merged above.
+            int is_direct = 0;
+            for (int i = 0; i < orig_count; i++) {
+                ASTNode* child = program->children[i];
+                if (child && child->type == AST_IMPORT_STATEMENT &&
+                    child->value && strcmp(child->value, dep_path) == 0) {
+                    is_direct = 1;
+                    break;
+                }
+            }
+            if (is_direct) continue;
+
+            AetherModule* dep_mod = module_find(dep_path);
+            if (!dep_mod || !dep_mod->ast) continue;
+
+            ASTNode* mod_ast = dep_mod->ast;
+            const char* ns = module_get_namespace(dep_path);
+
+            const char* func_names[128];
+            int func_count = collect_module_func_names(mod_ast, func_names, 128);
+            const char* const_names[128];
+            int const_count = collect_module_const_names(mod_ast, const_names, 128);
+
+            // Add a synthetic AST_IMPORT_STATEMENT for this transitive
+            // dep so the typechecker's namespace-registration pass
+            // picks it up. Without this, qualified calls to the dep's
+            // namespace from inside merged module bodies (e.g.
+            // `json.stringify(...)` inside a merged
+            // `client_post_json`) get rejected by the typechecker
+            // even though the prefixed `json_stringify` symbol is
+            // present in the program AST. Insert at insert_idx so it
+            // lives between the existing imports and the main
+            // function — same region as the merged decls below it.
+            //
+            // Issue #243 sealed-scope follow-up: tag the synthetic
+            // import with annotation="synthetic" so the typechecker
+            // can register the namespace globally (for cloned merged
+            // bodies that need to resolve their own internal
+            // qualified calls) BUT skip the user-explicit registry
+            // (so user code can't accidentally call into the
+            // transitively-pulled-in namespace it never imported).
+            ASTNode* synth_import = create_ast_node(AST_IMPORT_STATEMENT,
+                                                   dep_path, 0, 0);
+            synth_import->annotation = strdup("synthetic");
+            insert_child_at(program, synth_import, insert_idx++);
+
+            for (int j = 0; j < mod_ast->child_count; j++) {
+                ASTNode* decl = unwrap_export(mod_ast->children[j]);
+                if (!decl || !decl->value) continue;
+
+                if (decl->type == AST_FUNCTION_DEFINITION ||
+                    decl->type == AST_BUILDER_FUNCTION) {
+                    char prefixed[256];
+                    snprintf(prefixed, sizeof(prefixed), "%s_%s", ns, decl->value);
+
+                    if (module_has_extern_named(mod_ast, prefixed)) continue;
+                    if (program_has_function(program, prefixed)) continue;
+
+                    ASTNode* clone = clone_ast_node(decl);
+                    free(clone->value);
+                    clone->value = strdup(prefixed);
+                    clone->is_imported = 1;
+
+                    rename_intra_module_refs(clone, ns, func_names, func_count,
+                                             const_names, const_count, NULL, 0);
+
+                    insert_child_at(program, clone, insert_idx++);
+                } else if (decl->type == AST_CONST_DECLARATION) {
+                    char prefixed[256];
+                    snprintf(prefixed, sizeof(prefixed), "%s_%s", ns, decl->value);
+
+                    if (program_has_function(program, prefixed)) continue;
+
+                    ASTNode* clone = clone_ast_node(decl);
+                    free(clone->value);
+                    clone->value = strdup(prefixed);
+
+                    rename_intra_module_refs(clone, ns, func_names, func_count,
+                                             const_names, const_count, NULL, 0);
+
+                    insert_child_at(program, clone, insert_idx++);
+                }
+            }
+        }
+    }
+
     // Second pass: for each selective import (either the parenthesised
     // `import mod (a, b, c)` form or the trailing-component `import mod.a`
     // form, which resolve_import_path rewrites into the same shape),

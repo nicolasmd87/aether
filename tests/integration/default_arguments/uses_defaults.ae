@@ -1,0 +1,52 @@
+// Phase A2.1 / issue #265 prerequisite: default function arguments.
+//
+// Six cases:
+//   1. Function with one defaulted param — call with default omitted.
+//   2. Same function — call with default explicitly supplied.
+//   3. Function with multiple defaulted params — call with all defaults omitted.
+//   4. Same function — call with first default supplied, second omitted.
+//   5. Same function — call with both defaults supplied.
+//   6. Function with required and defaulted params interleaved correctly
+//      (required first, then defaults) — call exercising the boundary.
+
+greet(name: string, greeting: string = "Hello") -> string {
+    return "${greeting}, ${name}!"
+}
+
+box(width: int = 10, height: int = 5) -> int {
+    return width * height
+}
+
+shout(prefix: string, msg: string, suffix: string = "!") -> string {
+    return "${prefix}${msg}${suffix}"
+}
+
+main() {
+    // Case 1: one defaulted param, default omitted.
+    a = greet("Ada")
+    println(a)
+
+    // Case 2: one defaulted param, default supplied.
+    b = greet("Ada", "Hi")
+    println(b)
+
+    // Case 3: multiple defaults, all omitted.
+    c = box()
+    println(c)
+
+    // Case 4: first default supplied, second omitted.
+    d = box(20)
+    println(d)
+
+    // Case 5: both defaults supplied.
+    e = box(20, 7)
+    println(e)
+
+    // Case 6: required + defaulted mix, default omitted.
+    f = shout(">>> ", "ok")
+    println(f)
+
+    // Case 6b: required + defaulted mix, default supplied.
+    g = shout(">>> ", "go", "***")
+    println(g)
+}

@@ -772,6 +772,17 @@ void collect_function_constraints(ASTNode* node, InferenceContext* ctx) {
 
     Symbol* saved_head = ctx->symbols ? ctx->symbols->symbols : NULL;
 
+    /* Issue #243 sealed scopes: relax qualified-call visibility
+     * while walking the body of a cloned merged-module function so
+     * internal calls into transitively-merged namespaces (e.g.
+     * `json.parse` inside a merged http.client function) resolve
+     * correctly. Save/restore the SymbolTable flag — same channel
+     * the typechecker uses, just transient over this walk. */
+    int saved_inside_merged = ctx->symbols ? ctx->symbols->inside_merged_body : 0;
+    if (node->is_imported && ctx->symbols) {
+        ctx->symbols->inside_merged_body = 1;
+    }
+
     // Add parameters to symbol table so identifiers in function body can look them up
     int body_index = node->child_count - 1;
     for (int i = 0; i < body_index; i++) {
@@ -812,6 +823,8 @@ void collect_function_constraints(ASTNode* node, InferenceContext* ctx) {
         }
         ctx->symbols->symbols = saved_head;
     }
+
+    if (ctx->symbols) ctx->symbols->inside_merged_body = saved_inside_merged;
 }
 
 // Main constraint collection

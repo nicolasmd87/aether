@@ -17,9 +17,12 @@ HttpRequest* http_request_raw(const char* m, const char* u) { (void)m; (void)u; 
 int http_request_set_header_raw(HttpRequest* r, const char* n, const char* v) { (void)r; (void)n; (void)v; return -1; }
 int http_request_set_body_raw(HttpRequest* r, const char* b, int l, const char* c) { (void)r; (void)b; (void)l; (void)c; return -1; }
 int http_request_set_timeout_raw(HttpRequest* r, int s) { (void)r; (void)s; return -1; }
+int http_request_set_follow_redirects_raw(HttpRequest* r, int n) { (void)r; (void)n; return -1; }
 void http_request_free_raw(HttpRequest* r) { (void)r; }
 HttpResponse* http_send_raw(HttpRequest* r) { (void)r; return NULL; }
 const char* http_response_header_raw(HttpResponse* r, const char* n) { (void)r; (void)n; return ""; }
+const char* http_response_effective_url_raw(HttpResponse* r) { (void)r; return ""; }
+const char* http_response_redirect_error_raw(HttpResponse* r) { (void)r; return ""; }
 #else
 
 #include <stdio.h>
@@ -304,6 +307,7 @@ struct HttpRequest {
     int   body_len;      /* explicit length; 0 if no body */
     char* content_type;  /* may be NULL; defaults applied at send time */
     int   timeout_secs;  /* 0 = no timeout (block forever) */
+    int   max_redirects; /* 0 = don't follow (default); N>0 = follow up to N hops */
 };
 
 HttpRequest* http_request_raw(const char* method, const char* url) {
@@ -379,6 +383,12 @@ int http_request_set_timeout_raw(HttpRequest* req, int seconds) {
     return 0;
 }
 
+int http_request_set_follow_redirects_raw(HttpRequest* req, int max_hops) {
+    if (!req || max_hops < 0) return -1;
+    req->max_redirects = max_hops;
+    return 0;
+}
+
 void http_request_free_raw(HttpRequest* req) {
     if (!req) return;
     free(req->method);
@@ -416,6 +426,8 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
     response->body = NULL;
     response->headers = NULL;
     response->error = NULL;
+    response->redirect_error = NULL;
+    response->effective_url = NULL;
 
     char host[256];
     char path[1024];
@@ -776,11 +788,259 @@ static int header_already_set(HttpRequest* req, const char* name) {
     return 0;
 }
 
+/* Look up the case-folded value of a response header from the raw
+ * header block. Lighter than http_response_header_raw because it
+ * works directly on the string buffer rather than the response
+ * struct (so the redirect loop below can use it without releasing
+ * intermediate responses). Returns a freshly-allocated copy the
+ * caller must free, or NULL if the header isn't present. */
+static char* http_extract_response_header(const char* hdr_block, const char* name) {
+    if (!hdr_block || !name) return NULL;
+    size_t name_len = strlen(name);
+    const char* p = hdr_block;
+    /* Skip the status line. */
+    const char* nl = strchr(p, '\n');
+    if (nl) p = nl + 1;
+    while (*p) {
+        const char* line_end = strchr(p, '\n');
+        size_t line_len = line_end ? (size_t)(line_end - p) : strlen(p);
+        const char* colon = memchr(p, ':', line_len);
+        if (colon && (size_t)(colon - p) == name_len) {
+            int match = 1;
+            for (size_t i = 0; i < name_len; i++) {
+                char a = p[i], b = name[i];
+                if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+                if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
+                if (a != b) { match = 0; break; }
+            }
+            if (match) {
+                const char* v = colon + 1;
+                while (v < p + line_len && (*v == ' ' || *v == '\t')) v++;
+                size_t vlen = (size_t)((p + line_len) - v);
+                while (vlen > 0 && (v[vlen - 1] == '\r' || v[vlen - 1] == ' ' ||
+                                    v[vlen - 1] == '\t')) vlen--;
+                char* out = (char*)malloc(vlen + 1);
+                if (!out) return NULL;
+                memcpy(out, v, vlen);
+                out[vlen] = '\0';
+                return out;
+            }
+        }
+        if (!line_end) break;
+        p = line_end + 1;
+    }
+    return NULL;
+}
+
+/* Resolve a Location-header value against a base URL. The Location
+ * may be absolute (`http://other.host/x`), scheme-relative
+ * (`//other.host/x`), root-relative (`/x`), or relative
+ * (`x`). Returns a malloc'd absolute URL on success, NULL on
+ * malformed input. */
+static char* http_resolve_location(const char* base_url, const char* location) {
+    if (!base_url || !location || !*location) return NULL;
+    /* Absolute URL — Location starts with a scheme. */
+    if (strstr(location, "://")) return strdup(location);
+    /* Need to extract scheme + host[:port] from base_url.
+     * parse_url returns 1 on success, 0 on failure — bail when it
+     * fails. The earlier round-1 implementation had the check
+     * inverted, which produced a bogus "malformed Location header"
+     * for every well-formed base URL. Caught by the cases-8-10
+     * end-to-end test in test_http_client_v2.ae. */
+    char base_host[256], base_path[1024];
+    int base_port = 0, base_use_tls = 0;
+    if (parse_url(base_url, base_host, sizeof(base_host),
+                  &base_port, base_path, sizeof(base_path), &base_use_tls) == 0) {
+        return NULL;
+    }
+    const char* scheme = base_use_tls ? "https" : "http";
+    /* Scheme-relative: //host/x → keep base scheme. */
+    if (location[0] == '/' && location[1] == '/') {
+        size_t need = strlen(scheme) + 1 + strlen(location) + 1;
+        char* out = (char*)malloc(need);
+        if (!out) return NULL;
+        snprintf(out, need, "%s:%s", scheme, location);
+        return out;
+    }
+    /* Root-relative: /x → keep base scheme + host[:port]. */
+    if (location[0] == '/') {
+        size_t need = strlen(scheme) + 3 + strlen(base_host) + 16 + strlen(location) + 1;
+        char* out = (char*)malloc(need);
+        if (!out) return NULL;
+        if ((base_use_tls && base_port == 443) || (!base_use_tls && base_port == 80)) {
+            snprintf(out, need, "%s://%s%s", scheme, base_host, location);
+        } else {
+            snprintf(out, need, "%s://%s:%d%s", scheme, base_host, base_port, location);
+        }
+        return out;
+    }
+    /* Relative path: replace last segment of base_path. */
+    char joined_path[1024];
+    char* last_slash = strrchr(base_path, '/');
+    if (last_slash) {
+        size_t prefix_len = (size_t)(last_slash - base_path) + 1;
+        if (prefix_len + strlen(location) + 1 > sizeof(joined_path)) return NULL;
+        memcpy(joined_path, base_path, prefix_len);
+        strcpy(joined_path + prefix_len, location);
+    } else {
+        snprintf(joined_path, sizeof(joined_path), "/%s", location);
+    }
+    size_t need = strlen(scheme) + 3 + strlen(base_host) + 16 + strlen(joined_path) + 1;
+    char* out = (char*)malloc(need);
+    if (!out) return NULL;
+    if ((base_use_tls && base_port == 443) || (!base_use_tls && base_port == 80)) {
+        snprintf(out, need, "%s://%s%s", scheme, base_host, joined_path);
+    } else {
+        snprintf(out, need, "%s://%s:%d%s", scheme, base_host, base_port, joined_path);
+    }
+    return out;
+}
+
+/* Strip headers that should not be forwarded across a host change
+ * (Authorization, Cookie, Proxy-Authorization). Modifies req in
+ * place. Called on each redirect hop where the target host differs
+ * from the previous host. */
+static void http_strip_cross_host_headers(HttpRequest* req) {
+    if (!req) return;
+    HttpHeader** link = &req->headers;
+    while (*link) {
+        HttpHeader* h = *link;
+        int strip = http_strcaseeq(h->name, "Authorization") ||
+                    http_strcaseeq(h->name, "Cookie") ||
+                    http_strcaseeq(h->name, "Proxy-Authorization");
+        if (strip) {
+            *link = h->next;
+            free(h->name); free(h->value); free(h);
+        } else {
+            link = &h->next;
+        }
+    }
+}
+
 /* v2 entry point. The v1 wrappers below build a throwaway request
- * and call this. */
+ * and call this. Handles redirect-following when the request was
+ * configured with max_redirects > 0 (issue #239). */
 HttpResponse* http_send_raw(HttpRequest* req) {
     if (!req) return NULL;
-    return http_request_internal(req);
+
+    HttpResponse* resp = http_request_internal(req);
+    if (!resp) return NULL;
+
+    /* Stash the URL of the originating request as the effective URL.
+     * Overwritten below if redirects are followed. */
+    if (req->url) resp->effective_url = string_new(req->url);
+
+    /* If redirects aren't enabled, return the first response as-is. */
+    if (req->max_redirects <= 0) return resp;
+
+    /* Track visited URLs for loop detection. Bounded by max_redirects
+     * + 1 (the original URL). Static array is fine — max_redirects is
+     * expected to be small (typically 5-10). */
+    char* visited[64];
+    int visited_count = 0;
+    int max_track = req->max_redirects + 1;
+    if (max_track > 64) max_track = 64;
+    visited[visited_count++] = strdup(req->url);
+
+    int hops_remaining = req->max_redirects;
+    char* current_url = strdup(req->url);
+
+    while (hops_remaining > 0 && resp && resp->status_code >= 300 && resp->status_code < 400) {
+        const char* hdrs = resp->headers ? string_to_cstr(resp->headers) : "";
+        char* location = http_extract_response_header(hdrs, "Location");
+        if (!location) break;  /* 3xx with no Location → return as-is. */
+
+        char* next_url = http_resolve_location(current_url, location);
+        free(location);
+        if (!next_url) {
+            /* Redirect-class error — record on redirect_error so the
+             * v2 send_request wrapper preserves the response and the
+             * caller can still inspect the terminal 3xx. Issue #239. */
+            if (resp->redirect_error) string_release(resp->redirect_error);
+            resp->redirect_error = string_new("malformed Location header");
+            break;
+        }
+
+        /* Reject scheme downgrade: HTTPS origin → HTTP target. */
+        int curr_https = strncmp(current_url, "https://", 8) == 0;
+        int next_https = strncmp(next_url, "https://", 8) == 0;
+        if (curr_https && !next_https) {
+            if (resp->redirect_error) string_release(resp->redirect_error);
+            resp->redirect_error = string_new(
+                "redirect rejected: scheme downgrade (https -> http)");
+            free(next_url);
+            break;
+        }
+
+        /* Loop detection: refuse to revisit a URL within this chain. */
+        int looped = 0;
+        for (int i = 0; i < visited_count; i++) {
+            if (visited[i] && strcmp(visited[i], next_url) == 0) {
+                looped = 1;
+                break;
+            }
+        }
+        if (looped) {
+            if (resp->redirect_error) string_release(resp->redirect_error);
+            resp->redirect_error = string_new(
+                "redirect loop detected (hop limit may have been exceeded)");
+            free(next_url);
+            break;
+        }
+
+        /* Strip cross-host auth headers if the host changed.
+         * parse_url returns 1 on success — same inverted-check bug
+         * as http_resolve_location had above; without this fix the
+         * strip path never fired in practice (because parse_url
+         * always succeeds for well-formed URLs). */
+        char curr_host[256], next_host[256], dummy_path[1024];
+        int curr_port = 0, next_port = 0, curr_tls = 0, next_tls = 0;
+        if (parse_url(current_url, curr_host, sizeof(curr_host), &curr_port,
+                      dummy_path, sizeof(dummy_path), &curr_tls) != 0 &&
+            parse_url(next_url, next_host, sizeof(next_host), &next_port,
+                      dummy_path, sizeof(dummy_path), &next_tls) != 0) {
+            if (strcmp(curr_host, next_host) != 0) {
+                http_strip_cross_host_headers(req);
+            }
+        }
+
+        /* Move on. Record the new URL, swap the request URL, send,
+         * release the prior response. */
+        if (visited_count < max_track) {
+            visited[visited_count++] = strdup(next_url);
+        }
+        free(current_url);
+        current_url = strdup(next_url);
+
+        free(req->url);
+        req->url = next_url;  /* takes ownership */
+
+        http_response_free(resp);
+        resp = http_request_internal(req);
+        if (!resp) break;
+
+        hops_remaining--;
+    }
+
+    /* If we exited the loop because we ran out of hops while still
+     * looking at a 3xx response, surface that as a redirect_error so
+     * the caller can inspect the terminal 3xx status / body without
+     * the v2 wrapper auto-freeing the response. */
+    if (resp && hops_remaining == 0 && resp->status_code >= 300 && resp->status_code < 400) {
+        if (resp->redirect_error) string_release(resp->redirect_error);
+        resp->redirect_error = string_new("redirect hop limit reached");
+    }
+
+    /* Stash the final URL as the effective URL on the response. */
+    if (resp) {
+        if (resp->effective_url) string_release(resp->effective_url);
+        resp->effective_url = string_new(current_url);
+    }
+
+    free(current_url);
+    for (int i = 0; i < visited_count; i++) free(visited[i]);
+
+    return resp;
 }
 
 /* v1 wrappers — thin sugar over the v2 builder. timeout=0 preserves
@@ -829,6 +1089,8 @@ void http_response_free(HttpResponse* response) {
     if (response->body) string_release(response->body);
     if (response->headers) string_release(response->headers);
     if (response->error) string_release(response->error);
+    if (response->redirect_error) string_release(response->redirect_error);
+    if (response->effective_url) string_release(response->effective_url);
     free(response);
 }
 
@@ -964,6 +1226,18 @@ const char* http_response_header_raw(HttpResponse* response, const char* name) {
     }
 
     return tls_joined;
+}
+
+const char* http_response_effective_url_raw(HttpResponse* response) {
+    if (!response || !response->effective_url) return "";
+    const char* s = string_to_cstr(response->effective_url);
+    return s ? s : "";
+}
+
+const char* http_response_redirect_error_raw(HttpResponse* response) {
+    if (!response || !response->redirect_error) return "";
+    const char* s = string_to_cstr(response->redirect_error);
+    return s ? s : "";
 }
 
 #endif // AETHER_HAS_NETWORKING

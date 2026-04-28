@@ -1,0 +1,18 @@
+// Reserved-keyword regression: `send` is the actor message-send keyword
+// (`actor ! Message { ... }`), so a top-level `send() -> int { ... }`
+// must error rather than silently producing a binary that drops the
+// function and crashes at runtime.
+//
+// Before the fix, the parser advanced past TOKEN_SEND in the top-level
+// dispatch's default case, the function body got reparsed as
+// statements (mostly fine), and the named definition was lost — call
+// sites compiled to `rc;` (variable-as-statement) instead of
+// `rc = send();`. The user got a successful build with a binary that
+// referenced an undefined symbol.
+
+send() -> int { return 0 }
+
+main() {
+    rc = send()
+    println(rc)
+}

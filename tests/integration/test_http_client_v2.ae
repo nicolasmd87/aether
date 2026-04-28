@@ -136,6 +136,46 @@ handle_patch_echo(req: ptr, res: ptr, ud: ptr) {
     http.response_set_body(res, "method=${method} body=${body}")
 }
 
+// Redirect handlers (issue #239 cases 8-10). Each returns a 301 with
+// a Location header. The chain depth is encoded in the route path so
+// the test can drive multi-hop, single-hop, and self-loop variants
+// against the same in-process server. Relative Location values
+// exercise http_resolve_location's "root-relative" path.
+handle_redirect_3(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 301)
+    http.response_set_header(res, "Location", "/redirect-2")
+    http.response_set_body(res, "")
+}
+
+handle_redirect_2(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 301)
+    http.response_set_header(res, "Location", "/redirect-1")
+    http.response_set_body(res, "")
+}
+
+handle_redirect_1(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 301)
+    http.response_set_header(res, "Location", "/ok")
+    http.response_set_body(res, "")
+}
+
+// Self-loop — Location points back at the same path. The redirect
+// loop detector (visited-URL tracking) must short-circuit this with
+// an error rather than spinning until max_hops.
+handle_redirect_self(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 301)
+    http.response_set_header(res, "Location", "/redirect-self")
+    http.response_set_body(res, "")
+}
+
+// Absolute Location URL — exercises http_resolve_location's
+// "absolute URL" branch (instead of the relative-path branch above).
+handle_redirect_absolute(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 302)
+    http.response_set_header(res, "Location", "http://127.0.0.1:18091/ok")
+    http.response_set_body(res, "")
+}
+
 // ------------------------------------------------------------------
 // Server actor — owns the blocking accept loop. The companion
 // SchedHelper is empty-on-purpose: the multicore scheduler needs
@@ -208,6 +248,12 @@ main() {
     http.server_get (raw, "/json-broken",            handle_json_broken,  0)
     http.server_add_route(raw, "HEAD",  "/head-target", handle_head_target, 0)
     http.server_add_route(raw, "PATCH", "/patch-echo",  handle_patch_echo,  0)
+    // Redirect chain endpoints (issue #239 cases 8-10).
+    http.server_get(raw, "/redirect-3",        handle_redirect_3,        0)
+    http.server_get(raw, "/redirect-2",        handle_redirect_2,        0)
+    http.server_get(raw, "/redirect-1",        handle_redirect_1,        0)
+    http.server_get(raw, "/redirect-self",     handle_redirect_self,     0)
+    http.server_get(raw, "/redirect-absolute", handle_redirect_absolute, 0)
 
     // Hand the server to an actor that calls server_start (blocking).
     // SchedHelper spawned first to satisfy the >=2-actor scheduler
@@ -458,6 +504,107 @@ main() {
     }
     client.response_free(p_resp)
     print("  PASS: PATCH method + body round-tripped\n")
+
+    // ---- Test 13: redirect chain — 3 hops, response_url returns final URL ----
+    // Issue #239 acceptance criterion: client.set_follow_redirects(req, N)
+    // walks the chain and lands at the terminal 200; response_url
+    // reflects the final hop, not the original request URL.
+    print("\nTest 13: redirect chain (3 hops, relative Locations)\n")
+    req13 = client.request("GET", "${base_url()}/redirect-3")
+    client.set_follow_redirects(req13, 5)
+    client.set_timeout(req13, 5)
+    resp13, err13 = client.send_request(req13)
+    client.request_free(req13)
+    if err13 != "" { println("  FAIL transport: ${err13}"); exit(1) }
+    s13 = client.response_status(resp13)
+    if s13 != 200 {
+        println("  FAIL: expected final 200 after chain; got ${s13}")
+        exit(1)
+    }
+    body13 = client.response_body(resp13)
+    if string.contains(body13, "ok-body") != 1 {
+        println("  FAIL: terminal body wrong; got '${body13}'")
+        exit(1)
+    }
+    final_url = client.response_url(resp13)
+    if string.contains(final_url, "/ok") != 1 {
+        println("  FAIL: response_url '${final_url}' should end at /ok")
+        exit(1)
+    }
+    if string.contains(final_url, "/redirect-3") == 1 {
+        println("  FAIL: response_url '${final_url}' still points at original")
+        exit(1)
+    }
+    client.response_free(resp13)
+    print("  PASS: chain walked, response_url = '${final_url}'\n")
+
+    // ---- Test 14: max_hops exceeded surfaces a clear error ----
+    // The chain /redirect-3 → /redirect-2 → /redirect-1 → /ok needs 3
+    // hops to reach 200. With max_hops=2 the third 301 is left
+    // unfollowed; the response carries the last 3xx status and the
+    // error string flags hop-limit exhaustion.
+    print("\nTest 14: redirect hop limit exceeded\n")
+    req14 = client.request("GET", "${base_url()}/redirect-3")
+    client.set_follow_redirects(req14, 2)  // intentionally too low
+    client.set_timeout(req14, 5)
+    resp14, err14 = client.send_request(req14)
+    client.request_free(req14)
+    if err14 != "" { println("  FAIL transport: ${err14}"); exit(1) }
+    s14 = client.response_status(resp14)
+    if s14 < 300 || s14 >= 400 {
+        println("  FAIL: expected to stop at a 3xx; got ${s14}")
+        exit(1)
+    }
+    rerr14 = client.response_redirect_error(resp14)
+    if string.contains(rerr14, "hop limit") != 1 {
+        println("  FAIL: expected 'hop limit' redirect_error; got '${rerr14}'")
+        exit(1)
+    }
+    client.response_free(resp14)
+    print("  PASS: stopped at 3xx with '${rerr14}'\n")
+
+    // ---- Test 15: redirect-loop short-circuits on revisited URL ----
+    // /redirect-self points back at itself. The visited-URL detector
+    // must surface a "loop detected" error rather than spinning until
+    // max_hops is exhausted.
+    print("\nTest 15: redirect loop detection\n")
+    req15 = client.request("GET", "${base_url()}/redirect-self")
+    client.set_follow_redirects(req15, 10)  // generous; detector should fire well before
+    client.set_timeout(req15, 5)
+    resp15, err15 = client.send_request(req15)
+    client.request_free(req15)
+    if err15 != "" { println("  FAIL transport: ${err15}"); exit(1) }
+    rerr15 = client.response_redirect_error(resp15)
+    if string.contains(rerr15, "loop") != 1 {
+        println("  FAIL: expected 'loop' redirect_error; got '${rerr15}'")
+        exit(1)
+    }
+    client.response_free(resp15)
+    print("  PASS: loop detected as '${rerr15}'\n")
+
+    // ---- Test 16: absolute Location URL resolves correctly ----
+    // /redirect-absolute returns "Location: http://127.0.0.1:18091/ok".
+    // http_resolve_location should accept the absolute form and the
+    // chain should land on /ok.
+    print("\nTest 16: redirect with absolute Location URL\n")
+    req16 = client.request("GET", "${base_url()}/redirect-absolute")
+    client.set_follow_redirects(req16, 3)
+    client.set_timeout(req16, 5)
+    resp16, err16 = client.send_request(req16)
+    client.request_free(req16)
+    if err16 != "" { println("  FAIL transport: ${err16}"); exit(1) }
+    s16 = client.response_status(resp16)
+    if s16 != 200 {
+        println("  FAIL: expected 200 after absolute redirect; got ${s16}")
+        exit(1)
+    }
+    body16 = client.response_body(resp16)
+    if string.contains(body16, "ok-body") != 1 {
+        println("  FAIL: terminal body wrong; got '${body16}'")
+        exit(1)
+    }
+    client.response_free(resp16)
+    print("  PASS: absolute Location resolved to terminal 200\n")
 
     print("\n=== All std.http.client v2 tests passed ===\n")
     // Explicit exit because the SrvActor's accept loop would

@@ -17,6 +17,23 @@ exports (
     get, post, put, delete,
     http_server_create, http_server_bind_raw, http_server_start_raw,
     http_server_stop, http_server_free,
+    http_server_set_tls_raw, server_set_tls,
+    http_server_set_keepalive_raw, server_set_keepalive,
+    http_server_drain_connection,
+    http_server_shutdown_graceful_raw, server_shutdown_graceful,
+    http_server_set_on_start, http_server_set_on_stop,
+    server_on_start, server_on_stop,
+    http_server_set_health_probes_raw, server_set_health_probes,
+    http_server_set_access_log_raw, server_set_access_log,
+    http_server_set_metrics_raw, server_set_metrics,
+    http_server_sse, server_sse,
+    http_sse_send_event, http_sse_send_event_id, http_sse_close,
+    sse_send, sse_send_id, sse_close,
+    http_server_websocket, server_websocket,
+    http_ws_send_text, http_ws_send_binary, http_ws_recv,
+    http_ws_message_data, http_ws_message_length, http_ws_close,
+    ws_send_text, ws_send_binary, ws_recv,
+    ws_message, ws_message_length, ws_close,
     server_bind, server_start,
     http_server_add_route, http_server_get, http_server_post,
     http_server_put, http_server_delete,
@@ -182,6 +199,202 @@ extern http_server_bind_raw(server: ptr, host: string, port: int) -> int
 extern http_server_start_raw(server: ptr) -> int
 extern http_server_stop(server: ptr)
 extern http_server_free(server: ptr)
+// TLS termination (#260 Tier 0). Loads the cert+key (PEM-encoded);
+// after this call every accepted connection completes a TLS handshake
+// before the HTTP parse runs. Returns "" on success, error string
+// otherwise. See server_set_tls below for the Aether-side wrapper.
+extern http_server_set_tls_raw(server: ptr, cert_path: string, key_path: string) -> string
+
+// Enable TLS termination on an HTTP server. Both paths must point at
+// PEM-encoded files; the cert and key are validated to match before
+// the server is marked TLS-enabled. Returns "" on success, an error
+// string on failure (file unreadable, parse error, mismatched key,
+// build without OpenSSL).
+//
+// Idempotent — calling twice with the same files is a no-op success;
+// calling with different files re-loads.
+//
+// Example:
+//     server = http.server_create(443)
+//     err = http.server_set_tls(server, "/etc/ssl/cert.pem", "/etc/ssl/key.pem")
+//     if err != "" { println("TLS setup failed: ${err}"); exit(1) }
+//     http.server_start(server)
+server_set_tls(server: ptr, cert_path: string, key_path: string) -> {
+    return http_server_set_tls_raw(server, cert_path, key_path)
+}
+
+// HTTP/1.1 keep-alive (#260 Tier 0). When enabled, the server reads
+// multiple requests off one socket instead of closing after each.
+//   max_requests = 0  -> unlimited per connection
+//   idle_ms      = 0  -> use the default 30s SO_RCVTIMEO
+// Returns "" on success.
+extern http_server_set_keepalive_raw(server: ptr, enabled: int, max_requests: int, idle_ms: int) -> string
+
+server_set_keepalive(server: ptr, enabled: int, max_requests: int, idle_ms: int) -> {
+    return http_server_set_keepalive_raw(server, enabled, max_requests, idle_ms)
+}
+
+// Graceful shutdown (#260 Tier 3). Stops accepting new connections,
+// then waits up to `timeout_ms` for in-flight ones to finish naturally.
+// Returns "" on clean drain, "timeout" if connections were still
+// active when the deadline passed. Typically wired into a SIGTERM
+// handler in the entry point.
+extern http_server_shutdown_graceful_raw(server: ptr, timeout_ms: int) -> string
+
+server_shutdown_graceful(server: ptr, timeout_ms: int) -> {
+    return http_server_shutdown_graceful_raw(server, timeout_ms)
+}
+
+// Lifecycle hooks (#260 Tier 3). on_start fires once after the listen
+// socket is bound, before the accept loop runs (great place to log
+// "ready" or flip a readiness probe). on_stop fires after the accept
+// loop exits but before sockets close. Both pass the `user_data`
+// pointer to the hook function. Hooks are C function pointers — declare
+// them with @c_callback on the Aether side.
+extern http_server_set_on_start(server: ptr, hook: ptr, user_data: ptr)
+extern http_server_set_on_stop (server: ptr, hook: ptr, user_data: ptr)
+
+server_on_start(server: ptr, hook: ptr, user_data: ptr) {
+    http_server_set_on_start(server, hook, user_data)
+}
+
+server_on_stop(server: ptr, hook: ptr, user_data: ptr) {
+    http_server_set_on_stop(server, hook, user_data)
+}
+
+// Health-probe endpoints (#260 Tier 3). Registers two routes:
+//   live_path  — always 200 "ok" (process is up)
+//   ready_path — calls ready_check (1 -> 200 "ready", 0 -> 503 "not ready")
+// Either path may be "" to skip registration. ready_check may be null —
+// in that case ready_path returns 200 too.
+extern http_server_set_health_probes_raw(server: ptr,
+                                         live_path: string,
+                                         ready_path: string,
+                                         ready_check: ptr,
+                                         user_data: ptr) -> string
+
+server_set_health_probes(server: ptr, live_path: string, ready_path: string,
+                         ready_check: ptr, user_data: ptr) -> {
+    return http_server_set_health_probes_raw(server, live_path, ready_path,
+                                             ready_check, user_data)
+}
+
+// Built-in access logger (#260 Tier 3 / F1). format: "combined" or
+// "json". output_path: file path (opened with "ab" — appends),
+// "-" for stderr, or "" to disable. Returns "" on success.
+extern http_server_set_access_log_raw(server: ptr, format: string, output_path: string) -> string
+
+server_set_access_log(server: ptr, format: string, output_path: string) -> {
+    return http_server_set_access_log_raw(server, format, output_path)
+}
+
+// Built-in per-route metrics (#260 Tier 3 / F2). Tracks request
+// counts, error rates, latency histograms; exposes the standard
+// Prometheus text format on the configured endpoint (default
+// "/metrics"). Returns "" on success.
+extern http_server_set_metrics_raw(server: ptr, metrics_endpoint: string) -> string
+
+server_set_metrics(server: ptr, metrics_endpoint: string) -> {
+    return http_server_set_metrics_raw(server, metrics_endpoint)
+}
+
+// Server-Sent Events (#260 Tier 2). Register an SSE route — the
+// handler owns the connection lifetime and pushes events directly
+// to the client. The server sends `Content-Type: text/event-stream`
+// + `Connection: close` automatically before invoking the handler.
+//
+// Handler signature (declared as @c_callback on the Aether side):
+//     handler(req: ptr, sse: ptr, ud: ptr)
+//
+// Inside the handler, call sse_send / sse_send_id to push events,
+// or sse_close to terminate explicitly. The connection closes
+// when the handler returns.
+extern http_server_sse(server: ptr, path: string, handler: ptr, user_data: ptr)
+extern http_sse_send_event(sse: ptr, event_name: string, data: string) -> int
+extern http_sse_send_event_id(sse: ptr, event_name: string, data: string, id: string) -> int
+extern http_sse_close(sse: ptr)
+
+server_sse(server: ptr, path: string, handler: ptr, user_data: ptr) {
+    http_server_sse(server, path, handler, user_data)
+}
+
+sse_send(sse: ptr, event_name: string, data: string) -> int {
+    return http_sse_send_event(sse, event_name, data)
+}
+
+sse_send_id(sse: ptr, event_name: string, data: string, id: string) -> int {
+    return http_sse_send_event_id(sse, event_name, data, id)
+}
+
+sse_close(sse: ptr) {
+    http_sse_close(sse)
+}
+
+// WebSocket (#260 Tier 2 / E2 — RFC 6455). The handler owns the
+// connection lifetime — the server completes the upgrade handshake
+// then hands control to the user.
+//
+// Handler signature (declared @c_callback on the Aether side):
+//     handler(req: ptr, ws: ptr, ud: ptr)
+//
+// Inside the handler:
+//   ws_recv(ws) -> (kind, data) where kind = 1 (text) / 2 (binary) /
+//                 -1 (closed)
+//   ws_send_text(ws, text) -> int (0 OK, -1 transport error)
+//   ws_send_binary(ws, data, len) -> int
+//   ws_close(ws, code, reason) — 1000 = normal, 1001 = going away, ...
+//
+// Control frames (ping/pong) are auto-handled inside ws_recv.
+extern http_server_websocket(server: ptr, path: string, handler: ptr, user_data: ptr)
+extern http_ws_send_text(ws: ptr, text: string) -> int
+extern http_ws_send_binary(ws: ptr, data: ptr, length: int) -> int
+extern http_ws_recv(ws: ptr) -> int
+extern http_ws_message_data(ws: ptr) -> string
+extern http_ws_message_length(ws: ptr) -> int
+extern http_ws_close(ws: ptr, code: int, reason: string)
+
+server_websocket(server: ptr, path: string, handler: ptr, user_data: ptr) {
+    http_server_websocket(server, path, handler, user_data)
+}
+
+ws_send_text(ws: ptr, text: string) -> int {
+    return http_ws_send_text(ws, text)
+}
+
+ws_send_binary(ws: ptr, data: ptr, length: int) -> int {
+    return http_ws_send_binary(ws, data, length)
+}
+
+// Returns: 1 = text frame, 2 = binary, -1 = closed.
+// After 1 or 2, the message is accessible via ws_message and
+// ws_message_length. Pointers are valid until the next ws_recv /
+// ws_send / ws_close call.
+ws_recv(ws: ptr) -> int {
+    return http_ws_recv(ws)
+}
+
+ws_message(ws: ptr) -> string {
+    return http_ws_message_data(ws)
+}
+
+ws_message_length(ws: ptr) -> int {
+    return http_ws_message_length(ws)
+}
+
+ws_close(ws: ptr, code: int, reason: string) {
+    http_ws_close(ws, code, reason)
+}
+
+// Drain a single accepted connection through the full HTTP lifecycle:
+// optional TLS handshake, request parsing loop with keep-alive, route
+// dispatch, response emission, socket close. This is the building
+// block that user-side actor step functions plug into when running
+// the server in actor-dispatch mode (set via
+// http_server_set_actor_handler) — the actor's step receives a
+// MSG_HTTP_CONNECTION with a client_fd and should call this helper
+// to get the same TLS / keep-alive / route-dispatch behaviour the
+// thread-pool worker path uses. (#260 Tier 0 / Phase C3.)
+extern http_server_drain_connection(server: ptr, client_fd: int)
 
 // Go-style wrappers for server lifecycle. Return "" on success, error
 // string on failure.

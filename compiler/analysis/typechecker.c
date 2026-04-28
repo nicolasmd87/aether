@@ -29,6 +29,9 @@ SymbolTable* create_symbol_table(SymbolTable* parent) {
     table->hidden_names = NULL;
     table->seal_whitelist = NULL;
     table->is_sealed = 0;
+    // Inherit merged-body flag so nested scopes (loops, blocks, closures
+    // inside a merged function) keep the relaxed namespace visibility.
+    table->inside_merged_body = parent ? parent->inside_merged_body : 0;
     return table;
 }
 
@@ -194,9 +197,28 @@ Symbol* resolve_module_alias(SymbolTable* table, const char* name) {
     return NULL;
 }
 
-// Track imported namespaces for qualified function calls
+// Track imported namespaces for qualified function calls.
+//
+// Two parallel sets exist (issue #243 sealed-scope follow-up):
+//
+//   imported_namespaces[]      — every namespace registered during
+//     orchestration, including ones the user did not explicitly import
+//     but that were pulled in transitively by module_merge_into_program's
+//     BFS pass. Cloned function bodies of merged modules need this set
+//     to resolve their internal qualified calls (e.g. a cloned
+//     `client_post_json` calling `json.stringify(...)` even though the
+//     user only wrote `import std.http.client`).
+//
+//   user_explicit_namespaces[] — only namespaces the user explicitly
+//     wrote `import` for. Synthetic AST_IMPORT_STATEMENT nodes that
+//     module_merge_into_program injects (annotated "synthetic") are
+//     skipped. User-code qualified calls resolve against this stricter
+//     set so a user can't accidentally call into a transitively-pulled-
+//     in module they never asked for.
 static char* imported_namespaces[64];
 static int namespace_count = 0;
+static char* user_explicit_namespaces[64];
+static int user_explicit_namespace_count = 0;
 
 // Import alias table: maps short names to dotted qualified names
 // for selective imports (e.g. "release" -> "build.release")
@@ -232,6 +254,61 @@ void register_namespace(const char* ns) {
         }
         imported_namespaces[namespace_count++] = strdup(ns);
     }
+}
+
+// Issue #243 sealed-scope follow-up. Records that the user *explicitly*
+// wrote `import <module>` for the given namespace leaf. Called from the
+// AST_IMPORT_STATEMENT visitor only when the import is not flagged
+// synthetic (`annotation == "synthetic"`) — which means the import came
+// from the user's source rather than from the BFS transitive-merge
+// pass. Used by user-code qualified-call resolution to reject
+// `lib_b.shout()` when the user only wrote `import lib_a`.
+static void register_user_explicit_namespace(const char* ns) {
+    if (user_explicit_namespace_count < 64) {
+        for (int i = 0; i < user_explicit_namespace_count; i++) {
+            if (strcmp(user_explicit_namespaces[i], ns) == 0) return;
+        }
+        user_explicit_namespaces[user_explicit_namespace_count++] = strdup(ns);
+    }
+}
+
+static int is_user_explicit_namespace(const char* name) {
+    for (int i = 0; i < user_explicit_namespace_count; i++) {
+        if (strcmp(user_explicit_namespaces[i], name) == 0) return 1;
+    }
+    return 0;
+}
+
+// Forward decl — defined below alongside the global registry it gates.
+int is_imported_namespace(const char* name);
+
+// Gate for qualified-call resolution. A qualified call `mod.fn()` is
+// allowed if either:
+//   - The caller is inside a merged-module body (typechecker propagates
+//     SymbolTable::inside_merged_body from the cloned function decl);
+//     in that case ANY transitively-merged namespace is fair game,
+//     because cloned bodies need to call into their original module's
+//     transitive deps to compile.
+//   - The caller is user code (inside_merged_body == 0); in that case
+//     only namespaces the user explicitly imported are visible. This
+//     closes the encapsulation hole left after the round-1 BFS-merge
+//     fix for issue #243.
+//
+// `table` may be NULL during early symbol-table population; treat NULL
+// as user-context (the strict path) — early registration paths don't
+// resolve qualified user calls, so this is safe.
+int is_visible_namespace(const char* name, SymbolTable* table) {
+    /* Single channel: the SymbolTable's inside_merged_body flag.
+     * Both walkers (the typechecker — which creates per-function
+     * child tables — and the type-inference pass — which walks
+     * against the global symbol table directly) flip this flag
+     * transiently while inside a `is_imported` function body, then
+     * restore it on exit. Save/restore is the standard scope-
+     * stack pattern; no global mutable state required. */
+    if (table && table->inside_merged_body) {
+        return is_imported_namespace(name);
+    }
+    return is_user_explicit_namespace(name);
 }
 
 // Per-module selective-import filter.
@@ -394,9 +471,13 @@ Symbol* lookup_qualified_symbol(SymbolTable* table, const char* qualified_name) 
             return lookup_symbol(table, resolved_name);
         }
 
-        // Check if prefix is an imported namespace (e.g., "string" from import std.string)
+        // Check if prefix is a namespace visible from this scope.
+        // Issue #243: user code can only see namespaces it explicitly
+        // imported; merged-body code can see all transitively-merged
+        // namespaces. is_visible_namespace picks the right set based
+        // on the table's inside_merged_body flag.
         // Convert string.new -> string_new
-        if (is_imported_namespace(prefix)) {
+        if (is_visible_namespace(prefix, table)) {
             // Enforce export visibility
             if (is_export_blocked(prefix, suffix)) {
                 free(name_copy);
@@ -486,6 +567,66 @@ static int count_function_params(ASTNode* func) {
             count++;
         }
         // AST_GUARD_CLAUSE is skipped (not a parameter)
+    }
+    return count;
+}
+
+// Returns 1 if the parameter has a default expression attached
+// (Phase A2.1 — default function arguments). Default expressions are
+// stored as the first child of an AST_PATTERN_VARIABLE / AST_VARIABLE_
+// DECLARATION node by the parser, with annotation="has_default" so
+// they are distinguishable from struct/list-pattern children.
+static int param_has_default(ASTNode* param) {
+    return param && param->annotation &&
+           strcmp(param->annotation, "has_default") == 0 &&
+           param->child_count > 0 && param->children[0] != NULL;
+}
+
+// Phase A2.2 (issue #265 close): rewrite source-location intrinsic
+// AST nodes inside a cloned default expression to reflect the
+// caller's location instead of the function-definition's. Called on
+// the clone before it is appended to the call's child list.
+//
+//   __LINE__  — codegen emits `expr->line`. Overwrite with the
+//               call site's line so the caller's site is captured.
+//   __FILE__  — codegen reads `gen->source_file` (per-TU global), not
+//               `expr->line`, so no per-node rewrite needed; the
+//               value is naturally the file holding the call.
+//   __func__  — codegen emits the literal C99 `__func__` keyword,
+//               which the C compiler resolves to the enclosing C
+//               function. Since codegen mirrors Aether function
+//               names, this is the calling Aether function's name —
+//               exactly the caller-site semantics we want. No
+//               rewrite needed.
+static void rewrite_caller_site_intrinsics(ASTNode* node, int call_line, int call_column) {
+    if (!node) return;
+    if (node->type == AST_IDENTIFIER && node->value &&
+        strcmp(node->value, "__LINE__") == 0) {
+        node->line = call_line;
+        node->column = call_column;
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        rewrite_caller_site_intrinsics(node->children[i], call_line, call_column);
+    }
+}
+
+// Counts required (non-defaulted) parameters. Defaults trail required
+// (Python rule: once a default appears, every subsequent parameter
+// must also have one). The rule is enforced separately at function-
+// declaration time; this helper just counts.
+static int count_required_params(ASTNode* func) {
+    if (!func || func->child_count == 0) return 0;
+    int count = 0;
+    for (int i = 0; i < func->child_count - 1; i++) {
+        ASTNode* child = func->children[i];
+        if (child->type == AST_GUARD_CLAUSE) continue;
+        if (child->type != AST_VARIABLE_DECLARATION &&
+            child->type != AST_PATTERN_VARIABLE &&
+            child->type != AST_PATTERN_LITERAL) continue;
+        if (param_has_default(child)) {
+            return count;  // first defaulted param ends the required prefix
+        }
+        count++;
     }
     return count;
 }
@@ -648,10 +789,14 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
             return expr->node_type ? clone_type(expr->node_type) : create_type(TYPE_UNKNOWN);
 
         case AST_MEMBER_ACCESS: {
-            // Enforce export visibility before resolving
+            // Enforce export visibility before resolving. Use the
+            // strict per-scope `is_visible_namespace` check (issue #243
+            // sealed scopes) so user code that did not import a
+            // transitively-pulled-in module gets a clear "not visible"
+            // error rather than the looser "not exported" message.
             if (expr->child_count > 0 && expr->children[0] &&
                 expr->children[0]->type == AST_IDENTIFIER && expr->children[0]->value &&
-                is_imported_namespace(expr->children[0]->value) && expr->value &&
+                is_visible_namespace(expr->children[0]->value, table) && expr->value &&
                 is_export_blocked(expr->children[0]->value, expr->value)) {
                 char msg[256];
                 snprintf(msg, sizeof(msg), "'%s' is not exported from module '%s'",
@@ -665,7 +810,7 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
             // Namespace-qualified constant access: mymath.PI_APPROX -> mymath_PI_APPROX
             if (expr->child_count > 0 && expr->children[0] &&
                 expr->children[0]->type == AST_IDENTIFIER && expr->children[0]->value &&
-                is_imported_namespace(expr->children[0]->value) && expr->value) {
+                is_visible_namespace(expr->children[0]->value, table) && expr->value) {
                 char qualified[512];
                 snprintf(qualified, sizeof(qualified), "%s_%s",
                          expr->children[0]->value, expr->value);
@@ -1055,6 +1200,7 @@ int typecheck_program(ASTNode* program) {
     error_count = 0;
     warning_count = 0;
     namespace_count = 0;  // Reset imported namespaces
+    user_explicit_namespace_count = 0;  // Reset user-explicit namespaces (issue #243)
     selective_import_reset();  // Reset per-module selective-import filters
 
     SymbolTable* global_table = create_symbol_table(NULL);
@@ -1087,6 +1233,16 @@ int typecheck_program(ASTNode* program) {
     // Timing builtin — returns nanoseconds as int64 (int32 overflows after ~2.1 seconds)
     Type* clock_ns_type = create_type(TYPE_INT64);
     add_symbol(global_table, "clock_ns", clock_ns_type, 0, 1, 0);
+
+    // Source-location intrinsics (#265). At codegen time these expand
+    // to the AST node's line, source-file path, and enclosing C
+    // function name — useful for assertions, panic messages, and log
+    // formatters. Caller-site capture via default arguments is not
+    // yet wired up (deferred to a follow-up); for now callers pass
+    // them explicitly: `my_log(msg, __LINE__, __FILE__, __func__)`.
+    add_symbol(global_table, "__LINE__", create_type(TYPE_INT),    0, 1, 0);
+    add_symbol(global_table, "__FILE__", create_type(TYPE_STRING), 0, 1, 0);
+    add_symbol(global_table, "__func__", create_type(TYPE_STRING), 0, 1, 0);
 
     // Output builtins
     Type* println_type = create_type(TYPE_VOID);
@@ -1282,6 +1438,16 @@ int typecheck_program(ASTNode* program) {
 
                     // Register namespace for qualified calls (e.g., string.new)
                     register_namespace(ns_leaf);
+                    // User-explicit registration (issue #243 sealed scopes):
+                    // skip if this import was synthesized by
+                    // module_merge_into_program's BFS transitive-merge
+                    // pass. Synthetic imports keep the namespace
+                    // resolvable for cloned merged-body callers but
+                    // hide it from user code that didn't ask for it.
+                    if (!child->annotation ||
+                        strcmp(child->annotation, "synthetic") != 0) {
+                        register_user_explicit_namespace(ns_leaf);
+                    }
 
                     // If this is a selective import, record the allow list
                     // so qualified calls to functions not in it get rejected.
@@ -1343,6 +1509,12 @@ int typecheck_program(ASTNode* program) {
                     // Handle local package imports: import mypackage.utils
                     const char* namespace = get_namespace_from_path(module_path);
                     register_namespace(namespace);
+                    // Same synthetic-skip gate as the std.* path above
+                    // (issue #243 sealed scopes).
+                    if (!child->annotation ||
+                        strcmp(child->annotation, "synthetic") != 0) {
+                        register_user_explicit_namespace(namespace);
+                    }
 
                     // Look up cached module from orchestrator
                     AetherModule* mod = module_find(module_path);
@@ -1492,6 +1664,8 @@ int typecheck_program(ASTNode* program) {
         // Clean up namespace strings to avoid leaks on re-runs
         for (int ns = 0; ns < namespace_count; ns++) free(imported_namespaces[ns]);
         namespace_count = 0;
+        for (int ns = 0; ns < user_explicit_namespace_count; ns++) free(user_explicit_namespaces[ns]);
+        user_explicit_namespace_count = 0;
         return 0;
     }
     
@@ -1542,6 +1716,8 @@ int typecheck_program(ASTNode* program) {
     // Clean up namespace strings
     for (int ns = 0; ns < namespace_count; ns++) free(imported_namespaces[ns]);
     namespace_count = 0;
+    for (int ns = 0; ns < user_explicit_namespace_count; ns++) free(user_explicit_namespaces[ns]);
+    user_explicit_namespace_count = 0;
 
     return 1;
 }
@@ -1704,6 +1880,16 @@ int typecheck_function_definition(ASTNode* func, SymbolTable* table) {
     if (!func || (func->type != AST_FUNCTION_DEFINITION && func->type != AST_BUILDER_FUNCTION)) return 0;
 
     SymbolTable* func_table = create_symbol_table(table);
+
+    // Issue #243 sealed scopes: cloned function bodies from
+    // module_merge_into_program's BFS transitive-merge pass need
+    // relaxed qualified-call resolution so they can reach into other
+    // transitively-merged namespaces. The flag propagates from
+    // parent in create_symbol_table, so nested scopes inside this
+    // body inherit it; on function exit we just free func_table.
+    if (func->is_imported) {
+        func_table->inside_merged_body = 1;
+    }
 
     // Add parameters to function's symbol table
     for (int i = 0; i < func->child_count - 1; i++) { // Last child is body
@@ -2459,10 +2645,12 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
             
         case AST_MEMBER_ACCESS: {
             // Namespace-qualified constant access: mymath.PI_APPROX -> mymath_PI_APPROX
-            // Rewrite AST to AST_IDENTIFIER so codegen emits the C variable name directly
+            // Rewrite AST to AST_IDENTIFIER so codegen emits the C variable name directly.
+            // Issue #243: gate on the strict per-scope visibility check
+            // so user code can't reach into transitively-merged consts.
             if (expr->child_count > 0 && expr->children[0] &&
                 expr->children[0]->type == AST_IDENTIFIER && expr->children[0]->value &&
-                is_imported_namespace(expr->children[0]->value) && expr->value) {
+                is_visible_namespace(expr->children[0]->value, table) && expr->value) {
                 // Enforce export visibility for constants
                 if (is_export_blocked(expr->children[0]->value, expr->value)) {
                     char msg[256];
@@ -2681,6 +2869,53 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
         }
     }
 
+    // Phase A3 (foundation for #260 D pure-Aether middleware): if the
+    // call's target name resolves to a local variable whose type is
+    // TYPE_FUNCTION (a closure / function-typed value), this is a
+    // direct invocation of a function-typed local — `handler(req, res)`
+    // where `handler` is a local variable. Transparently rewrite the
+    // AST to flow through the existing `call(fn, args...)` codegen
+    // path (codegen_expr.c:~2155). This lets users write the natural
+    // form rather than the workaround `call(handler, req, res)`.
+    if (symbol && !symbol->is_function && symbol->type &&
+        symbol->type->kind == TYPE_FUNCTION && call->value) {
+        // Build a new child list: [fn_ref, original_args...]
+        ASTNode* fn_ref = create_ast_node(AST_IDENTIFIER, call->value,
+                                          call->line, call->column);
+        fn_ref->node_type = clone_type(symbol->type);
+
+        int old_count = call->child_count;
+        ASTNode** new_children = malloc(sizeof(ASTNode*) * (old_count + 1));
+        new_children[0] = fn_ref;
+        for (int i = 0; i < old_count; i++) {
+            new_children[i + 1] = call->children[i];
+        }
+        if (call->children) free(call->children);
+        call->children = new_children;
+        call->child_count = old_count + 1;
+
+        // Rename the call from <varname> to "call" so codegen routes
+        // through the existing closure-invocation path.
+        free(call->value);
+        call->value = strdup("call");
+
+        // Type-check argument expressions (skip the new fn_ref at
+        // index 0; its type is already set above).
+        for (int i = 1; i < call->child_count; i++) {
+            typecheck_expression(call->children[i], table);
+        }
+
+        // The call's return type is the function-type's return slot,
+        // when known. Otherwise leave UNKNOWN — type inference may
+        // refine it later.
+        if (symbol->type->return_type) {
+            call->node_type = clone_type(symbol->type->return_type);
+        } else {
+            call->node_type = create_type(TYPE_UNKNOWN);
+        }
+        return 1;
+    }
+
     if (!symbol || !symbol->is_function) {
         char error_msg[256];
         // Check if this is a visibility rejection (not-exported) rather than truly undefined
@@ -2707,6 +2942,7 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
     // Arity check: user-defined functions have their AST node stored
     if (symbol->node && (symbol->node->type == AST_FUNCTION_DEFINITION || symbol->node->type == AST_BUILDER_FUNCTION)) {
         int expected = count_function_params(symbol->node);
+        int required = count_required_params(symbol->node);
         int ctx_first = has_ctx_first_param(symbol->node);
         int got = call->child_count;
         // If mismatch, try excluding trailing closures (for functions that
@@ -2726,15 +2962,74 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
         // Functions with _ctx as the first param accept either:
         //   - expected args (caller passed _ctx explicitly), or
         //   - expected-1 args (builder DSL auto-injects _ctx at the call site)
+        // Phase A2.1 default arguments: a call with `got` between
+        // `required` and `expected` (inclusive) is also OK — the
+        // missing trailing args get filled in below from the
+        // declared defaults.
         int arity_ok = (got == expected) ||
-                       (ctx_first && got == expected - 1);
+                       (ctx_first && got == expected - 1) ||
+                       (got >= required && got < expected);
         if (!arity_ok) {
             char error_msg[256];
-            snprintf(error_msg, sizeof(error_msg),
-                     "Function '%s' expects %d argument(s), got %d",
-                     call->value, expected, got);
+            if (required < expected) {
+                snprintf(error_msg, sizeof(error_msg),
+                         "Function '%s' expects %d-%d argument(s), got %d",
+                         call->value, required, expected, got);
+            } else {
+                snprintf(error_msg, sizeof(error_msg),
+                         "Function '%s' expects %d argument(s), got %d",
+                         call->value, expected, got);
+            }
             type_error(error_msg, call->line, call->column);
             return 0;
+        }
+
+        // Phase A2.1 default-arg fill: if the caller passed fewer
+        // args than the callee declared (within the required..total
+        // window allowed above), append clones of the declared
+        // default expressions to the call's child list. After this
+        // codegen sees a fully-populated call and emits the right C.
+        // Defaults trail required, so the missing slots are always
+        // the trailing tail.
+        if (got >= required && got < expected) {
+            int param_idx = 0;
+            for (int i = 0; i < symbol->node->child_count - 1 &&
+                            call->child_count < expected; i++) {
+                ASTNode* p = symbol->node->children[i];
+                if (!p) continue;
+                if (p->type == AST_GUARD_CLAUSE) continue;
+                if (p->type != AST_VARIABLE_DECLARATION &&
+                    p->type != AST_PATTERN_VARIABLE &&
+                    p->type != AST_PATTERN_LITERAL) continue;
+                // Skip param indexes the caller already supplied.
+                if (param_idx < got) {
+                    param_idx++;
+                    continue;
+                }
+                if (!param_has_default(p)) {
+                    // Should be unreachable given the trailing-default
+                    // rule, but defensively: error instead of silently
+                    // filling with an undefined value.
+                    char err[256];
+                    snprintf(err, sizeof(err),
+                             "Function '%s' parameter %d has no default — caller must supply it",
+                             call->value, param_idx + 1);
+                    type_error(err, call->line, call->column);
+                    return 0;
+                }
+                ASTNode* default_clone = clone_ast_node(p->children[0]);
+                if (!default_clone) {
+                    type_error("internal: failed to clone default expression",
+                               call->line, call->column);
+                    return 0;
+                }
+                // Phase A2.2: rewrite source-location intrinsics in
+                // the clone so they capture the caller's location
+                // rather than the function definition's. Closes #265.
+                rewrite_caller_site_intrinsics(default_clone, call->line, call->column);
+                add_child(call, default_clone);
+                param_idx++;
+            }
         }
     }
 

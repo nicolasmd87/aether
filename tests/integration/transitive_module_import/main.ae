@@ -1,0 +1,21 @@
+// Issue #243 regression: when module A imports module B internally,
+// and user imports A and calls A's function that delegates to B,
+// the user must NOT be forced to also `import lib_b`.
+//
+// Earlier behaviour: the merger cloned `lib_a.greet` into the
+// program but skipped `lib_b.shout` entirely, so the cloned body
+// referenced `lib_b.shout` which the typechecker couldn't resolve
+// → E0301: Undefined function 'lib_b.shout'.
+//
+// After the fix: the merger does a BFS through `mod->imports` and
+// pulls in transitively-required modules, registering their
+// namespaces and merging their exported decls so the cloned bodies
+// link cleanly. User code only needs to write the imports they
+// actually use.
+
+import lib_a
+
+main() {
+    msg = lib_a.greet("hello")
+    println(msg)
+}

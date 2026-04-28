@@ -1,0 +1,86 @@
+// Issue #239 regression: std.http.client redirect support + response_url().
+//
+// Two new API surfaces being verified here:
+//
+//   - client.set_follow_redirects(req, max_hops) -> string
+//       error string on failure, "" on success. max_hops < 0 is
+//       rejected by the C side; 0 = don't follow (default); N > 0
+//       follows up to N hops.
+//
+//   - client.response_url(resp) -> string
+//       returns the URL of the response. For a non-followed
+//       request, this is the URL the caller passed; for a
+//       followed redirect chain, it's the URL of the final hop.
+//       NULL-safe — returns "" on null.
+//
+// Full integration (a multi-endpoint HTTP server returning 30x
+// chains, scheme-downgrade rejection in flight, loop detection) is
+// covered by the in-process server tests in test_http_client_v2.ae
+// when those are extended in a follow-up. This regression locks
+// down the API contract: the calls compile, return the documented
+// values for the clean cases, and pass null safely.
+
+import std.http.client
+
+main() {
+    // 1. set_follow_redirects with 0 (the default) succeeds.
+    req1 = client.request("GET", "http://does-not-resolve.invalid/")
+    err1 = client.set_follow_redirects(req1, 0)
+    if err1 != "" {
+        println("FAIL: set_follow_redirects(0) returned: ${err1}")
+        client.request_free(req1)
+        return
+    }
+    client.request_free(req1)
+
+    // 2. set_follow_redirects with positive value succeeds.
+    req2 = client.request("GET", "http://does-not-resolve.invalid/")
+    err2 = client.set_follow_redirects(req2, 5)
+    if err2 != "" {
+        println("FAIL: set_follow_redirects(5) returned: ${err2}")
+        client.request_free(req2)
+        return
+    }
+    client.request_free(req2)
+
+    // 3. set_follow_redirects with negative value returns an error.
+    req3 = client.request("GET", "http://does-not-resolve.invalid/")
+    err3 = client.set_follow_redirects(req3, -1)
+    if err3 == "" {
+        println("FAIL: set_follow_redirects(-1) should have returned an error")
+        client.request_free(req3)
+        return
+    }
+    client.request_free(req3)
+
+    // 4. response_url on a null pointer returns "" (NULL-safe).
+    url_null = client.response_url(null)
+    if url_null != "" {
+        println("FAIL: response_url(null) returned: '${url_null}'")
+        return
+    }
+
+    // 5. response_url after a real (failing) send returns the
+    //    original URL — the request never made it past DNS but the
+    //    response struct still records the URL the caller gave us.
+    target = "http://does-not-resolve.invalid/some/path"
+    req5 = client.request("GET", target)
+    client.set_follow_redirects(req5, 3)
+    resp5, send_err = client.send_request(req5)
+    if resp5 != null {
+        url5 = client.response_url(resp5)
+        if url5 != target {
+            println("FAIL: response_url after failed send was '${url5}', expected '${target}'")
+            client.response_free(resp5)
+            client.request_free(req5)
+            return
+        }
+        client.response_free(resp5)
+    }
+    // send_err is expected (DNS fails for .invalid TLD); resp5 may
+    // be null on some configurations, the check above handles both.
+    _ = send_err
+    client.request_free(req5)
+
+    println("PASS: redirect API surface contract holds")
+}

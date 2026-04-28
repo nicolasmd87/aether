@@ -1,0 +1,50 @@
+// examples/host-tinygo-demo.ae - in-process Go from Aether via TinyGo
+//
+// Prerequisite: tinygo on PATH, then build the demo lib:
+//
+//   tinygo build -buildmode=c-shared \
+//       -o /tmp/libgreet.so contrib/host/tinygo/examples/greet.go
+//
+// Then run:
+//
+//   AETHER_HOME=$(pwd) ./build/ae run examples/host-tinygo-demo.ae
+//
+// On macOS use libgreet.dylib; on Windows libgreet.dll. See
+// contrib/host/tinygo/README.md for the full cookbook.
+
+import contrib.host.tinygo
+import std.os
+
+main() {
+    lib_path = os_getenv("TINYGO_LIB")
+    if lib_path == 0 {
+        println("set TINYGO_LIB to the .so/.dylib/.dll path (see header comment)")
+        return
+    }
+
+    handle, err = tinygo.load(lib_path)
+    if handle == null {
+        println("load failed: ${err}")
+        return
+    }
+
+    answer = tinygo.call_int_void(handle, "Answer")
+    println("Answer() = ${answer}")
+
+    sum = tinygo.call_int_int_int(handle, "Add", 2, 40)
+    println("Add(2, 40) = ${sum}")
+
+    neg = tinygo.call_int_int(handle, "Negate", 7)
+    println("Negate(7) = ${neg}")
+
+    msg = tinygo.call_str_str(handle, "Greet", "world")
+    println(msg)
+
+    println("PrintN(5):")
+    tinygo.call_void_int(handle, "PrintN", 5)
+
+    close_err = tinygo.unload(handle)
+    if close_err != "" {
+        println("unload warning: ${close_err}")
+    }
+}

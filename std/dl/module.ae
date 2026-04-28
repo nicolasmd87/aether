@@ -1,0 +1,82 @@
+// std.dl - cross-platform dynamic library loader.
+//
+// Wraps dlopen/dlsym/dlclose (POSIX) and LoadLibraryA/GetProcAddress/
+// FreeLibrary (Windows) behind a uniform Go-style API:
+//
+//   handle, err = dl.open("./libfoo.so")
+//   sym,    err = dl.symbol(handle, "foo_init")
+//   _ = dl.close(handle)
+//
+// The platform path suffix (.so / .dylib / .dll) is the caller's
+// responsibility — std.dl does not auto-mangle. Callers wanting
+// portable resolution typically branch on a build-time platform
+// check or accept a config-driven library name.
+//
+// Sandbox interaction (POSIX): libaether_sandbox_preload.c intercepts
+// real dlopen and consults the per-process grant table, so dl.open
+// inherits sandbox grants transparently.
+
+exports (
+    open_raw, symbol_raw, close_raw, last_error_raw,
+    open, symbol, close, last_error
+)
+
+// Raw externs (escape hatch). Return NULL/0 on failure; consult
+// last_error_raw() for the platform error string.
+extern aether_dl_open_raw(path: string) -> ptr
+extern aether_dl_symbol_raw(handle: ptr, name: string) -> ptr
+extern aether_dl_close_raw(handle: ptr) -> int
+extern aether_dl_last_error_raw() -> string
+
+// Aether-side aliases under the dl.* namespace. Keeping the C symbol
+// names verbose preserves header-grep friendliness; the short aliases
+// below are what user code calls.
+open_raw(path: string) -> ptr {
+    return aether_dl_open_raw(path)
+}
+
+symbol_raw(handle: ptr, name: string) -> ptr {
+    return aether_dl_symbol_raw(handle, name)
+}
+
+close_raw(handle: ptr) -> int {
+    return aether_dl_close_raw(handle)
+}
+
+last_error_raw() -> string {
+    return aether_dl_last_error_raw()
+}
+
+// Open a shared library. Returns (handle, "") on success,
+// (null, error) on failure.
+open(path: string) -> {
+    h = aether_dl_open_raw(path)
+    if h == null {
+        return null, aether_dl_last_error_raw()
+    }
+    return h, ""
+}
+
+// Resolve a symbol in a previously opened handle. Returns
+// (ptr, "") on success, (null, error) on failure.
+symbol(handle: ptr, name: string) -> {
+    s = aether_dl_symbol_raw(handle, name)
+    if s == null {
+        return null, aether_dl_last_error_raw()
+    }
+    return s, ""
+}
+
+// Close a handle. Returns "" on success, error on failure.
+close(handle: ptr) -> {
+    ok = aether_dl_close_raw(handle)
+    if ok == 0 {
+        return aether_dl_last_error_raw()
+    }
+    return ""
+}
+
+// Last error string for the calling thread, or "" if none.
+last_error() -> {
+    return aether_dl_last_error_raw()
+}

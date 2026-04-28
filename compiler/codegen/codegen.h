@@ -28,6 +28,10 @@ typedef struct {
     int interp_as_printf;  // When set, string interp generates printf() instead of snprintf+malloc
     ASTNode* program;  // Reference to program root for lookups
 
+    // Source file path threaded through to expand `__FILE__` at codegen
+    // time (#265). NULL is fine — `__FILE__` then emits "(unknown)".
+    const char* source_file;
+
     // Header generation (--emit-header)
     int emit_header;         // Whether to emit a C header file
     FILE* header_file;       // Output stream for header

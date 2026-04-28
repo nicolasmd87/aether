@@ -1,0 +1,287 @@
+// std.http.middleware — composable middleware for the Aether HTTP server.
+//
+// Each middleware is a C function pointer registered into the
+// existing http_server_use_middleware chain. The Aether-side
+// wrappers below allocate the per-middleware config struct and do
+// the registration in one call.
+//
+// Usage (issue #260 Tier 1):
+//
+//     import std.http
+//     import std.http.middleware
+//
+//     server = http.server_create(8080)
+//
+//     // CORS — open it up to one origin, allow GET/POST/OPTIONS,
+//     // cache the preflight for 1 hour.
+//     middleware.use_cors(server,
+//         "https://example.com",       // allow_origin
+//         "GET, POST, OPTIONS",         // allow_methods
+//         "Content-Type, Authorization",// allow_headers
+//         0,                            // allow_credentials
+//         3600)                         // max_age (seconds)
+//
+//     // Rate limit: 100 requests per 60 seconds, per client IP.
+//     middleware.use_rate_limit(server, 100, 60000)
+//
+//     // Virtual host gate: only requests with Host: api.example.com
+//     // or Host: app.example.com are forwarded; everything else
+//     // gets a 404.
+//     middleware.use_vhost(server, "api.example.com,app.example.com")
+//
+//     // Basic auth: use a verifier defined elsewhere as a
+//     // @c_callback function returning int.
+//     middleware.use_basic_auth(server, "Restricted", verify_creds_cb)
+
+exports (
+    use_cors,
+    use_basic_auth,
+    use_rate_limit,
+    use_vhost,
+    use_gzip,
+    use_static_files,
+    use_rewrite,
+    rewrite_add_rule,
+    use_error_pages,
+    error_pages_register,
+)
+
+// ---- Raw externs ----
+
+extern aether_cors_opts_new(allow_origin: string,
+                            allow_methods: string,
+                            allow_headers: string,
+                            allow_credentials: int,
+                            max_age_seconds: int) -> ptr
+extern aether_middleware_cors(req: ptr, res: ptr, user_data: ptr) -> int
+
+extern aether_basic_auth_opts_new(realm: string,
+                                  verifier: ptr,
+                                  verifier_user_data: ptr) -> ptr
+extern aether_middleware_basic_auth(req: ptr, res: ptr, user_data: ptr) -> int
+
+extern aether_rate_limit_opts_new(max_requests: int, window_ms: int) -> ptr
+extern aether_middleware_rate_limit(req: ptr, res: ptr, user_data: ptr) -> int
+
+extern aether_vhost_map_new(fallback_status: int) -> ptr
+extern aether_vhost_register_host(map: ptr, host: string) -> int
+extern aether_middleware_vhost(req: ptr, res: ptr, user_data: ptr) -> int
+
+extern http_server_use_middleware(server: ptr, middleware: ptr, user_data: ptr)
+extern http_server_use_response_transformer(server: ptr, xform: ptr, user_data: ptr)
+
+// D2 externs.
+extern aether_gzip_opts_new(min_size: int, level: int) -> ptr
+extern aether_xform_gzip(req: ptr, res: ptr, user_data: ptr)
+
+extern aether_static_opts_new(url_prefix: string, root: string) -> ptr
+extern aether_middleware_static(req: ptr, res: ptr, user_data: ptr) -> int
+
+extern aether_rewrite_opts_new() -> ptr
+extern aether_rewrite_add_rule(opts: ptr, from_prefix: string, to_prefix: string) -> int
+extern aether_middleware_rewrite(req: ptr, res: ptr, user_data: ptr) -> int
+
+extern aether_error_pages_opts_new() -> ptr
+extern aether_error_pages_register(opts: ptr, status: int, body: string, content_type: string) -> int
+extern aether_xform_error_pages(req: ptr, res: ptr, user_data: ptr)
+
+extern string_length(s: string) -> int
+
+// ---- Aether-facing wrappers ----
+
+// Install a CORS middleware on `server`. Empty-string args mean
+// "do not emit that header"; pass "*" or a specific origin/method
+// list to set them. Preflight OPTIONS requests get a 204 with the
+// configured Access-Control-Max-Age and short-circuit the chain
+// (the route handler is not run for OPTIONS).
+//
+// Returns "" on success, error string on allocation failure.
+use_cors(server: ptr,
+         allow_origin: string,
+         allow_methods: string,
+         allow_headers: string,
+         allow_credentials: int,
+         max_age_seconds: int) -> {
+    opts = aether_cors_opts_new(allow_origin, allow_methods,
+                                 allow_headers, allow_credentials,
+                                 max_age_seconds)
+    if opts == null {
+        return "cors: allocation failed"
+    }
+    http_server_use_middleware(server, aether_middleware_cors, opts)
+    return ""
+}
+
+// Install Basic auth. `verify` is a C callback (declared
+// `@c_callback` on the Aether side) that receives the decoded
+// username + password and returns 1 if valid, 0 otherwise. The
+// realm string is shown in the browser's auth prompt.
+use_basic_auth(server: ptr,
+               realm: string,
+               verify: ptr,
+               verifier_user_data: ptr) -> {
+    if verify == null {
+        return "basic_auth: verify callback is null"
+    }
+    opts = aether_basic_auth_opts_new(realm, verify, verifier_user_data)
+    if opts == null {
+        return "basic_auth: allocation failed"
+    }
+    http_server_use_middleware(server, aether_middleware_basic_auth, opts)
+    return ""
+}
+
+// Install a per-IP token-bucket rate limiter. `max_requests` is the
+// burst size; tokens refill continuously over `window_ms`
+// milliseconds. Clients exceeding the rate get 429 + a Retry-After
+// header. Client identity comes from X-Forwarded-For (proxy
+// deployment) → X-Real-IP → "anonymous" — see the C side for the
+// exact resolution chain.
+use_rate_limit(server: ptr, max_requests: int, window_ms: int) -> {
+    if max_requests <= 0 || window_ms <= 0 {
+        return "rate_limit: max_requests and window_ms must be positive"
+    }
+    opts = aether_rate_limit_opts_new(max_requests, window_ms)
+    if opts == null {
+        return "rate_limit: allocation failed"
+    }
+    http_server_use_middleware(server, aether_middleware_rate_limit, opts)
+    return ""
+}
+
+// Install a virtual-host gate. `hosts_csv` is a comma-separated
+// list of accepted Host headers (case-insensitive). Unknown hosts
+// get a 404 with body "Unknown host". Registers each host
+// individually with the underlying map.
+use_vhost(server: ptr, hosts_csv: string) -> {
+    map = aether_vhost_map_new(404)
+    if map == null {
+        return "vhost: allocation failed"
+    }
+
+    // Parse the CSV in pure Aether — split on ',' and trim each entry.
+    n = string_length(hosts_csv)
+    start = 0
+    i = 0
+    while i <= n {
+        if i == n || char_at(hosts_csv, i) == 44 {  // 44 == ','
+            // Substring from start..i-1 (trim leading/trailing spaces).
+            len = i - start
+            if len > 0 {
+                host = substring_trim(hosts_csv, start, len)
+                if string_length(host) > 0 {
+                    aether_vhost_register_host(map, host)
+                }
+            }
+            start = i + 1
+        }
+        i = i + 1
+    }
+
+    http_server_use_middleware(server, aether_middleware_vhost, map)
+    return ""
+}
+
+// Tiny helper: extract the substring [start, start+len) from `s`
+// and trim ASCII whitespace from both ends. Returns a heap-allocated
+// string. Uses the existing string_substring(str, start, end) extern
+// from std.string (end-exclusive, not length-based).
+extern string_substring(str: string, start: int, end: int) -> string
+
+substring_trim(s: string, start: int, len: int) -> string {
+    // Forward-trim.
+    while len > 0 && (char_at(s, start) == 32 || char_at(s, start) == 9) {
+        start = start + 1
+        len = len - 1
+    }
+    // Backward-trim.
+    while len > 0 && (char_at(s, start + len - 1) == 32 ||
+                      char_at(s, start + len - 1) == 9) {
+        len = len - 1
+    }
+    if len <= 0 {
+        return ""
+    }
+    return string_substring(s, start, start + len)
+}
+
+// =================================================================
+// D2 wrappers — gzip / static_files / rewrite / error_pages
+// =================================================================
+
+// Install a response-side gzip compressor. Compresses bodies of
+// `min_size` bytes or larger when the client sends Accept-Encoding:
+// gzip; emits Content-Encoding: gzip + Vary: Accept-Encoding.
+// `level` is 1 (fastest) - 9 (best); pass 0 for default (6).
+//
+// Skipped (no compression) when:
+//   - the response body is shorter than min_size,
+//   - the response already has a Content-Encoding header,
+//   - the client did not advertise gzip in Accept-Encoding,
+//   - compression failed or didn't shrink the body.
+//
+// Returns "" on success; error string on allocation failure.
+use_gzip(server: ptr, min_size: int, level: int) -> {
+    opts = aether_gzip_opts_new(min_size, level)
+    if opts == null {
+        return "gzip: allocation failed"
+    }
+    http_server_use_response_transformer(server, aether_xform_gzip, opts)
+    return ""
+}
+
+// Mount a directory at a URL prefix. Path traversal (..) is
+// blocked at the middleware level. MIME type is auto-detected from
+// the file extension via http_mime_type. Returns "" on success.
+use_static_files(server: ptr, url_prefix: string, root: string) -> {
+    opts = aether_static_opts_new(url_prefix, root)
+    if opts == null {
+        return "static_files: allocation failed (root may be empty)"
+    }
+    http_server_use_middleware(server, aether_middleware_static, opts)
+    return ""
+}
+
+// Allocate a URL-rewrite opts struct. Use `rewrite_add_rule` to
+// install one or more prefix-rewrite rules, then pass the opts to
+// `use_rewrite`. Rules apply in registration order; first match wins.
+//
+// Idiom:
+//     opts = mw.aether_rewrite_opts_new()  // (or expose a wrapper)
+//     mw.rewrite_add_rule(opts, "/old/", "/new/")
+//     mw.rewrite_add_rule(opts, "/legacy/", "/api/v1/")
+//     mw.use_rewrite(server, opts)
+rewrite_add_rule(opts: ptr, from_prefix: string, to_prefix: string) -> {
+    rc = aether_rewrite_add_rule(opts, from_prefix, to_prefix)
+    if rc != 0 {
+        return "rewrite: rule registration failed"
+    }
+    return ""
+}
+
+use_rewrite(server: ptr, opts: ptr) -> {
+    if opts == null {
+        return "rewrite: opts is null (call aether_rewrite_opts_new first)"
+    }
+    http_server_use_middleware(server, aether_middleware_rewrite, opts)
+    return ""
+}
+
+// Register a custom error page. Body is served with the given
+// Content-Type when the route handler emits the matching status
+// code. Multiple registrations supported (one per status).
+error_pages_register(opts: ptr, status_code: int, body: string, content_type: string) -> {
+    rc = aether_error_pages_register(opts, status_code, body, content_type)
+    if rc != 0 {
+        return "error_pages: register failed"
+    }
+    return ""
+}
+
+use_error_pages(server: ptr, opts: ptr) -> {
+    if opts == null {
+        return "error_pages: opts is null (call aether_error_pages_opts_new first)"
+    }
+    http_server_use_response_transformer(server, aether_xform_error_pages, opts)
+    return ""
+}
