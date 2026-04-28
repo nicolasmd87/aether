@@ -28,17 +28,30 @@ trap cleanup EXIT
 AETHER_HOME="$ROOT" "$AE" run "$SCRIPT_DIR/server.ae" >"$TMPDIR/srv.log" 2>&1 &
 SRV_PID=$!
 
-deadline=$(($(date +%s) + 5))
+PORT=18104
+# Wait for the server to ACTUALLY accept connections, not just print
+# READY. The server prints READY at line 50 of server.ae but doesn't
+# call http_server_start_raw until the SrvActor receives StartSrv —
+# which on slower runners (Windows GHA) can be ~hundreds of ms after
+# READY hits the log. Probe the port directly until curl succeeds.
+deadline=$(($(date +%s) + 15))
 while [ "$(date +%s)" -lt "$deadline" ]; do
-    if grep -q READY "$TMPDIR/srv.log" 2>/dev/null; then break; fi
     if ! kill -0 "$SRV_PID" 2>/dev/null; then
         echo "  [FAIL] server died:"
         head -20 "$TMPDIR/srv.log"
         exit 1
     fi
+    if curl -s -o /dev/null --max-time 1 \
+            "http://127.0.0.1:$PORT/echo" 2>/dev/null; then
+        break
+    fi
     sleep 0.1
 done
-sleep 0.3
+if [ "$(date +%s)" -ge "$deadline" ]; then
+    echo "  [FAIL] server never accepted connections within 15s"
+    head -20 "$TMPDIR/srv.log"
+    exit 1
+fi
 
 # Drive 4 parallel sessions, each with 25 requests over one TCP
 # connection. Each session uses a unique X-Session-Id; the server

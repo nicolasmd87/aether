@@ -410,6 +410,13 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
     if ((!ret_type || ret_type->kind == TYPE_VOID || ret_type->kind == TYPE_UNKNOWN) && has_return_value(func)) {
         fprintf(gen->output, "int");
     } else {
+        // Multi-value return — ensure the `_tuple_T1_T2` typedef is in
+        // scope before the signature references it. The return-statement
+        // path also calls this when emitting `return (_tuple_X){a, b};`,
+        // but the signature is rendered first (#285).
+        if (ret_type && ret_type->kind == TYPE_TUPLE) {
+            ensure_tuple_typedef(gen, ret_type);
+        }
         generate_type(gen, ret_type);
     }
     // For @c_callback, emit the chosen C symbol verbatim (no namespace

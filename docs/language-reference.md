@@ -666,6 +666,19 @@ The error convention: empty string `""` means no error, non-empty string is the 
 
 Tuple destructuring creates typed local variables. The compiler generates C structs for each unique tuple type (`_tuple_int_string`, etc.).
 
+#### Explicit tuple return type
+
+The compiler infers the return tuple from `return a, b` statements in the body, but you can also declare it up front using the same parenthesised form accepted on `extern`:
+
+```aether
+safe_divide(a: int, b: int) -> (int, string) {
+    if b == 0 { return 0, "division by zero" }
+    return a / b, ""
+}
+```
+
+Stating the return type at the signature is preferred when the function is part of a public API or when readers shouldn't have to scan the body to know the return shape. The two forms (`-> { ... }` with inference vs. `-> (T1, T2) { ... }` explicit) are interchangeable from the caller's perspective and produce the same C struct return.
+
 Error propagation across function boundaries works correctly:
 
 ```aether
