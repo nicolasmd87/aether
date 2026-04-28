@@ -28,12 +28,21 @@ Hi, Ada!
 >>> ok!
 >>> go***'
 
-if [ "$(cat "$ACTUAL")" != "$EXPECTED" ]; then
+# Normalize CR-LF to LF: on Windows the C runtime translates `\n` to
+# `\r\n` when writing printf output to a redirected file, which the
+# shell comparison then sees as a mismatch even though the visible
+# output is identical.
+ACTUAL_NORM="$(tr -d '\r' < "$ACTUAL")"
+if [ "$ACTUAL_NORM" != "$EXPECTED" ]; then
     echo "  [FAIL] output mismatch"
     echo "--- expected ---"
     echo "$EXPECTED"
     echo "--- actual ---"
     cat "$ACTUAL"
+    echo "--- actual (hex first 200 bytes) ---"
+    head -c 200 "$ACTUAL" | od -c | head -10
+    echo "--- stderr ---"
+    head -20 "$TMPDIR/err.log"
     exit 1
 fi
 

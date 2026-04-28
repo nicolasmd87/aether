@@ -24,12 +24,20 @@ EXPECTED='7
 35
 42'
 
-if [ "$(cat "$ACTUAL")" != "$EXPECTED" ]; then
+# Strip CR (Windows printf-to-file emits `\r\n`).
+ACTUAL_NORM="$(tr -d '\r' < "$ACTUAL")"
+if [ "$ACTUAL_NORM" != "$EXPECTED" ]; then
     echo "  [FAIL] output mismatch"
     echo "--- expected ---"
     echo "$EXPECTED"
-    echo "--- actual ---"
+    echo "--- actual (raw bytes) ---"
     cat "$ACTUAL"
+    echo "--- actual (hex, first 200 bytes) ---"
+    head -c 200 "$ACTUAL" | od -c | head -10
+    echo "--- actual file size ---"
+    wc -c "$ACTUAL"
+    echo "--- stderr ---"
+    head -20 "$TMPDIR/err.log"
     exit 1
 fi
 
