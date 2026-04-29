@@ -16,7 +16,6 @@ Type* create_type(TypeKind kind) {
     type->param_types = NULL;
     type->param_count = 0;
     type->return_type = NULL;
-    type->is_ptr_view = 0;
     return type;
 }
 
@@ -170,7 +169,6 @@ Type* clone_type(Type* type) {
 
     Type* new_type = create_type(type->kind);
     new_type->array_size = type->array_size;
-    new_type->is_ptr_view = type->is_ptr_view;
     
     if (type->element_type) {
         new_type->element_type = clone_type(type->element_type);
