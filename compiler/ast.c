@@ -92,6 +92,7 @@ const char* type_to_string(Type* type) {
         case TYPE_INT: return "int";
         case TYPE_FLOAT: return "float";
         case TYPE_BOOL: return "bool";
+        case TYPE_BYTE: return "byte";
         case TYPE_STRING: return "string";
         case TYPE_VOID: return "void";
         case TYPE_MESSAGE: return "Message";

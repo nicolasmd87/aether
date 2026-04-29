@@ -212,6 +212,10 @@ Type* parse_type(Parser* parser) {
             advance_token(parser);
             type = create_type(TYPE_BOOL);
             break;
+        case TOKEN_BYTE:
+            advance_token(parser);
+            type = create_type(TYPE_BYTE);
+            break;
         case TOKEN_STRING:
             advance_token(parser);
             type = create_type(TYPE_STRING);
@@ -1240,7 +1244,8 @@ ASTNode* parse_statement(Parser* parser) {
         case TOKEN_INT64:
         case TOKEN_STRING:
         case TOKEN_FLOAT:
-        case TOKEN_BOOL: {
+        case TOKEN_BOOL:
+        case TOKEN_BYTE: {
             // Check if this is a namespace call: string.func() vs type declaration: string x = ...
             Token* next = peek_ahead(parser, 1);
             if (next && next->type == TOKEN_DOT) {
@@ -1254,7 +1259,7 @@ ASTNode* parse_statement(Parser* parser) {
                 }
                 return NULL;
             }
-            // Explicit type declaration: int x = 42;
+            // Explicit type declaration: int x = 42;  byte b = 0x7F;
             return parse_variable_declaration(parser);
         }
             
@@ -1565,7 +1570,8 @@ ASTNode* parse_for_loop(Parser* parser) {
 
     // Check if init is a variable declaration (int i = 1) or expression (i = 1)
     if (token && (token->type == TOKEN_INT || token->type == TOKEN_STRING ||
-                  token->type == TOKEN_FLOAT || token->type == TOKEN_BOOL)) {
+                  token->type == TOKEN_FLOAT || token->type == TOKEN_BOOL ||
+                  token->type == TOKEN_BYTE)) {
         init = parse_variable_declaration_with_semicolon(parser, false);
         match_token(parser, TOKEN_SEMICOLON);
     } else if (token && token->type == TOKEN_IDENTIFIER) {
@@ -1875,6 +1881,7 @@ static int is_module_name_token(Token* token) {
         case TOKEN_INT:     // 'int' keyword
         case TOKEN_FLOAT:   // 'float' keyword
         case TOKEN_BOOL:    // 'bool' keyword
+        case TOKEN_BYTE:    // 'byte' keyword
             return 1;
         default:
             return 0;
@@ -2026,6 +2033,7 @@ ASTNode* parse_export_statement(Parser* parser) {
         case TOKEN_INT64:
         case TOKEN_FLOAT:
         case TOKEN_BOOL:
+        case TOKEN_BYTE:
         case TOKEN_STRING:
         case TOKEN_PTR: {
             // C-style: export int func_name(...) { ... }
@@ -2493,7 +2501,8 @@ ASTNode* parse_actor_definition(Parser* parser) {
             
             if (next_tok && (next_tok->type == TOKEN_INT || next_tok->type == TOKEN_INT64 ||
                             next_tok->type == TOKEN_FLOAT ||
-                            next_tok->type == TOKEN_STRING || next_tok->type == TOKEN_BOOL)) {
+                            next_tok->type == TOKEN_STRING || next_tok->type == TOKEN_BOOL ||
+                            next_tok->type == TOKEN_BYTE)) {
                 // Explicit type: state int count = 0  or  state long total = 0
                 state_decl = parse_variable_declaration_with_semicolon(parser, false);
             } else if (next_tok && next_tok->type == TOKEN_IDENTIFIER) {
@@ -2810,6 +2819,7 @@ ASTNode* parse_function_definition(Parser* parser) {
                 case TOKEN_INT64:
                 case TOKEN_FLOAT:
                 case TOKEN_BOOL:
+                case TOKEN_BYTE:
                 case TOKEN_STRING:
                 case TOKEN_MESSAGE:
                 case TOKEN_PTR:
@@ -2849,6 +2859,7 @@ ASTNode* parse_function_definition(Parser* parser) {
                             case TOKEN_INT64:
                             case TOKEN_FLOAT:
                             case TOKEN_BOOL:
+                            case TOKEN_BYTE:
                             case TOKEN_STRING:
                             case TOKEN_MESSAGE:
                             case TOKEN_PTR:
@@ -3012,6 +3023,7 @@ ASTNode* parse_pattern(Parser* parser) {
         case TOKEN_INT64:
         case TOKEN_FLOAT:
         case TOKEN_BOOL:
+        case TOKEN_BYTE:
         case TOKEN_STRING:
         case TOKEN_PTR: {
             // Check if next token is an identifier (type name pattern)
@@ -3172,6 +3184,7 @@ ASTNode* parse_struct_definition(Parser* parser) {
         Type* c_type = NULL;
         if (peek && (peek->type == TOKEN_INT  || peek->type == TOKEN_INT64 ||
                      peek->type == TOKEN_FLOAT || peek->type == TOKEN_BOOL  ||
+                     peek->type == TOKEN_BYTE  ||
                      peek->type == TOKEN_STRING || peek->type == TOKEN_PTR)) {
             Token* ahead = peek_ahead(parser, 1);
             if (ahead && ahead->type == TOKEN_IDENTIFIER) {
@@ -3429,6 +3442,7 @@ ASTNode* parse_program(Parser* parser) {
             case TOKEN_INT64:
             case TOKEN_FLOAT:
             case TOKEN_BOOL:
+            case TOKEN_BYTE:
             case TOKEN_STRING:
             case TOKEN_PTR: {
                 Token* next = peek_ahead(parser, 1);

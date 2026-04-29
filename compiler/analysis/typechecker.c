@@ -539,6 +539,7 @@ static const char* type_name(Type* t) {
         case TYPE_UINT64:   return "uint64";
         case TYPE_FLOAT:    return "float";
         case TYPE_BOOL:     return "bool";
+        case TYPE_BYTE:     return "byte";
         case TYPE_STRING:   return "string";
         case TYPE_VOID:     return "void";
         case TYPE_PTR:      return "ptr";
@@ -648,6 +649,41 @@ static int has_ctx_first_param(ASTNode* func) {
     return 0;
 }
 
+/* Returns 1 if `init` is an integer literal whose value is outside
+ * 0..255, which would silently truncate when assigned to a `byte`-
+ * typed slot. Returns 0 if it's in range, not a literal, or not an
+ * integer literal at all (those cases are accepted; runtime
+ * truncation matches how other narrowings behave).
+ *
+ * Catches the obvious typo `b: byte = 256` at compile time per Nic's
+ * pick of option (b): literal-range check + runtime truncate for
+ * non-literal int. */
+static int byte_assignment_literal_out_of_range(ASTNode* init) {
+    if (!init || init->type != AST_LITERAL || !init->value) return 0;
+    if (!init->node_type) return 0;
+    /* Only int / int64 literals get the range check. Float / string /
+     * bool literals fail the type-compatibility check earlier and
+     * never reach here. */
+    if (init->node_type->kind != TYPE_INT && init->node_type->kind != TYPE_INT64) {
+        return 0;
+    }
+    /* Parse the literal text. Aether accepts decimal, hex (0x), octal
+     * (0o), and binary (0b) integer literals. strtoll handles decimal
+     * and 0x out of the box; octal/binary need a lighter touch but
+     * the values for byte-range bounds (0..255) are small enough that
+     * any of these representations is fine to parse. */
+    const char* s = init->value;
+    long long v = 0;
+    if (s[0] == '0' && (s[1] == 'b' || s[1] == 'B')) {
+        v = strtoll(s + 2, NULL, 2);
+    } else if (s[0] == '0' && (s[1] == 'o' || s[1] == 'O')) {
+        v = strtoll(s + 2, NULL, 8);
+    } else {
+        v = strtoll(s, NULL, 0);  /* handles decimal and 0x / 0X */
+    }
+    return (v < 0 || v > 255) ? 1 : 0;
+}
+
 // Type compatibility functions
 int is_type_compatible(Type* from, Type* to) {
     if (!from || !to) return 0;
@@ -689,6 +725,20 @@ int is_type_compatible(Type* from, Type* to) {
     // int ↔ ptr compatibility (e.g. x = 0 then x = ptr_func(), or passing 0 to ptr param)
     if (from->kind == TYPE_INT && to->kind == TYPE_PTR) return 1;
     if (from->kind == TYPE_PTR && to->kind == TYPE_INT) return 1;
+
+    // byte → int / int64 / float: safe widenings.
+    // Reverse direction (int → byte) is intentionally NOT here — it's
+    // gated at the assignment site so out-of-range integer literals
+    // produce a compile-time error rather than silent truncation.
+    // See `check_byte_assignment_literal_range` in the assignment path.
+    if (from->kind == TYPE_BYTE &&
+        (to->kind == TYPE_INT || to->kind == TYPE_INT64 ||
+         to->kind == TYPE_UINT64 || to->kind == TYPE_FLOAT)) return 1;
+    // int → byte allowed for non-literal int (runtime truncate is the
+    // contract, matching how other narrowings behave). Literal-range
+    // check happens elsewhere.
+    if (from->kind == TYPE_INT && to->kind == TYPE_BYTE) return 1;
+    if (from->kind == TYPE_INT64 && to->kind == TYPE_BYTE) return 1;
 
     return 0;
 }
@@ -966,6 +1016,22 @@ Type* infer_binary_type(ASTNode* left, ASTNode* right, AeTokenType operator) {
             if (left_type->kind == TYPE_FLOAT || right_type->kind == TYPE_FLOAT) {
                 return create_type(TYPE_FLOAT);
             }
+            // byte arithmetic: byte op byte → byte; mixed byte/int → int
+            // (the wider type wins, matching how int op int64 → int64).
+            // This keeps `b1 + b2` typed as byte for tag-byte / NaN-boxing
+            // patterns while letting `b + 1` widen for general arithmetic.
+            if (left_type->kind == TYPE_BYTE && right_type->kind == TYPE_BYTE) {
+                return create_type(TYPE_BYTE);
+            }
+            if ((left_type->kind == TYPE_BYTE || right_type->kind == TYPE_BYTE) &&
+                (left_type->kind == TYPE_INT || left_type->kind == TYPE_INT64 ||
+                 right_type->kind == TYPE_INT || right_type->kind == TYPE_INT64)) {
+                /* Pick the wider int side */
+                if (left_type->kind == TYPE_INT64 || right_type->kind == TYPE_INT64) {
+                    return create_type(TYPE_INT64);
+                }
+                return create_type(TYPE_INT);
+            }
             if (left_type->kind == TYPE_INT && right_type->kind == TYPE_INT) {
                 return create_type(TYPE_INT);
             }
@@ -993,6 +1059,21 @@ Type* infer_binary_type(ASTNode* left, ASTNode* right, AeTokenType operator) {
             // Bitwise operations: integer operands, result matches wider type
             if (left_type->kind == TYPE_UNKNOWN || right_type->kind == TYPE_UNKNOWN) {
                 return create_type(TYPE_UNKNOWN);
+            }
+            // byte op byte → byte. NaN-boxing / packed-tag code does
+            // `tag & 0x07`, `flags | 0x80`, etc. — keeping the result
+            // typed `byte` lets the value flow back into a `byte` field
+            // without an explicit narrowing.
+            if (left_type->kind == TYPE_BYTE && right_type->kind == TYPE_BYTE) {
+                return create_type(TYPE_BYTE);
+            }
+            if ((left_type->kind == TYPE_BYTE || right_type->kind == TYPE_BYTE) &&
+                (left_type->kind == TYPE_INT || left_type->kind == TYPE_INT64 ||
+                 right_type->kind == TYPE_INT || right_type->kind == TYPE_INT64)) {
+                if (left_type->kind == TYPE_INT64 || right_type->kind == TYPE_INT64) {
+                    return create_type(TYPE_INT64);
+                }
+                return create_type(TYPE_INT);
             }
             if (left_type->kind == TYPE_INT && right_type->kind == TYPE_INT) {
                 return create_type(TYPE_INT);
@@ -2126,6 +2207,25 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                 }
                 Type* init_type = infer_type(init, table);
 
+                /* Python-style "redeclaration" (`b = 999` after a prior
+                 * `byte b = 0`) parses as a fresh AST_VARIABLE_DECLARATION
+                 * with stmt->node_type == TYPE_UNKNOWN. The variable's
+                 * actual type lives in the symbol table. When the existing
+                 * binding is byte-typed, run the literal-range check
+                 * before stmt->node_type gets overwritten with the int
+                 * init type below. */
+                Symbol* existing = stmt->value ? lookup_symbol(table, stmt->value) : NULL;
+                if (existing && existing->type && existing->type->kind == TYPE_BYTE &&
+                    byte_assignment_literal_out_of_range(init)) {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg),
+                        "byte literal out of range: %s does not fit in 0..255",
+                        init->value ? init->value : "?");
+                    type_error(msg, stmt->line, stmt->column);
+                    free_type(init_type);
+                    return 0;
+                }
+
                 // If variable has no explicit type (TYPE_UNKNOWN), use initializer's type
                 if (!stmt->node_type || stmt->node_type->kind == TYPE_UNKNOWN) {
                     if (stmt->node_type) free_type(stmt->node_type);
@@ -2134,6 +2234,20 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                     // Has explicit type but initializer doesn't match
                     free_type(init_type);
                     type_error("Type mismatch in variable initialization", stmt->line, stmt->column);
+                    return 0;
+                }
+                /* `byte b = <int literal>` — fresh declaration with explicit
+                 * `byte` type. Reject out-of-range literals at compile time
+                 * per Nic's option (b). Non-literal int is accepted (runtime
+                 * truncation, matching int64→int etc.). */
+                if (stmt->node_type && stmt->node_type->kind == TYPE_BYTE &&
+                    byte_assignment_literal_out_of_range(init)) {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg),
+                        "byte literal out of range: %s does not fit in 0..255",
+                        init->value ? init->value : "?");
+                    type_error(msg, stmt->line, stmt->column);
+                    free_type(init_type);
                     return 0;
                 }
                 free_type(init_type);
@@ -2172,6 +2286,18 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                              type_name(symbol->type), type_name(right_type));
                     free_type(right_type);
                     type_error(error_msg, stmt->line, stmt->column);
+                    return 0;
+                }
+                /* `b = <int literal>` where b: byte — same range check as the
+                 * declaration path. */
+                if (symbol->type && symbol->type->kind == TYPE_BYTE &&
+                    byte_assignment_literal_out_of_range(right)) {
+                    char msg[256];
+                    snprintf(msg, sizeof(msg),
+                        "byte literal out of range: %s does not fit in 0..255",
+                        right->value ? right->value : "?");
+                    type_error(msg, stmt->line, stmt->column);
+                    free_type(right_type);
                     return 0;
                 }
                 free_type(right_type);
@@ -2935,6 +3061,21 @@ int typecheck_binary_expression(ASTNode* expr, SymbolTable* table) {
             free_type(left_type);
             free_type(right_type);
             type_error("Type mismatch in assignment", expr->line, expr->column);
+            return 0;
+        }
+        /* `b = <int literal>` where b: byte — same range check as the
+         * declaration / AST_ASSIGNMENT paths. The plain `=` operator
+         * parses as AST_BINARY_EXPRESSION, so we need the check here
+         * too. */
+        if (left_type && left_type->kind == TYPE_BYTE &&
+            byte_assignment_literal_out_of_range(right)) {
+            char msg[256];
+            snprintf(msg, sizeof(msg),
+                "byte literal out of range: %s does not fit in 0..255",
+                right->value ? right->value : "?");
+            type_error(msg, expr->line, expr->column);
+            free_type(left_type);
+            free_type(right_type);
             return 0;
         }
         expr->node_type = clone_type(left_type);

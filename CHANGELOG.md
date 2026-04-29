@@ -5,9 +5,15 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.103.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Added
+
+- **`byte` primitive type — unsigned 8-bit, lowers to `unsigned char`** (`compiler/ast.{h,c}`, `compiler/parser/{lexer.c,tokens.h,parser.c}`, `compiler/analysis/typechecker.c`, `compiler/codegen/codegen.c`, `docs/language-reference.md`, `docs/c-interop.md`, `tests/regression/test_byte_primitive.ae`, `tests/integration/byte_literal_range_reject/`). Type-precision for struct fields, function parameters, returns, and locals where the value is genuinely an octet — packed-tag bytes, opcode discriminators, NaN-boxing pointer tags, network protocol headers, on-disk file format fields. For *bulk* byte storage, `std.bytes` remains the answer; `byte` is the single-octet primitive that complements it. Motivated by the microQuickJS port's JSValue/OpCode struct fields where forcing `int` would either bloat memory or force a parallel intrinsic API. Unsigned because that's what every modern language calls "byte" (Go, Rust, C#) and because the natural meaning of "the octet at this address" is unsigned. C-side mapping is `unsigned char` (not `uint8_t`) for C's strict-aliasing exemption — `unsigned char *` can legally alias any type's bytes for read/write; `uint8_t *` cannot. Arithmetic: `byte op byte → byte`, mixed `byte op int → int` (the wider type wins). Bitwise on byte operands stays byte (so `flags & 0x80` keeps `byte` typing). `byte → int / int64 / float` is implicit safe widening. `int → byte` requires an explicit declaration / assignment — out-of-range integer literals (256, 0x100, 999, etc.) are rejected at compile time with a "byte literal out of range: N does not fit in 0..255" diagnostic; non-literal int → byte compiles and truncates at runtime (matching how other narrowings behave). Pointer arithmetic and `ptr[i]` byte indexing are deliberately NOT included — those are a separate feature with their own design surface and would need their own PR.
 
 ## [0.103.0]
 

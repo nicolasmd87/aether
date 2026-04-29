@@ -52,7 +52,10 @@ extern void_function(param: type)  // No return type = void
 | `float` | `double` |
 | `string` | `const char*` |
 | `bool` | `int` |
+| `byte` | `unsigned char` |
 | `ptr` | `void*` |
+
+> **`byte` mapping note.** `byte` lowers to `unsigned char`, not `uint8_t`. The two are typedef-compatible on every platform Aether targets, but C's strict-aliasing rules give `unsigned char *` an exemption (it can legally alias any type's bytes for read/write); `uint8_t *` does not. Since `byte` is exactly the type used in C extern signatures that scrape bytes from other types' storage (packed binary protocol parsers, NaN-boxing tag readers, on-disk file headers), `unsigned char` is the right choice.
 
 ### Example: Custom C Functions
 

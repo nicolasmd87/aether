@@ -346,6 +346,7 @@ Token* read_identifier() {
     else if (strcmp(buffer, "long") == 0) token = create_token(TOKEN_INT64, buffer, current_line, current_column);
     else if (strcmp(buffer, "float") == 0) token = create_token(TOKEN_FLOAT, buffer, current_line, current_column);
     else if (strcmp(buffer, "bool") == 0) token = create_token(TOKEN_BOOL, buffer, current_line, current_column);
+    else if (strcmp(buffer, "byte") == 0) token = create_token(TOKEN_BYTE, buffer, current_line, current_column);
     else if (strcmp(buffer, "string") == 0) token = create_token(TOKEN_STRING, buffer, current_line, current_column);
     else if (strcmp(buffer, "ActorRef") == 0 || strcmp(buffer, "actor_ref") == 0) token = create_token(TOKEN_ACTOR_REF, buffer, current_line, current_column);
     else if (strcmp(buffer, "Message") == 0) token = create_token(TOKEN_MESSAGE, buffer, current_line, current_column);
@@ -677,6 +678,7 @@ const char* token_type_to_string(AeTokenType type) {
         case TOKEN_INT: return "INT";
         case TOKEN_FLOAT: return "FLOAT";
         case TOKEN_BOOL: return "BOOL";
+        case TOKEN_BYTE: return "BYTE";
         case TOKEN_STRING: return "STRING";
         case TOKEN_ACTOR_REF: return "ACTOR_REF";
         case TOKEN_MESSAGE: return "MESSAGE";
