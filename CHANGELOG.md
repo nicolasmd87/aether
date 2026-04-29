@@ -5,9 +5,15 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.103.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Fixed
+
+- **Module-imported externs now trigger the #297 auto-unwrap at call sites** (`compiler/codegen/codegen_func.c`, `tests/integration/module_extern_auto_unwrap/`). The #297 auto-unwrap (`aether_string_data(arg)` injected at C extern call sites for `string`-typed parameters) only fired when the extern was declared inline in the same `.ae` file as the call. When the same extern was reached through `import std.X`, `is_extern_func` returned false (the registry stored the bare extern name like `http_response_set_body_n`; the call site searched for the dotted form `http.response_set_body_n`) and the auto-unwrap branch was skipped. The downstream svn-aether port worked around this by duplicating stdlib extern decls inline (Rounds 162/164 of the port). Fix: `find_extern_registry_index` (refactored out of `is_extern_func`) now tries both the exact form and the dot-normalised form. `is_extern_func`, `lookup_extern_param_kind`, and `lookup_extern_c_name` all route through the new helper. Module-qualified call sites match the underscore-named registry entry. The flagged caveat in v0.103.0's CHANGELOG (#309) for `http.response_set_body_n` is now resolved — port code that was using inline-extern workarounds can drop them.
 
 ## [0.103.0]
 

@@ -1,0 +1,60 @@
+// Regression test for the module-imported-extern auto-unwrap fix.
+//
+// Pre-fix, the #297 auto-unwrap (`aether_string_data(arg)` injected
+// at C extern call sites for `string`-typed parameters) only fired
+// when the extern was declared inline in the same .ae file as the
+// call. When the same extern was reached through `import std.X`,
+// is_extern_func returned false (the registry stored the bare
+// `http_response_set_body_n` name; the call site searched for
+// `http.response_set_body_n` with the dot) and the auto-unwrap
+// branch was skipped. Downstream ports (svn-aether) had to
+// duplicate stdlib extern decls inline as a workaround.
+//
+// Post-fix, find_extern_registry_index tries both the exact form
+// and the dot-normalised form, so module-qualified call sites match
+// the underscore-named registry entry. Auto-unwrap now fires for
+// both shapes.
+//
+// This test exercises the module-import path. The C shim returns
+// the first 4 bytes the C side sees; pre-fix it would see the
+// AetherString magic header (0xDE 0xC0 0x57 0xAE little-endian =
+// 0xAE57C0DE = 2925242078). Post-fix it sees the actual payload.
+
+import std.string
+
+// ffi_check_first4 returns the first 4 bytes of `content` as a
+// little-endian uint32. The shim is a naive C extern (declares
+// `const char*`) — no dispatch on AetherString magic header.
+// Without auto-unwrap firing, the C side reads the struct header.
+extern ffi_check_first4(content: string) -> int
+
+extern exit(code: int)
+
+main() {
+    print("=== module_extern_auto_unwrap ===\n\n")
+
+    // Build a wrapped AetherString via string.copy. string.copy
+    // routes through string_new which returns AetherString*.
+    wrapped = string.copy("AB")
+    if string.length(wrapped) != 2 {
+        println("FAIL setup: wrapped length=${string.length(wrapped)}, want 2")
+        exit(1)
+    }
+
+    // Pass `wrapped` (an AetherString*) to a naive C extern declared
+    // `const char*`. The codegen must auto-unwrap via aether_string_data
+    // — even though `string.copy` was reached through `import std.string`
+    // and `ffi_check_first4` is module-imported.
+    v = ffi_check_first4(wrapped)
+
+    // Bytes "AB\0\0" little-endian → 'A' (0x41) | 'B'<<8 (0x42) = 0x4241 = 16961.
+    // Pre-fix this would be 0xC0DE = 49374 (the AetherString magic, low half).
+    if (v & 0xFFFF) != 16961 {
+        println("FAIL: read_first4 saw bytes=${v & 0xFFFF}, want 16961 (\"AB\\0\\0\")")
+        println("      pre-fix this would be 49374 (0xC0DE — the AetherString magic)")
+        exit(1)
+    }
+    println("  PASS: module-imported extern auto-unwraps `string` arg")
+
+    println("OK")
+}
