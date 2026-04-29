@@ -5,9 +5,15 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.101.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Added
+
+- **`expr as StructName` pointer-overlay struct cast** (`compiler/ast.h`, `compiler/ast.c`, `compiler/parser/parser.c`, `compiler/analysis/typechecker.c`, `compiler/codegen/codegen.c`, `compiler/codegen/codegen_expr.c`, `docs/c-interop.md`, `tests/regression/test_ptr_as_struct_cast.ae`). Aether-side syntactic sugar for the C pattern `((StructT*)raw_ptr)`, letting systems-programming code overlay a struct header on a raw `ptr` without a parallel intrinsic surface (`ptr_set_int`, `ptr_set_ptr`, …). Motivated by ports of pointer-tagging / linked-list / arena-allocator C code (microQuickJS et al.) where the storage is C-allocated and Aether wants to manipulate fields. Operand must be a `ptr` value (or coercible to one); RHS must be a struct name in scope. Result is a `StructT*`-shaped variable whose `view.field` accesses lower to `view->field`. The cast is a view — no allocation, no refcount, no auto-free; the operand's lifetime is the caller's problem (same contract as raw `extern` interaction). The `as` keyword is the same token used for `import x as y` aliasing; the two parses don't collide because import-aliasing is only recognised inside `import` statements. See `docs/c-interop.md` § Struct overlay on raw pointers.
 
 ## [0.101.0]
 

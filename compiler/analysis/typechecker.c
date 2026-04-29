@@ -727,6 +727,48 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
         case AST_NULL_LITERAL:
             return create_type(TYPE_PTR);
 
+        case AST_PTR_AS_STRUCT_CAST: {
+            /* `expr as StructName` — view the operand as a pointer to
+             * StructName. Operand must be ptr-typed. Result is a
+             * TYPE_STRUCT carrying the named struct's identity, with
+             * is_ptr_view=1 so member-access codegen emits `->field`
+             * rather than `.field`. */
+            if (!expr->value) return create_type(TYPE_UNKNOWN);
+            if (expr->child_count == 0 || !expr->children[0])
+                return create_type(TYPE_UNKNOWN);
+            Type* operand = infer_type(expr->children[0], table);
+            if (operand) {
+                /* Aether already coerces int<->ptr in places, so we
+                 * accept ptr OR int64 OR int as the operand. anything
+                 * else is a type error (a struct value isn't a ptr;
+                 * neither is a string). */
+                int operand_ok = operand->kind == TYPE_PTR ||
+                                 operand->kind == TYPE_INT ||
+                                 operand->kind == TYPE_INT64 ||
+                                 operand->kind == TYPE_UNKNOWN;
+                free_type(operand);
+                if (!operand_ok) {
+                    type_error("`as` cast operand must be a `ptr` value",
+                               expr->line, expr->column);
+                    return create_type(TYPE_UNKNOWN);
+                }
+            }
+            /* Validate the named struct exists. */
+            Symbol* struct_sym = lookup_symbol(table, expr->value);
+            if (!struct_sym || !struct_sym->type ||
+                struct_sym->type->kind != TYPE_STRUCT) {
+                char msg[256];
+                snprintf(msg, sizeof(msg),
+                    "`as %s` — '%s' is not a struct type", expr->value, expr->value);
+                type_error(msg, expr->line, expr->column);
+                return create_type(TYPE_UNKNOWN);
+            }
+            Type* result = create_type(TYPE_STRUCT);
+            result->struct_name = strdup(expr->value);
+            result->is_ptr_view = 1;
+            return result;
+        }
+
         case AST_IF_EXPRESSION:
             // Type is the type of the then-branch expression
             if (expr->child_count >= 2) {
@@ -2557,6 +2599,18 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
         case AST_NULL_LITERAL:
             // null is always TYPE_PTR
             if (!expr->node_type) expr->node_type = create_type(TYPE_PTR);
+            return 1;
+
+        case AST_PTR_AS_STRUCT_CAST:
+            /* Walk the operand, then set our own node_type via the
+             * shared inference path so codegen sees the is_ptr_view
+             * struct on this node and emits `->field` for downstream
+             * member access. */
+            if (expr->child_count > 0) {
+                typecheck_expression(expr->children[0], table);
+            }
+            if (expr->node_type) free_type(expr->node_type);
+            expr->node_type = infer_type(expr, table);
             return 1;
 
         case AST_ARRAY_LITERAL:

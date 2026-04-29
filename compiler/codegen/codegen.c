@@ -668,8 +668,17 @@ const char* get_c_type(Type* type) {
             static char buffers[4][256];
             static int buf_idx = 0;
             char* buffer = buffers[buf_idx++ & 3];
-            snprintf(buffer, 256, "%s",
-                    type->struct_name ? type->struct_name : "unnamed");
+            /* `is_ptr_view` set by the `expr as StructName` cast —
+             * render as `StructName*` rather than `StructName` so the
+             * surrounding declaration / parameter / return-slot is
+             * a pointer-to-struct. Member-access codegen separately
+             * dispatches on the same flag to emit `->field`. */
+            const char* nm = type->struct_name ? type->struct_name : "unnamed";
+            if (type->is_ptr_view) {
+                snprintf(buffer, 256, "%s*", nm);
+            } else {
+                snprintf(buffer, 256, "%s", nm);
+            }
             return buffer;
         }
         case TYPE_ARRAY: {

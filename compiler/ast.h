@@ -85,6 +85,11 @@ typedef enum {
     AST_STRUCT_LITERAL,
     AST_STRING_INTERP,      // interpolated string "Hello ${expr}"
     AST_NULL_LITERAL,       // null pointer literal
+    AST_PTR_AS_STRUCT_CAST, // `expr as StructName` — view a raw ptr as a
+                            // pointer-to-struct. children[0] = expr (must
+                            // be ptr-typed); value = struct name. Result
+                            // is TYPE_STRUCT with is_ptr_view=1; member
+                            // access codegen emits `->field` not `.field`.
     AST_IF_EXPRESSION,      // if cond { expr } else { expr } — value-producing
 
     // Closures
@@ -134,6 +139,11 @@ typedef struct Type {
     struct Type** param_types;  // Parameter types (NULL if not function type)
     int param_count;            // Number of parameters (0 if not function type)
     struct Type* return_type;   // Return type (NULL if not function type)
+    // Set when this TYPE_STRUCT was produced by the `expr as StructName`
+    // pointer-overlay cast — codegen emits `->field` rather than `.field`
+    // on member access. The struct itself is unchanged; only the access
+    // mode differs. Zero for normal value-structs.
+    int is_ptr_view;
 } Type;
 
 typedef struct ASTNode {
