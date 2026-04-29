@@ -15,6 +15,7 @@ exports (
     string_seq_empty, string_seq_cons, string_seq_head, string_seq_tail,
     string_seq_is_empty, string_seq_length, string_seq_retain, string_seq_free,
     string_seq_from_array, string_seq_to_array,
+    string_seq_reverse, string_seq_concat, string_seq_take, string_seq_drop,
     string_to_cstr, string_from_int, string_from_long, string_from_float,
     string_to_int_raw, string_to_long_raw, string_to_float_raw, string_to_double_raw,
     string_try_int, string_get_int, string_try_long, string_get_long,
@@ -139,6 +140,18 @@ extern string_seq_retain(s: *StringSeq) -> *StringSeq
 extern string_seq_free(s: *StringSeq)
 extern string_seq_from_array(arr: ptr, count: int) -> *StringSeq
 extern string_seq_to_array(s: *StringSeq) -> ptr
+
+// Closure-free combinators. The shape deliberately avoids passing
+// Aether functions across the FFI — that's its own design question
+// (closure-bearing combinators map / filter / foldl will land in a
+// separate change set once the callback bridge is settled). The
+// four below are pure structural ops over the cons cells, all
+// refcount-correct on shared tails, all O(min(n, length)) or
+// O(length) work with no auxiliary stack.
+extern string_seq_reverse(s: *StringSeq) -> *StringSeq
+extern string_seq_concat(a: *StringSeq, b: *StringSeq) -> *StringSeq
+extern string_seq_take(s: *StringSeq, n: int) -> *StringSeq
+extern string_seq_drop(s: *StringSeq, n: int) -> *StringSeq
 
 // Conversion
 extern string_to_cstr(str: string) -> string

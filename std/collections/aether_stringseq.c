@@ -109,6 +109,108 @@ StringSeq* string_seq_from_array(void* arr_v, int count) {
     return head;
 }
 
+/* Closure-free combinators. See the contracts in aether_stringseq.h.
+ * All four maintain the refcount invariant: every cell in any
+ * returned spine is reachable through exactly the refs the caller
+ * holds, and freeing the result drops exactly the right number of
+ * refs from any cells shared with the input. */
+
+StringSeq* string_seq_reverse(StringSeq* s) {
+    /* Walk the source spine, prepending each head to a fresh result
+     * spine. Each `cons` retains the head (the underlying string
+     * gets a new ref); we don't share any tail cells with the
+     * source, so freeing the result later is independent of `s`. */
+    StringSeq* result = NULL;
+    StringSeq* cur = s;
+    while (cur) {
+        StringSeq* cell = string_seq_cons((const char*)cur->head, result);
+        if (!cell) {
+            string_seq_free(result);
+            return NULL;
+        }
+        /* cons retained `result` (the prior head of the new spine);
+         * we hold that ref ourselves through `result`. Drop our
+         * local now so the new cell is the sole owner of the rest
+         * of the chain. Safe even when result is NULL. */
+        string_seq_free(result);
+        result = cell;
+        cur = cur->tail;
+    }
+    return result;
+}
+
+StringSeq* string_seq_concat(StringSeq* a, StringSeq* b) {
+    /* Strategy: reverse `a`, then iteratively cons each element of
+     * the reversed list onto `b` (with `b` shared). Net effect: a
+     * fresh spine of length |a| whose tail is `b` itself,
+     * refcount-bumped via cons. Two passes over `a` (one to
+     * reverse, one to walk the reversed view), but each is O(|a|)
+     * and `b` is never walked. */
+    if (!a) return string_seq_retain(b);
+
+    StringSeq* reversed = string_seq_reverse(a);
+    if (!reversed) return NULL;
+
+    StringSeq* result = b;
+    string_seq_retain(result); /* match the cons retain pattern below */
+    StringSeq* cur = reversed;
+    while (cur) {
+        StringSeq* cell = string_seq_cons((const char*)cur->head, result);
+        if (!cell) {
+            string_seq_free(result);
+            string_seq_free(reversed);
+            return NULL;
+        }
+        string_seq_free(result);
+        result = cell;
+        cur = cur->tail;
+    }
+    string_seq_free(reversed);
+    return result;
+}
+
+StringSeq* string_seq_take(StringSeq* s, int n) {
+    /* Build the first n elements as a fresh independent spine.
+     * Walk the source forward collecting elements into a temp
+     * reverse buffer (head-of-result-on-the-end so every step is
+     * O(1)), then reverse at the end. */
+    if (n <= 0 || !s) return NULL;
+
+    StringSeq* reversed_prefix = NULL;
+    StringSeq* cur = s;
+    int taken = 0;
+    while (cur && taken < n) {
+        StringSeq* cell = string_seq_cons((const char*)cur->head, reversed_prefix);
+        if (!cell) {
+            string_seq_free(reversed_prefix);
+            return NULL;
+        }
+        string_seq_free(reversed_prefix);
+        reversed_prefix = cell;
+        cur = cur->tail;
+        taken++;
+    }
+    StringSeq* result = string_seq_reverse(reversed_prefix);
+    string_seq_free(reversed_prefix);
+    return result;
+}
+
+StringSeq* string_seq_drop(StringSeq* s, int n) {
+    /* Walk forward n cells (or until the spine ends) and retain the
+     * cell we land on. No allocations — the result shares storage
+     * with the source, so the caller owning a ref to the returned
+     * cell will keep that sub-spine alive even if the caller's
+     * handle to `s` is freed first. */
+    if (n <= 0) return string_seq_retain(s);
+    StringSeq* cur = s;
+    int skipped = 0;
+    while (cur && skipped < n) {
+        cur = cur->tail;
+        skipped++;
+    }
+    return string_seq_retain(cur);
+}
+
 void* string_seq_to_array(StringSeq* s) {
     if (!s) return NULL;
     int n = s->length;

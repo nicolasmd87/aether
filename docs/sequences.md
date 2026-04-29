@@ -45,6 +45,10 @@ pattern.
 | `string.seq_free(s)` | O(n) work, O(1) stack — iterative spine walk |
 | `string.seq_from_array(arr, n)` | O(n) — builds back-to-front |
 | `string.seq_to_array(s)` | O(n) — materialises an `AetherStringArray*` |
+| `string.seq_reverse(s)` | O(n) — fresh independent spine |
+| `string.seq_concat(a, b)` | O(\|a\|) — `a` copied, `b` shared via refcount bump |
+| `string.seq_take(s, n)` | O(min(n, length)) — fresh independent spine |
+| `string.seq_drop(s, n)` | O(min(n, length)) — pointer walk only, returns retained tail |
 
 ## Building, walking, freeing
 
@@ -91,6 +95,63 @@ matched expression's type:
 When the arm body doesn't reference `h` or `t`, the binding is
 omitted but the dispatch test is still emitted — same
 `pattern_needs_array` optimisation the int-array path uses.
+
+## Combinators
+
+The four built-in structural ops are all closure-free — they don't
+take an Aether function as a parameter, so the FFI surface stays
+simple. Closure-bearing siblings (`map` / `filter` / `foldl`) are
+deferred to a follow-up change set once the Aether-callback-from-C
+bridge is settled; until then, walk the spine with `match` and
+build the result with `cons`.
+
+```aether
+import std.string
+
+s = string.split_to_seq("a,b,c,d,e", ",")
+
+// Reverse — fresh independent spine; freeing the result doesn't
+// affect `s`.
+r = string.seq_reverse(s)
+println(string.seq_head(r))      // "e"
+
+// Take the first n cells. Negative or zero n yields the empty seq.
+// n exceeding length clamps to the full spine.
+prefix = string.seq_take(s, 3)   // ["a", "b", "c"]
+
+// Drop the first n cells. Returns the n-th tail of `s`, retained
+// (the caller owns one ref).  Negative n returns `s` itself
+// retained; n exceeding length returns the empty seq.
+suffix = string.seq_drop(s, 3)   // ["d", "e"]
+
+// take(n) ++ drop(n) round-trips the spine for any n.
+rebuilt = string.seq_concat(prefix, suffix)
+
+// concat copies the first argument and shares the second via a
+// refcount bump — freeing `rebuilt` later drops one ref from
+// `suffix` but `s` stays walkable from any other handle.
+
+string.seq_free(r)
+string.seq_free(prefix)
+string.seq_free(suffix)
+string.seq_free(rebuilt)
+string.seq_free(s)
+```
+
+Two equational laws every test exercises:
+
+```
+reverse(reverse(s)) == s
+take(s, n) ++ drop(s, n) == s          (for any 0 <= n <= length(s))
+```
+
+`reverse` walks the source spine forward, prepending each head onto
+a fresh result spine — O(n) work, O(1) auxiliary stack. `concat`
+reverses the first argument (one O(\|a\|) walk), then iteratively
+conses each element back onto the second; the second argument is
+shared, never walked. `take` collects the first n elements into a
+reverse buffer then reverses to get them in order. `drop` is a pure
+pointer walk with a single `seq_retain` at the end.
 
 ## Building from existing string-array shapes
 

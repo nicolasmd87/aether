@@ -123,4 +123,42 @@ StringSeq* string_seq_from_array(void* arr, int count);
  * Returns NULL on empty input or OOM. */
 void* string_seq_to_array(StringSeq* s);
 
+/* ---- Closure-free combinators ---------------------------------------
+ *
+ * The shape of these deliberately avoids callbacks — Aether's
+ * function-typed-parameter / closure FFI bridge is a separate design
+ * question (tracked under "closure-bearing combinators" in the PR
+ * out-of-scope list). The four below are pure structural ops over
+ * the cons cells: reverse the spine, append two seqs, take the
+ * first n cells, drop the first n cells. All retain refs correctly
+ * for shared tails. NULL-safe. Return NULL on OOM, with any
+ * partial spine freed before return.
+ */
+
+/* Returns a new seq with the elements of `s` in reverse order. The
+ * result is independently allocated; `s` is left untouched. O(n)
+ * work, O(1) auxiliary stack. NULL on empty input or OOM. */
+StringSeq* string_seq_reverse(StringSeq* s);
+
+/* Returns a new seq that is the elements of `a` followed by `b`.
+ * The cells from `a` are *copied* (one new cell per element); the
+ * tail of the new seq points at `b` directly with a shared
+ * reference, so freeing the result drops one ref from `b` but
+ * leaves `b` walkable from the caller's other handles. O(|a|)
+ * work — `b` is shared, not walked. NULL on OOM. */
+StringSeq* string_seq_concat(StringSeq* a, StringSeq* b);
+
+/* Returns a new seq with the first min(n, length(s)) elements of
+ * `s`. New cells; the tail is NULL (independent spine, not shared
+ * with `s`). n <= 0 returns empty. O(min(n, length)) work. */
+StringSeq* string_seq_take(StringSeq* s, int n);
+
+/* Returns the n-th tail of `s` — i.e. the seq obtained by skipping
+ * the first n elements. Increments the resulting cell's refcount
+ * so the returned handle is independent (caller must free). n
+ * exceeding length returns the empty seq (NULL). n <= 0 returns
+ * `s` retained. O(min(n, length)) work — pointer walk only, no
+ * new allocations. */
+StringSeq* string_seq_drop(StringSeq* s, int n);
+
 #endif

@@ -394,6 +394,10 @@ main() {
 - `string.seq_free(s)` — iterative spine walk; stops at shared cells
 - `string.seq_from_array(arr, count)` → `*StringSeq` — build from an `AetherStringArray*` (the shape `string.split` returns)
 - `string.seq_to_array(s)` → `ptr` — materialise as `AetherStringArray*` for legacy callers; free with `string.array_free`
+- `string.seq_reverse(s)` → `*StringSeq` — O(n), fresh independent spine
+- `string.seq_concat(a, b)` → `*StringSeq` — O(|a|), `a` copied, `b` shared via refcount bump
+- `string.seq_take(s, n)` → `*StringSeq` — first `n` elements (clamped to length, negative yields empty); fresh independent spine
+- `string.seq_drop(s, n)` → `*StringSeq` — n-th tail retained (clamped to length, negative yields `s` retained); pointer walk only, no allocations
 
 Pattern-match `[]` and `[h|t]` arms work directly against `*StringSeq` matched expressions:
 
