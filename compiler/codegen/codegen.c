@@ -663,7 +663,22 @@ const char* get_c_type(Type* type) {
             return buffer;
         }
         case TYPE_MESSAGE: return "Message";
-        case TYPE_PTR: return "void*";
+        case TYPE_PTR: {
+            /* `*StructName` (TYPE_PTR with a TYPE_STRUCT element) renders
+             * as `StructName*` so the C type carries the struct identity
+             * across declarations / parameters / returns. Bare `ptr` (no
+             * element type) stays `void*`. Mirrors the TYPE_ACTOR_REF
+             * shape just below. */
+            if (type->element_type && type->element_type->kind == TYPE_STRUCT &&
+                type->element_type->struct_name) {
+                static char buffers[4][256];
+                static int buf_idx = 0;
+                char* buffer = buffers[buf_idx++ & 3];
+                snprintf(buffer, 256, "%s*", type->element_type->struct_name);
+                return buffer;
+            }
+            return "void*";
+        }
         case TYPE_STRUCT: {
             static char buffers[4][256];
             static int buf_idx = 0;
@@ -1517,6 +1532,20 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
         gen->builder_funcs_reg[gen->builder_func_reg_count].name = strdup(child->value);
         gen->builder_funcs_reg[gen->builder_func_reg_count].factory = child->annotation ? strdup(child->annotation) : NULL;
         gen->builder_func_reg_count++;
+    }
+
+    // Forward-declare struct types BEFORE function forward declarations,
+    // so a function signature like `int header_flags(Header*)` resolves
+    // even though the full `typedef struct Header { ... } Header;` is
+    // emitted later (alongside actor / message bodies). Same shape as
+    // the actor forward typedefs at line ~537. Without this, any
+    // function whose param or return type is `*StructName` produces
+    // `unknown type name 'StructName'` at the forward decl site.
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* sd = program->children[i];
+        if (sd && sd->type == AST_STRUCT_DEFINITION && sd->value) {
+            fprintf(gen->output, "typedef struct %s %s;\n", sd->value, sd->value);
+        }
     }
 
     // Generate forward declarations for all functions FIRST so that

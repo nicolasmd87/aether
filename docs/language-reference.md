@@ -730,6 +730,40 @@ struct Config {
 }
 ```
 
+### Pointer-to-struct type — `*StructName` and `expr as *StructName`
+
+For systems-programming code that overlays a struct header on a raw `ptr` (e.g. linked-list nodes in C-allocated memory, on-disk file headers read into a buffer), Aether has a first-class pointer-to-struct type spelled `*StructName` and a postfix `as` cast operator that produces a value of that type:
+
+```aether
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+struct ListHead {
+    next: ptr
+    prev: ptr
+    flags: int
+}
+
+// `*ListHead` is usable in any type position — params, returns,
+// struct fields, locals.
+init_head(h: *ListHead) {
+    h.next  = 0
+    h.prev  = 0
+    h.flags = 1
+}
+
+main() {
+    raw  = malloc(64)
+    head = raw as *ListHead    // type of head is *ListHead
+    init_head(head)
+    free(raw)
+}
+```
+
+The cast is a view, not an allocation — the operand pointer's lifetime is the caller's problem (the same contract as raw `extern` interaction). Reach for this only when the storage is C-allocated and Aether wants to manipulate fields. For Aether-owned data, use the normal struct-literal form (`Point { x: 1, y: 2 }`) so refcounting and lifetime tracking apply.
+
+The `as` keyword is the same token used for `import x as y` aliasing; the two parses don't collide because import-aliasing is recognised only inside `import` statements. Full semantics (operand type rules, error cases, the shared-token interaction) are in [c-interop.md § Struct overlay on raw pointers](c-interop.md#struct-overlay-on-raw-pointers--structname-and-expr-as-structname).
+
 ---
 
 ## Messages

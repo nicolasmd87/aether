@@ -463,6 +463,63 @@ int shim(const char* s, int len) {
 
 If a shim genuinely needs to dispatch on the header (e.g. for a polymorphic API where the caller might pass either a literal or a wrapped string and the length isn't known to the caller), declare its parameter as `ptr` to opt out of auto-unwrap, and dispatch via `aether_string_data` / `aether_string_length` manually.
 
+### Struct overlay on raw pointers — `*StructName` and `expr as *StructName`
+
+Systems-programming code often needs to overlay a struct header on a raw `ptr`: a linked-list node whose `next` field lives at offset 8 of a malloc'd block, a tagged-pointer JSValue, an arena-allocator chunk header, etc. Writing a parallel API of width-typed intrinsics (`ptr_set_int`, `ptr_set_ptr`, `ptr_set_long`, …) for every field width is the wrong shape — it doesn't generalise to mixed-field structs and locks the language into an opaque-pointer style that's harder to read than C itself.
+
+Aether's answer is a first-class **pointer-to-struct type** spelled `*StructName`, plus an `as` cast operator that produces a value of that type from a raw `ptr`. The pointer-ness is part of the spelled type so callers can declare it on parameters, returns, struct fields, and locals:
+
+```aether
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+
+struct ListHead {
+    next: ptr
+    prev: ptr
+    flags: int
+}
+
+// `*ListHead` is a first-class type. Functions can declare it on
+// parameters, returns, locals, and struct fields.
+init_head(h: *ListHead) {
+    h.next  = 0
+    h.prev  = 0
+    h.flags = 1
+}
+
+main() {
+    raw  = malloc(64)
+    head = raw as *ListHead    // `head` has type *ListHead
+    init_head(head)
+    free(raw)
+}
+```
+
+`*ListHead` lowers to `ListHead*` in the generated C; the cast `raw as *ListHead` lowers to `((ListHead*)(raw))`. Member access on a `*StructName`-typed value emits `view->field` (not `view.field`), matching the C convention.
+
+**Semantics**
+
+- The operand of `as` must be a `ptr` value (or `int` / `int64`, since Aether already coerces ptr-shaped integers to and from `ptr`). A struct value, string, or other type produces a typecheck error.
+- The named struct must be defined and visible at the cast site. Unknown struct names produce a typecheck error.
+- The cast itself is a view — **it does not allocate, refcount, or auto-free**. The operand pointer's lifetime is the caller's problem (the same contract as raw `extern` interaction). If the underlying memory is freed while a struct view still references it, you have a use-after-free; Aether does not track this.
+- Two views of the same memory alias each other (writes through one are visible through the other). This is the whole point.
+- A `ptr`-typed field of a struct view can itself be re-cast: `head.next as *ListHead` reaches the next list element.
+- `*StructName` is accepted in any type position: variable annotations, function parameters, function return types, struct fields, extern declarations.
+
+**When to reach for it**
+
+- Porting C data structures (linked lists, intrusive trees, ring buffers) where the storage was allocated by C and Aether wants to manipulate fields.
+- Implementing tagged-pointer / NaN-boxing / pointer-bit-flag schemes for embedded interpreters.
+- Reading on-disk file headers or wire-protocol frames where you've `read()` raw bytes into a buffer and want to reach individual fields.
+
+**When NOT to reach for it**
+
+- For Aether-owned data that participates in the language's normal value semantics, declare a struct and use struct-literal construction (`Point { x: 1, y: 2 }`) — that path runs constructors / refcounting / lifetime tracking. The `*T` cast is specifically the unsafe-by-design escape hatch for crossing into raw memory; reaching for it on Aether-owned data sidesteps the safety machinery for no benefit.
+
+**Token-sharing with `import x as y`**
+
+The `as` keyword is the same token already used for module-import aliasing (`import std.cryptography as crypto`). The two parses don't collide because import-aliasing is recognised only inside `import` statements; expression-level `as *T` is recognised only as a postfix operator on expressions. Both forms continue to work in the same source file.
+
 ### Aether-side string-builder return types
 
 Aether-side primitives that build strings split into two camps:

@@ -141,6 +141,27 @@ Type* parse_type(Parser* parser) {
 
     Type* type = NULL;
 
+    // Pointer-to-struct type: `*StructName`. Lowers to `StructName*` in
+    // C. Used as the return type of `expr as *StructName` (the
+    // pointer-overlay cast) and accepted in any other type position
+    // (variable annotations, function params, return types, struct
+    // fields, extern decls). The pointer-ness is part of the spelled
+    // type so callers can declare e.g. `process(node: *list_head)`.
+    // Plain `ptr` (void*) remains the right type for raw byte addresses;
+    // `*T` carries the struct identity through the type system so member
+    // access dispatches via `->field` automatically. Lifetime is the
+    // operand's — `as` does not allocate or refcount.
+    if (token->type == TOKEN_MULTIPLY) {
+        advance_token(parser);
+        Token* name_tok = expect_token(parser, TOKEN_IDENTIFIER);
+        if (!name_tok) return NULL;
+        Type* struct_type = create_type(TYPE_STRUCT);
+        struct_type->struct_name = strdup(name_tok->value);
+        Type* ptr_type = create_type(TYPE_PTR);
+        ptr_type->element_type = struct_type;
+        return ptr_type;
+    }
+
     // Tuple type: `(T1, T2, ...)` — used in extern return positions for
     // C functions that return a struct by value with the matching shape.
     // See `compiler/codegen/codegen_func.c` for the `_tuple_T1_T2`
@@ -857,11 +878,38 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
             ASTNode* index = parse_expression(parser);
             if (!index) return NULL;
             if (!expect_token(parser, TOKEN_RIGHT_BRACKET)) return NULL;
-            
+
             ASTNode* array_access = create_ast_node(AST_ARRAY_ACCESS, NULL, op->line, op->column);
             add_child(array_access, expr);  // array expression
             add_child(array_access, index); // index expression
             expr = array_access;
+            continue;
+        }
+
+        if (op->type == TOKEN_AS) {
+            // Pointer-overlay struct cast: `expr as *StructName`
+            // Views a raw `ptr`-typed value as a pointer-to-struct so
+            // member access (`view.field`) can reach struct fields. The
+            // `ptr` operand's lifetime is the caller's problem — the
+            // cast does NOT allocate, refcount, or auto-free. This is
+            // the systems-programming escape hatch for FFI shapes that
+            // overlay struct headers on raw memory (e.g. QuickJS-style
+            // tagged-pointer ports). The leading `*` makes the
+            // pointer-ness visible in source; the result type is
+            // spelled `*StructName` and matches type annotations on
+            // function parameters, struct fields, etc. The keyword
+            // token TOKEN_AS is shared with `import x as y` aliasing;
+            // that's parsed only inside import statements so there's
+            // no collision.
+            advance_token(parser);  /* consume `as` */
+            if (!expect_token(parser, TOKEN_MULTIPLY)) return NULL;
+            Token* struct_name_tok = expect_token(parser, TOKEN_IDENTIFIER);
+            if (!struct_name_tok) return NULL;
+            ASTNode* cast = create_ast_node(AST_PTR_AS_STRUCT_CAST,
+                                            struct_name_tok->value,
+                                            op->line, op->column);
+            add_child(cast, expr);
+            expr = cast;
             continue;
         }
         

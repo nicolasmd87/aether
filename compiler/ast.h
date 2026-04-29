@@ -85,6 +85,12 @@ typedef enum {
     AST_STRUCT_LITERAL,
     AST_STRING_INTERP,      // interpolated string "Hello ${expr}"
     AST_NULL_LITERAL,       // null pointer literal
+    AST_PTR_AS_STRUCT_CAST, // `expr as *StructName` — view a raw ptr as
+                            // a pointer-to-struct. children[0] = expr
+                            // (must be ptr-typed); value = struct name.
+                            // Result type is TYPE_PTR with element_type
+                            // = TYPE_STRUCT{name}; member-access codegen
+                            // emits `->field` not `.field`.
     AST_IF_EXPRESSION,      // if cond { expr } else { expr } — value-producing
 
     // Closures

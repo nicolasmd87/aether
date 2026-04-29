@@ -1,0 +1,98 @@
+// Regression test for the `expr as *StructName` pointer-overlay cast
+// and the `*StructName` type form.
+//
+// Aether-side syntactic sugar for the C pattern `((StructT*)raw_ptr)`,
+// letting systems-programming code overlay a struct header on a raw
+// `ptr` without a parallel intrinsic surface (`ptr_set_int`,
+// `ptr_set_ptr`, etc.). Motivated by ports of pointer-tagging /
+// linked-list / arena-allocator C code (microQuickJS et al.).
+//
+// Surface:
+//   - `*StructName` is a first-class type usable in any type
+//     position: variable annotations, function params, return types,
+//     struct fields, extern decls. Lowers to `StructName*` in C.
+//   - `expr as *StructName` reinterprets a `ptr`-typed value as
+//     `*StructName`. Result is a pointer; member access uses
+//     `view.field` syntax which lowers to `view->field`.
+//
+// Semantics:
+//   - LHS of `as` must be ptr-typed (or coercible — Aether bridges
+//     int/int64/ptr in places). Other types: typecheck error.
+//   - RHS struct must be in scope. Unknown struct: typecheck error.
+//   - The cast is a view — no allocation, no refcount, no auto-free.
+//     Operand pointer's lifetime is the caller's problem.
+//
+// Cases:
+//   1. Round-trip read+write through the cast view.
+//   2. Two views of the same memory observe each other's writes.
+//   3. Re-cast through a `ptr` field reaches a chained struct view.
+//   4. `*StructName` as a function parameter type (the Nic-requested
+//      expressiveness — function signatures can declare struct-view
+//      parameters explicitly, not just locals).
+
+import std.string
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+extern exit(code: int)
+
+struct Header {
+    flags: int
+    next: ptr
+}
+
+struct Node {
+    value: int
+    link: ptr
+}
+
+// Case 4: function declared to take a `*Header` and return its flags.
+header_flags(h: *Header) -> int {
+    return h.flags
+}
+
+main() {
+    // Case 1: round-trip.
+    raw = malloc(64)
+    h = raw as *Header
+    h.flags = 7
+    h.next = 0
+    if h.flags != 7 {
+        println("FAIL 1a: flags=${h.flags}, want 7")
+        exit(1)
+    }
+    println("  PASS 1: round-trip read/write through cast view")
+
+    // Case 2: two views of the same memory observe each other's writes.
+    h2 = raw as *Header
+    h2.flags = 42
+    if h.flags != 42 {
+        println("FAIL 2: aliasing failed; h.flags=${h.flags}, want 42")
+        exit(1)
+    }
+    println("  PASS 2: two views see the same memory")
+
+    // Case 3: chain through a ptr field to a different struct.
+    other = malloc(64)
+    h.next = other
+    n = h.next as *Node
+    n.value = 99
+    n.link = 0
+    if n.value != 99 {
+        println("FAIL 3: chained-cast value=${n.value}, want 99")
+        exit(1)
+    }
+    println("  PASS 3: re-cast through ptr field reaches chained struct")
+
+    // Case 4: *T as a function parameter type.
+    if header_flags(h) != 42 {
+        println("FAIL 4: header_flags(h)=${header_flags(h)}, want 42")
+        exit(1)
+    }
+    println("  PASS 4: *StructName accepted as function parameter type")
+
+    free(other)
+    free(raw)
+
+    println("OK")
+}

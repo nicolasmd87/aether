@@ -166,7 +166,7 @@ int types_equal(Type* a, Type* b) {
 
 Type* clone_type(Type* type) {
     if (!type) return NULL;
-    
+
     Type* new_type = create_type(type->kind);
     new_type->array_size = type->array_size;
     

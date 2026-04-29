@@ -1575,10 +1575,31 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                 } else if (child->node_type && child->node_type->kind == TYPE_ACTOR_REF) {
                     generate_expression(gen, child);
                     fprintf(gen->output, "->%s", expr->value);
+                } else if (child->node_type && child->node_type->kind == TYPE_PTR &&
+                           child->node_type->element_type &&
+                           child->node_type->element_type->kind == TYPE_STRUCT) {
+                    /* Pointer-to-struct (`*StructName`) — emit `->field`.
+                     * Produced by `expr as *StructName`, by `*T` type
+                     * annotations on locals/params, and by struct fields
+                     * of pointer-to-struct type. */
+                    generate_expression(gen, child);
+                    fprintf(gen->output, "->%s", expr->value);
                 } else {
                     generate_expression(gen, child);
                     fprintf(gen->output, ".%s", expr->value);
                 }
+            }
+            break;
+
+        case AST_PTR_AS_STRUCT_CAST:
+            /* `expr as *StructName` — emit `((StructName*)(expr))`.
+             * The result is consumed by member-access codegen above,
+             * which dispatches on TYPE_PTR{element=TYPE_STRUCT} and
+             * emits `->field`. */
+            if (expr->child_count > 0 && expr->value) {
+                fprintf(gen->output, "((%s*)(", expr->value);
+                generate_expression(gen, expr->children[0]);
+                fprintf(gen->output, "))");
             }
             break;
             
