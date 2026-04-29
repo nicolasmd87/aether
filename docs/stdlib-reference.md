@@ -318,12 +318,24 @@ main() {
     // Substrings
     sub = string.substring(s, 0, 3);  // "Hel"
 
-    // Splitting
+    // Splitting — pick the shape that matches your access pattern.
     csv = string.new("a,b,c");
+
+    // (a) AetherStringArray — O(1) random access via integer index.
     parts = string.split(csv, ",");
-    count = string.array_size(parts);  // 3
-    first = string.array_get(parts, 0); // "a"
+    count = string.array_size(parts);   // 3
+    first = string.array_get(parts, 0);  // "a"
     string.array_free(parts);
+
+    // (b) *StringSeq cons-cell — O(1) head/tail/cons/length, refcount-
+    //     aware, pattern-matches with [h | t]. Reach for this when the
+    //     result will be walked recursively or sent across an actor
+    //     boundary as a message field. See docs/sequences.md.
+    parts_seq = string.split_to_seq(csv, ",");
+    n = string.seq_length(parts_seq);    // 3 (O(1) cached)
+    h = string.seq_head(parts_seq);       // "a"
+    string.seq_free(parts_seq);
+
     string.release(csv);
 
     // Conversion

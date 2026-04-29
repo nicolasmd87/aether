@@ -293,7 +293,6 @@ void lsp_handle_completion(LSPServer* server, const char* id, const char* uri, i
         "{\"label\":\"string\",\"kind\":25,\"detail\":\"primitive — refcounted string / const char*\"},"
         "{\"label\":\"void\",\"kind\":25,\"detail\":\"primitive — no value\"},"
         "{\"label\":\"ptr\",\"kind\":25,\"detail\":\"primitive — opaque void*\"},"
-        "{\"label\":\"byte\",\"kind\":25,\"detail\":\"primitive — unsigned 8-bit\"},"
         "{\"label\":\"actor_ref\",\"kind\":25,\"detail\":\"primitive — handle to a spawned actor\"},"
         "{\"label\":\"StringSeq\",\"kind\":22,\"detail\":\"struct — cons-cell of strings (use as *StringSeq)\"},"
 

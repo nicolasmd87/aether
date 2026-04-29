@@ -159,7 +159,7 @@
       "patterns": [
         {
           "name": "support.type.primitive.aether",
-          "match": "\\b(int|int64|int32|long|short|float|double|bool|string|void|ptr|byte|actor_ref)\\b"
+          "match": "\\b(int|int64|int32|long|short|float|double|bool|string|void|ptr|actor_ref)\\b"
         }
       ]
     },
