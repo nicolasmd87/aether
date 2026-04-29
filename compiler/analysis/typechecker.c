@@ -1870,7 +1870,23 @@ static void typecheck_message_constructor(ASTNode* constructor, SymbolTable* tab
         typecheck_expression(value_expr, table);
         Type* actual = infer_type(value_expr, table);
 
-        if (actual && actual->kind != TYPE_UNKNOWN &&
+        /* Cons-cell context: when the declared field type is
+         * `*StringSeq` and the RHS is an array literal, accept the
+         * assignment and stamp the literal's node_type to *StringSeq.
+         * The codegen branch in emit_message_field_init / AST_ARRAY_LITERAL
+         * picks up the stamped type and emits a cons chain instead of
+         * a static C array initialiser. Same disambiguation rule the
+         * variable-decl path uses, lifted to message-field context.
+         * See codegen_expr.c emit_message_field_init for the
+         * matching codegen branch. */
+        int seq_literal_match =
+            value_expr && value_expr->type == AST_ARRAY_LITERAL &&
+            is_string_seq_ptr_type(declared);
+
+        if (seq_literal_match) {
+            if (value_expr->node_type) free_type(value_expr->node_type);
+            value_expr->node_type = clone_type(declared);
+        } else if (actual && actual->kind != TYPE_UNKNOWN &&
             declared->kind != TYPE_UNKNOWN &&
             !is_type_compatible(actual, declared)) {
             char buf[256];
@@ -2125,6 +2141,23 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                     typecheck_expression(init, table);
                 }
                 Type* init_type = infer_type(init, table);
+
+                /* Context-sensitive literal: `[a, b, c]` against a
+                 * `*StringSeq`-typed variable means "build a cons chain"
+                 * rather than "build a static C array". Stamp the
+                 * literal's node_type so the codegen branch in
+                 * codegen_expr.c picks the cons-chain emitter. The
+                 * empty literal `[]` carries through as a *StringSeq
+                 * NULL the same way. See std/collections/aether_stringseq.h
+                 * for the cell layout. */
+                if (init->type == AST_ARRAY_LITERAL &&
+                    is_string_seq_ptr_type(stmt->node_type)) {
+                    if (init->node_type) free_type(init->node_type);
+                    init->node_type = clone_type(stmt->node_type);
+                    free_type(init_type);
+                    add_symbol(table, stmt->value, clone_type(stmt->node_type), 0, 0, 0);
+                    return 1;
+                }
 
                 // If variable has no explicit type (TYPE_UNKNOWN), use initializer's type
                 if (!stmt->node_type || stmt->node_type->kind == TYPE_UNKNOWN) {
@@ -2487,12 +2520,23 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
             // Type check the match expression
             Type* match_expr_type = NULL;
             Type* element_type = NULL;
+            /* Whether the match expression is a `*StringSeq`. When it
+             * is, head bindings are typed `string` and tail bindings
+             * are typed `*StringSeq` (so recursive walks compose) —
+             * not the array-element + array-of-element shapes used
+             * for the legacy int-array path. See codegen_stmt.c
+             * `is_string_seq_type` for the matching codegen
+             * dispatch. */
+            int is_seq_match = 0;
             if (stmt->child_count > 0) {
                 typecheck_expression(stmt->children[0], table);
                 match_expr_type = stmt->children[0]->node_type;
                 // Extract element type if matching on an array
                 if (match_expr_type && match_expr_type->kind == TYPE_ARRAY && match_expr_type->element_type) {
                     element_type = match_expr_type->element_type;
+                } else if (is_string_seq_ptr_type(match_expr_type)) {
+                    is_seq_match = 1;
+                    element_type = create_type(TYPE_STRING);
                 }
             }
             // Default to int if we couldn't determine the element type
@@ -2530,8 +2574,19 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                     if (pattern->child_count >= 2) {
                         ASTNode* tail = pattern->children[1];
                         if (tail && tail->type == AST_PATTERN_VARIABLE && tail->value) {
-                            Type* tail_type = create_type(TYPE_ARRAY);
-                            tail_type->element_type = clone_type(element_type);
+                            Type* tail_type;
+                            if (is_seq_match) {
+                                /* tail in `[h|t]` against a `*StringSeq`
+                                 * is itself a `*StringSeq`, not an
+                                 * array-of-element. This is what makes
+                                 * recursive walks compose: walk(tail)
+                                 * passes a properly-typed seq into the
+                                 * recursive call. */
+                                tail_type = make_string_seq_ptr_type();
+                            } else {
+                                tail_type = create_type(TYPE_ARRAY);
+                                tail_type->element_type = clone_type(element_type);
+                            }
                             add_symbol(arm_table, tail->value, tail_type, 0, 0, 0);
                         }
                     }

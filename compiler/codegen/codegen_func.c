@@ -261,7 +261,22 @@ void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext) {
                 fprintf(gen->output, "double");  // C uses double by default
                 break;
             case TYPE_PTR:
-                fprintf(gen->output, "void*");
+                /* `*StructName` typed pointer (PR #307): TYPE_PTR with a
+                 * TYPE_STRUCT element. Emit `StructName*` so the extern
+                 * declaration matches the runtime header's signature
+                 * exactly — otherwise downstream C compilers see
+                 * conflicting prototypes (`void* foo(void*)` here vs
+                 * `StructName* foo(StructName*)` in the runtime .h)
+                 * and refuse to link. Bare `ptr` (no element type) stays
+                 * `void*`. */
+                if (ext->node_type->element_type &&
+                    ext->node_type->element_type->kind == TYPE_STRUCT &&
+                    ext->node_type->element_type->struct_name) {
+                    fprintf(gen->output, "%s*",
+                        ext->node_type->element_type->struct_name);
+                } else {
+                    fprintf(gen->output, "void*");
+                }
                 break;
             case TYPE_BOOL:
                 fprintf(gen->output, "int");
@@ -301,7 +316,17 @@ void generate_extern_declaration(CodeGenerator* gen, ASTNode* ext) {
                         fprintf(gen->output, "double");
                         break;
                     case TYPE_PTR:
-                        fprintf(gen->output, "void*");
+                        /* See the matching note on the return-type switch
+                         * above — typed `*StructName` parameters must
+                         * emit `StructName*`, not `void*`. */
+                        if (param->node_type->element_type &&
+                            param->node_type->element_type->kind == TYPE_STRUCT &&
+                            param->node_type->element_type->struct_name) {
+                            fprintf(gen->output, "%s*",
+                                param->node_type->element_type->struct_name);
+                        } else {
+                            fprintf(gen->output, "void*");
+                        }
                         break;
                     case TYPE_BOOL:
                         fprintf(gen->output, "int");

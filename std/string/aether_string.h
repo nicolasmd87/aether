@@ -106,6 +106,20 @@ int string_array_size(AetherStringArray* arr);
 const char* string_array_get(AetherStringArray* arr, int index);
 void string_array_free(AetherStringArray* arr);
 
+/* Sibling of `string_split` that returns the result as a cons-cell
+ * `*StringSeq` (see std/collections/aether_stringseq.h). Same split
+ * semantics — empty input gives a single-cell list with "", a delim
+ * longer than the input gives a single-cell list with the whole
+ * input, trailing/leading delimiters yield empty pieces — but the
+ * shape on return is the Erlang-style sequence rather than the
+ * dynamic-array AetherStringArray. Useful when the result will be
+ * pattern-matched, walked recursively, or sent across an actor
+ * boundary as a message field. The returned pointer is a `void*`
+ * to keep this header free of a layering dependency on
+ * aether_stringseq.h; callers cast to `StringSeq*` (or Aether-side
+ * declared as `*StringSeq`). NULL on OOM or NULL inputs. */
+void* string_split_to_seq(const void* str, const char* delimiter);
+
 // Conversion
 const char* string_to_cstr(const void* str);
 

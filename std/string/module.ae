@@ -11,6 +11,10 @@ exports (
     string_index_of, string_index_of_from, string_substring,
     string_from_char, string_to_upper, string_to_lower, string_trim,
     string_split, string_array_size, string_array_get, string_array_free,
+    string_split_to_seq,
+    string_seq_empty, string_seq_cons, string_seq_head, string_seq_tail,
+    string_seq_is_empty, string_seq_length, string_seq_retain, string_seq_free,
+    string_seq_from_array, string_seq_to_array,
     string_to_cstr, string_from_int, string_from_long, string_from_float,
     string_to_int_raw, string_to_long_raw, string_to_float_raw, string_to_double_raw,
     string_try_int, string_get_int, string_try_long, string_get_long,
@@ -71,6 +75,70 @@ extern string_split(str: string, delimiter: string) -> ptr
 extern string_array_size(arr: ptr) -> int
 extern string_array_get(arr: ptr, index: int) -> ptr
 extern string_array_free(arr: ptr)
+
+// ---- Cons-cell string sequence (Erlang/Elixir-shaped) --------------
+//
+// `*StringSeq` is a singly-linked list of strings. Empty list is the
+// NULL pointer. Each cell carries a CACHED length, so length() is
+// O(1). Cells are reference-counted and immutable after creation, so
+// `string.seq_cons(x, t)` and `string.seq_cons(y, t)` share `t`
+// without copying — and cycles are impossible to construct.
+//
+// Operation complexity:
+//   seq_empty / cons / head / tail / is_empty / length / retain : O(1)
+//   seq_free                                                    : O(n) work,
+//                                                                  O(1) stack
+//   seq_from_array                                              : O(n)
+//   seq_to_array                                                : O(n)
+//
+// When to reach for `*StringSeq` vs the alternatives:
+//   - `string[]`       — for compile-time literals where count is known
+//                        statically; lowers to bare `const char**`.
+//   - `*StringSeq`     — for runtime-built sequences (split results,
+//                        per-request work queues, message payloads
+//                        with unknown count). O(1) head/tail/cons/
+//                        length, structurally shared, pattern-matches.
+//   - `std.collections.string_list_*`
+//                      — dynamic-array shape with O(1) random access;
+//                        useful when you index by integer rather than
+//                        walk head/tail.
+//
+// Pattern matching:
+//
+//     match s {
+//         []      -> { /* empty */ }
+//         [h | t] -> { /* h: string, t: *StringSeq */ }
+//     }
+//
+// Literals (when target type is *StringSeq):
+//
+//     sites: *StringSeq
+//     sites = ["foo", "bar", "baz"]   // builds a cons chain
+//
+// The C runtime (struct layout + 9 functions) lives in
+// std/collections/aether_stringseq.{c,h}. The codegen emits the
+// matching include unconditionally so `*StringSeq` resolves in any
+// generated TU.
+
+// Producers — sibling of string_split that returns a *StringSeq
+// directly. Same split semantics: empty input → single-cell list
+// with "", delimiter longer than input → single-cell list with the
+// whole input, trailing/leading delimiters produce empty pieces.
+extern string_split_to_seq(str: string, delimiter: string) -> *StringSeq
+
+// Cons-cell construction + destructuring. Names mirror the C
+// runtime symbols; users call them via dot-notation `string.seq_X(...)`
+// (the qualified-name resolver joins `string` + `seq_X` → `string_seq_X`).
+extern string_seq_empty() -> *StringSeq
+extern string_seq_cons(head: string, tail: *StringSeq) -> *StringSeq
+extern string_seq_head(s: *StringSeq) -> string
+extern string_seq_tail(s: *StringSeq) -> *StringSeq
+extern string_seq_is_empty(s: *StringSeq) -> int
+extern string_seq_length(s: *StringSeq) -> int
+extern string_seq_retain(s: *StringSeq) -> *StringSeq
+extern string_seq_free(s: *StringSeq)
+extern string_seq_from_array(arr: ptr, count: int) -> *StringSeq
+extern string_seq_to_array(s: *StringSeq) -> ptr
 
 // Conversion
 extern string_to_cstr(str: string) -> string

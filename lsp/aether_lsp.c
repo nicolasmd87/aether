@@ -217,36 +217,225 @@ void lsp_handle_initialize(LSPServer* server, const char* id) {
 }
 
 void lsp_handle_completion(LSPServer* server, const char* id, const char* uri, int line, int character) {
+    /* Hard-coded completion list — kept in sync by hand for now. The
+     * full symbol-aware path (query the typechecker's symbol table at
+     * the cursor's scope) is tracked in lsp/README.md as the next
+     * upgrade. Until that lands, this table covers:
+     *   - language keywords (control flow + storage/declaration)
+     *   - core actor and message-passing constructs
+     *   - the most-used stdlib surfaces (string, collections, intarr,
+     *     bytes, http, fs, json, os, math, log, io, cryptography)
+     *
+     * LSP CompletionItemKind reference (the integer in `kind`):
+     *    3 = Function     12 = Value         14 = Keyword
+     *    6 = Variable     15 = Snippet       21 = Constant
+     *    7 = Class        22 = Struct        25 = TypeParameter
+     */
     const char* completions =
         "{"
         "\"isIncomplete\":false,"
         "\"items\":["
+
+        /* ---- Storage / declaration keywords ---- */
         "{\"label\":\"actor\",\"kind\":14,\"detail\":\"actor definition\",\"documentation\":\"Define a new actor\"},"
-        "{\"label\":\"spawn\",\"kind\":3,\"detail\":\"spawn actor\",\"documentation\":\"Create a new actor instance\"},"
-        "{\"label\":\"send\",\"kind\":3,\"detail\":\"send message\",\"documentation\":\"Send a message to an actor\"},"
-        "{\"label\":\"receive\",\"kind\":3,\"detail\":\"receive message\",\"documentation\":\"Receive messages in actor\"},"
-        "{\"label\":\"make\",\"kind\":3,\"detail\":\"make actor\",\"documentation\":\"Create actor with initial state\"},"
+        "{\"label\":\"struct\",\"kind\":14,\"detail\":\"struct definition\",\"documentation\":\"Define a struct type\"},"
+        "{\"label\":\"message\",\"kind\":14,\"detail\":\"message definition\",\"documentation\":\"Define an actor message type\"},"
+        "{\"label\":\"state\",\"kind\":14,\"detail\":\"actor state field\",\"documentation\":\"Declare a state field inside an actor body\"},"
+        "{\"label\":\"extern\",\"kind\":14,\"detail\":\"C function declaration\",\"documentation\":\"Declare a C-side function\"},"
         "{\"label\":\"func\",\"kind\":14,\"detail\":\"function definition\",\"documentation\":\"Define a function\"},"
         "{\"label\":\"main\",\"kind\":3,\"detail\":\"main function\",\"documentation\":\"Program entry point\"},"
-        "{\"label\":\"struct\",\"kind\":14,\"detail\":\"struct definition\",\"documentation\":\"Define a struct type\"},"
+        "{\"label\":\"let\",\"kind\":14,\"detail\":\"local binding\"},"
+        "{\"label\":\"var\",\"kind\":14,\"detail\":\"local binding\"},"
+        "{\"label\":\"const\",\"kind\":14,\"detail\":\"compile-time constant\"},"
+        "{\"label\":\"import\",\"kind\":14,\"detail\":\"import std.* / module\"},"
+        "{\"label\":\"export\",\"kind\":14,\"detail\":\"export declaration\"},"
+        "{\"label\":\"as\",\"kind\":14,\"detail\":\"alias / pointer-overlay cast\"},"
+        "{\"label\":\"hide\",\"kind\":14,\"detail\":\"hide a name from this scope\"},"
+        "{\"label\":\"seal\",\"kind\":14,\"detail\":\"seal scope (with `except`)\"},"
+        "{\"label\":\"builder\",\"kind\":14,\"detail\":\"builder function\"},"
+        "{\"label\":\"callback\",\"kind\":14,\"detail\":\"hoisted-closure trailing block\"},"
+
+        /* ---- Control flow ---- */
         "{\"label\":\"if\",\"kind\":14,\"detail\":\"if statement\",\"documentation\":\"Conditional statement\"},"
-        "{\"label\":\"else\",\"kind\":14,\"detail\":\"else clause\",\"documentation\":\"Alternative branch\"},"
-        "{\"label\":\"for\",\"kind\":14,\"detail\":\"for loop\",\"documentation\":\"For loop iteration\"},"
-        "{\"label\":\"while\",\"kind\":14,\"detail\":\"while loop\",\"documentation\":\"While loop\"},"
-        "{\"label\":\"return\",\"kind\":14,\"detail\":\"return statement\",\"documentation\":\"Return from function\"},"
-        "{\"label\":\"break\",\"kind\":14,\"detail\":\"break statement\",\"documentation\":\"Exit loop\"},"
-        "{\"label\":\"continue\",\"kind\":14,\"detail\":\"continue statement\",\"documentation\":\"Continue to next iteration\"},"
-        "{\"label\":\"defer\",\"kind\":14,\"detail\":\"defer statement\",\"documentation\":\"Execute at scope exit\"},"
+        "{\"label\":\"else\",\"kind\":14,\"detail\":\"else clause\"},"
+        "{\"label\":\"for\",\"kind\":14,\"detail\":\"for loop\"},"
+        "{\"label\":\"while\",\"kind\":14,\"detail\":\"while loop\"},"
+        "{\"label\":\"match\",\"kind\":14,\"detail\":\"match statement\",\"documentation\":\"Pattern-match dispatch — supports literals, struct patterns, list `[a, b]`, cons `[h | t]`\"},"
+        "{\"label\":\"switch\",\"kind\":14,\"detail\":\"switch statement\"},"
+        "{\"label\":\"case\",\"kind\":14,\"detail\":\"switch arm\"},"
+        "{\"label\":\"default\",\"kind\":14,\"detail\":\"switch default\"},"
+        "{\"label\":\"return\",\"kind\":14,\"detail\":\"return statement\"},"
+        "{\"label\":\"break\",\"kind\":14,\"detail\":\"break loop\"},"
+        "{\"label\":\"continue\",\"kind\":14,\"detail\":\"continue loop\"},"
+        "{\"label\":\"defer\",\"kind\":14,\"detail\":\"defer statement\",\"documentation\":\"Run an expression at scope exit (LIFO order)\"},"
+        "{\"label\":\"panic\",\"kind\":14,\"detail\":\"abort with message\"},"
+        "{\"label\":\"try\",\"kind\":14,\"detail\":\"try / catch block\"},"
+        "{\"label\":\"catch\",\"kind\":14,\"detail\":\"try / catch arm\"},"
+        "{\"label\":\"after\",\"kind\":14,\"detail\":\"receive timeout arm\"},"
+        "{\"label\":\"receive\",\"kind\":14,\"detail\":\"receive message\",\"documentation\":\"Receive messages in actor\"},"
+        "{\"label\":\"send\",\"kind\":3,\"detail\":\"send message\"},"
+        "{\"label\":\"spawn\",\"kind\":3,\"detail\":\"spawn(Actor()) — launch a new actor\"},"
+        "{\"label\":\"spawn_actor\",\"kind\":3,\"detail\":\"alternate spawn form\"},"
+        "{\"label\":\"self\",\"kind\":21,\"detail\":\"the current actor's reference\"},"
+
+        /* ---- Literals ---- */
         "{\"label\":\"true\",\"kind\":12,\"detail\":\"boolean literal\"},"
         "{\"label\":\"false\",\"kind\":12,\"detail\":\"boolean literal\"},"
-        "{\"label\":\"print\",\"kind\":3,\"detail\":\"print(value)\",\"documentation\":\"Print to stdout\"},"
+        "{\"label\":\"null\",\"kind\":12,\"detail\":\"null pointer / empty value\"},"
+
+        /* ---- Primitive types ---- */
+        "{\"label\":\"int\",\"kind\":25,\"detail\":\"primitive — 32-bit signed\"},"
+        "{\"label\":\"int64\",\"kind\":25,\"detail\":\"primitive — 64-bit signed\"},"
+        "{\"label\":\"long\",\"kind\":25,\"detail\":\"primitive — 64-bit signed (alias)\"},"
+        "{\"label\":\"float\",\"kind\":25,\"detail\":\"primitive — IEEE-754 float\"},"
+        "{\"label\":\"double\",\"kind\":25,\"detail\":\"primitive — IEEE-754 double\"},"
+        "{\"label\":\"bool\",\"kind\":25,\"detail\":\"primitive — boolean\"},"
+        "{\"label\":\"string\",\"kind\":25,\"detail\":\"primitive — refcounted string / const char*\"},"
+        "{\"label\":\"void\",\"kind\":25,\"detail\":\"primitive — no value\"},"
+        "{\"label\":\"ptr\",\"kind\":25,\"detail\":\"primitive — opaque void*\"},"
+        "{\"label\":\"byte\",\"kind\":25,\"detail\":\"primitive — unsigned 8-bit\"},"
+        "{\"label\":\"actor_ref\",\"kind\":25,\"detail\":\"primitive — handle to a spawned actor\"},"
+        "{\"label\":\"StringSeq\",\"kind\":22,\"detail\":\"struct — cons-cell of strings (use as *StringSeq)\"},"
+
+        /* ---- Builtins ---- */
+        "{\"label\":\"print\",\"kind\":3,\"detail\":\"print(value)\",\"documentation\":\"Print to stdout (no newline)\"},"
         "{\"label\":\"println\",\"kind\":3,\"detail\":\"println(value)\",\"documentation\":\"Print with newline\"},"
-        "{\"label\":\"len\",\"kind\":3,\"detail\":\"len(array)\",\"documentation\":\"Get array length\"},"
-        "{\"label\":\"string_concat\",\"kind\":3,\"detail\":\"string concat\"},"
-        "{\"label\":\"http_get\",\"kind\":3,\"detail\":\"HTTP GET request\"},"
-        "{\"label\":\"socket_connect\",\"kind\":3,\"detail\":\"TCP socket connect\"},"
-        "{\"label\":\"file_exists\",\"kind\":3,\"detail\":\"check file exists\"},"
-        "{\"label\":\"json_parse\",\"kind\":3,\"detail\":\"parse JSON string\"}"
+        "{\"label\":\"sleep\",\"kind\":3,\"detail\":\"sleep(ms)\"},"
+        "{\"label\":\"clock_ns\",\"kind\":3,\"detail\":\"clock_ns() -> long — monotonic ns\"},"
+        "{\"label\":\"wait_for_idle\",\"kind\":3,\"detail\":\"wait_for_idle() — drain actor scheduler\"},"
+        "{\"label\":\"exit\",\"kind\":3,\"detail\":\"exit(code: int)\"},"
+        "{\"label\":\"len\",\"kind\":3,\"detail\":\"len(array)\"},"
+
+        /* ---- std.string (full surface) ---- */
+        "{\"label\":\"string.length\",\"kind\":3,\"detail\":\"-> int\"},"
+        "{\"label\":\"string.equals\",\"kind\":3,\"detail\":\"-> int (1 if equal)\"},"
+        "{\"label\":\"string.compare\",\"kind\":3,\"detail\":\"-> int (negative/zero/positive)\"},"
+        "{\"label\":\"string.concat\",\"kind\":3,\"detail\":\"-> string\"},"
+        "{\"label\":\"string.concat_wrapped\",\"kind\":3,\"detail\":\"-> ptr (length-aware concat)\"},"
+        "{\"label\":\"string.starts_with\",\"kind\":3,\"detail\":\"-> int\"},"
+        "{\"label\":\"string.ends_with\",\"kind\":3,\"detail\":\"-> int\"},"
+        "{\"label\":\"string.contains\",\"kind\":3,\"detail\":\"-> int\"},"
+        "{\"label\":\"string.index_of\",\"kind\":3,\"detail\":\"-> int (-1 if not found)\"},"
+        "{\"label\":\"string.index_of_from\",\"kind\":3,\"detail\":\"-> int — search starting at offset\"},"
+        "{\"label\":\"string.substring\",\"kind\":3,\"detail\":\"-> string\"},"
+        "{\"label\":\"string.to_upper\",\"kind\":3,\"detail\":\"-> string\"},"
+        "{\"label\":\"string.to_lower\",\"kind\":3,\"detail\":\"-> string\"},"
+        "{\"label\":\"string.trim\",\"kind\":3,\"detail\":\"-> string\"},"
+        "{\"label\":\"string.from_int\",\"kind\":3,\"detail\":\"-> ptr (refcounted string)\"},"
+        "{\"label\":\"string.from_long\",\"kind\":3,\"detail\":\"-> ptr (refcounted string)\"},"
+        "{\"label\":\"string.from_float\",\"kind\":3,\"detail\":\"-> ptr (refcounted string)\"},"
+        "{\"label\":\"string.from_char\",\"kind\":3,\"detail\":\"-> ptr — 1-byte string from a code\"},"
+        "{\"label\":\"string.copy\",\"kind\":3,\"detail\":\"-> string — independently-owned snapshot\"},"
+        "{\"label\":\"string.format\",\"kind\":3,\"detail\":\"format(fmt, args) -> string\"},"
+        "{\"label\":\"string.split\",\"kind\":3,\"detail\":\"-> ptr (AetherStringArray*)\"},"
+        "{\"label\":\"string.split_to_seq\",\"kind\":3,\"detail\":\"-> *StringSeq — cons-cell sibling of split\"},"
+        "{\"label\":\"string.array_size\",\"kind\":3,\"detail\":\"-> int\"},"
+        "{\"label\":\"string.array_get\",\"kind\":3,\"detail\":\"-> string\"},"
+        "{\"label\":\"string.array_free\",\"kind\":3,\"detail\":\"\"},"
+        "{\"label\":\"string.seq_empty\",\"kind\":3,\"detail\":\"-> *StringSeq (NULL)\"},"
+        "{\"label\":\"string.seq_cons\",\"kind\":3,\"detail\":\"(head, tail) -> *StringSeq\"},"
+        "{\"label\":\"string.seq_head\",\"kind\":3,\"detail\":\"-> string\"},"
+        "{\"label\":\"string.seq_tail\",\"kind\":3,\"detail\":\"-> *StringSeq\"},"
+        "{\"label\":\"string.seq_is_empty\",\"kind\":3,\"detail\":\"-> int\"},"
+        "{\"label\":\"string.seq_length\",\"kind\":3,\"detail\":\"-> int (O(1) cached)\"},"
+        "{\"label\":\"string.seq_retain\",\"kind\":3,\"detail\":\"-> *StringSeq (refcount++)\"},"
+        "{\"label\":\"string.seq_free\",\"kind\":3,\"detail\":\"\"},"
+        "{\"label\":\"string.seq_from_array\",\"kind\":3,\"detail\":\"(arr: ptr, count: int) -> *StringSeq\"},"
+        "{\"label\":\"string.seq_to_array\",\"kind\":3,\"detail\":\"-> ptr (AetherStringArray*)\"},"
+        "{\"label\":\"string.to_int\",\"kind\":3,\"detail\":\"-> (int, error)\"},"
+        "{\"label\":\"string.to_long\",\"kind\":3,\"detail\":\"-> (long, error)\"},"
+        "{\"label\":\"string.to_float\",\"kind\":3,\"detail\":\"-> (float, error)\"},"
+        "{\"label\":\"string.to_double\",\"kind\":3,\"detail\":\"-> (double, error)\"},"
+
+        /* ---- std.collections (list / map / string_list) ---- */
+        "{\"label\":\"list_new\",\"kind\":3,\"detail\":\"-> ptr (ArrayList)\"},"
+        "{\"label\":\"list_add\",\"kind\":3,\"detail\":\"(list, item) -> string err\"},"
+        "{\"label\":\"list_get\",\"kind\":3,\"detail\":\"(list, i) -> (item, err)\"},"
+        "{\"label\":\"list_size\",\"kind\":3,\"detail\":\"-> int\"},"
+        "{\"label\":\"list_remove\",\"kind\":3,\"detail\":\"\"},"
+        "{\"label\":\"list_clear\",\"kind\":3,\"detail\":\"\"},"
+        "{\"label\":\"list_free\",\"kind\":3,\"detail\":\"\"},"
+        "{\"label\":\"map_new\",\"kind\":3,\"detail\":\"-> ptr (HashMap)\"},"
+        "{\"label\":\"map_put\",\"kind\":3,\"detail\":\"(map, key, value) -> string err\"},"
+        "{\"label\":\"map_get\",\"kind\":3,\"detail\":\"(map, key) -> (value, err)\"},"
+        "{\"label\":\"map_has\",\"kind\":3,\"detail\":\"-> int\"},"
+        "{\"label\":\"map_remove\",\"kind\":3,\"detail\":\"\"},"
+        "{\"label\":\"map_size\",\"kind\":3,\"detail\":\"-> int\"},"
+        "{\"label\":\"map_keys\",\"kind\":3,\"detail\":\"-> (ptr, err)\"},"
+        "{\"label\":\"map_free\",\"kind\":3,\"detail\":\"\"},"
+        "{\"label\":\"string_list_new\",\"kind\":3,\"detail\":\"-> ptr — refcount-aware list of strings (#274)\"},"
+        "{\"label\":\"string_list_add\",\"kind\":3,\"detail\":\"(list, s) -> int\"},"
+        "{\"label\":\"string_list_get\",\"kind\":3,\"detail\":\"(list, i) -> string\"},"
+        "{\"label\":\"string_list_set\",\"kind\":3,\"detail\":\"\"},"
+        "{\"label\":\"string_list_size\",\"kind\":3,\"detail\":\"-> int\"},"
+        "{\"label\":\"string_list_remove\",\"kind\":3,\"detail\":\"\"},"
+        "{\"label\":\"string_list_clear\",\"kind\":3,\"detail\":\"\"},"
+        "{\"label\":\"string_list_free\",\"kind\":3,\"detail\":\"\"},"
+
+        /* ---- std.intarr ---- */
+        "{\"label\":\"intarr.new\",\"kind\":3,\"detail\":\"(size) -> (arr, err)\"},"
+        "{\"label\":\"intarr.new_filled\",\"kind\":3,\"detail\":\"(size, init) -> (arr, err)\"},"
+        "{\"label\":\"intarr.get\",\"kind\":3,\"detail\":\"(arr, i) -> (value, err)\"},"
+        "{\"label\":\"intarr.set\",\"kind\":3,\"detail\":\"(arr, i, value) -> err\"},"
+        "{\"label\":\"intarr.fill\",\"kind\":3,\"detail\":\"\"},"
+        "{\"label\":\"intarr.free\",\"kind\":3,\"detail\":\"\"},"
+
+        /* ---- std.bytes (#288) ---- */
+        "{\"label\":\"bytes.new\",\"kind\":3,\"detail\":\"(size) -> ptr\"},"
+        "{\"label\":\"bytes.set\",\"kind\":3,\"detail\":\"(b, i, byte: int)\"},"
+        "{\"label\":\"bytes.length\",\"kind\":3,\"detail\":\"-> int\"},"
+        "{\"label\":\"bytes.copy_from_string\",\"kind\":3,\"detail\":\"(b, offset, src) -> int\"},"
+        "{\"label\":\"bytes.copy_within\",\"kind\":3,\"detail\":\"(b, dst, src, len)\"},"
+        "{\"label\":\"bytes.finish\",\"kind\":3,\"detail\":\"-> string\"},"
+        "{\"label\":\"bytes.free\",\"kind\":3,\"detail\":\"\"},"
+
+        /* ---- std.fs ---- */
+        "{\"label\":\"fs.read\",\"kind\":3,\"detail\":\"-> (string, err)\"},"
+        "{\"label\":\"fs.read_binary\",\"kind\":3,\"detail\":\"-> (ptr, err)\"},"
+        "{\"label\":\"fs.write\",\"kind\":3,\"detail\":\"-> err\"},"
+        "{\"label\":\"fs.write_atomic\",\"kind\":3,\"detail\":\"-> err\"},"
+        "{\"label\":\"fs.exists\",\"kind\":3,\"detail\":\"-> int\"},"
+        "{\"label\":\"fs.mkdir_p\",\"kind\":3,\"detail\":\"-> err\"},"
+        "{\"label\":\"fs.unlink\",\"kind\":3,\"detail\":\"-> err\"},"
+
+        /* ---- std.json ---- */
+        "{\"label\":\"json.parse\",\"kind\":3,\"detail\":\"-> (value, err)\"},"
+        "{\"label\":\"json.stringify\",\"kind\":3,\"detail\":\"-> string\"},"
+
+        /* ---- std.net.http ---- */
+        "{\"label\":\"http.get\",\"kind\":3,\"detail\":\"-> (body, err)\"},"
+        "{\"label\":\"http.get_raw\",\"kind\":3,\"detail\":\"-> ptr (HttpResponse*)\"},"
+        "{\"label\":\"http.server_create\",\"kind\":3,\"detail\":\"-> ptr\"},"
+        "{\"label\":\"http.server_get\",\"kind\":3,\"detail\":\"\"},"
+        "{\"label\":\"http.server_start\",\"kind\":3,\"detail\":\"\"},"
+        "{\"label\":\"http.server_stop\",\"kind\":3,\"detail\":\"\"},"
+
+        /* ---- std.os ---- */
+        "{\"label\":\"os.getenv\",\"kind\":3,\"detail\":\"-> string\"},"
+        "{\"label\":\"os.setenv\",\"kind\":3,\"detail\":\"\"},"
+        "{\"label\":\"os.exec\",\"kind\":3,\"detail\":\"-> err\"},"
+        "{\"label\":\"os.system\",\"kind\":3,\"detail\":\"-> int\"},"
+        "{\"label\":\"os.getpid\",\"kind\":3,\"detail\":\"-> int\"},"
+
+        /* ---- std.cryptography ---- */
+        "{\"label\":\"cryptography.sha256\",\"kind\":3,\"detail\":\"-> string (hex)\"},"
+        "{\"label\":\"cryptography.base64_encode\",\"kind\":3,\"detail\":\"-> string\"},"
+        "{\"label\":\"cryptography.base64_encode_padded\",\"kind\":3,\"detail\":\"-> string\"},"
+        "{\"label\":\"cryptography.base64_decode\",\"kind\":3,\"detail\":\"-> (data, len, err)\"},"
+
+        /* ---- std.math ---- */
+        "{\"label\":\"math.sqrt\",\"kind\":3,\"detail\":\"\"},"
+        "{\"label\":\"math.pow\",\"kind\":3,\"detail\":\"\"},"
+        "{\"label\":\"math.abs\",\"kind\":3,\"detail\":\"\"},"
+        "{\"label\":\"math.min\",\"kind\":3,\"detail\":\"\"},"
+        "{\"label\":\"math.max\",\"kind\":3,\"detail\":\"\"},"
+
+        /* ---- std.log ---- */
+        "{\"label\":\"log.write\",\"kind\":3,\"detail\":\"\"},"
+        "{\"label\":\"log.info\",\"kind\":3,\"detail\":\"\"},"
+        "{\"label\":\"log.warn\",\"kind\":3,\"detail\":\"\"},"
+        "{\"label\":\"log.error\",\"kind\":3,\"detail\":\"\"}"
+
         "]"
         "}";
     lsp_send_response(server, id, completions);

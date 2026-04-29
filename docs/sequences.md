@@ -1,0 +1,217 @@
+# Sequences (`*StringSeq`)
+
+`*StringSeq` is Aether's Erlang/Elixir-shaped cons-cell linked list of
+strings. Empty list is the `NULL` pointer; each cell carries a
+**cached length** so `string.seq_length` is O(1); cells are
+**reference-counted** so `string.seq_cons(x, t)` and
+`string.seq_cons(y, t)` share the same `t` without copying. Cells
+are **immutable** after creation, so cycles can't form and the
+iterative free walk can't loop.
+
+## When to use this vs the alternatives
+
+| Shape | Typical use | Length | Random access | Refcounts | Ships in |
+|---|---|---|---|---|---|
+| `string[]` | Compile-time literal arrays paired with a `count` field | not carried | O(1) | manual | std (always) |
+| `*StringSeq` | Runtime-built sequences, message payloads, pattern-match walks | O(1) cached | O(n) walk | yes | `std.string` |
+| `std.collections.string_list_*` | Dynamic-array shape with O(1) random access | tracked | O(1) | yes | `std.collections` |
+| `AetherStringArray*` (raw `string.split` return) | Legacy interop with the existing split surface | tracked | O(1) | manual | `std.string` |
+
+Reach for `*StringSeq` when:
+
+- You're streaming or pattern-matching head/tail (`match s { [] -> …; [h|t] -> … }`),
+- You want O(1) `cons`/`head`/`tail`/`length` and the prepend-y shape
+  Erlang/Elixir programmers expect,
+- You're sending the sequence across an actor boundary as a message
+  field — no separate `count` companion required,
+- You want structural sharing without an explicit copy.
+
+Reach for `string[]` when the count is known at compile time. Reach
+for `string_list_*` when you need O(1) random access by integer
+index. The shapes co-exist; pick the one that fits the access
+pattern.
+
+## Operation complexity
+
+| Op | Cost |
+|---|---|
+| `string.seq_empty()` | O(1) |
+| `string.seq_cons(h, t)` | O(1) — malloc one cell, retain head + tail |
+| `string.seq_head(s)` | O(1) |
+| `string.seq_tail(s)` | O(1) |
+| `string.seq_is_empty(s)` | O(1) |
+| `string.seq_length(s)` | O(1) — read cached field |
+| `string.seq_retain(s)` | O(1) |
+| `string.seq_free(s)` | O(n) work, O(1) stack — iterative spine walk |
+| `string.seq_from_array(arr, n)` | O(n) — builds back-to-front |
+| `string.seq_to_array(s)` | O(n) — materialises an `AetherStringArray*` |
+
+## Building, walking, freeing
+
+```aether
+import std.string
+
+main() {
+    s = string.seq_empty()
+    s = string.seq_cons("c", s)
+    s = string.seq_cons("b", s)
+    s = string.seq_cons("a", s)        // s = a -> b -> c
+
+    println("length=${string.seq_length(s)}")  // 3 (O(1))
+    println("first=${string.seq_head(s)}")      // a
+
+    walk(s)                                     // pattern-match
+    string.seq_free(s)                          // iterative spine walk
+}
+
+walk(s: *StringSeq) {
+    match s {
+        []      -> { /* end of list */ }
+        [h | t] -> {
+            println(h)
+            walk(t)
+        }
+    }
+}
+```
+
+## Pattern match
+
+The compiler dispatches `[]` / `[h|t]` arms differently based on the
+matched expression's type:
+
+- **`*StringSeq` matched expression** → NULL-checking pointer walk.
+  - `[]` arm tests `s == NULL`.
+  - `[h | t]` arm tests `s != NULL` and binds `h: string = s->head`,
+    `t: *StringSeq = s->tail`. Tail is typed as `*StringSeq` (not as
+    an array), so recursive walks compose without an extra cast.
+- **`int[]` matched expression** → existing slice-style lowering
+  (untouched by this addition).
+
+When the arm body doesn't reference `h` or `t`, the binding is
+omitted but the dispatch test is still emitted — same
+`pattern_needs_array` optimisation the int-array path uses.
+
+## Building from existing string-array shapes
+
+`string.split` keeps its existing `AetherStringArray*` (`ptr`) return
+shape — backwards-compatible with every caller. Two paths to migrate
+to a `*StringSeq`:
+
+```aether
+// (a) Direct: split into a seq from the start.
+sites = string.split_to_seq(csv, ",")
+
+// (b) Bridge: split, then materialise into a seq.
+arr = string.split(csv, ",")
+sites = string.seq_from_array(arr, string.array_size(arr))
+string.array_free(arr)   // seq cells already retained their own refs
+```
+
+The bridge form is useful when calling code that already produces an
+`AetherStringArray*` (`string.split`, foreign FFI helpers).
+
+The reverse — get a flat `AetherStringArray*` view of an existing
+seq for legacy callers — is `string.seq_to_array(s)`. The returned
+pointer is freed with `string.array_free`.
+
+## Sending across actor boundaries
+
+`*StringSeq` field on a message just works:
+
+```aether
+message AnalyzeBatch {
+    sites: *StringSeq
+    poller_id: int
+}
+
+actor PollWorker {
+    receive {
+        AnalyzeBatch(sites, poller_id) -> {
+            walk(sites)
+            // sites is borrowed from the message — actor framework
+            // releases the wire when the handler returns. Don't
+            // free here unless you've explicitly retained.
+        }
+    }
+}
+
+main() {
+    w = spawn(PollWorker())
+    w ! AnalyzeBatch {
+        sites: ["alpha.example.com", "beta.example.com", "gamma.example.com"],
+        poller_id: 1
+    }
+}
+```
+
+The literal `[a, b, c]` in the message-field initializer is
+disambiguated by the field type:
+
+- field typed `string[]` → static C array (existing behaviour).
+- field typed `*StringSeq` → cons chain (this addition).
+
+Both shapes are first-class; pick by what the receiver wants.
+
+## Refcount + structural sharing
+
+`cons(h, t)` retains both `h` (via the AetherString refcount path —
+`string_retain` is a no-op on plain `char*` literals) and `t` (via
+`string.seq_retain`). So:
+
+```aether
+shared = string.seq_cons("y", string.seq_cons("z", string.seq_empty()))
+
+a = string.seq_cons("a", string.seq_retain(shared))   // a = a -> y -> z
+b = string.seq_cons("b", string.seq_retain(shared))   // b = b -> y -> z
+                                                       // a and b share the [y, z] tail
+
+string.seq_free(shared)   // drop our local; a and b each still own one ref
+
+string.seq_free(a)        // a's head frees; the [y, z] tail stays
+                          //   alive because b still owns it.
+string.seq_free(b)        // b's head frees, then [y, z] drops to 0
+                          //   and the spine collapses.
+```
+
+`string.seq_free` walks the spine iteratively (no stack growth on
+deep lists), decrementing each cell's refcount. The walk stops at
+the first cell whose refcount stays > 0 after decrement — the other
+owner finishes the walk later when its own free runs.
+
+Because cells are immutable (no `set_head` / `set_tail` mutator),
+**cycles can't form**, and the iterative free can't loop.
+
+## Edge cases
+
+| Situation | Behaviour |
+|---|---|
+| `string.seq_free(string.seq_empty())` | No-op (NULL-safe) |
+| `string.seq_head(empty)` | Returns `""` |
+| `string.seq_tail(empty)` | Returns `NULL` (still an empty seq) |
+| `string.seq_length(empty)` | Returns `0` |
+| `string.split_to_seq("", delim)` | Single-cell list with `""` (matches `string.split`) |
+| `string.split_to_seq("ab", "abcdef")` | Single-cell list with `"ab"` (matches `string.split`) |
+| Trailing delimiter `"a,b,"` | Three cells: `"a"`, `"b"`, `""` |
+| Leading delimiter `",a,b"` | Three cells: `""`, `"a"`, `"b"` |
+| Deep list (10k+ cells) | `free` runs in O(n) time, O(1) stack |
+| Mixed-type literal `[1, "a"]` against `*StringSeq` | Typechecker rejects (same rule as today's array literal) |
+
+## C runtime layout
+
+Authoritative definition lives in
+`std/collections/aether_stringseq.h`:
+
+```c
+typedef struct StringSeq {
+    int   ref_count;
+    int   length;            /* length of THIS list (head + length(tail)) */
+    void* head;              /* AetherString* or const char* */
+    struct StringSeq* tail;
+} StringSeq;
+```
+
+24 bytes per cell on 64-bit. Empty list is `NULL`. The Aether
+codegen emits `#include "aether_stringseq.h"` near the prologue of
+every generated TU so `*StringSeq` resolves uniformly across the
+language surface.

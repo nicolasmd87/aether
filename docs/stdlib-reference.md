@@ -367,7 +367,32 @@ main() {
 - `string.array_size(arr)` - Get number of parts in split result
 - `string.array_get(arr, index)` - Get string at index from split result
 - `string.array_free(arr)` - Free split result array
+- `string.split_to_seq(str, delimiter)` - Split into a `*StringSeq` cons-cell list (Erlang/Elixir-shaped). Same split semantics as `string.split`, but returns the result as an O(1) head/tail/cons/length linked list with refcount-aware structural sharing. Use this when the result will be pattern-matched, walked recursively, or sent across an actor boundary as a message field. See [docs/sequences.md](sequences.md) for the full surface.
 - `string.strip_prefix(s, prefix)` → `(rest, stripped)` - If `s` starts with `prefix`, returns the remainder and 1. Otherwise returns `s` and 0. Cleaner than manual `starts_with` + `substring` length arithmetic.
+
+**Sequences (`*StringSeq` — Erlang/Elixir-shaped cons-cell list):**
+
+- `string.seq_empty()` → `*StringSeq` — empty list (NULL pointer)
+- `string.seq_cons(head, tail)` → `*StringSeq` — prepend; retains both head and tail
+- `string.seq_head(s)` → `string` — `""` on empty
+- `string.seq_tail(s)` → `*StringSeq` — empty seq on empty
+- `string.seq_is_empty(s)` → `int` — 1 if empty
+- `string.seq_length(s)` → `int` — O(1) cached
+- `string.seq_retain(s)` → `*StringSeq` — bump refcount; pair with `seq_free`
+- `string.seq_free(s)` — iterative spine walk; stops at shared cells
+- `string.seq_from_array(arr, count)` → `*StringSeq` — build from an `AetherStringArray*` (the shape `string.split` returns)
+- `string.seq_to_array(s)` → `ptr` — materialise as `AetherStringArray*` for legacy callers; free with `string.array_free`
+
+Pattern-match `[]` and `[h|t]` arms work directly against `*StringSeq` matched expressions:
+
+```aether
+match s {
+    []      -> { /* end of list */ }
+    [h | t] -> { println(h); walk(t) }   // h: string, t: *StringSeq
+}
+```
+
+Array literal `[a, b, c]` builds a cons chain when the target type is `*StringSeq` (in message-field initializers); see [docs/sequences.md](sequences.md) for the disambiguation rule and worked examples.
 - `string.copy(s)` - Return an independently-owned copy of `s`. Equivalent to `string.concat(s, "")` but with a discoverable name; callers use it to snapshot a borrowed TLS buffer before the next C call overwrites it.
 - `string.format(fmt, args)` - Format a string by substituting `{}` placeholders with entries from an `std.list` of strings. `{{` and `}}` are literal braces. Use this for runtime-built strings of N parts where literal `${...}` interpolation isn't an option (e.g. when the format string itself comes from a config file or message-template lookup). Non-string values must be converted via `string.from_int(...)` etc. before being added to the list.
 

@@ -1,0 +1,176 @@
+// Regression test for *StringSeq — Erlang/Elixir-shaped cons-cell
+// linked list of strings. Surface lives under the existing `string`
+// namespace alongside `string.array_*` (the AetherStringArray ops),
+// so users only need `import std.string`.
+//
+// Surface under test:
+//   - empty / cons / head / tail / is_empty / length / retain / free
+//     (all O(1) per cell; length cached in each cell)
+//   - from_array / split_to_seq round-trip with the legacy
+//     AetherStringArray
+//   - structural sharing: cons(x, t) and cons(y, t) share t; freeing
+//     one keeps the other intact
+//   - deep lists: free is iterative (no stack overflow at 5k cells)
+//   - cached length stays consistent through cons / tail chains
+//   - empty list = NULL pointer; head returns "" and tail returns
+//     empty seq
+//
+// Companion files:
+//   - tests/regression/test_string_seq_literal.ae — `[a, b, c]` literal
+//     disambiguation when the target type is *StringSeq.
+//   - tests/regression/test_string_seq_pattern_match.ae — `match s { [] -> …;
+//     [h|t] -> … }` arm dispatch on cons cells.
+
+import std.string
+
+extern exit(code: int)
+
+main() {
+    // ---- Case 1: empty + is_empty + head + tail edge cases ----
+    e = string.seq_empty()
+    if string.seq_is_empty(e) != 1 {
+        println("FAIL 1a: empty() should report is_empty=1")
+        exit(1)
+    }
+    if string.seq_length(e) != 0 {
+        println("FAIL 1b: empty() should report length=0")
+        exit(1)
+    }
+    eh = string.seq_head(e)
+    if string.equals(eh, "") != 1 {
+        println("FAIL 1c: head(empty) should be empty string")
+        exit(1)
+    }
+    et = string.seq_tail(e)
+    if string.seq_is_empty(et) != 1 {
+        println("FAIL 1d: tail(empty) should be empty")
+        exit(1)
+    }
+    println("  PASS 1: empty/is_empty/head/tail edge cases")
+
+    // ---- Case 2: cons + length cached ----
+    s = string.seq_empty()
+    s = string.seq_cons("c", s)
+    s = string.seq_cons("b", s)
+    s = string.seq_cons("a", s)
+    if string.seq_length(s) != 3 {
+        println("FAIL 2a: length=${string.seq_length(s)}, want 3")
+        exit(1)
+    }
+    h = string.seq_head(s)
+    if string.equals(h, "a") != 1 {
+        println("FAIL 2b: head=${h}, want a")
+        exit(1)
+    }
+    t = string.seq_tail(s)
+    if string.seq_length(t) != 2 {
+        println("FAIL 2c: tail.length=${string.seq_length(t)}, want 2")
+        exit(1)
+    }
+    th = string.seq_head(t)
+    if string.equals(th, "b") != 1 {
+        println("FAIL 2d: tail.head=${th}, want b")
+        exit(1)
+    }
+    string.seq_free(s)
+    println("  PASS 2: cons + cached length + head/tail")
+
+    // ---- Case 3: from_array round-trip with split ----
+    arr = string.split("alpha,beta,gamma,delta", ",")
+    seq = string.seq_from_array(arr, string.array_size(arr))
+    if string.seq_length(seq) != 4 {
+        println("FAIL 3a: from_array length=${string.seq_length(seq)}, want 4")
+        exit(1)
+    }
+    sh = string.seq_head(seq)
+    if string.equals(sh, "alpha") != 1 {
+        println("FAIL 3b: from_array head=${sh}, want alpha")
+        exit(1)
+    }
+    string.array_free(arr)
+    string.seq_free(seq)
+    println("  PASS 3: from_array round-trip with split")
+
+    // ---- Case 4: structural sharing — free one, other survives ----
+    shared = string.seq_cons("y", string.seq_cons("z", string.seq_empty()))
+    a = string.seq_cons("a", string.seq_retain(shared))
+    b = string.seq_cons("b", string.seq_retain(shared))
+    string.seq_free(shared)  // drop our local; a and b each still own one ref
+
+    if string.seq_length(a) != 3 {
+        println("FAIL 4a: a.length=${string.seq_length(a)}, want 3")
+        exit(1)
+    }
+    if string.seq_length(b) != 3 {
+        println("FAIL 4b: b.length=${string.seq_length(b)}, want 3")
+        exit(1)
+    }
+
+    string.seq_free(a)
+    // a is gone; b's shared tail must still be alive
+    if string.seq_length(b) != 3 {
+        println("FAIL 4c: after freeing a, b.length=${string.seq_length(b)}, want 3")
+        exit(1)
+    }
+    bh2 = string.seq_head(string.seq_tail(b))
+    if string.equals(bh2, "y") != 1 {
+        println("FAIL 4d: after freeing a, b[1]=${bh2}, want y")
+        exit(1)
+    }
+    string.seq_free(b)
+    println("  PASS 4: structural sharing — free one, other survives")
+
+    // ---- Case 5: deep list (5000 cells), iterative free ----
+    deep = string.seq_empty()
+    i = 0
+    while i < 5000 {
+        deep = string.seq_cons("x", deep)
+        i = i + 1
+    }
+    if string.seq_length(deep) != 5000 {
+        println("FAIL 5a: deep length=${string.seq_length(deep)}, want 5000")
+        exit(1)
+    }
+    string.seq_free(deep)  // must be iterative — recursive free at this depth would overflow
+    println("  PASS 5: deep list (5000 cells) frees iteratively")
+
+    // ---- Case 6: free(empty) is a no-op ----
+    string.seq_free(string.seq_empty())
+    println("  PASS 6: free(empty) is a no-op")
+
+    // ---- Case 7: split_to_seq matches split semantics ----
+    s7 = string.split_to_seq("a,b,c", ",")
+    if string.seq_length(s7) != 3 {
+        println("FAIL 7a: split_to_seq length=${string.seq_length(s7)}, want 3")
+        exit(1)
+    }
+    if string.equals(string.seq_head(s7), "a") != 1 {
+        println("FAIL 7b: split_to_seq head=${string.seq_head(s7)}, want a")
+        exit(1)
+    }
+    string.seq_free(s7)
+
+    // Trailing delimiter should produce an empty tail piece
+    s8 = string.split_to_seq("a,b,", ",")
+    if string.seq_length(s8) != 3 {
+        println("FAIL 7c: trailing-delim length=${string.seq_length(s8)}, want 3")
+        exit(1)
+    }
+    string.seq_free(s8)
+
+    // Empty input → single-cell list with ""
+    s9 = string.split_to_seq("", ",")
+    if string.seq_length(s9) != 1 {
+        println("FAIL 7d: empty-input length=${string.seq_length(s9)}, want 1")
+        exit(1)
+    }
+    if string.equals(string.seq_head(s9), "") != 1 {
+        println("FAIL 7e: empty-input head should be empty string")
+        exit(1)
+    }
+    string.seq_free(s9)
+    println("  PASS 7: split_to_seq matches split semantics")
+
+    println("OK")
+    exit(0)
+}
