@@ -93,11 +93,22 @@ main() {
 - `column_blob(stmt, col)` returns `(bytes, length, err)` — a length-aware AetherString plus byte count, same shape as `std.fs.read_binary`. Embedded NULs survive both directions.
 - `step` returns `(rc, err)` where `rc` is one of the exported constants `SQLITE_ROW` (100 — row available, read columns), `SQLITE_DONE` (101 — no more rows / DML completed), or any other code (error; `err` carries `errmsg(db)` text).
 - Streaming the row loop is a pure-Aether `while sqlite.step(stmt, db) == SQLITE_ROW { … }` on top of these primitives. No new C externs needed.
+- `next_row(stmt, db) -> int` is cursor-iteration sugar over `step`. Returns `1` on row available, `0` on `SQLITE_DONE`, `-1` on error (call `sqlite.errmsg(db)` for text). Replaces the doubled-`step()` shape that's the most common bug in cursor APIs (forget to step at the end → infinite loop; forget to step at the start → skip row 0). Canonical use:
+  ```aether
+  stmt, _ = sqlite.prepare(db, "SELECT col FROM t WHERE x = ?")
+  sqlite.bind_int(stmt, 1, 42)
+  while sqlite.next_row(stmt, db) == 1 {
+      v = sqlite.column_int(stmt, 0)
+      ...
+  }
+  sqlite.finalize(stmt)
+  ```
+  `step` / `errmsg` / explicit rc compare remain available for callers that want to distinguish DONE from ROW with their own control flow.
 - `finalize(stmt)` MUST be called before `close(db)`, otherwise close fails with "unable to close due to unfinalized statements".
 
 ## Still out of scope (v3 candidates)
 
-- **Streaming row helper as DSL sugar.** The pure-Aether `while step()` loop covers the use case; a `for_each_row(stmt) { … }` block sugar can land later.
+- **`for_each_row(stmt) { … }` block-passing DSL sugar.** Needs Aether language-level support for closure-passing. The minor shape — `sqlite.next_row(stmt, db) -> int` — has shipped and removes the doubled-`step()` foot-gun, but a true block form is still future work.
 - **Transactions as first-class.** `sqlite.exec(db, "BEGIN")` / `"COMMIT"` / `"ROLLBACK"` is idiomatic SQLite C API too.
 - **Pragmas as named primitives.** `set_pragma(db, "journal_mode", "WAL")` is just `exec` underneath.
 - **Migrations helper.** Generic enough to belong here, opinionated enough that real users (e.g. the subversion port's `wc/db_schema.ae` migration with PRAGMA introspection) hand-roll their own.

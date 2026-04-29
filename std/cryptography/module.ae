@@ -18,13 +18,13 @@ import std.string
 exports (
     cryptography_sha1_hex_raw, cryptography_sha256_hex_raw,
     cryptography_hash_hex_raw, cryptography_hash_supported,
-    cryptography_base64_encode_raw,
+    cryptography_base64_encode_raw, cryptography_base64_encode_padded_raw,
     cryptography_base64_decode_raw,
     cryptography_get_base64_decode,
     cryptography_get_base64_decode_length,
     cryptography_release_base64_decode,
     sha1_hex, sha256_hex, hash_hex, hash_supported,
-    base64_encode, base64_decode
+    base64_encode, base64_encode_padded, base64_decode
 )
 
 extern cryptography_sha1_hex_raw(data: string, length: int) -> string
@@ -32,6 +32,7 @@ extern cryptography_sha256_hex_raw(data: string, length: int) -> string
 extern cryptography_hash_hex_raw(algo: string, data: string, length: int) -> string
 extern cryptography_hash_supported(algo: string) -> int
 extern cryptography_base64_encode_raw(data: string, length: int) -> string
+extern cryptography_base64_encode_padded_raw(data: string, length: int) -> string
 extern cryptography_base64_decode_raw(b64: string) -> int
 extern cryptography_get_base64_decode() -> string
 extern cryptography_get_base64_decode_length() -> int
@@ -103,6 +104,21 @@ hash_supported(algo: string) -> int {
 // Returns (b64_string, "") on success, ("", error) on failure.
 base64_encode(data: string, length: int) -> {
     out = cryptography_base64_encode_raw(data, length)
+    if out == 0 {
+        return "", "openssl unavailable"
+    }
+    return out, ""
+}
+
+// Padded sibling of base64_encode — RFC 4648 §4 standard alphabet
+// WITH `=` padding to a multiple of 4 bytes. Reach for this when
+// the wire format on the other end expects padded base64 — most
+// non-strict decoders accept either, but some auth headers and
+// JSON-encoded blob formats explicitly require padding.
+//
+// Returns (b64_string, "") on success, ("", error) on failure.
+base64_encode_padded(data: string, length: int) -> {
+    out = cryptography_base64_encode_padded_raw(data, length)
     if out == 0 {
         return "", "openssl unavailable"
     }
