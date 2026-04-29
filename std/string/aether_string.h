@@ -86,6 +86,20 @@ int string_index_of(const void* str, const char* substring);
 int string_index_of_from(const void* str, const char* substring, int start);
 char* string_substring(const void* str, int start, int end);
 
+/* Length-aware sibling — caller supplies the source length explicitly.
+ * Use when `str` arrives as a `string`-typed parameter at a function
+ * boundary (where #297's auto-unwrap may have stripped the
+ * AetherString header) AND the content may contain embedded NULs.
+ * The plain string_substring would call str_len() on the unwrapped
+ * data and fall through to strlen, truncating at the first NUL. */
+char* string_substring_n(const void* str, int str_len_bytes, int start, int end);
+
+/* Identity helper documenting intent: in code that receives a
+ * `string` parameter plus an explicit length, the explicit length
+ * is the truth — don't consult the AetherString header. Pure no-op
+ * at the C level; clamps negative input to 0. */
+int string_length_n(const void* str, int known_length);
+
 // Construct a 1-byte AetherString from a byte code (0..255).
 // Primary use: emitting known single-byte markers (\x01, \x02, etc.)
 // into packed-string record formats without routing through a

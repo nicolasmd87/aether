@@ -1,0 +1,124 @@
+// Regression test for the stdlib binary-safety + small-additions batch:
+//   - os.getpid()
+//   - cryptography.base64_encode_padded
+//   - string.substring_n / string.length_n
+//
+// HTTP set_body_n and sqlite.next_row are exercised by separate
+// integration tests (http/sqlite need network/db fixtures); this file
+// covers the in-process additions that just need std.string et al.
+
+import std.string
+import std.os
+import std.cryptography
+
+extern exit(code: int)
+
+main() {
+    // --- os.getpid ---
+    pid = os.getpid()
+    if pid <= 0 {
+        println("FAIL 1: getpid=${pid}, want > 0")
+        exit(1)
+    }
+    println("  PASS 1: os.getpid() returned ${pid}")
+
+    // Calling twice in the same process must yield the same PID (the
+    // function is informational, not action — no fork happens).
+    pid2 = os.getpid()
+    if pid != pid2 {
+        println("FAIL 2: getpid drift ${pid} != ${pid2}")
+        exit(1)
+    }
+    println("  PASS 2: os.getpid() stable across calls")
+
+    // --- cryptography.base64_encode_padded ---
+    // 2 input bytes "AB" → "QUI" unpadded, "QUI=" padded.
+    pad, perr = cryptography.base64_encode_padded("AB", 2)
+    if string.length(perr) > 0 {
+        println("FAIL 3: padded err='${perr}'")
+        exit(1)
+    }
+    if string.equals(pad, "QUI=") == 0 {
+        println("FAIL 3: padded='${pad}', want 'QUI='")
+        exit(1)
+    }
+    println("  PASS 3: base64_encode_padded(2 bytes) == 'QUI='")
+
+    // 3 input bytes — already a multiple of 3, no padding either way.
+    pad3, _ = cryptography.base64_encode_padded("ABC", 3)
+    if string.equals(pad3, "QUJD") == 0 {
+        println("FAIL 4: padded='${pad3}', want 'QUJD'")
+        exit(1)
+    }
+    println("  PASS 4: base64_encode_padded(3 bytes) == 'QUJD' (no padding needed)")
+
+    // 1 input byte → "QQ==" padded ("QQ" unpadded).
+    pad1, _ = cryptography.base64_encode_padded("A", 1)
+    if string.equals(pad1, "QQ==") == 0 {
+        println("FAIL 5: padded='${pad1}', want 'QQ=='")
+        exit(1)
+    }
+    println("  PASS 5: base64_encode_padded(1 byte) == 'QQ=='")
+
+    // The unpadded sibling is unchanged — verify both forms produce
+    // the right shapes side-by-side.
+    unp, _ = cryptography.base64_encode("AB", 2)
+    if string.equals(unp, "QUI") == 0 {
+        println("FAIL 6: unpadded='${unp}', want 'QUI'")
+        exit(1)
+    }
+    println("  PASS 6: base64_encode (unpadded) still produces 'QUI'")
+
+    // --- string.length_n ---
+    // Identity on positive input.
+    n = string.length_n("ignored", 42)
+    if n != 42 {
+        println("FAIL 7: length_n(_, 42)=${n}")
+        exit(1)
+    }
+    println("  PASS 7: length_n returns explicit length")
+
+    // Negative input clamps to 0 (defensive).
+    n2 = string.length_n("ignored", 0 - 5)
+    if n2 != 0 {
+        println("FAIL 8: length_n(_, -5)=${n2}, want 0")
+        exit(1)
+    }
+    println("  PASS 8: length_n clamps negative to 0")
+
+    // --- string.substring_n ---
+    // Caller-length-aware substring; trust the explicit length.
+    s = "hello world"
+    sub = string.substring_n(s, 11, 0, 5)
+    if string.equals(sub, "hello") == 0 {
+        println("FAIL 9: substring_n='${sub}', want 'hello'")
+        exit(1)
+    }
+    println("  PASS 9: substring_n(s, 11, 0, 5) == 'hello'")
+
+    // end > str_len gets clamped to str_len.
+    sub2 = string.substring_n(s, 11, 6, 999)
+    if string.equals(sub2, "world") == 0 {
+        println("FAIL 10: substring_n end-clamp='${sub2}', want 'world'")
+        exit(1)
+    }
+    println("  PASS 10: substring_n clamps end to str_len_bytes")
+
+    // start < 0 gets clamped to 0.
+    sub3 = string.substring_n(s, 11, 0 - 100, 5)
+    if string.equals(sub3, "hello") == 0 {
+        println("FAIL 11: substring_n start-clamp='${sub3}', want 'hello'")
+        exit(1)
+    }
+    println("  PASS 11: substring_n clamps start to 0")
+
+    // start >= end returns empty string.
+    sub4 = string.substring_n(s, 11, 5, 3)
+    if string.equals(sub4, "") == 0 {
+        println("FAIL 12: substring_n start>=end='${sub4}', want ''")
+        exit(1)
+    }
+    println("  PASS 12: substring_n start >= end returns ''")
+
+    println("OK")
+}

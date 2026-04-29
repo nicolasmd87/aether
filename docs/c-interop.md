@@ -463,6 +463,30 @@ int shim(const char* s, int len) {
 
 If a shim genuinely needs to dispatch on the header (e.g. for a polymorphic API where the caller might pass either a literal or a wrapped string and the length isn't known to the caller), declare its parameter as `ptr` to opt out of auto-unwrap, and dispatch via `aether_string_data` / `aether_string_length` manually.
 
+**The same hazard fires inside Aether code.** Any Aether library that exports a `string`-typed parameter and tries to derive length / slice / iterate is at risk for the symmetric reason: the auto-unwrap fires at the `.ae→.ae` extern boundary, replacing the length-aware AetherString with a raw payload pointer. By the time the helper sees its argument, calls to `string.length(s)`, `string.substring(s, …)`, or `string.char_at(s, i)` go through `str_len` → `strlen` and truncate binary content at the first embedded NUL.
+
+```aether
+// HAZARD — looks safe; truncates binary content at the auto-unwrap.
+export slice_from(s: string, start: int, end: int) -> string {
+    n = string.length(s)        // strlen on auto-unwrapped payload!
+    if end > n { end = n }      // clamps to first-NUL-prefix length
+    return string.substring(s, start, end)
+}
+```
+
+For Aether libraries operating on potentially-binary input, use the explicit-length companions in `std.string`:
+
+```aether
+// CORRECT — caller threads the length through; no internal strlen.
+export slice_from(s: string, s_len: int, start: int, end: int) -> string {
+    n = string.length_n(s, s_len)   // identity; documents intent
+    if end > n { end = n }
+    return string.substring_n(s, s_len, start, end)
+}
+```
+
+`string.substring_n(s, s_len, start, end)` and `string.length_n(s, s_known)` exist specifically to make this pattern available without falling back to a C shim. If you find yourself accumulating `_n`-suffixed externs (`some_op_n`, `some_op_n_n`) at the FFI boundary, that's a sign the function should accept the length as a regular parameter on the Aether side too — not punt to C.
+
 ### Struct overlay on raw pointers — `*StructName` and `expr as *StructName`
 
 Systems-programming code often needs to overlay a struct header on a raw `ptr`: a linked-list node whose `next` field lives at offset 8 of a malloc'd block, a tagged-pointer JSValue, an arena-allocator chunk header, etc. Writing a parallel API of width-typed intrinsics (`ptr_set_int`, `ptr_set_ptr`, `ptr_set_long`, …) for every field width is the wrong shape — it doesn't generalise to mixed-field structs and locks the language into an opaque-pointer style that's harder to read than C itself.

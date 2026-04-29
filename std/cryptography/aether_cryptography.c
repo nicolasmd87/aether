@@ -121,6 +121,28 @@ char* cryptography_base64_encode_raw(const char* data, int length) {
     return out;
 }
 
+/* Padded sibling — RFC 4648 §4 standard alphabet WITH `=` padding to
+ * a multiple of 4 bytes. Used by callers whose wire format expects
+ * padded base64 (most decoders that aren't RFC-strict; some auth
+ * headers; common JSON-encoded blob formats). The output is exactly
+ * what EVP_EncodeBlock produces — same allocation cost, just no
+ * trailing-`=` strip. */
+char* cryptography_base64_encode_padded_raw(const char* data, int length) {
+    if (length < 0) return NULL;
+    size_t want;
+    const unsigned char* bytes = cryptography_unwrap_bytes(data, length, &want);
+    if (want > 0 && !bytes) return NULL;
+
+    size_t out_cap = ((want + 2) / 3) * 4 + 1;
+    char* out = (char*)malloc(out_cap);
+    if (!out) return NULL;
+
+    int written = EVP_EncodeBlock((unsigned char*)out, bytes, (int)want);
+    if (written < 0) { free(out); return NULL; }
+    out[written] = '\0';
+    return out;
+}
+
 /* TLS-owned decode buffer + length, mirroring std.fs.read_binary's
  * split-accessor shape. Tracked per-thread so concurrent decodes on
  * different threads don't clobber each other; lifetime is until the
@@ -215,6 +237,9 @@ int cryptography_hash_supported(const char* algo) {
     (void)algo; return 0;
 }
 char* cryptography_base64_encode_raw(const char* data, int length) {
+    (void)data; (void)length; return NULL;
+}
+char* cryptography_base64_encode_padded_raw(const char* data, int length) {
     (void)data; (void)length; return NULL;
 }
 int cryptography_base64_decode_raw(const char* b64) {

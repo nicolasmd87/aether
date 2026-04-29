@@ -75,4 +75,4 @@ if ! grep -q "All contrib.sqlite v2 tests passed" "$TMPDIR/run.log"; then
     exit 1
 fi
 
-echo "  [PASS] sqlite_prepared: 8 cases"
+echo "  [PASS] sqlite_prepared: 9 cases"

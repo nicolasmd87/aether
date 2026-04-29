@@ -4,7 +4,7 @@
 // matrix is in sqlite-improvement-plan.md §"Testing surface to add
 // upstream".
 //
-// 8 cases:
+// 9 cases:
 //   1. bind_int + bind_text round-trip via INSERT + SELECT WHERE
 //   2. bind_i64 round-trip across the 32-bit boundary (>= 2^31)
 //   3. bind_blob round-trip preserving embedded NULs
@@ -13,6 +13,8 @@
 //   6. reset + re-bind + re-step (one statement, two rows)
 //   7. changes(db) after a multi-row UPDATE
 //   8. finalize then fresh prepare on the same SQL (no handle leak)
+//   9. next_row cursor sugar (1/0/-1 return) iterates without
+//      doubled-step() boilerplate
 
 import contrib.sqlite
 
@@ -176,6 +178,23 @@ main() {
     if rc8 != sqlite.SQLITE_ROW { print("  FAIL re-prepared step\n"); exit(1) }
     sqlite.finalize(s8b)
     print("  PASS: re-prepare on the same SQL works\n")
+
+    // ---- Test 9: next_row cursor sugar ----
+    // Replaces the doubled-step() shape with a single 1/0/-1 return.
+    // Uses the rows already inserted in Test 6 (UPDATEd in Test 7).
+    print("\nTest 9: next_row cursor sugar\n")
+    s9, _ = sqlite.prepare(db, "SELECT v FROM t WHERE k IN ('row1','row2') ORDER BY k")
+    seen = 0
+    sum = 0
+    while sqlite.next_row(s9, db) == 1 {
+        sum = sum + sqlite.column_int(s9, 0)
+        seen = seen + 1
+    }
+    sqlite.finalize(s9)
+    /* row1.v and row2.v were both UPDATEd to 999 in Test 7. */
+    if seen != 2 { println("  FAIL next_row: seen ${seen} rows, want 2"); exit(1) }
+    if sum != 1998 { println("  FAIL next_row: sum=${sum}, want 1998"); exit(1) }
+    print("  PASS: next_row iterated 2 rows, sum=1998\n")
 
     sqlite.close(db)
     print("\n=== All contrib.sqlite v2 tests passed ===\n")

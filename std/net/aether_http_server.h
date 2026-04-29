@@ -267,6 +267,11 @@ HttpServerResponse* http_response_create();
 void http_response_set_status(HttpServerResponse* res, int code);
 void http_response_set_header(HttpServerResponse* res, const char* key, const char* value);
 void http_response_set_body(HttpServerResponse* res, const char* body);
+/* Length-aware sibling — binary-safe set_body. Use when the body
+ * may contain embedded NULs (binary content, gzip output, packed
+ * binary, etc.); plain set_body uses strlen() and truncates at the
+ * first NUL. */
+void http_response_set_body_n(HttpServerResponse* res, const char* body, int length);
 void http_response_json(HttpServerResponse* res, const char* json);
 char* http_response_serialize(HttpServerResponse* res);  // caller must free()
 // Length-aware variant — use this when the response body might contain

@@ -370,6 +370,8 @@ main() {
 
 **Transformation:**
 - `string.substring(str, start, end)` - Extract substring
+- `string.substring_n(str, str_len_bytes, start, end)` - Length-aware sibling. Caller threads the source length through; `str_len(s)` is not consulted internally. Reach for this when `str` arrived as a `string`-typed parameter at a function boundary AND the content may contain embedded NULs — see [c-interop.md § Length-clamp hazard](c-interop.md#length-clamp-hazard-for-binary-content). Without it, the auto-unwrap (#297) strips the AetherString header at the call site, `str_len` falls through to `strlen`, and binary content gets truncated at the first NUL.
+- `string.length_n(str, known_length)` - Identity helper that documents intent. In code that receives a `string` parameter plus an explicit length, the explicit length IS the truth — don't consult the AetherString header. `n = string.length_n(s, n)` reads as "yes I know my length" instead of looking like a forgotten `string.length(s)` that would have truncated at NUL.
 - `string.to_upper(str)` - Convert to uppercase (returns new string)
 - `string.to_lower(str)` - Convert to lowercase (returns new string)
 - `string.trim(str)` - Remove leading/trailing whitespace
@@ -755,8 +757,9 @@ main() {
 - `cryptography.hash_hex(algo, data, length)` → `(string, string)` - Algorithm-by-name dispatcher. `algo` is `"sha1"`, `"sha256"`, or any other name OpenSSL's `EVP_get_digestbyname()` recognizes (`"sha384"`, `"sha512"`, `"sha3-256"`, ...). Returns `("", "unknown algorithm")` for unrecognized names. Useful when the algorithm is config-driven rather than compile-time.
 - `cryptography.hash_supported(algo)` → `int` - `1` if this build can compute `algo`, `0` otherwise. Always succeeds; never errors. Use at config time to validate user-supplied algorithm names before they hit `hash_hex`.
 
-**Base64 (RFC 4648 §4 standard alphabet, unpadded):**
-- `cryptography.base64_encode(data, length)` → `(string, string)` - Encode `length` bytes. Output has no `=` padding (callers needing strict-RFC padded output append `=` themselves to make the length a multiple of 4).
+**Base64 (RFC 4648 §4 standard alphabet):**
+- `cryptography.base64_encode(data, length)` → `(string, string)` - Encode `length` bytes, **unpadded** output.
+- `cryptography.base64_encode_padded(data, length)` → `(string, string)` - Encode `length` bytes, **with `=` padding** to a multiple of 4. Reach for this when the wire format on the other end expects padded base64 — most non-strict decoders accept either, but some auth headers and JSON-encoded blob formats explicitly require padding.
 - `cryptography.base64_decode(b64)` → `(string, int, string)` - Decode a Base64 string. Returns `(bytes, byte_count, "")` on success, `("", 0, error)` on malformed input. Accepts both padded and unpadded input; `bytes` is an AetherString preserving embedded NULs.
 
 **What `std.cryptography` doesn't do:**
@@ -895,7 +898,8 @@ Raw externs: `http_server_bind_raw`, `http_server_start_raw`.
 - `http.response_create()` - Create response
 - `http.response_set_status(res, code)` - Set HTTP status code
 - `http.response_set_header(res, name, value)` - Set response header
-- `http.response_set_body(res, body)` - Set response body
+- `http.response_set_body(res, body)` - Set response body. Uses `strdup` + `strlen` internally — **truncates at the first embedded NUL**. Fine for text bodies; use `response_set_body_n` for anything that may contain binary.
+- `http.response_set_body_n(res, body, length)` - Length-aware sibling of `response_set_body`. Treats `body` as `length` bytes verbatim, no NUL searching. Reach for this when the body is binary content (gzip / image / packed binary) or may contain NUL bytes mid-payload. `length == 0` clears the body; negative length is a no-op.
 - `http.response_json(res, json)` - Set JSON response
 - `http.server_response_free(res)` - Free response
 
@@ -1205,6 +1209,8 @@ main() {
 - `os.system(cmd)` - Run shell command, returns exit code (0 = success, POSIX convention)
 - `os.exec(cmd)` → `(string, string)` - Run command and capture stdout, return `(output, err)`
 - `os.getenv(name)` - Get environment variable (returns string, or null if not set — infallible)
+- `os.getpid()` → `int` - Process identifier of the current process. POSIX `getpid(2)`; Windows `_getpid()`. Useful for tmpfile names (`/tmp/myprog.${os.getpid()}.tmp`), per-process locks, log prefixes, and stable tagging across forked children. Returns 0 on platforms compiled without filesystem support.
+- `os.now_utc_iso8601()` → `string` - Current UTC time as ISO-8601 (`YYYY-MM-DDThh:mm:ssZ`). Returns `""` (never null) on clock/format failure. Thread-safe.
 - `aether_args_count()` → `int` - Number of command-line arguments
 - `aether_args_get(index)` → `string` - Get the i-th argument; null if out of range
 - `aether_argv0()` → `string` - Path the OS launched the current process with (argv[0]); null before `aether_args_init` runs

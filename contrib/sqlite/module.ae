@@ -71,7 +71,7 @@ exports (
     row_count, col_count, col_name, cell, free,
     prepare,
     bind_int, bind_text, bind_blob, bind_i64, bind_null,
-    step,
+    step, next_row,
     column_int, column_i64, column_text, column_blob,
     reset, finalize, changes, errmsg
 )
@@ -252,6 +252,31 @@ step(stmt: ptr, db: ptr) -> {
     if rc == SQLITE_ROW { return rc, "" }
     if rc == SQLITE_DONE { return rc, "" }
     return rc, sqlite_errmsg_raw(db)
+}
+
+// Cursor-iteration sugar over step(). Replaces the doubled-step()
+// loop shape with a single call returning:
+//   1  — a row is available; read columns then call next_row again
+//   0  — SQLITE_DONE; loop is finished, no more rows
+//  -1  — error; call sqlite.errmsg(db) for the message text
+//
+// Canonical use:
+//   stmt, _ = sqlite.prepare(db, "SELECT col FROM t WHERE x = ?")
+//   sqlite.bind_int(stmt, 1, 42)
+//   while sqlite.next_row(stmt, db) == 1 {
+//       v = sqlite.column_int(stmt, 0)
+//       ...
+//   }
+//   sqlite.finalize(stmt)
+//
+// step() / errmsg() / explicit rc compare remain available for
+// callers that want to distinguish DONE from ROW with their own
+// control flow. next_row exists purely to flatten the common case.
+next_row(stmt: ptr, db: ptr) -> int {
+    rc = sqlite_step_raw(stmt)
+    if rc == SQLITE_ROW { return 1 }
+    if rc == SQLITE_DONE { return 0 }
+    return -1
 }
 
 // Column accessors. Only valid after step() returned SQLITE_ROW.
