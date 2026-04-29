@@ -28,6 +28,8 @@ next version number before tagging the release.
 
 - **`benchmarks/cross-language/run_benchmarks.ae` no longer fails to parse** (`benchmarks/cross-language/run_benchmarks.ae`). Eleven sites in the file used the C-style single-line `if A { if B { stmt } ; stmt ; stmt }` shape, where a brace-delimited block was followed by `;` and additional statements on the same line. Aether's parser does not accept that — `}` ends the inner block; the trailing `;` and following statements expected to be top-level inside the outer block fired `error[E0100]: Expected statement in block`. The form pre-existed the parser and `make benchmark` failed to even compile the runner. Rewrote each occurrence as a multi-line block (one statement per line), which is the canonical Aether shape. No semantic change.
 
+- **`http_server_sse` integration test no longer races with listener startup on slower CI runners** (`tests/integration/http_server_sse/test_http_server_sse.sh`). The test waited for the server's `READY` line to land in stdout before issuing curl, but `server.ae` prints `READY` *before* sending the actor message that opens the listening socket. On macOS this gap was small enough that the existing 0.3s post-`READY` sleep covered it; on Linux GHA runners it stretched to whole seconds and curl returned no headers (no Content-Type, no body — matching the failure pattern reported on Linux/GCC CI for PR #305). Replaced the `READY`-grep + fixed-sleep with the same port-probing pattern the sibling `http_server_actor_dispatch` test already uses: a 15-second deadline loop that issues HEAD-style probes against `/events` until one succeeds, with an early bail if the server process died first. Stable across 3 back-to-back local runs after the change.
+
 ## [0.100.0]
 
 ### Fixed

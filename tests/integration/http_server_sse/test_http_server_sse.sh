@@ -32,24 +32,37 @@ trap cleanup EXIT
 AETHER_HOME="$ROOT" "$AE" run "$SCRIPT_DIR/server.ae" >"$TMPDIR/srv.log" 2>&1 &
 SRV_PID=$!
 
-deadline=$(($(date +%s) + 5))
+PORT=18109
+
+# Wait for the server to actually accept connections, not just for
+# READY to land in the log. server.ae prints READY before sending
+# the StartSrv message that opens the listening socket — on slower
+# runners (Linux GHA, Windows GHA) the listener can be hundreds of
+# ms behind READY, and a curl issued against the port too early
+# returns no response at all (no Content-Type, no body — exactly
+# the failure shape this guard is here to prevent). Probe the port
+# directly until a HEAD succeeds; bail if the server died before
+# binding.
+deadline=$(($(date +%s) + 15))
 while [ "$(date +%s)" -lt "$deadline" ]; do
-    if grep -q READY "$TMPDIR/srv.log" 2>/dev/null; then break; fi
     if ! kill -0 "$SRV_PID" 2>/dev/null; then
         echo "  [FAIL] server died:"
         head -20 "$TMPDIR/srv.log"
         exit 1
     fi
+    if curl -s -o /dev/null --max-time 1 \
+            "http://127.0.0.1:$PORT/events" 2>/dev/null; then
+        break
+    fi
     sleep 0.1
 done
-sleep 0.3
 
 OUT="$TMPDIR/sse.out"
 HEADERS="$TMPDIR/sse.h"
 # -N: no buffering. Server closes after 3 events; max-time bounds
 # the wait if it didn't.
 curl -s -N -D "$HEADERS" -o "$OUT" --max-time 5 \
-    "http://127.0.0.1:18109/events" || true
+    "http://127.0.0.1:$PORT/events" || true
 
 if ! grep -qi "Content-Type: text/event-stream" "$HEADERS"; then
     echo "  [FAIL] missing Content-Type: text/event-stream"
