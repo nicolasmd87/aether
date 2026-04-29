@@ -511,9 +511,10 @@ main() {
 
 `length` is explicit so binary payloads with embedded NULs survive. `data` may be either a plain string literal or an AetherString from `fs.read_binary` — the runtime unwraps automatically.
 
-### Base64 (RFC 4648 §4 standard alphabet, unpadded)
+### Base64 (RFC 4648 §4 standard alphabet)
 
-- `cryptography.base64_encode(data, length)` → `(string, string)` - Encode `length` bytes. Output has no `=` padding.
+- `cryptography.base64_encode(data, length)` → `(string, string)` - Encode `length` bytes, **unpadded** output.
+- `cryptography.base64_encode_padded(data, length)` → `(string, string)` - Encode `length` bytes, **with `=` padding** to a multiple of 4. For wire formats (auth headers, JSON-encoded blobs) that require padded output.
 - `cryptography.base64_decode(b64)` → `(string, int, string)` - Decode. Returns `(bytes, byte_count, "")` on success — `bytes` is an AetherString preserving embedded NULs. Accepts both padded and unpadded input.
 
 ### What's not in `std.cryptography`

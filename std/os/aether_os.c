@@ -25,6 +25,7 @@ _tuple_string_int_string os_run_capture_status_raw(const char* p, void* a, void*
     return out;
 }
 char* os_now_utc_iso8601_raw(void) { return NULL; }
+int os_getpid_raw(void) { return 0; }
 #else
 
 #include <stdio.h>
@@ -51,6 +52,7 @@ extern void* list_get_raw(void* list, int index);
 #else
 #include <windows.h>
 #include <wchar.h>
+#include <process.h>  /* _getpid */
 #endif
 
 // libaether.a list operations — declared extern so this file doesn't have
@@ -164,6 +166,21 @@ char* os_now_utc_iso8601_raw(void) {
         return strdup("");
     }
     return strdup(buf);
+}
+
+/* Process identifier for the current process. Useful for tmpfile names
+ * (`/tmp/myprog.${pid}.tmp`), per-process locks, log prefixes, and
+ * stable tagging across forked children. POSIX uses `getpid(2)`;
+ * Windows uses `_getpid()` from <process.h>. Returns an int across
+ * both platforms — Windows PIDs fit in 32 bits even though the
+ * GetCurrentProcessId() type is DWORD. Sandbox-free: this is a
+ * pure-information call, not an action. */
+int os_getpid_raw(void) {
+#ifdef _WIN32
+    return (int)_getpid();
+#else
+    return (int)getpid();
+#endif
 }
 
 int os_execv(const char* prog, void* argv_list) {

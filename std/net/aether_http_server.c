@@ -66,6 +66,7 @@ HttpServerResponse* http_response_create() { return NULL; }
 void http_response_set_status(HttpServerResponse* r, int c) { (void)r; (void)c; }
 void http_response_set_header(HttpServerResponse* r, const char* k, const char* v) { (void)r; (void)k; (void)v; }
 void http_response_set_body(HttpServerResponse* r, const char* b) { (void)r; (void)b; }
+void http_response_set_body_n(HttpServerResponse* r, const char* b, int n) { (void)r; (void)b; (void)n; }
 void http_response_json(HttpServerResponse* r, const char* j) { (void)r; (void)j; }
 char* http_response_serialize(HttpServerResponse* r) { (void)r; return NULL; }
 void http_server_response_free(HttpServerResponse* r) { (void)r; }
@@ -1075,6 +1076,48 @@ void http_response_set_body(HttpServerResponse* res, const char* body) {
     res->body_length = strlen(body);
 
     // Update Content-Length
+    char len_str[32];
+    snprintf(len_str, sizeof(len_str), "%zu", res->body_length);
+    http_response_set_header(res, "Content-Length", len_str);
+}
+
+/* Length-aware sibling — binary-safe set_body. The plain set_body
+ * above uses strdup + strlen, so any embedded NUL truncates the
+ * payload and the wire body comes out short. Reach for this when
+ * the body is binary content (gzip / image / packed binary) or
+ * may otherwise contain NUL bytes mid-payload.
+ *
+ * `body` is treated as `length` bytes verbatim — no NUL termination
+ * required from the caller, no NUL searching done internally. The
+ * stored buffer is one byte longer than `length` and NUL-terminated
+ * so any code path that reads it as a C string still sees a valid
+ * pointer (it just won't see the bytes after the first NUL via
+ * strlen). Issue: see svn-aether's svnserver_respond_binary_ok
+ * shim, which exists only because this function didn't.
+ *
+ * `length < 0` is treated as a no-op. `length == 0` clears the body.
+ * `body == NULL` with `length > 0` is a no-op (defensive — same as
+ * how set_body rejects NULL body). */
+void http_response_set_body_n(HttpServerResponse* res, const char* body, int length) {
+    if (!res) return;
+    if (length < 0) return;
+    if (length > 0 && !body) return;
+
+    free(res->body);
+    if (length == 0) {
+        res->body = NULL;
+        res->body_length = 0;
+    } else {
+        res->body = (char*)malloc((size_t)length + 1);
+        if (!res->body) {
+            res->body_length = 0;
+            return;
+        }
+        memcpy(res->body, body, (size_t)length);
+        res->body[length] = '\0';
+        res->body_length = (size_t)length;
+    }
+
     char len_str[32];
     snprintf(len_str, sizeof(len_str), "%zu", res->body_length);
     http_response_set_header(res, "Content-Length", len_str);

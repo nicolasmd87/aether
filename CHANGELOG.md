@@ -5,9 +5,23 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.102.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Added
+
+- **`os.getpid() -> int`** (`std/os/{aether_os.h,aether_os.c,module.ae}`, `docs/stdlib-reference.md`). POSIX `getpid(2)` / Windows `_getpid()`. Universally needed for tmpfile names (`/tmp/myprog.${os.getpid()}.tmp`), per-process locks, log prefixes, and stable tagging across forked children. Returns 0 on platforms compiled without filesystem support.
+
+- **`cryptography.base64_encode_padded(data, length) -> (string, string)`** (`std/cryptography/{aether_cryptography.h,aether_cryptography.c,module.ae}`, `docs/stdlib-reference.md`, `docs/stdlib-api.md`). Sibling of the existing unpadded `base64_encode` — same RFC 4648 §4 standard alphabet, but with `=` padding to a multiple of 4 bytes. Reach for this when the wire format on the other end expects padded base64 (most auth headers, some JSON-encoded blob formats). Avoids 12-line C-shim "append `=` to the unpadded output" workarounds in downstream ports.
+
+- **`sqlite.next_row(stmt, db) -> int`** (`contrib/sqlite/module.ae`, `contrib/sqlite/README.md`). Cursor-iteration sugar over `step`. Returns `1` on row available, `0` on `SQLITE_DONE`, `-1` on error. Replaces the doubled-`step()` shape that's the most common bug in cursor APIs (forget to step at the end → infinite loop; forget to step at the start → skip row 0). `step` / `errmsg` / explicit rc compare remain available for callers that want to distinguish DONE from ROW with their own control flow.
+
+- **`http.response_set_body_n(res, body, length)`** (`std/net/{aether_http_server.h,aether_http_server.c,module.ae}`, `std/http/module.ae`, `docs/stdlib-reference.md`). Length-aware sibling of `http.response_set_body`. The plain setter uses `strdup` + `strlen` and silently truncates response bodies at the first embedded NUL — a landmine for any Aether HTTP server returning binary content (gzip-compressed payloads, image bytes, NUL-bearing files). The `_n` form treats `body` as `length` bytes verbatim, no NUL searching. Existing `set_body` callers untouched. **Caveat**: there's a pre-existing codegen bug where module-imported externs don't trigger the #297 auto-unwrap at call sites (works fine for inline-declared externs in the same `.ae` file). Until that's fixed in a follow-up, callers reaching this through `import std.http` need to manually unwrap via a small inline extern decl, or pass an explicit `aether_string_data(body)` cast. The underlying C function is correct end-to-end and binary-safe.
+
+- **`string.substring_n(str, str_len_bytes, start, end) -> string` and `string.length_n(str, known_length) -> int`** (`std/string/{aether_string.h,aether_string.c,module.ae}`, `docs/stdlib-reference.md`, `docs/c-interop.md`). Length-aware companions to `string.substring` / `string.length` for use inside Aether libraries that take `string`-typed parameters. After #297's auto-unwrap fires at the function boundary, the helper sees only payload bytes — internal calls to `string.length(s)` fall through to `strlen` and truncate binary content at the first embedded NUL. The `_n` family threads the caller's length through and bypasses the internal `str_len` dispatch entirely. `length_n` is the identity helper that documents intent: `n = string.length_n(s, n)` reads as "yes I know my length" instead of looking like a forgotten `string.length(s)` that would have truncated. Plus a docs callout in `c-interop.md` § Length-clamp hazard explaining the symmetric Aether-side form of the post-#297 hazard previously documented only for C shims.
 
 ## [0.102.0]
 
