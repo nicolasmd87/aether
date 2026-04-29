@@ -922,7 +922,18 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
                     return NULL;
                 }
             }
-            
+
+            // Capture the closing paren's line for the trailing-block
+            // line check below. Both arg-list paths (empty via
+            // match_token at the head of the surrounding if; non-empty
+            // via expect_token after the do/while) have just consumed
+            // the `)`, so it sits at parser->current_token - 1. See #286:
+            // a `{` on a later line must NOT be eaten as a trailing
+            // closure for this call — it is a separate bare-brace block.
+            int paren_close_line = (parser->current_token > 0)
+                ? parser->tokens[parser->current_token - 1]->line
+                : -1;
+
             // Check for trailing closure/block after function call
             // func(args) { body }  or  func(args) |x| { body }
             // func(args) callback { body }  or  func(args) callback |x| { body }
@@ -957,21 +968,52 @@ static ASTNode* parse_postfix_expression(Parser* parser) {
                         add_child(func_call, trailing);
                     }
                 } else if (next_tok && next_tok->type == TOKEN_LEFT_BRACE &&
-                           !parser->in_condition) {
+                           !parser->in_condition &&
+                           next_tok->line == paren_close_line) {
                     // Trailing block without params: func(args) { body }
                     //
-                    // Suppressed when we're parsing an if/while/for condition:
-                    // the `{` there is the start of the statement's body, not
-                    // a trailing closure attached to the rightmost call. Eating
-                    // it here would swallow the real body and produce silently
-                    // wrong code (e.g. an infinite while loop because the
-                    // increment statement becomes the if-body).
+                    // Only attached when `{` is on the same source line as
+                    // the call's closing `)`. A `{` on a later line is a
+                    // separate bare-brace block (handled by the statement
+                    // parser via TOKEN_LEFT_BRACE → parse_block). See #286
+                    // and docs/closures-and-builder-dsl.md § Same-line rule
+                    // for trailing blocks.
+                    //
+                    // Also suppressed when we're parsing an if/while/for
+                    // condition: the `{` there is the start of the
+                    // statement's body, not a trailing closure attached to
+                    // the rightmost call. Eating it here would swallow the
+                    // real body and produce silently wrong code (e.g. an
+                    // infinite while loop because the increment statement
+                    // becomes the if-body).
                     ASTNode* trailing = create_ast_node(AST_CLOSURE, "trailing",
                                                          next_tok->line, next_tok->column);
                     trailing->node_type = create_type(TYPE_FUNCTION);
                     ASTNode* body = parse_block(parser);
                     add_child(trailing, body);
                     add_child(func_call, trailing);
+                } else if (next_tok && next_tok->type == TOKEN_LEFT_BRACE &&
+                           !parser->in_condition &&
+                           next_tok->line > paren_close_line) {
+                    // Common foot-gun (#286): user wrote
+                    //     x = call()
+                    //     {
+                    //         ...
+                    //     }
+                    // and likely either (a) intended a trailing closure
+                    // and put `{` on the wrong line, or (b) intended a
+                    // separate bare-brace block. Under the same-line
+                    // rule we keep the safe interpretation — leave the
+                    // `{` for the statement parser, which will treat it
+                    // as a bare block — and emit a hint so users in case
+                    // (a) get pointed at the fix without having to debug
+                    // an "Undefined variable" later.
+                    AetherError w = {NULL, NULL, next_tok->line, next_tok->column,
+                        "'{' on this line is parsed as a separate block, not as a trailing closure for the preceding call",
+                        "move '{' to the same line as the closing ')' if you intended a trailing closure",
+                        NULL, AETHER_ERR_NONE};
+                    aether_warning_report(&w);
+                    /* fall through — leave the `{` for the statement parser */
                 }
             }
 

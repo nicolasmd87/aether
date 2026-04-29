@@ -107,12 +107,14 @@ plays that role), no interfaces.
 - **Reserved keywords that trip users up**: `state`, `match`,
   `message` (actor-model hangover). Fails in extern param names too.
   Rename to `st`, `is_match`, `msg`.
-- **`export` functions can't call each other in the same file.**
-  `export baz() { return bar(x) }` where `bar` is also `export`
-  errors with `Undefined function 'bar'`. Workaround: non-export
-  `foo_impl()` + `export foo() { return foo_impl() }` wrapper, and
-  have other exports call `foo_impl`. Not the language's best day,
-  but it's consistent.
+- **Trailing closure brace must be on the call's line.** `f(x) { … }`
+  attaches as a trailing closure; `f(x)\n{ … }` is parsed as a
+  separate bare-brace block. The compiler warns on the next-line
+  variant. Move the brace to the call's line if you wanted a
+  closure. Pre-fix, the next-line shape was eaten as a trailing
+  closure even when the user meant a separate block, producing
+  misleading "Undefined variable" errors against names assigned
+  by the call. (#286)
 - **Ownership of `ptr`-typed returns.** Strings returned by builtins
   like `string.from_long` / `string.concat` are ref-counted
   (`AetherString*` with a magic sentinel). Safe to pass to other

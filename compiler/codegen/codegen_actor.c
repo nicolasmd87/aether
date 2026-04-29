@@ -225,7 +225,21 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
                         print_line(gen, "static AETHER_HOT void %s_handle_%s(%s* self, void* _msg_data) {",
                                   actor->value, pattern->value, actor->value);
                         indent(gen);
+                        // Reset declared-vars / heap-string state for this
+                        // handler. Each handler is its own C function with
+                        // its own scope; carrying entries over from the
+                        // last regular function (or the previous handler)
+                        // makes hoist_loop_vars believe a name is already
+                        // declared and skip emitting its declaration.
+                        // Without this reset, a free function whose
+                        // parameter shares a name with a variable first
+                        // assigned inside the handler's while body would
+                        // leak into the handler and produce undeclared-
+                        // identifier errors in the generated C.
+                        clear_declared_vars(gen);
+                        clear_heap_string_vars(gen);
                         print_line(gen, "%s* _pattern = (%s*)_msg_data;", pattern->value, pattern->value);
+                        mark_var_declared(gen, "_pattern");
 
                         // Extract pattern fields with correct types from message definition.
                         // Single-int-field messages use intptr_t (matches payload_int width).
@@ -260,6 +274,11 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
                                     var_name = field->children[0]->value;
                                 }
                                 print_line(gen, "%s %s = _pattern->%s;", c_type, var_name, field->value);
+                                // Pattern fields are now C-locals at the
+                                // top of the handler — record them so a
+                                // subsequent hoist pass doesn't attempt
+                                // a duplicate declaration.
+                                mark_var_declared(gen, var_name);
                             }
                         }
 

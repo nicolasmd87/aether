@@ -97,6 +97,43 @@ panel("title") {
 }
 ```
 
+### Same-line rule for trailing blocks
+
+A trailing block `{ ... }` is recognised as part of a function call only
+when `{` appears on the **same source line** as the call's closing `)`.
+A `{` on a later line is parsed as an independent block, not as a
+trailing closure for the preceding call.
+
+```aether
+result = build() { ... }    // trailing closure of build()
+
+result = build()
+{ ... }                     // independent block, runs after build()
+```
+
+Why: this rule lets ordinary statements like
+
+```aether
+base_body = read_blob(repo, sha)
+{
+    n = string.length(base_body)
+    // …
+}
+```
+
+keep the obvious lexical scoping — the bare block sees `base_body`,
+because it was never folded into `read_blob`'s argument list. Without
+the same-line rule, the parser greedily consumed any `{` that followed
+a call as a trailing closure (whether the call was an assignment RHS
+or a statement), and the block body could not see the variable being
+declared by the enclosing assignment. See issue #286.
+
+When a `{` on a later line follows a call directly, the compiler emits
+a warning suggesting the user move the `{` to the call's line if they
+intended a trailing closure. This makes the typical foot-gun
+(intending a closure but writing the brace on the next line)
+self-diagnosing.
+
 ### Closure blocks (callbacks)
 
 A `|| { }` or `|params| { }` after a function call creates a real closure that is

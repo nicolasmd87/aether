@@ -4,6 +4,13 @@
 
 import std.http
 
+// Unique high-numbered port — port 8080 used to be hardcoded here, but
+// 8080 collides with anything else listening on a dev machine and is in
+// the parallel-test-runner's path. Other HTTP tests under
+// tests/integration/http_server_*/ use the 18xxx range; use 18101 here
+// to match that convention. None of the other tests use 18101.
+const PORT = 18101
+
 // Handler that sets status and body
 handle_test(req: ptr, res: ptr, ud: ptr) {
     http.response_set_status(res, 200)
@@ -34,17 +41,19 @@ main() {
     print("=== HTTP Response Accessor Tests ===\n\n")
 
     // Start server
-    raw = http.server_create(8080)
+    raw = http.server_create(PORT)
     http.server_get(raw, "/test", handle_test, 0)
     spawn(Helper())
     a = spawn(Srv())
     a ! Go { raw: raw }
     sleep(300)
 
+    base = "http://127.0.0.1:${PORT}"
+
     // Make request via the raw ptr API (this test specifically guards
     // the ptr-based accessor functions; the Go-style http.get wrapper
     // returns a (body, err) tuple instead).
-    resp = http.get_raw("http://127.0.0.1:8080/test")
+    resp = http.get_raw("${base}/test")
 
     // Test 1: status code accessor
     print("Test 1: http_response_status_code... ")
@@ -94,7 +103,7 @@ main() {
 
     // Test 6: 404 response has correct status
     print("Test 6: 404 status code... ")
-    resp2 = http.get_raw("http://127.0.0.1:8080/nonexistent")
+    resp2 = http.get_raw("${base}/nonexistent")
     code2 = http.response_status_code(resp2)
     if code2 != 404 {
         print("FAIL: expected 404, got "); print(code2); println("")
@@ -109,4 +118,14 @@ main() {
     http.server_free(raw)
 
     print("\n=== All HTTP Accessor Tests Passed ===\n")
+
+    // Force-exit so the actor scheduler doesn't busy-loop waiting on
+    // worker threads that have nothing to do but can't observe the
+    // scheduler-shutdown signal under contention. Without this, the
+    // test reliably passes in isolation but consumes 700%+ CPU at the
+    // tail of `make test-ae` on macOS, where the parallel runner has
+    // many concurrent processes and the work-stealing scheduler keeps
+    // workers spinning. exit(0) bypasses the natural-shutdown path and
+    // hands control back to the OS immediately.
+    exit(0)
 }
