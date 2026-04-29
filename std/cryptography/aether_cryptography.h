@@ -55,6 +55,15 @@ int cryptography_hash_supported(const char* algo);
  * on OOM / no OpenSSL. */
 char* cryptography_base64_encode_raw(const char* data, int length);
 
+/* Padded sibling of cryptography_base64_encode_raw — RFC 4648 §4
+ * standard alphabet WITH `=` padding to a multiple of 4 bytes. Used
+ * by callers whose wire format expects padded base64 (most decoders
+ * that aren't RFC-strict; some auth headers; common JSON-encoded
+ * blob formats). Same lifetime contract as the unpadded form:
+ * caller frees the returned NUL-terminated string. Returns NULL on
+ * OOM / no OpenSSL. */
+char* cryptography_base64_encode_padded_raw(const char* data, int length);
+
 /* Decode a Base64 string. Returns 1 on success, 0 on failure
  * (malformed input / OOM / no OpenSSL). On success, the decoded
  * bytes live in a thread-local buffer accessible via

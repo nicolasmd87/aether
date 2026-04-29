@@ -9,6 +9,7 @@ exports (
     string_equals, string_compare,
     string_starts_with, string_ends_with, string_contains,
     string_index_of, string_index_of_from, string_substring,
+    string_substring_n, string_length_n,
     string_from_char, string_to_upper, string_to_lower, string_trim,
     string_split, string_array_size, string_array_get, string_array_free,
     string_split_to_seq,
@@ -60,6 +61,27 @@ extern string_index_of(str: string, substring: string) -> int
 // scan a packed string record-by-record.
 extern string_index_of_from(str: string, substring: string, start: int) -> int
 extern string_substring(str: string, start: int, end: int) -> string
+
+// Length-aware sibling — caller supplies the source length explicitly.
+// Reach for this when `str` arrives as a `string` parameter at a
+// function boundary (where #297's auto-unwrap may have stripped the
+// AetherString header) AND the content may contain embedded NULs.
+// The plain string_substring would call str_len() on the unwrapped
+// data and fall through to strlen, truncating at the first NUL.
+//
+// Trusts the caller's `str_len_bytes` parameter — does NOT consult
+// the AetherString header even if one happens to be present.
+// start / end are clamped to [0, str_len_bytes].
+extern string_substring_n(str: string, str_len_bytes: int, start: int, end: int) -> string
+
+// Identity helper documenting intent: in code that receives a
+// `string` parameter plus an explicit length, the explicit length
+// IS the truth — don't consult the AetherString header. This
+// function exists so `n = string.length_n(s, n)` reads as "yes I
+// know my length" at the source level instead of looking like a
+// forgotten `string.length(s)` that would have truncated at NUL.
+// Pure no-op at the C level; clamps negative input to 0.
+extern string_length_n(str: string, known_length: int) -> int
 
 // Construct a 1-byte string from a byte code (0..255). Typical use
 // is emitting known single-byte separators (\x01, \x02) into packed

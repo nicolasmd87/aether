@@ -276,6 +276,54 @@ char* string_substring(const void* str, int start, int end) {
     return result;
 }
 
+/* Length-aware sibling of string_substring — caller supplies the
+ * source length explicitly. Reach for this when `str` arrives as a
+ * `string` parameter at a function boundary (where #297's auto-
+ * unwrap may have stripped the AetherString header) AND the content
+ * may contain embedded NULs. The plain string_substring would call
+ * str_len() → strlen() on the unwrapped data and silently truncate
+ * at the first NUL.
+ *
+ * Trusts the caller's `str_len` parameter — does NOT consult the
+ * AetherString header even if one happens to be present. start/end
+ * are clamped to [0, str_len]. */
+char* string_substring_n(const void* str, int str_len_bytes, int start, int end) {
+    if (!str) return NULL;
+    if (str_len_bytes < 0) str_len_bytes = 0;
+    /* Skip str_data dispatch — we trust the caller's length and
+     * treat `str` as a raw byte pointer regardless of whether it
+     * carries an AetherString header. The auto-unwrap at the call
+     * site has already given us the payload pointer in the common
+     * case; honouring the header here would be inconsistent. */
+    const char* sdata = (const char*)str;
+    if (start < 0) start = 0;
+    if (end > str_len_bytes) end = str_len_bytes;
+    if (start >= end) {
+        char* empty = (char*)malloc(1);
+        if (empty) empty[0] = '\0';
+        return empty;
+    }
+
+    size_t len = (size_t)(end - start);
+    char* result = (char*)malloc(len + 1);
+    if (!result) return NULL;
+    memcpy(result, sdata + start, len);
+    result[len] = '\0';
+    return result;
+}
+
+/* Identity helper that documents intent: in code that receives a
+ * `string` parameter plus an explicit length, the explicit length
+ * IS the truth — don't consult the AetherString header. This
+ * function exists so `n = string.length_n(s, n)` reads as "yes I
+ * know my length" at the source level instead of looking like a
+ * forgotten `string.length(s)` that would have truncated at NUL.
+ * Pure no-op at the C level; clamps negative input to 0. */
+int string_length_n(const void* str, int known_length) {
+    (void)str;
+    return (known_length < 0) ? 0 : known_length;
+}
+
 char* string_to_upper(const void* str) {
     if (!str) return NULL;
     size_t slen = str_len(str);

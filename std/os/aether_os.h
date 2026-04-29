@@ -82,4 +82,9 @@ char* os_run_capture_raw(const char* prog, void* argv, void* env);
 // land without disturbing this one.
 char* os_now_utc_iso8601_raw(void);
 
+// Process identifier for the current process. Useful for tmpfile
+// names, per-process locks, log prefixes. POSIX getpid(2); Windows
+// _getpid(). Returns 0 on platforms without filesystem (no-op stub).
+int os_getpid_raw(void);
+
 #endif
