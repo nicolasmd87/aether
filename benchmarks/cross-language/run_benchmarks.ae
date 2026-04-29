@@ -379,35 +379,65 @@ main() {
             string_concat("cd aether && make clean >/dev/null 2>&1 && make ", string_concat(pattern, " >/dev/null 2>&1")),
             string_concat("cd aether && ", string_concat(env_prefix, string_concat(" ", string_concat(tc, string_concat(" ./", pattern))))),
             runs, 0, is_mac)
-        if string_length(res) > 0 { if first == 0 { json = string_concat(json, ",\n") }; json = string_concat(json, res); first = 0 }
+        if string_length(res) > 0 {
+            if first == 0 {
+                json = string_concat(json, ",\n")
+            }
+            json = string_concat(json, res)
+            first = 0
+        }
 
         // ---- C ----
         res = run_lang("C (pthread)",
             string_concat("cd c && make clean >/dev/null 2>&1 && make ", string_concat(pattern, " >/dev/null 2>&1")),
             string_concat("cd c && BENCHMARK_MESSAGES=", string_concat(ms, string_concat(" ", string_concat(tc, string_concat(" ./", pattern))))),
             runs, 0, is_mac)
-        if string_length(res) > 0 { if first == 0 { json = string_concat(json, ",\n") }; json = string_concat(json, res); first = 0 }
+        if string_length(res) > 0 {
+            if first == 0 {
+                json = string_concat(json, ",\n")
+            }
+            json = string_concat(json, res)
+            first = 0
+        }
 
         // ---- C++ ----
         res = run_lang("C++",
             string_concat("cd cpp && g++ -O3 -std=c++17 -march=native ", string_concat(pattern, string_concat(".cpp -o ", string_concat(pattern, " -pthread >/dev/null 2>&1")))),
             string_concat("cd cpp && BENCHMARK_MESSAGES=", string_concat(ms, string_concat(" ", string_concat(tc, string_concat(" ./", pattern))))),
             runs, 0, is_mac)
-        if string_length(res) > 0 { if first == 0 { json = string_concat(json, ",\n") }; json = string_concat(json, res); first = 0 }
+        if string_length(res) > 0 {
+            if first == 0 {
+                json = string_concat(json, ",\n")
+            }
+            json = string_concat(json, res)
+            first = 0
+        }
 
         // ---- Go ----
         res = run_lang("Go",
             string_concat("cd go && go build -o ", string_concat(pattern, string_concat(" ", string_concat(pattern, ".go >/dev/null 2>&1")))),
             string_concat("cd go && BENCHMARK_MESSAGES=", string_concat(ms, string_concat(" ", string_concat(tc, string_concat(" ./", pattern))))),
             runs, 0, is_mac)
-        if string_length(res) > 0 { if first == 0 { json = string_concat(json, ",\n") }; json = string_concat(json, res); first = 0 }
+        if string_length(res) > 0 {
+            if first == 0 {
+                json = string_concat(json, ",\n")
+            }
+            json = string_concat(json, res)
+            first = 0
+        }
 
         // ---- Rust ----
         res = run_lang("Rust",
             string_concat("cd rust && cargo build --release --bin ", string_concat(pattern, " >/dev/null 2>&1")),
             string_concat("cd rust && BENCHMARK_MESSAGES=", string_concat(ms, string_concat(" ", string_concat(tc, string_concat(" ./target/release/", pattern))))),
             runs, 0, is_mac)
-        if string_length(res) > 0 { if first == 0 { json = string_concat(json, ",\n") }; json = string_concat(json, res); first = 0 }
+        if string_length(res) > 0 {
+            if first == 0 {
+                json = string_concat(json, ",\n")
+            }
+            json = string_concat(json, res)
+            first = 0
+        }
 
         // ---- Java ----
         jc = java_class(pattern)
@@ -415,20 +445,38 @@ main() {
             string_concat("cd java && javac ", string_concat(jc, ".java >/dev/null 2>&1")),
             string_concat("cd java && BENCHMARK_MESSAGES=", string_concat(ms, string_concat(" ", string_concat(tc, string_concat(" java ", jc))))),
             runs, warmup, is_mac)
-        if string_length(res) > 0 { if first == 0 { json = string_concat(json, ",\n") }; json = string_concat(json, res); first = 0 }
+        if string_length(res) > 0 {
+            if first == 0 {
+                json = string_concat(json, ",\n")
+            }
+            json = string_concat(json, res)
+            first = 0
+        }
 
         // ---- Zig ----
         res = run_lang("Zig",
             string_concat("cd zig && make ", string_concat(pattern, " >/dev/null 2>&1")),
             string_concat("cd zig && BENCHMARK_MESSAGES=", string_concat(ms, string_concat(" ", string_concat(tc, string_concat(" ./", pattern))))),
             runs, 0, is_mac)
-        if string_length(res) > 0 { if first == 0 { json = string_concat(json, ",\n") }; json = string_concat(json, res); first = 0 }
+        if string_length(res) > 0 {
+            if first == 0 {
+                json = string_concat(json, ",\n")
+            }
+            json = string_concat(json, res)
+            first = 0
+        }
 
         // ---- Elixir ----
         res = run_lang("Elixir", "",
             string_concat("cd elixir && BENCHMARK_MESSAGES=", string_concat(ms, string_concat(" ", string_concat(tc, string_concat(" elixir ", string_concat(pattern, ".exs")))))),
             runs, warmup, is_mac)
-        if string_length(res) > 0 { if first == 0 { json = string_concat(json, ",\n") }; json = string_concat(json, res); first = 0 }
+        if string_length(res) > 0 {
+            if first == 0 {
+                json = string_concat(json, ",\n")
+            }
+            json = string_concat(json, res)
+            first = 0
+        }
 
         // ---- Erlang ----
         erl_extra = ""
@@ -441,21 +489,39 @@ main() {
             string_concat("cd erlang && erlc ", string_concat(pattern, ".erl >/dev/null 2>&1")),
             string_concat("cd erlang && ", string_concat(erl_env, string_concat(" ", string_concat(tc, string_concat(" erl ", string_concat(erl_extra, string_concat("-noshell -s ", string_concat(pattern, " start")))))))),
             runs, warmup, is_mac)
-        if string_length(res) > 0 { if first == 0 { json = string_concat(json, ",\n") }; json = string_concat(json, res); first = 0 }
+        if string_length(res) > 0 {
+            if first == 0 {
+                json = string_concat(json, ",\n")
+            }
+            json = string_concat(json, res)
+            first = 0
+        }
 
         // ---- Pony ----
         res = run_lang("Pony",
             string_concat("cd pony/", string_concat(pattern, " && ponyc . -o . >/dev/null 2>&1")),
             string_concat("cd pony/", string_concat(pattern, string_concat(" && BENCHMARK_MESSAGES=", string_concat(ms, string_concat(" ", string_concat(tc, string_concat(" ./", pattern))))))),
             runs, 0, is_mac)
-        if string_length(res) > 0 { if first == 0 { json = string_concat(json, ",\n") }; json = string_concat(json, res); first = 0 }
+        if string_length(res) > 0 {
+            if first == 0 {
+                json = string_concat(json, ",\n")
+            }
+            json = string_concat(json, res)
+            first = 0
+        }
 
         // ---- Scala ----
         sc = scala_class(pattern)
         res = run_lang("Scala", "",
             string_concat("cd scala && BENCHMARK_MESSAGES=", string_concat(ms, string_concat(" ", string_concat(tc, string_concat(" sbt -batch -error \"runMain ", string_concat(sc, "\"")))))),
             runs, warmup, is_mac)
-        if string_length(res) > 0 { if first == 0 { json = string_concat(json, ",\n") }; json = string_concat(json, res); first = 0 }
+        if string_length(res) > 0 {
+            if first == 0 {
+                json = string_concat(json, ",\n")
+            }
+            json = string_concat(json, res)
+            first = 0
+        }
 
         // Close JSON
         json = string_concat(json, "\n  }\n}\n")

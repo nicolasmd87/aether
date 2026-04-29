@@ -25,9 +25,8 @@ next version number before tagging the release.
 - Same-file callers can resolve `export`-tagged sibling functions — code merged in [0.98.0] (PR #299). Same close-keyword omission. (#287)
 - `std.collections.string_list_*` refcount-aware list — code merged in [0.98.0] (PR #299). Same close-keyword omission. (#274)
 - `c_struct` binding DSL closed as superseded by `@extern("c_symbol")` (#234) and module namespacing. The issue reporter's own recommendation in the body is "(A) close as superseded." (#266)
-**Workflow**: New changes go under `## [0.100.0]`. When a PR merges to
-`main`, the release pipeline automatically replaces `[current]` with the
-next version number before tagging the release.
+
+- **`benchmarks/cross-language/run_benchmarks.ae` no longer fails to parse** (`benchmarks/cross-language/run_benchmarks.ae`). Eleven sites in the file used the C-style single-line `if A { if B { stmt } ; stmt ; stmt }` shape, where a brace-delimited block was followed by `;` and additional statements on the same line. Aether's parser does not accept that — `}` ends the inner block; the trailing `;` and following statements expected to be top-level inside the outer block fired `error[E0100]: Expected statement in block`. The form pre-existed the parser and `make benchmark` failed to even compile the runner. Rewrote each occurrence as a multi-line block (one statement per line), which is the canonical Aether shape. No semantic change.
 
 ## [0.100.0]
 
