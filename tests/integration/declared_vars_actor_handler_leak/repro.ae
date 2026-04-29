@@ -1,0 +1,47 @@
+// Regression: declared_vars list leaked from a regular function's
+// parameters into a subsequent actor receive handler, causing
+// hoist_loop_vars to skip emitting the C-side declaration of a
+// variable first-assigned inside the handler's while body.
+//
+// Trigger: a free function defined BEFORE the actor takes a parameter
+// whose name (`loop_start`) matches a variable first-assigned inside
+// the actor's receive-handler while body. Without the fix, codegen
+// emits `loop_start = clock_ns();` without a C type prefix → gcc
+// reports undeclared identifier.
+
+extern exit(code: int)
+
+wait_for_next_round(loop_start: long, interval: int) {
+    elapsed_ms = (clock_ns() - loop_start) / 1000000
+    remaining_ms = interval - elapsed_ms
+    if remaining_ms > 0 {
+        sleep(1)
+    }
+}
+
+message Tick { n: int }
+
+actor Worker {
+    state count = 0
+    receive {
+        Tick(n) -> {
+            count = count + 1
+            iters = 0
+            while iters < n {
+                loop_start = clock_ns()
+                wait_for_next_round(loop_start, 1)
+                iters = iters + 1
+            }
+            println("ok")
+            exit(0)
+        }
+    }
+}
+
+main() {
+    w = spawn(Worker())
+    w ! Tick { n: 1 }
+    sleep(2000)
+    println("timeout")
+    exit(1)
+}

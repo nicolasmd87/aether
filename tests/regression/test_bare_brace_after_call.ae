@@ -1,0 +1,118 @@
+// Regression test for #286 — a bare-brace `{ ... }` block on the
+// line after a function call is no longer eaten as a trailing
+// closure attached to that call.
+//
+// Pre-fix shape that broke:
+//
+//     rebuild() {
+//         base_body = get_int()
+//         {
+//             b = base_body          // error: Undefined variable 'base_body'
+//         }
+//     }
+//
+// The parser consumed the `{ ... }` as `get_int()`'s trailing
+// closure body. Inside that synthesised closure the about-to-be-
+// declared `base_body` wasn't visible, so the typechecker reported
+// "Undefined variable" — a misleading diagnostic that sent the
+// reporter (and a downstream user) hunting for a typechecker
+// scope-rule regression that wasn't there.
+//
+// Fix: trailing-closure consumption now requires `{` on the SAME
+// line as the call's closing `)`. A `{` on a later line is parsed
+// as an independent bare-brace block and sees outer locals via
+// the ordinary lexical-scope chain. Existing same-line builder /
+// closure syntax (`x = build() { ... }`, `frame("y") { ... }`,
+// etc.) is untouched.
+//
+// Three cases covered:
+//   1. The original failing shape: `var = call() \n { ref var }`
+//      — outer-scope local must be visible inside the bare block.
+//   2. Same-line builder positive control: `x = build() { ... }`
+//      still attaches as a trailing closure (regression guard for
+//      the fix not over-firing).
+//   3. The reporter's full shape: function-call-RHS inside an `if`
+//      body, then a nested bare-brace block referencing the outer
+//      local — must compile and run.
+
+import std.string
+
+extern exit(code: int)
+
+get_int() -> int {
+    return 5
+}
+
+get_str() -> string {
+    return "hello"
+}
+
+// Case 1: function-call RHS in a regular function, followed by a
+// bare-brace block on the next line that references the LHS.
+case1() -> int {
+    base_body = get_int()
+    {
+        b = base_body
+        return b
+    }
+    return -1
+}
+
+// Case 2: same-line builder positive control. `count_calls` returns
+// an int and accepts a same-line trailing block. This locks the fix
+// not over-firing on the legitimate builder pattern.
+count_calls() -> int {
+    return 7
+}
+
+case2() -> int {
+    n = count_calls() {
+        // body intentionally empty — the trailing block is the
+        // legitimate-builder shape we must not break.
+    }
+    return n
+}
+
+// Case 3: full shape from the original bug report — function-call
+// RHS inside an `if` body, nested bare-brace block referencing the
+// outer local. Mirrors `rebuild_dir_impl`'s structure in the 360-line
+// failing file.
+case3(s: string) -> int {
+    rl = 0
+    if string.length(s) > 0 {
+        base_body = get_str()
+        {
+            n = string.length(base_body)
+            rl = n
+        }
+    }
+    return rl
+}
+
+main() {
+    a = case1()
+    if a != 5 {
+        println("FAIL case 1: expected 5, got ${a}")
+        exit(1)
+    }
+
+    b = case2()
+    if b != 7 {
+        println("FAIL case 2: expected 7, got ${b}")
+        exit(1)
+    }
+
+    c = case3("hello")
+    if c != 5 {
+        println("FAIL case 3: expected 5, got ${c}")
+        exit(1)
+    }
+
+    d = case3("")
+    if d != 0 {
+        println("FAIL case 3 (empty): expected 0, got ${d}")
+        exit(1)
+    }
+
+    println("OK")
+}
