@@ -2826,6 +2826,17 @@ ASTNode* parse_function_definition(Parser* parser) {
                 case TOKEN_ACTOR_REF:
                     is_typed_return = 1;
                     break;
+                case TOKEN_MULTIPLY:
+                    // `-> *StructName { body }` — the pointer-to-struct
+                    // return type. parse_type already handles `*Name`
+                    // in any other position (param, var annotation,
+                    // struct field, extern decl); the disambiguator
+                    // here was the only place it slipped through,
+                    // making the body parse as `-> expr` (multiplication)
+                    // and breaking with a misleading top-level error
+                    // at the `*`. Match the parameter-side surface.
+                    is_typed_return = 1;
+                    break;
                 case TOKEN_IDENTIFIER: {
                     // `-> Name { ... }` — only a typed return if what
                     // follows `{` is NOT a struct-literal `field:` head.

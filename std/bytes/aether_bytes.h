@@ -46,6 +46,27 @@ int aether_bytes_length(AetherBytes* b);
  * NULL or `index` is negative. Returns 1 on success, 0 on failure. */
 int aether_bytes_set(AetherBytes* b, int index, int byte);
 
+/* Read a single byte at `index`. Returns the byte as an unsigned
+ * value 0..255, or -1 if `b` is NULL, `index` is negative, or
+ * `index` >= the buffer's logical length. Pairs with `set` so a
+ * caller can build, then walk, a buffer in-place — the canonical
+ * binary-codec encoder pattern. */
+int aether_bytes_get(AetherBytes* b, int index);
+
+/* Little-endian packed-int read/write helpers. The 16/32-bit
+ * variants store / read consecutive bytes at `index .. index + N - 1`
+ * in little-endian order. `set_*` grows the buffer if needed
+ * (advancing logical length to cover the write); `get_*` returns -1
+ * if any byte in the range is past the buffer's logical length, the
+ * buffer is NULL, or `index` is negative. The 32-bit getters return
+ * the value in an `int` (host-endian), so on 32-bit-int hosts the
+ * stored value's top bit reads back as the sign bit — fine for byte-
+ * packing use cases that just round-trip the value. */
+int aether_bytes_set_le16(AetherBytes* b, int index, int value);
+int aether_bytes_get_le16(AetherBytes* b, int index);
+int aether_bytes_set_le32(AetherBytes* b, int index, int value);
+int aether_bytes_get_le32(AetherBytes* b, int index);
+
 /* Copy `src_len` bytes from `src` into the buffer starting at offset
  * `dst`. Grows the buffer if needed. `src` may be either a plain
  * `const char*` or an `AetherString*` (the function reads the payload

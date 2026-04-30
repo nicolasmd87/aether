@@ -19,16 +19,26 @@
 import std.string
 
 exports (
-    aether_bytes_new, aether_bytes_set, aether_bytes_length,
+    aether_bytes_new, aether_bytes_set, aether_bytes_get,
+    aether_bytes_length,
+    aether_bytes_set_le16, aether_bytes_get_le16,
+    aether_bytes_set_le32, aether_bytes_get_le32,
     aether_bytes_copy_from_string, aether_bytes_copy_within,
     aether_bytes_finish, aether_bytes_free,
-    new, set, length, copy_from_string, copy_within, finish, free
+    new, set, get, length,
+    set_le16, get_le16, set_le32, get_le32,
+    copy_from_string, copy_within, finish, free
 )
 
 // ---- Raw externs ----
 extern aether_bytes_new(initial_capacity: int) -> ptr
 extern aether_bytes_length(b: ptr) -> int
 extern aether_bytes_set(b: ptr, index: int, value: int) -> int
+extern aether_bytes_get(b: ptr, index: int) -> int
+extern aether_bytes_set_le16(b: ptr, index: int, value: int) -> int
+extern aether_bytes_get_le16(b: ptr, index: int) -> int
+extern aether_bytes_set_le32(b: ptr, index: int, value: int) -> int
+extern aether_bytes_get_le32(b: ptr, index: int) -> int
 extern aether_bytes_copy_from_string(b: ptr, dst: int, src: string, src_len: int) -> int
 // `length` here is the count of bytes to copy, not a buffer length.
 extern aether_bytes_copy_within(b: ptr, dst: int, src: int, length: int) -> int
@@ -57,6 +67,42 @@ length(b: ptr) -> int {
 // — it stores the low 8 bits at `index`.
 set(b: ptr, index: int, value: int) -> int {
     return aether_bytes_set(b, index, value)
+}
+
+// Read the byte previously written at `index`, returned as 0..255.
+// Returns -1 if `b` is null, `index` is negative, or `index` is past
+// the buffer's logical length. Pairs with `set` so a caller can build
+// then walk a buffer in-place — the canonical binary-codec encoder
+// pattern (svndiff and similar).
+get(b: ptr, index: int) -> int {
+    return aether_bytes_get(b, index)
+}
+
+// Little-endian 16-bit write at `index..index+1`. Grows the buffer
+// if needed. Returns 1 on success, 0 on failure (NULL buffer or
+// negative index).
+set_le16(b: ptr, index: int, value: int) -> int {
+    return aether_bytes_set_le16(b, index, value)
+}
+
+// Little-endian 16-bit read at `index..index+1`. Returns the
+// unsigned 16-bit value as an int, or -1 on failure (NULL buffer,
+// negative index, or range past current length).
+get_le16(b: ptr, index: int) -> int {
+    return aether_bytes_get_le16(b, index)
+}
+
+// Little-endian 32-bit write at `index..index+3`. Grows the buffer
+// if needed. Returns 1 on success, 0 on failure.
+set_le32(b: ptr, index: int, value: int) -> int {
+    return aether_bytes_set_le32(b, index, value)
+}
+
+// Little-endian 32-bit read at `index..index+3`. Returns the value
+// as an int (host-endian after reassembly), or -1 on failure.
+// Round-trips losslessly with set_le32 for any int input.
+get_le32(b: ptr, index: int) -> int {
+    return aether_bytes_get_le32(b, index)
 }
 
 // Copy `src_len` bytes from `src` into the buffer starting at offset

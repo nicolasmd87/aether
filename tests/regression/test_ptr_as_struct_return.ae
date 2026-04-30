@@ -1,0 +1,65 @@
+// Regression test for `*StructName` in function return-type position.
+//
+// Companion to test_ptr_as_struct_cast.ae (which covers the cast and
+// the `*T` parameter-position type, that test's Case 4). Until the
+// fresh-aether-requests Section B.1 fix, the function-decl parser's
+// disambiguation switch did not list TOKEN_MULTIPLY, so a `-> *Foo`
+// return type was treated as a `-> expr` arrow body where `*Foo` is a
+// multiplication, producing a misleading top-level-syntax error at
+// the `*`. The fix adds TOKEN_MULTIPLY to the typed-return-disambiguation
+// switch in compiler/parser/parser.c, mirroring the parameter side.
+//
+// Cases:
+//   1. Constructor returning `*Header` parses, runs, and the body's
+//      `as *Header` cast works (the canonical svn-aether port shape).
+//   2. Pass-through: a function whose return type is `*Header` and
+//      whose body is just `return h` for a `*Header` it received.
+
+import std.string
+
+extern malloc(size: int) -> ptr
+extern free(p: ptr)
+extern exit(code: int)
+
+struct Header {
+    flags: int
+    next: ptr
+}
+
+// Case 1: constructor — the headline form. Allocates raw memory and
+// returns a typed view of it. This is exactly the shape the four
+// container shims in the svn-aether port want to retire to Aether.
+mk_header(flags: int) -> *Header {
+    raw = malloc(16)
+    h = raw as *Header
+    h.flags = flags
+    h.next = 0
+    return h
+}
+
+// Case 2: pass-through. Confirms a `*Header`-typed param threads
+// through a function whose return type is also `*Header` without the
+// parser re-tripping at the second occurrence.
+identity(h: *Header) -> *Header {
+    return h
+}
+
+main() {
+    // Case 1: constructor returns a `*Header`, caller stores and reads it.
+    h = mk_header(123)
+    if h.flags != 123 {
+        println("FAIL 1: h.flags=${h.flags}, want 123")
+        exit(1)
+    }
+    println("  PASS 1: constructor returning *Header parses and runs")
+
+    // Case 2: pass-through (param-position + return-position both *Header).
+    h3 = identity(h)
+    if h3.flags != 123 {
+        println("FAIL 2: identity dropped value; h3.flags=${h3.flags}, want 123")
+        exit(1)
+    }
+    println("  PASS 2: *Header pass-through (param + return)")
+
+    println("OK")
+}

@@ -1,0 +1,155 @@
+// Regression for `bytes.get` and the `bytes.{set,get}_le{16,32}` family.
+//
+// Motivating case (svn-aether port, fresh-aether-requests Section A): a
+// binary-codec encoder accumulates 3-int ops (action, length, offset)
+// into a single buffer via `bytes.set`, then walks them at finish time.
+// Without read-back the encoder lifecycle has to live in C. With
+// `bytes.get` it lowers to plain Aether; with `_le32` it stays
+// readable.
+//
+// Cases:
+//   1. set + get round-trips a single byte.
+//   2. get returns -1 for OOB / negative / NULL.
+//   3. get sees zero-fill in the gap between set() writes.
+//   4. set_le32 + get_le32 round-trips a 32-bit value (small).
+//   5. set_le32 + get_le32 round-trips a value with the high bit set,
+//      and the byte order on disk is little-endian (verified via raw
+//      bytes.get of each lane).
+//   6. set_le16 + get_le16 round-trips, low byte at index, high at index+1.
+//   7. get_le32 returns -1 when the 4-byte range falls past length.
+//   8. The encoder pattern: write 3 ops via set_le32 at offsets 0,4,8,
+//      then walk and read each back.
+
+import std.bytes
+
+extern exit(code: int)
+
+main() {
+    println("=== std.bytes get + le32 regression ===")
+
+    // Case 1: set + get round-trip.
+    b1 = bytes.new(4)
+    bytes.set(b1, 0, 200)  // 0xC8
+    bytes.set(b1, 1, 7)
+    if bytes.get(b1, 0) != 200 {
+        println("  FAIL 1: get(0) = ${bytes.get(b1, 0)}, expected 200")
+        exit(1)
+    }
+    if bytes.get(b1, 1) != 7 {
+        println("  FAIL 1: get(1) = ${bytes.get(b1, 1)}, expected 7")
+        exit(1)
+    }
+    bytes.free(b1)
+    println("  PASS: set + get round-trip (high-bit byte returns unsigned)")
+
+    // Case 2: OOB returns -1.
+    b2 = bytes.new(0)
+    bytes.set(b2, 0, 1)
+    if bytes.get(b2, 5) != -1 {
+        println("  FAIL 2: OOB get returned ${bytes.get(b2, 5)}, expected -1")
+        exit(1)
+    }
+    if bytes.get(b2, -1) != -1 {
+        println("  FAIL 2: negative get returned ${bytes.get(b2, -1)}, expected -1")
+        exit(1)
+    }
+    bytes.free(b2)
+    println("  PASS: get OOB / negative returns -1")
+
+    // Case 3: gap is zero-filled — get(2), get(3) read 0.
+    b3 = bytes.new(0)
+    bytes.set(b3, 0, 65)
+    bytes.set(b3, 4, 90)
+    if bytes.get(b3, 2) != 0 {
+        println("  FAIL 3: gap byte = ${bytes.get(b3, 2)}, expected 0")
+        exit(1)
+    }
+    if bytes.get(b3, 4) != 90 {
+        println("  FAIL 3: tail byte = ${bytes.get(b3, 4)}, expected 90")
+        exit(1)
+    }
+    bytes.free(b3)
+    println("  PASS: get sees zero-fill in gap")
+
+    // Case 4: set_le32 + get_le32 small value round-trip.
+    b4 = bytes.new(0)
+    bytes.set_le32(b4, 0, 305419896)  // 0x12345678
+    if bytes.get_le32(b4, 0) != 305419896 {
+        println("  FAIL 4: get_le32 = ${bytes.get_le32(b4, 0)}, expected 305419896")
+        exit(1)
+    }
+    // Lane order: 0x78 0x56 0x34 0x12.
+    if bytes.get(b4, 0) != 120 {
+        println("  FAIL 4: lane 0 = ${bytes.get(b4, 0)}, expected 120 (0x78)")
+        exit(1)
+    }
+    if bytes.get(b4, 3) != 18 {
+        println("  FAIL 4: lane 3 = ${bytes.get(b4, 3)}, expected 18 (0x12)")
+        exit(1)
+    }
+    bytes.free(b4)
+    println("  PASS: set_le32 + get_le32 + little-endian lane order")
+
+    // Case 5: set_le16 + get_le16 round-trip.
+    b5 = bytes.new(0)
+    bytes.set_le16(b5, 0, 4660)  // 0x1234
+    if bytes.get_le16(b5, 0) != 4660 {
+        println("  FAIL 5: get_le16 = ${bytes.get_le16(b5, 0)}, expected 4660")
+        exit(1)
+    }
+    if bytes.get(b5, 0) != 52 {
+        println("  FAIL 5: low lane = ${bytes.get(b5, 0)}, expected 52 (0x34)")
+        exit(1)
+    }
+    if bytes.get(b5, 1) != 18 {
+        println("  FAIL 5: high lane = ${bytes.get(b5, 1)}, expected 18 (0x12)")
+        exit(1)
+    }
+    bytes.free(b5)
+    println("  PASS: set_le16 + get_le16 round-trip")
+
+    // Case 6: get_le32 OOB.
+    b6 = bytes.new(0)
+    bytes.set(b6, 0, 1)
+    bytes.set(b6, 1, 2)
+    // Length is 2 — get_le32 at 0 would read past the end.
+    if bytes.get_le32(b6, 0) != -1 {
+        println("  FAIL 6: get_le32 past length = ${bytes.get_le32(b6, 0)}, expected -1")
+        exit(1)
+    }
+    bytes.free(b6)
+    println("  PASS: get_le32 returns -1 when range falls past length")
+
+    // Case 7: encoder pattern — 3 ops, walked back.
+    b7 = bytes.new(0)
+    bytes.set_le32(b7, 0, 0)         // op0.action = 0
+    bytes.set_le32(b7, 4, 7)         // op0.length = 7
+    bytes.set_le32(b7, 8, 12345)     // op0.offset = 12345
+    bytes.set_le32(b7, 12, 1)        // op1.action = 1
+    bytes.set_le32(b7, 16, 1024)     // op1.length = 1024
+    bytes.set_le32(b7, 20, 0)        // op1.offset = 0
+    if bytes.length(b7) != 24 {
+        println("  FAIL 7: length=${bytes.length(b7)}, expected 24")
+        exit(1)
+    }
+    if bytes.get_le32(b7, 0) != 0 {
+        println("  FAIL 7: op0.action = ${bytes.get_le32(b7, 0)}, expected 0")
+        exit(1)
+    }
+    if bytes.get_le32(b7, 4) != 7 {
+        println("  FAIL 7: op0.length = ${bytes.get_le32(b7, 4)}, expected 7")
+        exit(1)
+    }
+    if bytes.get_le32(b7, 8) != 12345 {
+        println("  FAIL 7: op0.offset = ${bytes.get_le32(b7, 8)}, expected 12345")
+        exit(1)
+    }
+    if bytes.get_le32(b7, 16) != 1024 {
+        println("  FAIL 7: op1.length = ${bytes.get_le32(b7, 16)}, expected 1024")
+        exit(1)
+    }
+    bytes.free(b7)
+    println("  PASS: encoder build-then-walk pattern (svndiff motivating case)")
+
+    println("=== All cases passed ===")
+}

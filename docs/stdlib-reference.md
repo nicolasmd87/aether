@@ -234,10 +234,27 @@ out = bytes.finish(b, 6)                  // "ABABAB"
 - `bytes.new(initial_capacity)` → `ptr` - Allocate empty buffer with reserved capacity
 - `bytes.length(b)` → `int` - Logical byte count (-1 if null)
 - `bytes.set(b, index, byte)` → `int` - Write byte at index; gaps zero-fill; returns 1 on success
+- `bytes.get(b, index)` → `int` - Read byte at index as unsigned 0..255; -1 on OOB / NULL / negative
+- `bytes.set_le16(b, index, value)` → `int` - Little-endian 16-bit write at index..index+1; grows; 1 on success
+- `bytes.get_le16(b, index)` → `int` - Little-endian 16-bit read; -1 if range past current length
+- `bytes.set_le32(b, index, value)` → `int` - Little-endian 32-bit write at index..index+3; grows; 1 on success
+- `bytes.get_le32(b, index)` → `int` - Little-endian 32-bit read; -1 if range past current length
 - `bytes.copy_from_string(b, dst, src, src_len)` → `int` - Copy from a string into the buffer at offset
 - `bytes.copy_within(b, dst, src, length)` → `int` - Self-copy, forward byte-by-byte (RLE-safe)
 - `bytes.finish(b, length)` → `string` - Hand off to refcounted AetherString; buffer is consumed
 - `bytes.free(b)` - Discard without finishing (idempotent on null)
+
+The build-then-walk pattern needed by binary-codec encoders (svndiff and similar) is what `bytes.get` / `bytes.{set,get}_le32` are for — accumulate packed-int ops into the same buffer via `set_le32` at known offsets, then walk and read each back at finish time:
+
+```aether
+b = bytes.new(0)
+bytes.set_le32(b, 0,  action)    // op0
+bytes.set_le32(b, 4,  length)
+bytes.set_le32(b, 8,  offset)
+// … later …
+op0_action = bytes.get_le32(b, 0)
+op0_length = bytes.get_le32(b, 4)
+```
 
 ---
 
