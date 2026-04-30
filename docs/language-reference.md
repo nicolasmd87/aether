@@ -819,6 +819,62 @@ The cast is a view, not an allocation — the operand pointer's lifetime is the 
 
 The `as` keyword is the same token used for `import x as y` aliasing; the two parses don't collide because import-aliasing is recognised only inside `import` statements. Full semantics (operand type rules, error cases, the shared-token interaction) are in [c-interop.md § Struct overlay on raw pointers](c-interop.md#struct-overlay-on-raw-pointers--structname-and-expr-as-structname).
 
+#### Constructors returning `*StructName`
+
+The constructor shape — allocate raw storage, overlay the struct, initialise the fields, return the typed view — is the natural way to retire C "container holder" shims to Aether:
+
+```aether
+struct Txn {
+    revision: int
+    paths: ptr
+    state: int
+}
+
+mk_txn(revision: int) -> *Txn {
+    raw = malloc(64)
+    t = raw as *Txn
+    t.revision = revision
+    t.paths    = 0
+    t.state    = 0
+    return t
+}
+```
+
+The pointer-to-struct type is accepted in every type position, including the return-type position used here. Earlier compiler versions tripped on `-> *Foo` in this slot (the parser's typed-return-vs-arrow-body disambiguator missed `TOKEN_MULTIPLY`); current builds parse it cleanly.
+
+#### Self-referential structs
+
+Pointer-to-struct fields may point back at the enclosing struct, which is how recursive shapes (linked-list cells, error chains, n-ary tree nodes, dependency graphs) are spelled:
+
+```aether
+struct ErrChain {
+    code:  int
+    msg:   string
+    cause: *ErrChain      // self-pointer — chain cell or null
+    file:  string
+    line:  int
+}
+
+mk_err(code: int, msg: string, cause: *ErrChain, file: string, line: int) -> *ErrChain {
+    raw = malloc(64)
+    e = raw as *ErrChain
+    e.code  = code
+    e.msg   = msg
+    e.cause = cause
+    e.file  = file
+    e.line  = line
+    return e
+}
+
+walk(e: *ErrChain) {
+    if e == 0 { return }
+    println("[${e.code}] ${e.msg} (${e.file}:${e.line})")
+    walk(e.cause)
+}
+```
+
+Lifetime is the operand's — `mk_err` owns the raw allocation it returned, and the caller is responsible for freeing the chain. (For Aether-managed lifetimes on a similar shape with refcount-aware structural sharing, see `*StringSeq` in [sequences.md](sequences.md).)
+
 ---
 
 ## Messages

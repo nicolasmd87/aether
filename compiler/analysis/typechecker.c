@@ -2488,6 +2488,22 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
             return 1;
         }
 
+        // Bridge cases: when these node types appear in a "statement"
+        // recursion (e.g. as the value of a return statement, or as
+        // the RHS of an `if x = call()` shape that walks via the
+        // catch-all default), we want them routed through the
+        // expression typechecker so node_type lands on member-access
+        // / interp children. Without these, the default branch's
+        // `typecheck_node → typecheck_statement` recursion fell back
+        // to default again at AST_STRING_INTERP / AST_MEMBER_ACCESS
+        // (no cases here pre-fix) and never called typecheck_expression
+        // — string interp's TypeKind switch then defaulted to `%d`
+        // for string fields read through a `*Self` chain. Section C.1
+        // of fresh-aether-requests.
+        case AST_STRING_INTERP:
+        case AST_MEMBER_ACCESS:
+            return typecheck_expression(stmt, table);
+
         case AST_FUNCTION_CALL:
             // Function call used as a statement (e.g. println(...), user_fn(...))
             return typecheck_function_call(stmt, table);
@@ -3035,6 +3051,49 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
                         }
                     }
                     // Fallback to general inference
+                    if (!expr->node_type || expr->node_type->kind == TYPE_UNKNOWN) {
+                        expr->node_type = infer_type(expr, table);
+                    }
+                }
+                // Pointer-to-struct member access: `e.field` where e: *Foo
+                // Look through the TYPE_PTR to the underlying struct's
+                // field list, identical to TYPE_STRUCT above. Without
+                // this branch the field's declared type (e.g. `string`)
+                // never landed on the AST_MEMBER_ACCESS node, leaving
+                // string-interpolation codegen guessing — which printed
+                // string fields as `%d` (the int default in the
+                // interp's TypeKind switch) rather than `%s`. Issue
+                // surfaces on self-referential structs walked through
+                // a `*Self` chain. Section C.1 of fresh-aether-requests.
+                else if (base_type && base_type->kind == TYPE_PTR &&
+                         base_type->element_type &&
+                         base_type->element_type->kind == TYPE_STRUCT &&
+                         base_type->element_type->struct_name) {
+                    Symbol* struct_sym = lookup_symbol(table, base_type->element_type->struct_name);
+                    if (struct_sym && struct_sym->node) {
+                        ASTNode* struct_def = struct_sym->node;
+                        int found = 0;
+                        for (int fi = 0; fi < struct_def->child_count; fi++) {
+                            ASTNode* field = struct_def->children[fi];
+                            if (field && field->value && strcmp(field->value, expr->value) == 0) {
+                                if (field->node_type && field->node_type->kind != TYPE_UNKNOWN) {
+                                    expr->node_type = clone_type(field->node_type);
+                                }
+                                found = 1;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            char error_msg[256];
+                            snprintf(error_msg, sizeof(error_msg),
+                                     "Struct '%s' has no field '%s'",
+                                     base_type->element_type->struct_name,
+                                     expr->value ? expr->value : "?");
+                            free_type(base_type);
+                            type_error(error_msg, expr->line, expr->column);
+                            return 0;
+                        }
+                    }
                     if (!expr->node_type || expr->node_type->kind == TYPE_UNKNOWN) {
                         expr->node_type = infer_type(expr, table);
                     }

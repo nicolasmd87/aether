@@ -1,0 +1,98 @@
+// Regression test for self-referential structs via `*StructName`
+// self-pointer fields. Section C.1 of fresh-aether-requests.
+//
+// Prior to this PR, declaring `struct ErrChain { ... cause: *ErrChain
+// ... }` parsed and ran for int-only fields, but mixing in `string`
+// fields tripped a typechecker gap: pointer-to-struct member access
+// (`e.msg` where e is `*ErrChain`) didn't propagate the field's
+// declared type onto the AST_MEMBER_ACCESS node, so string-interp
+// codegen defaulted to `%d` and printed garbage. The companion fix
+// in compiler/analysis/typechecker.c teaches the AST_MEMBER_ACCESS
+// branch to look through TYPE_PTR-to-struct just like TYPE_STRUCT.
+//
+// Test mirrors the svnae_error chain shape that motivated this work:
+// code + msg + cause + file + line, walked recursively. Same shape
+// as the error-shim retirement path in the svn-aether port.
+//
+// Cases:
+//   1. Construct + walk a 3-deep chain, with string + int fields,
+//      verifying both data round-trip via field reads (no string
+//      interpolation involved).
+//   2. Print via string interpolation reads the right C format
+//      specifier — i.e. string fields aren't printed as %d.
+
+import std.string
+
+extern malloc(size: int) -> ptr
+extern exit(code: int)
+
+struct ErrChain {
+    code: int
+    msg: string
+    cause: *ErrChain
+    file: string
+    line: int
+}
+
+mk_err(code: int, msg: string, cause: *ErrChain, file: string, line: int) -> *ErrChain {
+    raw = malloc(64)
+    e = raw as *ErrChain
+    e.code = code
+    e.msg = msg
+    e.cause = cause
+    e.file = file
+    e.line = line
+    return e
+}
+
+// Walk depth-first; sum all `code` values to confirm the chain reads
+// through correctly. Returns the running total. Plain int return so
+// codegen doesn't fall back to TYPE_UNKNOWN.
+sum_codes(e: *ErrChain) -> int {
+    if e == 0 {
+        return 0
+    }
+    return e.code + sum_codes(e.cause)
+}
+
+// String interpolation goes through the codegen path that depends on
+// the typechecker setting node_type for member-access through `*Self`.
+// This was previously printing string fields as %d.
+chain_label(e: *ErrChain) -> string {
+    return "[${e.code}] ${e.msg} (${e.file}:${e.line})"
+}
+
+main() {
+    leaf   = mk_err(1, "io: enoent",    0 as *ErrChain, "io.c",     7)
+    middle = mk_err(2, "fs: read fail", leaf,           "fs.c",     42)
+    top    = mk_err(3, "svn: open",     middle,         "client.c", 99)
+
+    // Case 1: chain walk with int field reads.
+    total = sum_codes(top)
+    if total != 6 {
+        println("FAIL 1: sum_codes(top)=${total}, expected 6")
+        exit(1)
+    }
+    println("  PASS 1: 3-deep self-ref chain walked, int fields read")
+
+    // Case 2: string fields via interpolation. Pre-fix: prints garbage
+    // (string fields lowered as %d). Post-fix: prints the actual text.
+    label_top = chain_label(top)
+    if label_top != "[3] svn: open (client.c:99)" {
+        println("FAIL 2: top label='${label_top}', expected '[3] svn: open (client.c:99)'")
+        exit(1)
+    }
+    label_middle = chain_label(middle)
+    if label_middle != "[2] fs: read fail (fs.c:42)" {
+        println("FAIL 2: middle label='${label_middle}', expected '[2] fs: read fail (fs.c:42)'")
+        exit(1)
+    }
+    label_leaf = chain_label(leaf)
+    if label_leaf != "[1] io: enoent (io.c:7)" {
+        println("FAIL 2: leaf label='${label_leaf}', expected '[1] io: enoent (io.c:7)'")
+        exit(1)
+    }
+    println("  PASS 2: string fields via interpolation through *Self chain")
+
+    println("OK")
+}

@@ -72,6 +72,55 @@ int aether_bytes_set(AetherBytes* b, int index, int byte) {
     return 1;
 }
 
+int aether_bytes_get(AetherBytes* b, int index) {
+    if (!b || index < 0) return -1;
+    if ((size_t)index >= b->length) return -1;
+    return (int)(unsigned char)b->data[index];
+}
+
+int aether_bytes_set_le16(AetherBytes* b, int index, int value) {
+    if (!b || index < 0) return 0;
+    size_t needed = (size_t)index + 2;
+    if (needed < (size_t)index) return 0;  /* overflow */
+    if (!bytes_reserve(b, needed)) return 0;
+    b->data[index]     = (char)(value & 0xff);
+    b->data[index + 1] = (char)((value >> 8) & 0xff);
+    if (needed > b->length) b->length = needed;
+    return 1;
+}
+
+int aether_bytes_get_le16(AetherBytes* b, int index) {
+    if (!b || index < 0) return -1;
+    if ((size_t)index + 2 > b->length) return -1;
+    unsigned int v = (unsigned char)b->data[index]
+                   | ((unsigned int)(unsigned char)b->data[index + 1] << 8);
+    return (int)v;
+}
+
+int aether_bytes_set_le32(AetherBytes* b, int index, int value) {
+    if (!b || index < 0) return 0;
+    size_t needed = (size_t)index + 4;
+    if (needed < (size_t)index) return 0;  /* overflow */
+    if (!bytes_reserve(b, needed)) return 0;
+    unsigned int u = (unsigned int)value;
+    b->data[index]     = (char)(u & 0xff);
+    b->data[index + 1] = (char)((u >> 8) & 0xff);
+    b->data[index + 2] = (char)((u >> 16) & 0xff);
+    b->data[index + 3] = (char)((u >> 24) & 0xff);
+    if (needed > b->length) b->length = needed;
+    return 1;
+}
+
+int aether_bytes_get_le32(AetherBytes* b, int index) {
+    if (!b || index < 0) return -1;
+    if ((size_t)index + 4 > b->length) return -1;
+    unsigned int v = (unsigned char)b->data[index]
+                   | ((unsigned int)(unsigned char)b->data[index + 1] << 8)
+                   | ((unsigned int)(unsigned char)b->data[index + 2] << 16)
+                   | ((unsigned int)(unsigned char)b->data[index + 3] << 24);
+    return (int)v;
+}
+
 int aether_bytes_copy_from_string(AetherBytes* b, int dst,
                                   const void* src, int src_len) {
     if (!b || dst < 0 || !src || src_len < 0) return 0;
