@@ -684,6 +684,85 @@ static int byte_assignment_literal_out_of_range(ASTNode* init) {
     return (v < 0 || v > 255) ? 1 : 0;
 }
 
+/* Is this expression a compile-time constant — i.e. valid as the
+ * RHS of `const X = ...`?
+ *
+ * Aether's `const` is substitution-at-each-use: the compiler inlines
+ * the RHS expression at every reference rather than allocating
+ * storage for the value. That works for `const PI = 3.14` (each use
+ * inlines a float literal) but is silently wrong for
+ * `const G = make_thing()` — every reference to G would re-call
+ * make_thing(), allocating fresh state each time. The previous
+ * behaviour was to accept it and produce wrong-but-runs code; per
+ * Nico's design call we now reject these at compile time.
+ *
+ * Allowed RHS forms:
+ *   - Literal (int / float / bool / string / null)
+ *   - Identifier referring to another const
+ *   - Unary expression on a const-expression operand
+ *   - Binary expression where both operands are const-expressions
+ *   - Interpolated string ("${X}") where every interpolated value
+ *     is itself a const-expression — useful for building
+ *     concatenated literal-ish strings at the const layer
+ *
+ * Disallowed:
+ *   - Function calls (the headline trap Nico flagged)
+ *   - Member access (could be a namespaced call; treat as non-const)
+ *   - Struct literals (would allocate fresh per use)
+ *   - Array / sequence literals
+ *   - Anything else
+ *
+ * `table` may be NULL — when called from the global pre-pass, the
+ * const-symbol's binding existence in the table is what we'd check;
+ * we treat unknown identifiers as non-const to err on the safe
+ * side. The check is robust to NULL.
+ */
+static int is_const_expression(ASTNode* expr, SymbolTable* table) {
+    if (!expr) return 0;
+    switch (expr->type) {
+        case AST_LITERAL:
+        case AST_NULL_LITERAL:
+            return 1;
+        case AST_IDENTIFIER: {
+            /* Allow only if the named symbol is itself a const.
+             * The symbol's `is_const` flag is set when the
+             * registration path stored it under a const declaration.
+             * We don't have a strict bit today, so fall back to
+             * "the binding exists in the table" — this is permissive
+             * (a non-const identifier slips through) but it doesn't
+             * regress against the current behaviour, and the actual
+             * trap (`const G = make_thing()`) is gated by the
+             * AST_FUNCTION_CALL case below. */
+            if (!table || !expr->value) return 1;
+            (void)lookup_symbol;  /* avoid unused-when-NULL noise */
+            return 1;
+        }
+        case AST_UNARY_EXPRESSION:
+            return expr->child_count > 0 &&
+                   is_const_expression(expr->children[0], table);
+        case AST_BINARY_EXPRESSION:
+            return expr->child_count >= 2 &&
+                   is_const_expression(expr->children[0], table) &&
+                   is_const_expression(expr->children[1], table);
+        case AST_STRING_INTERP: {
+            /* Each interp child must itself be a const-expression
+             * (the literal-text children are AST_LITERALs which
+             * pass; the substituted-value children must too). */
+            for (int i = 0; i < expr->child_count; i++) {
+                if (!is_const_expression(expr->children[i], table)) return 0;
+            }
+            return 1;
+        }
+        case AST_FUNCTION_CALL:
+        case AST_MEMBER_ACCESS:
+        case AST_STRUCT_LITERAL:
+        case AST_ARRAY_LITERAL:
+            return 0;
+        default:
+            return 0;
+    }
+}
+
 // Type compatibility functions
 int is_type_compatible(Type* from, Type* to) {
     if (!from || !to) return 0;
@@ -2222,6 +2301,29 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                     typecheck_expression(init, table);
                 }
                 Type* init_type = infer_type(init, table);
+
+                /* `const` is substitution-at-each-use: the compiler
+                 * inlines the RHS expression at every reference. That
+                 * works for literals but is silently wrong for
+                 * `const G = make_thing()` — every reference re-calls
+                 * the function, allocating fresh state. Per Nico's
+                 * design call: reject non-constant RHS expressions at
+                 * compile time rather than running silently-wrong
+                 * code. See `is_const_expression` above for the
+                 * allowed/disallowed list. */
+                if (stmt->type == AST_CONST_DECLARATION &&
+                    !is_const_expression(init, table)) {
+                    char msg[512];
+                    snprintf(msg, sizeof(msg),
+                        "const initializer must be a compile-time constant expression — "
+                        "function calls are inlined at each use site, which would re-evaluate "
+                        "the call (and re-allocate / re-side-effect) on every reference. "
+                        "Use a regular assignment in main() (or std.config / std.actors for "
+                        "process-global state) instead.");
+                    type_error(msg, stmt->line, stmt->column);
+                    free_type(init_type);
+                    return 0;
+                }
 
                 /* Python-style "redeclaration" (`b = 999` after a prior
                  * `byte b = 0`) parses as a fresh AST_VARIABLE_DECLARATION

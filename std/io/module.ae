@@ -10,9 +10,13 @@ exports (
     io_delete_file_raw, io_file_info_raw, io_file_info_free,
     io_getenv, io_setenv_raw, io_unsetenv_raw,
     io_stderr_write, io_stdout_write,
+    io_fd_open_read_tuple, io_fd_open_write_tuple, io_fd_close_raw,
+    io_fd_write_n, io_fd_read_n_tuple, io_fd_read_line_tuple,
     read_file, write_file, append_file, delete_file, file_info,
     setenv, unsetenv,
-    stderr_write, stdout_write
+    stderr_write, stdout_write,
+    fd_open_read, fd_open_write, fd_close,
+    fd_write_n, fd_read_n, fd_read_line
 )
 
 // Console I/O — infallible in practice
@@ -43,6 +47,25 @@ extern io_unsetenv_raw(name: string) -> int
 // retries on EINTR.
 extern io_stderr_write(data: string, length: int) -> int
 extern io_stdout_write(data: string, length: int) -> int
+
+// Full fd-level I/O surface. Section 1 of nuther-ask-of-aether-team.md.
+// fd_open_read       → POSIX O_RDONLY  / Win _O_RDONLY | _O_BINARY
+// fd_open_write      → POSIX O_WRONLY|O_CREAT|O_TRUNC, mode 0644 /
+//                      Win _O_WRONLY|_O_CREAT|_O_TRUNC|_O_BINARY
+// fd_close           → close(fd) or _close(fd)
+// fd_write_n         → looped write, retries EINTR; 0 ok / -1 fail
+// fd_read_n          → looped read of up to `n` bytes; (bytes, count, err);
+//                      bytes is a refcounted AetherString (binary-safe;
+//                      embedded NULs survive)
+// fd_read_line       → reads until '\n', stripping trailing CR/LF;
+//                      ("", "") on clean EOF before any byte; partial
+//                      line returned on EOF mid-line
+extern io_fd_open_read_tuple(path: string)  -> (int, string)
+extern io_fd_open_write_tuple(path: string) -> (int, string)
+extern io_fd_close_raw(fd: int) -> string
+extern io_fd_write_n(fd: int, data: string, length: int) -> int
+extern io_fd_read_n_tuple(fd: int, n: int) -> (ptr, int, string)
+extern io_fd_read_line_tuple(fd: int) -> (ptr, string)
 
 // string_concat for owned-copy duplication
 extern string_concat(a: string, b: string) -> string
@@ -135,4 +158,59 @@ stderr_write(data: string, length: int) -> int {
 // record before the next stage reads.
 stdout_write(data: string, length: int) -> int {
     return io_stdout_write(data, length)
+}
+
+// Open `path` for reading. Returns (fd, err): success → (fd >= 0, "");
+// failure → (-1, "..."). Use with fd_read_n / fd_read_line / fd_close.
+//
+//     fd, err = io.fd_open_read("data.bin")
+//     if err != "" { return err }
+//     defer io.fd_close(fd)
+fd_open_read(path: string) -> (int, string) {
+    return io_fd_open_read_tuple(path)
+}
+
+// Open `path` for writing — implicit O_CREAT + O_TRUNC, mode 0644 on
+// POSIX. Returns (fd, err) like fd_open_read. The truncate-on-open
+// matches std.fs.write_binary semantics; if you need O_APPEND or
+// open-without-truncate, file an issue (the porter says no svn-aether
+// site needs them today).
+fd_open_write(path: string) -> (int, string) {
+    return io_fd_open_write_tuple(path)
+}
+
+// Close `fd`. Returns "" on success, error string on failure.
+fd_close(fd: int) -> string {
+    return io_fd_close_raw(fd)
+}
+
+// Write exactly `length` bytes from `data` to `fd`. Loops on partial
+// writes; retries EINTR on POSIX. `data` may contain NULs.
+// Returns 0 on success, -1 on error.
+//
+//     n = io.fd_write_n(fd, frame, frame_len)
+//     if n != 0 { return "write failed" }
+fd_write_n(fd: int, data: string, length: int) -> int {
+    return io_fd_write_n(fd, data, length)
+}
+
+// Read up to `n` bytes from `fd`. Returns (bytes, count, err):
+//   - On success: (bytes, count, "") with `count` between 1 and `n`.
+//   - On clean EOF before any byte: ("", 0, "").
+//   - On error: ("", 0, "<reason>").
+// `bytes` is a refcounted AetherString carrying the explicit byte
+// count, so embedded NULs survive (binary-safe).
+fd_read_n(fd: int, n: int) -> (ptr, int, string) {
+    return io_fd_read_n_tuple(fd, n)
+}
+
+// Read one '\n'-delimited line from `fd`. The trailing '\n' is
+// stripped (and a '\r' before it for CRLF input). Returns (line, err):
+//   - Normal line: (content, "").
+//   - Clean EOF before any byte: ("", "").
+//   - EOF mid-line: returns the partial line and ("", "") — server-
+//     side dump streams sometimes end without a trailing '\n'.
+//   - Read error: ("", "<reason>").
+fd_read_line(fd: int) -> (ptr, string) {
+    return io_fd_read_line_tuple(fd)
 }

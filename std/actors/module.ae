@@ -1,0 +1,103 @@
+// std.actors — process-global name → actor_ref registry.
+// Import with: import std.actors
+//
+// (Module name is plural because `actor` itself is a reserved
+// keyword in Aether and can't appear as a namespace prefix at call
+// sites. `actors.register("auditor", a)` parses; `actor.register(...)`
+// does not.)
+//
+// Models BEAM's `erlang:register(Name, Pid)` / `erlang:whereis(Name)`:
+// a way to find an actor from any context, including from inside
+// `@c_callback` handlers where Aether-typed parameters can't flow
+// through the C void* user_data slot.
+//
+//     import std.actors
+//
+//     actor Auditor {
+//         receive {
+//             Analyze(payload) -> { /* ... */ }
+//         }
+//     }
+//
+//     main() {
+//         a = spawn(Auditor())
+//         actors.register("auditor", a)
+//     }
+//
+//     handle_request(req: ptr, res: ptr, ud: ptr) {
+//         a = actors.whereis("auditor")
+//         a ! Analyze { ... }
+//     }
+//
+// Storage: a single process-global hashmap behind a reader/writer
+// lock. Reads (the hot path — every C-callback handler that needs
+// to find a named actor) are concurrent. Writes serialize.
+//
+// At the C level, `actor_ref` lowers to `void*`, which is exactly
+// what the registry stores — so the round-trip is layout-clean.
+//
+// The registry does NOT track actor liveness. If you register an
+// actor and it later exits, `whereis` keeps returning the stale
+// reference until something explicitly calls `unregister`. This
+// matches BEAM's behaviour for non-link'd registrations and keeps
+// the registry's responsibility narrow.
+//
+// Section 2 of nuther-ask-of-aether-team.md / Nico's reply.
+
+exports (
+    aether_actor_register, aether_actor_whereis,
+    aether_actor_unregister, aether_actor_is_registered,
+    aether_actor_registry_size, aether_actor_registry_clear,
+    register, whereis, unregister, is_registered, registry_size,
+    registry_clear
+)
+
+// ---- Raw externs ----
+// `actor_ref` lowers to `void*` at the C level, so the registry's
+// `void* ref` slot accepts and returns the same shape Aether code
+// passes / receives.
+extern aether_actor_register(name: string, ref: actor_ref)
+extern aether_actor_whereis(name: string) -> actor_ref
+extern aether_actor_unregister(name: string) -> int
+extern aether_actor_is_registered(name: string) -> int
+extern aether_actor_registry_size() -> int
+extern aether_actor_registry_clear()
+
+// ---- Aether-side wrappers ----
+
+// Bind `name` → `ref`. Overwrites any prior binding of the same
+// name (no error). The name is duplicated internally; the actor_ref
+// is stored as-is.
+register(name: string, ref: actor_ref) {
+    aether_actor_register(name, ref)
+}
+
+// Look up by name. Returns the registered actor_ref, or null (when
+// cast to actor_ref) if no binding exists. Pattern: spawn at
+// startup, register with a stable name, look up from any context
+// (including from inside C-callback handlers that can't take an
+// Aether-typed parameter).
+whereis(name: string) -> actor_ref {
+    return aether_actor_whereis(name)
+}
+
+// Remove a binding. Returns 1 if a binding was removed, 0 if `name`
+// wasn't registered.
+unregister(name: string) -> int {
+    return aether_actor_unregister(name)
+}
+
+// 1 if `name` is bound, 0 otherwise.
+is_registered(name: string) -> int {
+    return aether_actor_is_registered(name)
+}
+
+// Number of currently-registered names. Mostly for tests / debug.
+registry_size() -> int {
+    return aether_actor_registry_size()
+}
+
+// Wipe all bindings. Tests use this for isolation.
+registry_clear() {
+    aether_actor_registry_clear()
+}

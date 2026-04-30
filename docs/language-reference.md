@@ -205,6 +205,15 @@ main() {
 
 Constants are emitted as `#define` in generated C — zero runtime cost.
 
+**The RHS of `const` must be a compile-time constant expression.** Allowed forms: literals (int / float / bool / string / null), other consts referenced by name, unary / binary expressions over those, and string interpolation where every interpolated value is itself const. **Function calls are rejected** at typecheck time:
+
+```aether
+const G_BUF = malloc(64)        // ERROR: const initializer must be a
+                                 // compile-time constant expression
+```
+
+The reason is `const`'s substitution-at-each-use semantics: the compiler inlines the RHS at every reference rather than storing the value. For literal RHSs this is fine; for `make_thing()` it would re-call the function on every reference, allocating fresh state. If you need a process-global heap object initialised once and read everywhere, use [`std.config`](stdlib-reference.md#stdconfig--stringstring-kv) for string state or [`std.actors`](stdlib-reference.md#stdactors--name--actor_ref-registry) for actor references — both are described in the stdlib reference.
+
 ---
 
 ## Functions

@@ -1,0 +1,155 @@
+// Regression test for the std.io fd surface — Section 1 of
+// nuther-ask-of-aether-team.md. Round-trip a payload through
+// open_write / write_n / close + open_read / read_n / read_line /
+// close and check the bytes landed correctly.
+//
+// Note on binary content: the test uses ASCII payloads only. NUL-
+// bearing inputs through `fd_write_n` would hit the well-known
+// length-clamp hazard at the extern boundary (where the AetherString
+// header gets stripped by the #297 auto-unwrap, and `string.length`
+// fall-throughs to strlen at the C side). The fd_read_n side IS
+// binary-safe (returns a refcounted AetherString carrying the
+// explicit byte count); writing binary bytes from Aether-side
+// requires either the bytes module or a length-aware string builder.
+//
+// What this test guards:
+//   1. fd_open_write returns (fd, "") for a writable path
+//   2. fd_write_n returns 0 on success and the bytes hit disk
+//   3. fd_open_read for the same path returns (fd, "")
+//   4. fd_read_line strips trailing '\n' and round-trips
+//   5. fd_read_n round-trips the exact byte count
+//   6. Clean EOF returns count=0 / err="" for read_n; ("", "") for read_line
+//   7. fd_close returns "" on a valid fd
+//   8. Error paths: nonexistent path returns (-1, "..."); invalid fd
+//      returns count=0 / non-empty err
+
+import std.io
+import std.string
+
+extern exit(code: int)
+
+main() {
+    println("=== std.io fd surface regression ===")
+
+    tmp = "/tmp/aether_fd_test.txt"
+
+    // Case 1: open_write + write_n + close.
+    fd, err = io.fd_open_write(tmp)
+    if err != "" {
+        println("FAIL 1: fd_open_write returned err='${err}'")
+        exit(1)
+    }
+    if fd < 0 {
+        println("FAIL 1: fd_open_write returned fd=${fd}, expected >= 0")
+        exit(1)
+    }
+
+    // ASCII payload; safe to take string.length and pass through.
+    payload = "first-line\nsecond-line\nthe-rest-is-here\n"
+    plen = string.length(payload)
+    rc = io.fd_write_n(fd, payload, plen)
+    if rc != 0 {
+        println("FAIL 1: fd_write_n returned ${rc}")
+        exit(1)
+    }
+    cerr = io.fd_close(fd)
+    if cerr != "" {
+        println("FAIL 1: fd_close returned err='${cerr}'")
+        exit(1)
+    }
+    println("  PASS 1: open_write + write_n + close round-trip")
+
+    // Case 2: open_read.
+    rfd, rerr = io.fd_open_read(tmp)
+    if rerr != "" {
+        println("FAIL 2: fd_open_read returned err='${rerr}'")
+        exit(1)
+    }
+    println("  PASS 2: open_read returns valid fd")
+
+    // Case 3: read_line strips '\n' and round-trips two lines.
+    line1, lerr1 = io.fd_read_line(rfd)
+    if lerr1 != "" {
+        println("FAIL 3: read_line line 1 err='${lerr1}'")
+        exit(1)
+    }
+    if line1 != "first-line" {
+        println("FAIL 3: line 1='${line1}', expected 'first-line'")
+        exit(1)
+    }
+    line2, lerr2 = io.fd_read_line(rfd)
+    if lerr2 != "" {
+        println("FAIL 3: read_line line 2 err='${lerr2}'")
+        exit(1)
+    }
+    if line2 != "second-line" {
+        println("FAIL 3: line 2='${line2}', expected 'second-line'")
+        exit(1)
+    }
+    println("  PASS 3: read_line strips '\\n' and round-trips")
+
+    // Case 4: read_n for the remaining content. "the-rest-is-here\n"
+    // is 17 bytes — verify count matches.
+    bytes, count, berr = io.fd_read_n(rfd, 17)
+    if berr != "" {
+        println("FAIL 4: fd_read_n err='${berr}'")
+        exit(1)
+    }
+    if count != 17 {
+        println("FAIL 4: read count=${count}, expected 17")
+        exit(1)
+    }
+    println("  PASS 4: read_n reads ${count} bytes")
+
+    // Case 5: clean EOF — read_n returns count=0 / err="".
+    eof_b, eof_c, eof_e = io.fd_read_n(rfd, 100)
+    if eof_e != "" {
+        println("FAIL 5: clean EOF read_n err='${eof_e}', expected ''")
+        exit(1)
+    }
+    if eof_c != 0 {
+        println("FAIL 5: clean EOF read_n count=${eof_c}, expected 0")
+        exit(1)
+    }
+    println("  PASS 5: read_n on clean EOF returns count=0")
+
+    // Case 6: read_line on clean EOF returns ("", "").
+    eof_line, eof_lerr = io.fd_read_line(rfd)
+    if eof_lerr != "" {
+        println("FAIL 6: clean EOF read_line err='${eof_lerr}', expected ''")
+        exit(1)
+    }
+    println("  PASS 6: read_line on clean EOF returns ('', '')")
+
+    cerr2 = io.fd_close(rfd)
+    if cerr2 != "" {
+        println("FAIL 6: read-side fd_close returned err='${cerr2}'")
+        exit(1)
+    }
+
+    // Case 7: error path — nonexistent file.
+    bad_fd, bad_err = io.fd_open_read("/nonexistent/path/aether_fd_test_xyz")
+    if bad_err == "" {
+        println("FAIL 7: open of nonexistent path should have erred")
+        exit(1)
+    }
+    if bad_fd != -1 {
+        println("FAIL 7: nonexistent open returned fd=${bad_fd}, expected -1")
+        exit(1)
+    }
+    println("  PASS 7: nonexistent path returns (-1, '...')")
+
+    // Case 8: error path — invalid fd for read.
+    inv_b, inv_c, inv_e = io.fd_read_n(-1, 10)
+    if inv_e == "" {
+        println("FAIL 8: read_n(-1, 10) should have erred")
+        exit(1)
+    }
+    if inv_c != 0 {
+        println("FAIL 8: read_n(-1, 10) count=${inv_c}, expected 0")
+        exit(1)
+    }
+    println("  PASS 8: invalid fd returns count=0 with non-empty err")
+
+    println("=== All cases passed ===")
+}
