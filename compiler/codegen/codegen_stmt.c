@@ -399,8 +399,26 @@ static int try_emit_series_collapse(CodeGenerator* gen, ASTNode* while_node) {
 }
 
 static void generate_list_pattern_condition(CodeGenerator* gen, ASTNode* pattern,
-                                            const char* len_name) {
+                                            const char* len_name,
+                                            int is_seq_match) {
     if (!pattern) return;
+
+    if (is_seq_match) {
+        /* StringSeq cons cell. Empty list = NULL pointer; non-empty = any
+         * non-NULL cell (which by construction has at least one head and
+         * a tail — never partially-initialised, see string_seq_cons). */
+        if (pattern->type == AST_PATTERN_LIST && pattern->child_count == 0) {
+            fprintf(gen->output, "%s == NULL", len_name);
+        } else if (pattern->type == AST_PATTERN_LIST) {
+            /* Fixed-arity list pattern `[a, b, c]` against a StringSeq —
+             * compare cached length so an O(1) test is enough. */
+            fprintf(gen->output, "%s != NULL && %s->length == %d",
+                    len_name, len_name, pattern->child_count);
+        } else if (pattern->type == AST_PATTERN_CONS) {
+            fprintf(gen->output, "%s != NULL", len_name);
+        }
+        return;
+    }
 
     if (pattern->type == AST_PATTERN_LIST) {
         if (pattern->child_count == 0) {
@@ -435,8 +453,50 @@ static int pattern_needs_array(ASTNode* pattern, ASTNode* body) {
 
 static void generate_list_pattern_bindings(CodeGenerator* gen, ASTNode* pattern,
                                            ASTNode* match_expr, const char* len_name,
-                                           ASTNode* body) {
+                                           ASTNode* body, int is_seq_match) {
     if (!pattern) return;
+
+    if (is_seq_match) {
+        /* StringSeq cons-cell bindings. The seq pointer is already in
+         * scope as `len_name` (which holds the StringSeq* itself for
+         * the seq-match path). For `[h|t]` we read s->head and
+         * s->tail; for `[a, b, c]` (fixed-arity over a seq) we walk
+         * the cells. Skipped per-binding when the body never
+         * references the binding name — same `pattern_needs_array`
+         * optimisation the int-array path uses. */
+        if (pattern->type == AST_PATTERN_CONS && pattern->child_count >= 2) {
+            ASTNode* head = pattern->children[0];
+            ASTNode* tail = pattern->children[1];
+            if (head && head->type == AST_PATTERN_VARIABLE && head->value) {
+                if (expr_references_var(body, head->value)) {
+                    print_line(gen, "const char* %s = %s->head;",
+                               head->value, len_name);
+                }
+            }
+            if (tail && tail->type == AST_PATTERN_VARIABLE && tail->value) {
+                if (expr_references_var(body, tail->value)) {
+                    print_line(gen, "StringSeq* %s = %s->tail;",
+                               tail->value, len_name);
+                }
+            }
+        } else if (pattern->type == AST_PATTERN_LIST && pattern->child_count > 0) {
+            /* Fixed-arity over a seq — walk i cells. Cheap because we
+             * already know the length matches (see the condition
+             * emitted above), so no per-iteration NULL guard. */
+            for (int i = 0; i < pattern->child_count; i++) {
+                ASTNode* elem = pattern->children[i];
+                if (elem && elem->type == AST_PATTERN_VARIABLE && elem->value &&
+                    expr_references_var(body, elem->value)) {
+                    print_indent(gen);
+                    fprintf(gen->output, "const char* %s = ", elem->value);
+                    fprintf(gen->output, "%s", len_name);
+                    for (int j = 0; j < i; j++) fprintf(gen->output, "->tail");
+                    fprintf(gen->output, "->head;\n");
+                }
+            }
+        }
+        return;
+    }
 
     // Only declare the array pointer if this arm actually uses element bindings
     int needs_arr = pattern_needs_array(pattern, body);
@@ -1739,6 +1799,16 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
 
                 // Check if any arm uses list patterns
                 int uses_list_patterns = has_list_patterns(stmt);
+                /* When the matched expression is *StringSeq, the
+                 * "length variable" is actually a pointer to the
+                 * cons cell — we walk it via NULL-checks and
+                 * head/tail dereferences instead of array
+                 * slicing. The flag below toggles between the
+                 * two lowerings end-to-end. See
+                 * std/collections/aether_stringseq.h for the
+                 * cell layout. */
+                int is_seq_match = uses_list_patterns &&
+                    is_string_seq_ptr_type(match_expr->node_type);
                 char len_name[64] = "_match_len";
 
                 // Wrap match in a block and store the match expression in a temp
@@ -1747,7 +1817,13 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                 indent(gen);
 
                 // If using list patterns, generate length variable for conditions
-                if (uses_list_patterns) {
+                if (is_seq_match) {
+                    snprintf(len_name, sizeof(len_name), "_match_seq");
+                    print_indent(gen);
+                    fprintf(gen->output, "StringSeq* %s = ", len_name);
+                    generate_expression(gen, match_expr);
+                    fprintf(gen->output, ";\n");
+                } else if (uses_list_patterns) {
                     print_indent(gen);
                     fprintf(gen->output, "int %s = ", len_name);
                     generate_expression(gen, match_expr);
@@ -1808,7 +1884,7 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                             print_indent(gen);
                             fprintf(gen->output, "if (");
                         }
-                        generate_list_pattern_condition(gen, pattern, len_name);
+                        generate_list_pattern_condition(gen, pattern, len_name, is_seq_match);
                         fprintf(gen->output, ") {\n");
                     } else {
                         // Regular literal/expression pattern
@@ -1837,7 +1913,7 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
 
                     // Generate list pattern bindings if needed
                     if (is_list_pattern) {
-                        generate_list_pattern_bindings(gen, pattern, match_expr, len_name, result);
+                        generate_list_pattern_bindings(gen, pattern, match_expr, len_name, result, is_seq_match);
                     }
 
                     if (result->type == AST_BLOCK) {

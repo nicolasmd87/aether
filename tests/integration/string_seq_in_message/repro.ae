@@ -1,0 +1,55 @@
+// Integration repro: runtime-built `*StringSeq` in an actor message
+// field, sender uses `string.split_to_seq` to build the cons chain
+// from a CSV input, receiver pattern-matches and walks. This is the
+// shape the svn-aether port asked for — `sites: *StringSeq` in a
+// message-handler payload, replacing the `sites: ptr` workaround
+// where count had to be plumbed separately.
+//
+// Pass: program prints each site on its own line then "ok".
+
+import std.string
+
+extern exit(code: int)
+
+message Analyze {
+    sites: *StringSeq
+    interval: int
+}
+
+actor SiteWorker {
+    state ok = 0
+    receive {
+        Analyze(sites, interval) -> {
+            // Walk recursively. Pattern-match `[h|t]` decomposes
+            // the cons cell with `h: string` and `t: *StringSeq`,
+            // so the recursive call composes naturally.
+            walk(sites)
+            // The seq is owned by the message wire — the receive
+            // arm's binding is borrowed for the duration of the
+            // handler. Don't free here; the actor framework
+            // releases the message when the handler returns.
+            ok = 1
+            println("ok")
+            exit(0)
+        }
+    }
+}
+
+walk(s: *StringSeq) {
+    match s {
+        []      -> { /* end of list */ }
+        [h | t] -> {
+            println(h)
+            walk(t)
+        }
+    }
+}
+
+main() {
+    w = spawn(SiteWorker())
+    parts = string.split_to_seq("alpha.example.com,beta.example.com,gamma.example.com", ",")
+    w ! Analyze { sites: parts, interval: 5 }
+    sleep(2000)
+    println("FAIL: receiver never confirmed")
+    exit(1)
+}

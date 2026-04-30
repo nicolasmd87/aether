@@ -1,0 +1,88 @@
+// Sending a `*StringSeq` (cons-cell list of strings) across an
+// actor message. The natural Erlang/Elixir-shape for a runtime-
+// built sequence — no `count` companion field required, length is
+// cached per cell, and the receiver pattern-matches `[]` / `[h|t]`
+// with proper types.
+//
+// Compare this with `examples/actors/message-with-arrays.ae`,
+// which uses `string[]` — that's the static-literal shape (count
+// known at compile time, stored as a paired field). For runtime
+// arrays from things like `string.split_to_seq`, reach for
+// `*StringSeq` instead.
+//
+// Run with: ae run examples/actors/message-with-string-seq.ae
+
+import std.string
+
+extern exit(code: int)
+
+// Message field types in receive arms get the proper Aether types:
+//   - sites is *StringSeq (recursive walks compose)
+//   - poller_id is int (scalar)
+message AnalyzeBatch {
+    sites: *StringSeq
+    poller_id: int
+}
+
+actor PollWorker {
+    state processed = 0
+
+    receive {
+        AnalyzeBatch(sites, poller_id) -> {
+            println("poller-${poller_id}: starting batch")
+            // Walk + count using only the seq surface — no `count`
+            // companion field needed.
+            n = run_batch(sites, 0)
+            processed = n
+            println("poller-${poller_id}: processed ${n} sites")
+            exit(0)
+        }
+    }
+}
+
+// Tail-recursive walk: pattern-match destructures the cons cell;
+// the [h|t] arm binds head as `string` and tail as `*StringSeq`,
+// so the recursive call type-checks and the int counter accumulates
+// in the match-as-expression position.
+run_batch(s: *StringSeq, count: int) -> int {
+    match s {
+        []      -> {
+            return count
+        }
+        [h | t] -> {
+            println("  visiting ${h}")
+            return run_batch(t, count + 1)
+        }
+    }
+    return count
+}
+
+main() {
+    w = spawn(PollWorker())
+
+    // Two equally-valid ways to build the *StringSeq sent in the
+    // message:
+    //
+    //   (a) array-literal context-disambiguation (compile-time),
+    //   (b) string.split_to_seq (runtime input).
+    //
+    // (a) — same `[…]` syntax string[] uses; the typechecker sees
+    //       the target field is *StringSeq and the codegen emits
+    //       a right-fold cons chain instead of a static C array.
+    w ! AnalyzeBatch {
+        sites: ["alpha.example.com", "beta.example.com", "gamma.example.com"],
+        poller_id: 1
+    }
+
+    // (b) is the more common shape — runtime-derived input:
+    //
+    //     csv = read_config_value("sites")
+    //     parts = string.split_to_seq(csv, ",")
+    //     w ! AnalyzeBatch { sites: parts, poller_id: 2 }
+    //
+    // Either way the receiver code stays the same.
+
+    sleep(2000)
+    println("FAIL: receiver never confirmed")
+    exit(1)
+}

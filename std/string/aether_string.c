@@ -476,6 +476,47 @@ void string_array_free(AetherStringArray* arr) {
     free(arr);
 }
 
+/* string_split_to_seq — sibling of string_split that materialises the
+ * result as a cons-cell *StringSeq instead of an AetherStringArray*.
+ *
+ * Implementation note: we delegate to `string_split` and then
+ * re-shape via the StringSeq builder. The double-allocation is
+ * intentional for the V1 surface — keeps the split logic in one
+ * place, no risk of behaviour drift between the two return shapes.
+ * If the cost shows up in profiles later, fuse the walk with cell
+ * allocation in a follow-up.
+ *
+ * The layering here is asymmetric: std/string can call into
+ * std/collections (it's a higher layer in the Makefile order), but
+ * not the other way round. We declare the StringSeq surface inline
+ * to avoid a #include from this header that downstream tools
+ * (header compatibility check, MSVC build) would have to resolve. */
+struct StringSeq;  /* forward decl — full def in std/collections/aether_stringseq.h */
+extern struct StringSeq* string_seq_cons(const char* head, struct StringSeq* tail);
+extern void string_seq_free(struct StringSeq* s);
+
+void* string_split_to_seq(const void* str, const char* delimiter) {
+    AetherStringArray* arr = string_split(str, delimiter);
+    if (!arr) return NULL;
+    /* Build back-to-front so each cons is O(1). cons retains its
+     * head and tail; we drop the previous local tail ref so only
+     * the new cell holds it. */
+    struct StringSeq* head = NULL;
+    for (size_t i = arr->count; i > 0; i--) {
+        struct StringSeq* cell = string_seq_cons((const char*)arr->strings[i - 1], head);
+        if (!cell) {
+            string_seq_free(head);
+            string_array_free(arr);
+            return NULL;
+        }
+        string_seq_free(head); /* drop old local; cell owns the retained ref */
+        head = cell;
+    }
+    string_array_free(arr); /* releases each piece's array-side ref;
+                             * the seq cells retained their own. */
+    return head;
+}
+
 // Conversion
 const char* string_to_cstr(const void* str) {
     if (!str) return "";

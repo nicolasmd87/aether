@@ -1,0 +1,61 @@
+// Erlang/Elixir-shaped cons-cell list of strings.
+//
+// `*StringSeq` is the Aether sequence type for runtime-built lists
+// of strings. Empty list is the NULL pointer. Each cell carries a
+// CACHED length, so length() is O(1). Cells are reference-counted
+// to allow structural sharing.
+//
+// Use it when:
+//   - you don't know the length at compile time (split results,
+//     per-request work queues, message payloads),
+//   - you want pattern-match destructuring on head + tail,
+//   - you want to send the sequence across an actor boundary
+//     without plumbing a separate `count` field.
+//
+// Run with: ae run examples/basics/string-seq-walk.ae
+
+import std.string
+
+extern exit(code: int)
+
+main() {
+    // ---- Build a seq with cons. Empty is the NULL pointer. ----
+    s = string.seq_empty()
+    s = string.seq_cons("gamma", s)
+    s = string.seq_cons("beta", s)
+    s = string.seq_cons("alpha", s)
+
+    println("length=${string.seq_length(s)}")          // 3 (O(1) cached)
+    println("first=${string.seq_head(s)}")              // alpha
+
+    // ---- Pattern-match walk. [] / [h|t] arms dispatch on the cell. ----
+    walk(s)
+
+    // Free walks the spine iteratively — no recursion limit on
+    // deep lists. Each cell's refcount drops by 1; cells whose
+    // refcount hits 0 release their head and free.
+    string.seq_free(s)
+
+    // ---- Build directly from string.split_to_seq. ----
+    csv = "alpha.example.com,beta.example.com,gamma.example.com"
+    sites = string.split_to_seq(csv, ",")
+    println("split count=${string.seq_length(sites)}")
+    walk(sites)
+    string.seq_free(sites)
+
+    exit(0)
+}
+
+walk(s: *StringSeq) {
+    // The matched expression's type drives the codegen: a *StringSeq
+    // gets a NULL-checking pointer walk, where `[h|t]` binds
+    // `h: string = cell->head` and `t: *StringSeq = cell->tail`.
+    // Recursive walks compose because tail is properly typed.
+    match s {
+        []      -> { /* end of list */ }
+        [h | t] -> {
+            println("  ${h}")
+            walk(t)
+        }
+    }
+}

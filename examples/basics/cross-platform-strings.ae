@@ -33,12 +33,21 @@ main() {
 
     csv = string.new("alpha,beta,gamma,delta")
     defer string.release(csv)
+
+    // Two ways to consume a runtime split: the legacy AetherStringArray
+    // shape (returned by string.split), and the cons-cell *StringSeq
+    // shape (returned by string.split_to_seq). The array shape uses
+    // O(1) integer indexing; the seq shape uses O(1) head/tail/length
+    // and pattern-matches with [h | t]. Pick by access pattern, not
+    // by performance — both are O(n) memory, both are equally fast
+    // at element reads.
+
     parts = string.split(csv, ",")
     defer string.array_free(parts)
 
     print("\nSplit \"")
     print(string.to_cstr(csv))
-    print("\" by comma:\n")
+    print("\" by comma (string.split → AetherStringArray):\n")
     count = string.array_size(parts)
     for (i = 0; i < count; i = i + 1) {
         p = string.array_get(parts, i)
@@ -47,6 +56,12 @@ main() {
         print("] ")
         println(string.to_cstr(p))
     }
+
+    parts_seq = string.split_to_seq(csv, ",")
+    defer string.seq_free(parts_seq)
+
+    print("\nSame split as a cons-cell *StringSeq (string.split_to_seq):\n")
+    walk_seq(parts_seq, 0)
 
     print("\nEscape sequences:\n")
     print("  Tab:\t\tworks\n")
@@ -61,4 +76,17 @@ main() {
     print("\nInterpolation: Hello ${name} in ${n}!\n")
 
     println("\n=== Done ===")
+}
+
+walk_seq(s: *StringSeq, idx: int) {
+    match s {
+        []      -> { /* end */ }
+        [h | t] -> {
+            print("  [")
+            print(idx)
+            print("] ")
+            println(h)
+            walk_seq(t, idx + 1)
+        }
+    }
 }

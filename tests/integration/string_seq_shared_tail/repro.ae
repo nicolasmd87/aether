@@ -1,0 +1,96 @@
+// Integration repro: structural sharing of a tail across two
+// independently-rooted *StringSeq lists. Frees one of them, verifies
+// the other is still walkable. Exercises the refcount path of
+// string.seq_free and the explicit string.seq_retain hook.
+//
+// Layout:
+//
+//                        ┌────────────────────┐
+//                        │  shared = [y, z]   │
+//                        └────────────────────┘
+//                          ↑                ↑
+//                          │ retain         │ retain
+//                          │                │
+//                ┌─────────┴──┐       ┌─────┴───────┐
+//                │ a = [a|y,z]│       │ b = [b|y,z] │
+//                └────────────┘       └─────────────┘
+//
+// After freeing `a`, the shared `[y,z]` cells must stay alive
+// because `b` still owns a ref. Freeing `b` then drops the last
+// reference and the spine collapses cleanly.
+//
+// Pass: program prints "ok".
+
+import std.string
+
+extern exit(code: int)
+
+main() {
+    // Build a shared tail and two parents that retain it.
+    shared = string.seq_cons("y", string.seq_cons("z", string.seq_empty()))
+
+    a = string.seq_cons("a", string.seq_retain(shared))
+    b = string.seq_cons("b", string.seq_retain(shared))
+
+    // Drop our local handle to `shared`. Both `a` and `b` still
+    // hold a ref, so the cells stay alive.
+    string.seq_free(shared)
+
+    // Both should report length 3 (head + shared 2-cell tail).
+    if string.seq_length(a) != 3 {
+        println("FAIL: a.length=${string.seq_length(a)}, want 3")
+        exit(1)
+    }
+    if string.seq_length(b) != 3 {
+        println("FAIL: b.length=${string.seq_length(b)}, want 3")
+        exit(1)
+    }
+
+    // Verify both heads + shared tails through walk_join.
+    a_str = walk_join(a, "")
+    b_str = walk_join(b, "")
+    if string.equals(a_str, "a,y,z") != 1 {
+        println("FAIL: a walks to '${a_str}', want a,y,z")
+        exit(1)
+    }
+    if string.equals(b_str, "b,y,z") != 1 {
+        println("FAIL: b walks to '${b_str}', want b,y,z")
+        exit(1)
+    }
+
+    // Free `a`. The shared `[y, z]` cells must NOT free (b still owns).
+    string.seq_free(a)
+
+    // `b` must still be intact and walkable.
+    if string.seq_length(b) != 3 {
+        println("FAIL: after freeing a, b.length=${string.seq_length(b)}, want 3")
+        exit(1)
+    }
+    b_after = walk_join(b, "")
+    if string.equals(b_after, "b,y,z") != 1 {
+        println("FAIL: after freeing a, b walks to ${b_after}")
+        exit(1)
+    }
+
+    // Now free `b` — last ref drops, the whole spine collapses.
+    string.seq_free(b)
+
+    println("ok")
+    exit(0)
+}
+
+walk_join(s: *StringSeq, acc: string) -> string {
+    match s {
+        []      -> {
+            return acc
+        }
+        [h | t] -> {
+            sep = ""
+            if string.length(acc) > 0 {
+                sep = ","
+            }
+            return walk_join(t, string.concat(string.concat(acc, sep), h))
+        }
+    }
+    return acc
+}

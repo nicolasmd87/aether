@@ -1385,6 +1385,19 @@ void emit_message_field_init(CodeGenerator* gen, MessageFieldDef* fdef, ASTNode*
         // fine for synchronous ask/reply where the sender stays alive.
         fprintf(gen->output, "(%s[])", fdef->element_c_type);
     }
+    /* Cons-cell context: when the target field is `*StringSeq` and the
+     * RHS is an array literal, stamp the literal's node_type so the
+     * AST_ARRAY_LITERAL codegen case takes the cons-chain branch
+     * rather than the static-array one. Same disambiguation rule as
+     * variable declarations — keeps the user-visible syntax consistent
+     * across all literal-target contexts. See typechecker.c
+     * (AST_VARIABLE_DECLARATION) and codegen_expr.c
+     * (AST_ARRAY_LITERAL) for the matching code paths. */
+    if (rhs && rhs->type == AST_ARRAY_LITERAL && fdef && fdef->c_type &&
+        strcmp(fdef->c_type, "StringSeq*") == 0) {
+        if (rhs->node_type) free_type(rhs->node_type);
+        rhs->node_type = make_string_seq_ptr_type();
+    }
     generate_expression(gen, rhs);
 }
 
@@ -2680,6 +2693,28 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
             break;
 
         case AST_ARRAY_LITERAL:
+            /* Context-sensitive literal: when the typechecker stamped
+             * `*StringSeq` on this literal (LHS of a variable decl
+             * typed `*StringSeq`), emit a right-fold cons chain
+             * instead of a static array initialiser. `[]` lowers to
+             * `string_seq_empty()` (NULL); `[a, b, c]` lowers to
+             * `string_seq_cons("a", string_seq_cons("b", string_seq_cons("c", string_seq_empty())))`.
+             * Same source syntax, two C lowerings — see typechecker.c
+             * AST_VARIABLE_DECLARATION case for the type-stamping
+             * branch and docs/sequences.md § Literal disambiguation
+             * for the user-visible rule. */
+            if (is_string_seq_ptr_type(expr->node_type)) {
+                for (int i = 0; i < expr->child_count; i++) {
+                    fprintf(gen->output, "string_seq_cons(");
+                    generate_expression(gen, expr->children[i]);
+                    fprintf(gen->output, ", ");
+                }
+                fprintf(gen->output, "string_seq_empty()");
+                for (int i = 0; i < expr->child_count; i++) {
+                    fprintf(gen->output, ")");
+                }
+                break;
+            }
             fprintf(gen->output, "{");
             for (int i = 0; i < expr->child_count; i++) {
                 if (i > 0) fprintf(gen->output, ", ");
