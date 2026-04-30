@@ -24,7 +24,7 @@ EXT_DIR_NAME="${EXT_BASENAME}-${VERSION}"
 # here too — silently skipping it shipped a broken extension before.
 copy_extension_assets() {
     local target_dir="$1"
-    mkdir -p "$target_dir/themes"
+    mkdir -p "$target_dir/themes" "$target_dir/out"
 
     # Manifest + grammar + language config (always required).
     cp "$SCRIPT_DIR/package.json"                 "$target_dir/"
@@ -45,6 +45,18 @@ copy_extension_assets() {
     # README — VS Code's extension panel displays this when the user
     # clicks the extension entry.
     [ -f "$SCRIPT_DIR/README.md" ] && cp "$SCRIPT_DIR/README.md" "$target_dir/"
+
+    # LSP client bundle. The repo ships a pre-built `out/extension.js`
+    # so end users don't need node/npm to install. If the bundle is
+    # missing (someone wiped `out/` without rebuilding) we still copy
+    # everything else and warn — the extension then falls back to
+    # syntax-only mode, which is degraded but not broken.
+    if [ -f "$SCRIPT_DIR/out/extension.js" ]; then
+        cp "$SCRIPT_DIR/out/extension.js" "$target_dir/out/"
+    else
+        echo "  Warning: out/extension.js not found; LSP client won't auto-start." >&2
+        echo "           Build it with: cd $SCRIPT_DIR && npm install && npm run build" >&2
+    fi
 }
 
 install_extension() {
@@ -56,10 +68,19 @@ install_extension() {
 
     # Remove any prior install of the same extension family (any
     # version) so stale assets from older releases don't shadow new
-    # ones. Bounded to our own basename — never touch unrelated
+    # ones. Two naming patterns to catch:
+    #   1. `aether-language-<version>` — folders this script produces.
+    #   2. `aether.aether-language-<version>` — folders the VS Code
+    #      Marketplace produces (publisher-id prefixed). Past
+    #      marketplace installs co-existing with side-loaded ones
+    #      caused exactly this "I installed but nothing changed"
+    #      symptom — VS Code prefers the publisher-prefixed flavour.
+    # Bounded to the Aether-language basename — never touch unrelated
     # extension folders.
     if [ -d "$extensions_root" ]; then
-        find "$extensions_root" -maxdepth 1 -type d -name "${EXT_BASENAME}-*" -exec rm -rf {} + 2>/dev/null || true
+        find "$extensions_root" -maxdepth 1 -type d \
+            \( -name "${EXT_BASENAME}-*" -o -name "aether.${EXT_BASENAME}-*" \) \
+            -exec rm -rf {} + 2>/dev/null || true
     fi
 
     copy_extension_assets "${extensions_root}/${EXT_DIR_NAME}"
@@ -73,10 +94,21 @@ install_extension() {
 # Resolve install target. Both editors keep their extensions under
 # ~/.<editor>/extensions/. Cursor wins if both are installed, since it
 # inherits VS Code's extension protocol and is what most Aether devs
-# run today; pass an explicit override via $1 to install elsewhere.
+# run today; pass an explicit override via $1 to install elsewhere
+# (root install.sh delegates here with the editor's extensions dir).
 TARGET_OVERRIDE="${1:-}"
 if [ -n "$TARGET_OVERRIDE" ]; then
-    install_extension "$TARGET_OVERRIDE" "custom path"
+    # Infer the editor name from the override path so the success
+    # message reads "Restart Cursor" / "Restart VS Code" rather than
+    # the generic "Restart custom path" the script used to print.
+    case "$TARGET_OVERRIDE" in
+        *.cursor/extensions*)        target_label="Cursor" ;;
+        *.vscode/extensions*)        target_label="VS Code" ;;
+        *.vscode-insiders/extensions*) target_label="VS Code Insiders" ;;
+        *.cursor-server/extensions*) target_label="Cursor (remote)" ;;
+        *)                           target_label="your editor" ;;
+    esac
+    install_extension "$TARGET_OVERRIDE" "$target_label"
 elif [ -d "$HOME/.cursor/extensions" ]; then
     install_extension "$HOME/.cursor/extensions" "Cursor"
 elif [ -d "$HOME/.vscode/extensions" ]; then
