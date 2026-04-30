@@ -23,7 +23,8 @@ exports (
     string_try_float, string_get_float, string_try_double, string_get_double,
     to_int, to_long, to_float, to_double,
     strip_prefix, copy,
-    string_format_list, format
+    string_format_list, format,
+    string_glob_match_raw, glob_match, glob_match_pathname
 )
 
 // String creation
@@ -282,4 +283,33 @@ extern string_format_list(fmt: string, args: ptr) -> ptr
 
 format(fmt: string, args: ptr) -> string {
     return string_format_list(fmt, args)
+}
+
+// Glob-pattern matching: does `pattern` match `s`?
+// Aether-side equivalent of POSIX fnmatch(3) — string-pattern
+// matching, distinct from `fs.glob` (which enumerates files on disk).
+//
+// Pattern syntax:
+//   `*`      — zero or more characters
+//   `?`      — exactly one character
+//   `[abc]`  — any of the listed characters (char class)
+//   `[a-z]`  — character range
+//   `[!abc]` — negated class (also `[^abc]`)
+//   `\*` / `\?` — literal `*` / `?`
+//
+// Returns 1 on match, 0 on no-match, -1 on glob-syntax error
+// (unmatched bracket). Section A.2 of aether_changes_needed.md.
+//
+// Use `glob_match` for the plain form (svn:ignore matching, message
+// routing). Use `glob_match_pathname` when `*` and `?` should NOT
+// cross a `/` separator — the right form for matching path patterns
+// like `src/*.c` (matches `src/foo.c` but not `src/sub/foo.c`).
+extern string_glob_match_raw(pattern: string, s: string, flags: int) -> int
+
+glob_match(pattern: string, s: string) -> int {
+    return string_glob_match_raw(pattern, s, 0)
+}
+
+glob_match_pathname(pattern: string, s: string) -> int {
+    return string_glob_match_raw(pattern, s, 1)
 }

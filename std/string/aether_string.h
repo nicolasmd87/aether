@@ -190,4 +190,22 @@ AetherString* string_format(const char* fmt, ...);
 // are literal braces. Returns a refcounted AetherString. Closes #272.
 AetherString* string_format_list(const char* fmt, void* args);
 
+// Glob-pattern matching: does `pattern` match `s`? Aether-side
+// equivalent of POSIX fnmatch(3). Pattern syntax:
+//   - `*`          — zero or more characters
+//   - `?`          — exactly one character
+//   - `[abc]`      — any of the listed characters (char class)
+//   - `[a-z]`      — character range
+//   - `[!abc]`     — negated class (also `[^abc]`)
+//   - `\*` / `\?`  — literal `*` / `?`
+// Used for svn:ignore matching and similar string-pattern globs —
+// distinct from `fs.glob` (which enumerates matching files on disk).
+//
+// `flags` mirrors the libc fnmatch flag word; pass 0 for the plain
+// form, or 1 (FNM_PATHNAME on POSIX) for the path-aware form where
+// `*` / `?` / `[…]` do not match `/`. Returns 1 on match, 0 on
+// no-match, -1 on glob-syntax error (unmatched bracket).
+// Section A.2 of aether_changes_needed.md.
+int string_glob_match_raw(const char* pattern, const char* s, int flags);
+
 #endif // AETHER_STRING_H

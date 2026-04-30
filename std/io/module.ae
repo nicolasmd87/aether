@@ -9,8 +9,10 @@ exports (
     io_read_file_raw, io_write_file_raw, io_append_file_raw, io_file_exists,
     io_delete_file_raw, io_file_info_raw, io_file_info_free,
     io_getenv, io_setenv_raw, io_unsetenv_raw,
+    io_stderr_write, io_stdout_write,
     read_file, write_file, append_file, delete_file, file_info,
-    setenv, unsetenv
+    setenv, unsetenv,
+    stderr_write, stdout_write
 )
 
 // Console I/O — infallible in practice
@@ -34,6 +36,13 @@ extern io_file_info_free(info: ptr)
 extern io_getenv(name: string) -> string
 extern io_setenv_raw(name: string, value: string) -> int
 extern io_unsetenv_raw(name: string) -> int
+
+// Unbuffered fd-1 / fd-2 writes — bypass stdio buffering so output is
+// guaranteed on the wire before the process exits / crashes / aborts.
+// Returns bytes written, -1 on error. Loops on partial writes and
+// retries on EINTR.
+extern io_stderr_write(data: string, length: int) -> int
+extern io_stdout_write(data: string, length: int) -> int
 
 // string_concat for owned-copy duplication
 extern string_concat(a: string, b: string) -> string
@@ -105,4 +114,25 @@ unsetenv(name: string) -> {
         return "cannot unset env var"
     }
     return ""
+}
+
+// Unbuffered write to stderr (fd 2). `data` may contain NULs; pass
+// the explicit byte count via `length`. Returns the number of bytes
+// written or -1 on error. Reach for this in crash-trace paths
+// where println's buffering would lose output.
+//
+//     io.stderr_write("PANIC: ${msg}\n", string.length(msg) + 8)
+//
+// Distinct from `println` (line-buffered, lost on abort) and
+// `eprintln` (block-buffered when stderr is piped). Section A.3 of
+// aether_changes_needed.md.
+stderr_write(data: string, length: int) -> int {
+    return io_stderr_write(data, length)
+}
+
+// Unbuffered write to stdout (fd 1). Same shape as stderr_write.
+// Useful for shell-pipe-friendly tools that need to flush each
+// record before the next stage reads.
+stdout_write(data: string, length: int) -> int {
+    return io_stdout_write(data, length)
 }

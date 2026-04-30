@@ -19,20 +19,40 @@ void io_file_info_free(FileInfo* i) { (void)i; }
 char* io_getenv(const char* n) { (void)n; return NULL; }
 int io_setenv_raw(const char* n, const char* v) { (void)n; (void)v; return 0; }
 int io_unsetenv_raw(const char* n) { (void)n; return 0; }
+int io_stderr_write(const char* d, int n) {
+    if (!d || n <= 0) return 0;
+    fflush(stderr);
+    size_t w = fwrite(d, 1, (size_t)n, stderr);
+    fflush(stderr);
+    return (int)w;
+}
+int io_stdout_write(const char* d, int n) {
+    if (!d || n <= 0) return 0;
+    fflush(stdout);
+    size_t w = fwrite(d, 1, (size_t)n, stdout);
+    fflush(stdout);
+    return (int)w;
+}
 #else
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <errno.h>
 
 #ifdef _WIN32
+#include <io.h>      // _write
 #ifndef S_ISDIR
 #define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
 #endif
 #ifndef stat
 #define stat _stat
 #endif
+#define AE_FD_WRITE(fd, buf, n) _write((fd), (buf), (unsigned int)(n))
+#else
+#include <unistd.h>  // write
+#define AE_FD_WRITE(fd, buf, n) write((fd), (buf), (size_t)(n))
 #endif
 
 // Console I/O
@@ -172,6 +192,41 @@ int io_unsetenv_raw(const char* name) {
 #else
     return unsetenv(name) == 0 ? 1 : 0;
 #endif
+}
+
+/* Loop write to fd until all bytes are out, retrying on EINTR.
+ * Returns total bytes written, or -1 on a non-EINTR error. */
+static int fd_write_all(int fd, const char* data, int length) {
+    if (!data) return -1;
+    if (length <= 0) return 0;
+    int total = 0;
+    while (total < length) {
+#ifdef _WIN32
+        int w = AE_FD_WRITE(fd, data + total, length - total);
+#else
+        long w = AE_FD_WRITE(fd, data + total, length - total);
+#endif
+        if (w < 0) {
+#ifndef _WIN32
+            if (errno == EINTR) continue;
+#endif
+            return -1;
+        }
+        total += (int)w;
+    }
+    return total;
+}
+
+int io_stderr_write(const char* data, int length) {
+    /* fflush stdio's buffer first so interleaved println / fprintf
+     * output isn't reordered around the unbuffered write. */
+    fflush(stderr);
+    return fd_write_all(2, data, length);
+}
+
+int io_stdout_write(const char* data, int length) {
+    fflush(stdout);
+    return fd_write_all(1, data, length);
 }
 
 #endif // AETHER_HAS_FILESYSTEM

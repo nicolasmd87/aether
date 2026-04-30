@@ -401,6 +401,10 @@ main() {
 - `string.split_to_seq(str, delimiter)` - Split into a `*StringSeq` cons-cell list (Erlang/Elixir-shaped). Same split semantics as `string.split`, but returns the result as an O(1) head/tail/cons/length linked list with refcount-aware structural sharing. Use this when the result will be pattern-matched, walked recursively, or sent across an actor boundary as a message field. See [docs/sequences.md](sequences.md) for the full surface.
 - `string.strip_prefix(s, prefix)` → `(rest, stripped)` - If `s` starts with `prefix`, returns the remainder and 1. Otherwise returns `s` and 0. Cleaner than manual `starts_with` + `substring` length arithmetic.
 
+**Glob-pattern matching (string side, NOT filesystem):**
+- `string.glob_match(pattern, s)` → `int` - Does `pattern` match `s`? POSIX fnmatch(3) syntax: `*` zero-or-more, `?` single-char, `[abc]` / `[a-z]` char classes, `[!abc]` negation, `\*` / `\?` literal escapes. Returns 1 on match, 0 on no-match, -1 on glob-syntax error. Distinct from `fs.glob` which enumerates matching files on disk — this is pure string matching (svn:ignore patterns, message routing, branch-spec matching).
+- `string.glob_match_pathname(pattern, s)` → `int` - Same as `glob_match` but `*` and `?` do NOT cross a `/` separator. Use when matching path patterns: `src/*.c` matches `src/foo.c` but not `src/sub/foo.c`.
+
 **Sequences (`*StringSeq` — Erlang/Elixir-shaped cons-cell list):**
 
 - `string.seq_empty()` → `*StringSeq` — empty list (NULL pointer)
@@ -1366,6 +1370,10 @@ main() {
 - `io.print_line(str)` - Print string with newline
 - `io.print_int(value)` - Print integer
 - `io.print_float(value)` - Print float
+
+**Unbuffered fd writes (crash-trace use case):**
+- `io.stderr_write(data, length)` → `int` - Write `length` bytes to fd 2 directly, bypassing stdio buffering. Returns the byte count actually written, or -1 on error. Loops on partial writes; retries `EINTR` on POSIX. `data` may contain NULs (binary-safe). Reach for this when output must reach the terminal / pipe before the process aborts — `println` and `io.print` are line-buffered on tty and block-buffered when piped, so the last few lines reliably get lost during a crash.
+- `io.stdout_write(data, length)` → `int` - Same shape as `stderr_write` but writes to fd 1. Useful for shell-pipe-friendly tools that need each record flushed before the next stage reads.
 
 **File Operations (Go-style):**
 - `io.read_file(path)` → `(string, string)` - Read entire file

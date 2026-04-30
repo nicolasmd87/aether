@@ -31,5 +31,19 @@ char* io_getenv(const char* name);
 int io_setenv_raw(const char* name, const char* value);
 int io_unsetenv_raw(const char* name);
 
+// Unbuffered fd-1 / fd-2 writes — bypass stdio buffering so output is
+// guaranteed on the wire before the process exits / crashes / aborts.
+// `length` is the count of bytes to write; data may contain NULs.
+// Returns the number of bytes written, or -1 on error. Loops on
+// partial writes and retries on EINTR.
+//
+// `println` / `io.print` go through stdio (line-buffered on tty,
+// block-buffered when stdout is piped) — fine for normal output but
+// loses the last few lines if the process is killed mid-buffer.
+// Reach for these in crash-trace paths where you need the bytes
+// flushed NOW. Section A.3 (minimal scope) of aether_changes_needed.md.
+int io_stderr_write(const char* data, int length);
+int io_stdout_write(const char* data, int length);
+
 #endif // AETHER_IO_H
 
