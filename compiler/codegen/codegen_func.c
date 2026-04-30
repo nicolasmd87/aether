@@ -124,15 +124,50 @@ const char* get_builder_factory(CodeGenerator* gen, const char* func_name) {
     return "map_new";
 }
 
-// Check if a function name is registered as an extern function.
-int is_extern_func(CodeGenerator* gen, const char* func_name) {
-    if (!gen || !func_name) return 0;
+// Look up a registry entry by name, trying both the exact form and
+// the dot-normalised form. Module-qualified call sites store the
+// function name with a dot (e.g. "http.response_set_body_n"), but
+// externs are registered under the raw extern name (e.g.
+// "http_response_set_body_n"). Without the second pass, a call
+// reaching an extern via `import std.http` is not recognised as an
+// extern call, and the codegen skips behaviours gated on
+// is_extern_func — most importantly the #297 auto-unwrap of
+// `string`-typed args. Inline `extern` declarations in the same
+// .ae file matched fine because the call site's name and the
+// registered name are identical.
+static int find_extern_registry_index(CodeGenerator* gen, const char* func_name) {
+    if (!gen || !func_name) return -1;
     for (int i = 0; i < gen->extern_registry_count; i++) {
         if (gen->extern_registry[i].name && strcmp(gen->extern_registry[i].name, func_name) == 0) {
-            return 1;
+            return i;
         }
     }
-    return 0;
+    /* Try the dot-normalised form: "ns.fn" → "ns_fn". Bounded
+     * to a small stack buffer; truncation just means the
+     * lookup misses, which preserves current behaviour. */
+    if (strchr(func_name, '.')) {
+        char buf[256];
+        size_t n = strlen(func_name);
+        if (n < sizeof(buf)) {
+            memcpy(buf, func_name, n);
+            buf[n] = '\0';
+            for (char* p = buf; *p; p++) {
+                if (*p == '.') *p = '_';
+            }
+            for (int i = 0; i < gen->extern_registry_count; i++) {
+                if (gen->extern_registry[i].name &&
+                    strcmp(gen->extern_registry[i].name, buf) == 0) {
+                    return i;
+                }
+            }
+        }
+    }
+    return -1;
+}
+
+// Check if a function name is registered as an extern function.
+int is_extern_func(CodeGenerator* gen, const char* func_name) {
+    return find_extern_registry_index(gen, func_name) >= 0;
 }
 
 // If `func_name` was declared via @extern("c_symbol"), return the C
@@ -142,12 +177,9 @@ int is_extern_func(CodeGenerator* gen, const char* func_name) {
 // See #234.
 const char* lookup_extern_c_name(CodeGenerator* gen, const char* func_name) {
     if (!gen || !func_name) return func_name;
-    for (int i = 0; i < gen->extern_registry_count; i++) {
-        if (gen->extern_registry[i].name &&
-            strcmp(gen->extern_registry[i].name, func_name) == 0 &&
-            gen->extern_registry[i].c_name) {
-            return gen->extern_registry[i].c_name;
-        }
+    int idx = find_extern_registry_index(gen, func_name);
+    if (idx >= 0 && gen->extern_registry[idx].c_name) {
+        return gen->extern_registry[idx].c_name;
     }
     return func_name;
 }
@@ -155,13 +187,10 @@ const char* lookup_extern_c_name(CodeGenerator* gen, const char* func_name) {
 // Look up the expected TypeKind for the nth parameter of an extern function.
 // Returns TYPE_UNKNOWN if the function or parameter is not found.
 TypeKind lookup_extern_param_kind(CodeGenerator* gen, const char* func_name, int param_idx) {
-    for (int i = 0; i < gen->extern_registry_count; i++) {
-        if (strcmp(gen->extern_registry[i].name, func_name) == 0) {
-            if (param_idx < gen->extern_registry[i].param_count && gen->extern_registry[i].params) {
-                return gen->extern_registry[i].params[param_idx];
-            }
-            return TYPE_UNKNOWN;
-        }
+    int idx = find_extern_registry_index(gen, func_name);
+    if (idx < 0) return TYPE_UNKNOWN;
+    if (param_idx < gen->extern_registry[idx].param_count && gen->extern_registry[idx].params) {
+        return gen->extern_registry[idx].params[param_idx];
     }
     return TYPE_UNKNOWN;
 }
