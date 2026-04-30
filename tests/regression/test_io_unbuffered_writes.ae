@@ -1,0 +1,63 @@
+// Regression test for `io.stderr_write` and `io.stdout_write`.
+// Section A.3 (minimal scope) of aether_changes_needed.md.
+//
+// These are unbuffered fd-1 / fd-2 writes for crash-trace paths
+// where stdio buffering would lose output before the process aborts.
+//
+// What this test guards:
+//   1. Functions exist, are callable, return >= 0 byte counts.
+//   2. The byte count returned matches the requested length on a
+//      well-formed write.
+//   3. Negative / zero length is handled (no crash; returns 0).
+//   4. Write actually goes to the right fd (verified by sending the
+//      stdout output through a pipe and reading it back — but doing
+//      that from Aether code requires fork+pipe primitives we don't
+//      have here. Settle for a "doesn't crash and returns the right
+//      count" smoke test; the deeper "did fd 1 actually receive
+//      these bytes" property is what `make ci`'s example smoke tests
+//      cover indirectly when this test is run with output captured.)
+
+import std.io
+import std.string
+
+extern exit(code: int)
+
+main() {
+    println("=== io.stderr_write / io.stdout_write smoke ===")
+
+    // Case 1: simple write to stdout.
+    msg = "hello stdout\n"
+    n = io.stdout_write(msg, string.length(msg))
+    if n != string.length(msg) {
+        println("FAIL 1: stdout_write returned ${n}, expected ${string.length(msg)}")
+        exit(1)
+    }
+    println("  PASS 1: stdout_write returns the requested byte count")
+
+    // Case 2: simple write to stderr.
+    err = "hello stderr\n"
+    en = io.stderr_write(err, string.length(err))
+    if en != string.length(err) {
+        println("FAIL 2: stderr_write returned ${en}, expected ${string.length(err)}")
+        exit(1)
+    }
+    println("  PASS 2: stderr_write returns the requested byte count")
+
+    // Case 3: zero-length write is a no-op.
+    z = io.stdout_write("anything", 0)
+    if z != 0 {
+        println("FAIL 3: stdout_write(_, 0) = ${z}, expected 0")
+        exit(1)
+    }
+    println("  PASS 3: zero-length write is a no-op (returns 0)")
+
+    // Case 4: negative length is handled (returns 0, no crash).
+    neg = io.stdout_write("anything", -5)
+    if neg != 0 {
+        println("FAIL 4: stdout_write(_, -5) = ${neg}, expected 0")
+        exit(1)
+    }
+    println("  PASS 4: negative length returns 0 (no crash)")
+
+    println("=== All cases passed ===")
+}

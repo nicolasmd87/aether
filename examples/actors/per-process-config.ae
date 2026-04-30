@@ -1,0 +1,81 @@
+// Per-process config via the actor-singleton pattern.
+// Companion to docs/per-process-config.md.
+//
+// Aether rejects mutable assignment to module-level identifiers, so
+// the C `static char *g_config; void set_config(s); const char *
+// get_config(void);` shape doesn't transcribe directly. The Aether
+// equivalent: spawn one ConfigActor at startup, drive writes via
+// `Set*` messages, and drive reads via a `Get*` message that carries
+// an actor_ref to send the reply back through.
+//
+// This example demonstrates the full round-trip: set two values,
+// then read them back via the reply pattern. A real CLI tool would:
+//   - parse --token / --user from argv at startup, feed the values
+//     into the ConfigActor via SetUser / SetToken
+//   - have its request handlers either receive the values at spawn
+//     time, or query via the GetUser/GetToken pattern shown here
+
+import std.string
+
+// Note: `reply` is a reserved keyword in Aether — name reply-target
+// fields `to`, `target`, `dest`, etc. instead.
+message SetUser    { name: string }
+message SetToken   { value: string }
+message GetUser    { to: actor_ref }
+message GetToken   { to: actor_ref }
+message UserReply  { value: string }
+message TokenReply { value: string }
+
+// The singleton. Spawn exactly one of these at startup; pass the
+// resulting actor_ref to anything that needs config reads.
+actor ConfigActor {
+    state user  = ""
+    state token = ""
+
+    receive {
+        SetUser(name)   -> { user  = name  }
+        SetToken(value) -> { token = value }
+        GetUser(to)     -> { to ! UserReply  { value: user  } }
+        GetToken(to)    -> { to ! TokenReply { value: token } }
+    }
+}
+
+// A request-handler-style actor that reads from the config.
+// Shows the full ask shape: send Get* with self as the reply target,
+// then receive the matching *Reply message and act on it.
+actor RequestHandler {
+    state cached_user  = ""
+    state cached_token = ""
+
+    receive {
+        UserReply(value)  -> {
+            cached_user = value
+            println("RequestHandler cached user='${value}'")
+        }
+        TokenReply(value) -> {
+            cached_token = value
+            println("RequestHandler cached token='${value}'")
+        }
+    }
+}
+
+main() {
+    cfg = spawn(ConfigActor())
+
+    // Write-once at startup (in a real CLI: from parsed --flag args).
+    cfg ! SetUser  { name:  "alice" }
+    cfg ! SetToken { value: "secret-xyz" }
+
+    // Spawn a request handler and have it ask the config for both
+    // values. The handler stashes them in its own state so subsequent
+    // request-processing reads are zero-overhead local field access.
+    h = spawn(RequestHandler())
+    cfg ! GetUser  { to: h }
+    cfg ! GetToken { to: h }
+
+    // Yield long enough for the message round-trips to land.
+    // (A real server would run an event loop / accept loop instead.)
+    sleep(50)
+
+    println("done")
+}

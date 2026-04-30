@@ -281,3 +281,7 @@ Aether uses arena-based memory management for automatic cleanup:
 - **Arenas**: Bulk deallocation without per-object tracking
 
 See [Memory Management](memory-management.md) for details on arenas, pools, and allocation strategies.
+
+## Patterns
+
+- **Per-process configuration** — Aether rejects mutable assignment to module-level identifiers, so the C `static char *g_config` shape doesn't transcribe. The canonical replacement is the actor-singleton pattern: spawn one config actor at startup, drive writes via `Set*` messages, drive reads via `Get*` messages that carry an `actor_ref` reply target. See [per-process-config.md](per-process-config.md) for the worked example, the trade-offs (when message round-trip is acceptable vs. when to plumb the value as a parameter or worker-actor cache), and a port of a real C global-state shim.

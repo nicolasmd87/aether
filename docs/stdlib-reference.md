@@ -401,6 +401,10 @@ main() {
 - `string.split_to_seq(str, delimiter)` - Split into a `*StringSeq` cons-cell list (Erlang/Elixir-shaped). Same split semantics as `string.split`, but returns the result as an O(1) head/tail/cons/length linked list with refcount-aware structural sharing. Use this when the result will be pattern-matched, walked recursively, or sent across an actor boundary as a message field. See [docs/sequences.md](sequences.md) for the full surface.
 - `string.strip_prefix(s, prefix)` → `(rest, stripped)` - If `s` starts with `prefix`, returns the remainder and 1. Otherwise returns `s` and 0. Cleaner than manual `starts_with` + `substring` length arithmetic.
 
+**Glob-pattern matching (string side, NOT filesystem):**
+- `string.glob_match(pattern, s)` → `int` - Does `pattern` match `s`? POSIX fnmatch(3) syntax: `*` zero-or-more, `?` single-char, `[abc]` / `[a-z]` char classes, `[!abc]` negation, `\*` / `\?` literal escapes. Returns 1 on match, 0 on no-match, -1 on glob-syntax error. Distinct from `fs.glob` which enumerates matching files on disk — this is pure string matching (svn:ignore patterns, message routing, branch-spec matching).
+- `string.glob_match_pathname(pattern, s)` → `int` - Same as `glob_match` but `*` and `?` do NOT cross a `/` separator. Use when matching path patterns: `src/*.c` matches `src/foo.c` but not `src/sub/foo.c`.
+
 **Sequences (`*StringSeq` — Erlang/Elixir-shaped cons-cell list):**
 
 - `string.seq_empty()` → `*StringSeq` — empty list (NULL pointer)
@@ -906,6 +910,11 @@ Raw externs: `http_server_bind_raw`, `http_server_start_raw`.
 - `http.server_use_middleware(server, middleware, user_data)` - Add middleware
 
 **Request Accessors:**
+- `http.request_method(req)` → `string` - HTTP method (`GET`, `POST`, `PUT`, …); empty if `req` is null.
+- `http.request_path(req)` → `string` - URL path (no query string); empty if `req` is null.
+- `http.request_body(req)` → `string` - Request body as a C-string. **Truncates at the first embedded NUL** when read via `string.length(...)`; pair with `http.request_body_length` for binary-safe access.
+- `http.request_body_length(req)` → `int` - Byte count of the request body. Returns 0 if `req` is null or has no body. Reach for this whenever the body may contain NUL bytes (svn PUT, image uploads, gzipped JSON) — the length-aware companion to `http.request_body`.
+- `http.request_query(req)` → `string` - Raw query string; empty if absent.
 - `http.get_header(req, name)` - Get request header
 - `http.get_query_param(req, name)` - Get query parameter
 - `http.get_path_param(req, name)` - Get URL path parameter
@@ -1362,6 +1371,18 @@ main() {
 - `io.print_int(value)` - Print integer
 - `io.print_float(value)` - Print float
 
+**Unbuffered fd writes (crash-trace use case):**
+- `io.stderr_write(data, length)` → `int` - Write `length` bytes to fd 2 directly, bypassing stdio buffering. Returns the byte count actually written, or -1 on error. Loops on partial writes; retries `EINTR` on POSIX. `data` may contain NULs (binary-safe). Reach for this when output must reach the terminal / pipe before the process aborts — `println` and `io.print` are line-buffered on tty and block-buffered when piped, so the last few lines reliably get lost during a crash.
+- `io.stdout_write(data, length)` → `int` - Same shape as `stderr_write` but writes to fd 1. Useful for shell-pipe-friendly tools that need each record flushed before the next stage reads.
+
+**File-descriptor lifecycle and bulk fd I/O:**
+- `io.fd_open_read(path)` → `(int, string)` - Open `path` for reading (POSIX `O_RDONLY` / Win `_O_RDONLY | _O_BINARY`). Returns `(fd, "")` on success, `(-1, error)` on failure.
+- `io.fd_open_write(path)` → `(int, string)` - Open `path` for writing — implicit `O_CREAT | O_TRUNC` (mode 0644 on POSIX, `_O_BINARY` on Windows). Returns `(fd, "")` / `(-1, error)`. Pair with `fd_close`. For O_APPEND or non-truncating opens, file an issue.
+- `io.fd_close(fd)` → `string` - `""` on success, error string on failure. Single attempt — does not retry on EINTR (Linux requires not retrying; the descriptor is already gone).
+- `io.fd_write_n(fd, data, length)` → `int` - Write exactly `length` bytes to `fd`. Loops on partial writes; retries EINTR on POSIX. Returns 0 on success, -1 on error. Note: when `data` is an Aether `string` parameter that crossed an extern boundary, the auto-unwrap may have stripped the AetherString header and the C side sees a plain `const char*` — strlen-truncation applies for embedded NULs. For binary writes from Aether-side, marshal through `std.bytes` first.
+- `io.fd_read_n(fd, n)` → `(ptr, int, string)` - Read up to `n` bytes from `fd`. Returns `(bytes, count, err)`: `bytes` is a refcounted AetherString carrying the explicit byte count (binary-safe — embedded NULs survive), `count` is the number actually read (1..n on success, 0 on clean EOF or error), `err` is `""` on success or clean EOF, otherwise an error message.
+- `io.fd_read_line(fd)` → `(ptr, string)` - Read one `\n`-delimited line from `fd`. Trailing `\n` is stripped (a preceding `\r` is also stripped, so CRLF input yields content with neither). Returns `(line, "")` on a normal line, `("", "")` on clean EOF before any byte, `(partial, "")` on EOF mid-line (server-side dump streams sometimes omit a trailing newline), `("", error)` on read error.
+
 **File Operations (Go-style):**
 - `io.read_file(path)` → `(string, string)` - Read entire file
 - `io.write_file(path, content)` → `string` - Write (overwrites), return error string
@@ -1387,6 +1408,77 @@ Raw externs: `io_read_file_raw`, `io_write_file_raw`, `io_append_file_raw`, `io_
 - `spawn(ActorName())` - Create actor instance
 - `wait_for_idle()` - Block until all actors finish
 - `sleep(milliseconds)` - Pause execution
+
+---
+
+## Process state
+
+Aether deliberately rejects mutable assignment to module-level identifiers — the design philosophy is "if state is mutable, it lives inside an actor or a runtime registry." Two stdlib modules give you the **set-during-init, read-everywhere** shape that BEAM achieves with `persistent_term` and `register/whereis`, without spawning a long-lived actor or paying message round-trip on the read path.
+
+These are the right tool when:
+- A handler is entered from a C-callback and can't take an Aether-typed parameter (the `void* user_data` slot doesn't carry typed values).
+- The state is genuinely process-wide (CLI flags, current-user identity, the long-lived registry of named actors).
+- You'd otherwise reach for a `static` C global.
+
+**Don't** use these for per-request / per-tenant state — that should live in the actor or function that owns the work, plumbed through call parameters or actor messages.
+
+### `std.config` — string→string KV
+
+```aether
+import std.config
+
+main() {
+    config.put("user", "alice")
+    config.put("token", "xyz")
+}
+
+handle_request(req: ptr, res: ptr, ud: ptr) {
+    user  = config.get("user")            // "alice"
+    level = config.get_or("level", "info") // fallback default
+}
+```
+
+- `config.put(key, value)` - Insert / overwrite. Both `key` and `value` are duplicated internally; caller's string lifetimes don't matter.
+- `config.get(key)` → `string` - Returns `""` if the key isn't set (matches Aether's Go-style "" = absent convention). Reads are concurrent (no lock contention with each other).
+- `config.get_or(key, default_value)` → `string` - Returns the registered value if set, otherwise `default_value`.
+- `config.has(key)` → `int` - 1 if `key` has been put, 0 otherwise.
+- `config.size()` → `int` - Number of keys currently registered.
+- `config.clear()` - Wipe all keys. Tests use this for isolation; production code rarely needs it.
+
+Storage: a single process-global hashmap protected by a reader/writer lock. Implementation models BEAM's `persistent_term`. Returned `get` strings are borrowed — they remain valid until the next `put` / `clear` that touches the same key, which is fine for the "set once at startup" pattern and lets reads avoid an allocation. Copy via `string.copy(value)` if you need a value that survives a later `put`.
+
+### `std.actors` — name → actor_ref registry
+
+```aether
+import std.actors
+
+actor Auditor {
+    receive {
+        Analyze(payload) -> { /* ... */ }
+    }
+}
+
+main() {
+    a = spawn(Auditor())
+    actors.register("auditor", a)
+}
+
+handle_request(req: ptr, res: ptr, ud: ptr) {
+    a = actors.whereis("auditor")
+    a ! Analyze { payload: ud }
+}
+```
+
+- `actors.register(name, ref)` - Bind `name` → `ref`. Overwrites any prior binding (no error). The name is duplicated; the actor_ref is stored as-is.
+- `actors.whereis(name)` → `actor_ref` - Look up by name. Returns the registered ref, or null if unregistered.
+- `actors.unregister(name)` → `int` - 1 if a binding was removed, 0 if `name` wasn't registered.
+- `actors.is_registered(name)` → `int` - 1 if bound, 0 otherwise.
+- `actors.registry_size()` → `int` - Number of currently-registered names.
+- `actors.registry_clear()` - Wipe all bindings.
+
+Models BEAM's `erlang:register` / `whereis`. The registry doesn't track actor liveness — if the actor exits, `whereis` keeps returning the stale ref until something explicitly calls `unregister`. Match BEAM's behaviour for non-link'd registrations.
+
+**Why the module name is plural**: `actor` (singular) is a reserved keyword in Aether and can't appear as a namespace prefix. `actors.register(...)` parses; `actor.register(...)` does not. The plural also reads correctly — "the actors registry."
 
 ---
 

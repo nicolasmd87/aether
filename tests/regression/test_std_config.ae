@@ -1,0 +1,118 @@
+// Regression test for std.config — process-global immutable
+// string→string KV store, modelled after BEAM's persistent_term.
+// Section 2 of nuther-ask-of-aether-team.md / Nico's reply.
+//
+// What this test guards:
+//   1. put/get round-trips a value
+//   2. get on an unset key returns ""
+//   3. get_or returns the default for an unset key, the value for a set one
+//   4. put overwrites a prior binding (last-writer-wins)
+//   5. has() reports membership accurately
+//   6. size() tracks live keys
+//   7. clear() wipes the registry
+//   8. The classic CLI-flag use case: parse, put, then read from a
+//      separate function (no parameter threading)
+
+import std.config
+import std.string
+
+extern exit(code: int)
+
+// Function that reads from config without taking the value as a
+// parameter — the headline use case. This mirrors the request
+// handler in the porter doc that's entered via @c_callback and
+// has no Aether-typed slot to receive the value.
+read_user_from_config() -> string {
+    return config.get("user")
+}
+
+main() {
+    // Tests share a process; isolate by clearing first.
+    config.clear()
+
+    println("=== std.config regression ===")
+
+    // Case 1: put + get round-trip.
+    config.put("user", "alice")
+    u = config.get("user")
+    if u != "alice" {
+        println("FAIL 1: get('user')='${u}', expected 'alice'")
+        exit(1)
+    }
+    println("  PASS 1: put + get round-trip")
+
+    // Case 2: unset key returns "".
+    ne = config.get("nonexistent")
+    if ne != "" {
+        println("FAIL 2: get('nonexistent')='${ne}', expected ''")
+        exit(1)
+    }
+    println("  PASS 2: get on unset key returns ''")
+
+    // Case 3: get_or default fallback.
+    if config.get_or("level", "info") != "info" {
+        println("FAIL 3: get_or default failed")
+        exit(1)
+    }
+    config.put("level", "debug")
+    if config.get_or("level", "info") != "debug" {
+        println("FAIL 3: get_or didn't return set value")
+        exit(1)
+    }
+    println("  PASS 3: get_or fallback + override")
+
+    // Case 4: put overwrites.
+    config.put("user", "bob")
+    u2 = config.get("user")
+    if u2 != "bob" {
+        println("FAIL 4: overwrite failed; got '${u2}'")
+        exit(1)
+    }
+    println("  PASS 4: put overwrites")
+
+    // Case 5: has().
+    if config.has("user") != 1 {
+        println("FAIL 5: has('user') != 1")
+        exit(1)
+    }
+    if config.has("ghost") != 0 {
+        println("FAIL 5: has('ghost') != 0")
+        exit(1)
+    }
+    println("  PASS 5: has() reports membership")
+
+    // Case 6: size().
+    sz = config.size()
+    if sz != 2 {
+        println("FAIL 6: size()=${sz}, expected 2")
+        exit(1)
+    }
+    config.put("token", "xyz")
+    if config.size() != 3 {
+        println("FAIL 6: size after add != 3")
+        exit(1)
+    }
+    println("  PASS 6: size() tracks live keys")
+
+    // Case 7: read from a separate function (no parameter threading).
+    user_via_fn = read_user_from_config()
+    if user_via_fn != "bob" {
+        println("FAIL 7: read_user_from_config()='${user_via_fn}', expected 'bob'")
+        exit(1)
+    }
+    println("  PASS 7: read from separate function works (the headline case)")
+
+    // Case 8: clear().
+    config.clear()
+    if config.size() != 0 {
+        println("FAIL 8: size after clear != 0")
+        exit(1)
+    }
+    if config.get("user") != "" {
+        println("FAIL 8: get after clear didn't return ''")
+        exit(1)
+    }
+    println("  PASS 8: clear() wipes the registry")
+
+    println("=== All cases passed ===")
+}

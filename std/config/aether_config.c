@@ -1,0 +1,187 @@
+#include "aether_config.h"
+
+#include <stdlib.h>
+#include <string.h>
+#include <stdint.h>
+
+#ifdef _WIN32
+/* SRWLock — slim reader/writer lock; same shape as pthread rwlock
+ * for our purposes (readers don't block readers; writers exclusive). */
+#include <windows.h>
+typedef SRWLOCK ae_cfg_rwlock_t;
+static void ae_cfg_rwlock_init  (ae_cfg_rwlock_t* lk) { InitializeSRWLock(lk); }
+static void ae_cfg_rwlock_rdlock(ae_cfg_rwlock_t* lk) { AcquireSRWLockShared(lk); }
+static void ae_cfg_rwlock_rdunlock(ae_cfg_rwlock_t* lk) { ReleaseSRWLockShared(lk); }
+static void ae_cfg_rwlock_wrlock(ae_cfg_rwlock_t* lk) { AcquireSRWLockExclusive(lk); }
+static void ae_cfg_rwlock_wrunlock(ae_cfg_rwlock_t* lk) { ReleaseSRWLockExclusive(lk); }
+#define AE_CFG_RWLOCK_INITIALIZER SRWLOCK_INIT
+#else
+#include <pthread.h>
+typedef pthread_rwlock_t ae_cfg_rwlock_t;
+static void ae_cfg_rwlock_init    (ae_cfg_rwlock_t* lk) { pthread_rwlock_init(lk, NULL); }
+static void ae_cfg_rwlock_rdlock  (ae_cfg_rwlock_t* lk) { pthread_rwlock_rdlock(lk); }
+static void ae_cfg_rwlock_rdunlock(ae_cfg_rwlock_t* lk) { pthread_rwlock_unlock(lk); }
+static void ae_cfg_rwlock_wrlock  (ae_cfg_rwlock_t* lk) { pthread_rwlock_wrlock(lk); }
+static void ae_cfg_rwlock_wrunlock(ae_cfg_rwlock_t* lk) { pthread_rwlock_unlock(lk); }
+#define AE_CFG_RWLOCK_INITIALIZER PTHREAD_RWLOCK_INITIALIZER
+#endif
+
+#define AE_CFG_BUCKETS 64  /* power of two; small fixed table fits the
+                              "few dozen config keys per program" use
+                              case the porter doc described. Chains
+                              handle bucket overflow gracefully. */
+
+typedef struct ae_cfg_entry {
+    char* key;
+    char* value;
+    struct ae_cfg_entry* next;
+} ae_cfg_entry;
+
+static ae_cfg_entry* g_buckets[AE_CFG_BUCKETS];
+static int g_size = 0;
+static ae_cfg_rwlock_t g_lock = AE_CFG_RWLOCK_INITIALIZER;
+static int g_lock_initialized = 0;
+
+/* Lazy init for platforms whose static initializer macro is a stub
+ * (some Windows toolchains ship SRWLOCK_INIT but it's always safe
+ * to call InitializeSRWLock too; this guard keeps the path uniform). */
+static void ensure_lock_init(void) {
+    if (!g_lock_initialized) {
+        ae_cfg_rwlock_init(&g_lock);
+        g_lock_initialized = 1;
+    }
+}
+
+/* FNV-1a 32-bit. Good enough for short config keys; not crypto. */
+static uint32_t fnv1a(const char* s) {
+    uint32_t h = 2166136261u;
+    while (*s) {
+        h ^= (uint8_t)*s++;
+        h *= 16777619u;
+    }
+    return h;
+}
+
+static char* dup_str(const char* s) {
+    if (!s) return NULL;
+    size_t n = strlen(s);
+    char* d = (char*)malloc(n + 1);
+    if (!d) return NULL;
+    memcpy(d, s, n + 1);
+    return d;
+}
+
+static ae_cfg_entry* find_in_bucket(ae_cfg_entry* head, const char* key) {
+    for (ae_cfg_entry* e = head; e; e = e->next) {
+        if (strcmp(e->key, key) == 0) return e;
+    }
+    return NULL;
+}
+
+void aether_config_put(const char* key, const char* value) {
+    if (!key || !value) return;
+    ensure_lock_init();
+
+    char* new_value = dup_str(value);
+    if (!new_value) return;  /* OOM — silent (matches stdlib's other
+                                infallible-in-practice paths) */
+
+    uint32_t h = fnv1a(key);
+    int idx = (int)(h & (AE_CFG_BUCKETS - 1));
+
+    ae_cfg_rwlock_wrlock(&g_lock);
+    ae_cfg_entry* existing = find_in_bucket(g_buckets[idx], key);
+    if (existing) {
+        free(existing->value);
+        existing->value = new_value;
+        ae_cfg_rwlock_wrunlock(&g_lock);
+        return;
+    }
+    /* New entry. Allocate under the write lock to keep insertion
+     * atomic with the bucket-head update. */
+    ae_cfg_entry* e = (ae_cfg_entry*)malloc(sizeof(ae_cfg_entry));
+    if (!e) {
+        free(new_value);
+        ae_cfg_rwlock_wrunlock(&g_lock);
+        return;
+    }
+    e->key = dup_str(key);
+    if (!e->key) {
+        free(new_value);
+        free(e);
+        ae_cfg_rwlock_wrunlock(&g_lock);
+        return;
+    }
+    e->value = new_value;
+    e->next = g_buckets[idx];
+    g_buckets[idx] = e;
+    g_size++;
+    ae_cfg_rwlock_wrunlock(&g_lock);
+}
+
+const char* aether_config_get(const char* key) {
+    if (!key) return "";
+    ensure_lock_init();
+    uint32_t h = fnv1a(key);
+    int idx = (int)(h & (AE_CFG_BUCKETS - 1));
+
+    ae_cfg_rwlock_rdlock(&g_lock);
+    ae_cfg_entry* e = find_in_bucket(g_buckets[idx], key);
+    const char* v = e ? e->value : "";
+    ae_cfg_rwlock_rdunlock(&g_lock);
+    return v;
+}
+
+const char* aether_config_get_or(const char* key, const char* default_value) {
+    if (!key) return default_value ? default_value : "";
+    ensure_lock_init();
+    uint32_t h = fnv1a(key);
+    int idx = (int)(h & (AE_CFG_BUCKETS - 1));
+
+    ae_cfg_rwlock_rdlock(&g_lock);
+    ae_cfg_entry* e = find_in_bucket(g_buckets[idx], key);
+    const char* v;
+    if (e) v = e->value;
+    else   v = default_value ? default_value : "";
+    ae_cfg_rwlock_rdunlock(&g_lock);
+    return v;
+}
+
+int aether_config_has(const char* key) {
+    if (!key) return 0;
+    ensure_lock_init();
+    uint32_t h = fnv1a(key);
+    int idx = (int)(h & (AE_CFG_BUCKETS - 1));
+
+    ae_cfg_rwlock_rdlock(&g_lock);
+    ae_cfg_entry* e = find_in_bucket(g_buckets[idx], key);
+    int result = e ? 1 : 0;
+    ae_cfg_rwlock_rdunlock(&g_lock);
+    return result;
+}
+
+int aether_config_size(void) {
+    ensure_lock_init();
+    ae_cfg_rwlock_rdlock(&g_lock);
+    int n = g_size;
+    ae_cfg_rwlock_rdunlock(&g_lock);
+    return n;
+}
+
+void aether_config_clear(void) {
+    ensure_lock_init();
+    ae_cfg_rwlock_wrlock(&g_lock);
+    for (int i = 0; i < AE_CFG_BUCKETS; i++) {
+        ae_cfg_entry* e = g_buckets[i];
+        while (e) {
+            ae_cfg_entry* next = e->next;
+            free(e->key);
+            free(e->value);
+            free(e);
+            e = next;
+        }
+        g_buckets[i] = NULL;
+    }
+    g_size = 0;
+    ae_cfg_rwlock_wrunlock(&g_lock);
+}

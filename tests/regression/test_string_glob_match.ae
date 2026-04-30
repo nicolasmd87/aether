@@ -1,0 +1,149 @@
+// Regression test for `string.glob_match` and
+// `string.glob_match_pathname`. Section A.2 of aether_changes_needed.md.
+//
+// Pure string-pattern matching (POSIX fnmatch(3)), distinct from
+// fs.glob which enumerates files on disk. Used by the svn-aether
+// port's svn:ignore matching (`ae/wc/ignore.ae`) and branch-spec
+// matching (`ae/fs_fs/spec.ae`).
+//
+// Cases:
+//   1. `*` matches zero or more chars, `?` matches exactly one
+//   2. Character class `[abc]` and range `[a-z]`
+//   3. Negated class `[!abc]` and `[^abc]`
+//   4. Backslash escapes `\*` / `\?` for literal match
+//   5. Plain `glob_match` allows `*` to cross `/`
+//   6. `glob_match_pathname` does NOT cross `/`
+//   7. svn:ignore-style patterns
+//   8. Empty pattern / empty string corner cases
+//   9. Syntax error: unmatched bracket returns -1
+
+import std.string
+
+extern exit(code: int)
+
+main() {
+    println("=== string.glob_match regression ===")
+
+    // Case 1: * and ?
+    if string.glob_match("*.c", "foo.c") != 1 {
+        println("FAIL 1: '*.c' should match 'foo.c'")
+        exit(1)
+    }
+    if string.glob_match("*.c", "foo.h") != 0 {
+        println("FAIL 1: '*.c' should NOT match 'foo.h'")
+        exit(1)
+    }
+    if string.glob_match("f?o", "foo") != 1 {
+        println("FAIL 1: 'f?o' should match 'foo'")
+        exit(1)
+    }
+    if string.glob_match("f?o", "fo") != 0 {
+        println("FAIL 1: 'f?o' should NOT match 'fo' (? requires exactly one)")
+        exit(1)
+    }
+    println("  PASS 1: * and ? wildcards")
+
+    // Case 2: char class and range
+    if string.glob_match("[abc].txt", "a.txt") != 1 {
+        println("FAIL 2: '[abc].txt' should match 'a.txt'")
+        exit(1)
+    }
+    if string.glob_match("[abc].txt", "d.txt") != 0 {
+        println("FAIL 2: '[abc].txt' should NOT match 'd.txt'")
+        exit(1)
+    }
+    if string.glob_match("[a-z]oo", "foo") != 1 {
+        println("FAIL 2: '[a-z]oo' should match 'foo'")
+        exit(1)
+    }
+    if string.glob_match("[a-z]oo", "Foo") != 0 {
+        println("FAIL 2: '[a-z]oo' should NOT match 'Foo' (case-sensitive)")
+        exit(1)
+    }
+    println("  PASS 2: char class and range")
+
+    // Case 3: negated class
+    if string.glob_match("[!abc].txt", "d.txt") != 1 {
+        println("FAIL 3: '[!abc].txt' should match 'd.txt'")
+        exit(1)
+    }
+    if string.glob_match("[!abc].txt", "a.txt") != 0 {
+        println("FAIL 3: '[!abc].txt' should NOT match 'a.txt'")
+        exit(1)
+    }
+    println("  PASS 3: negated character class")
+
+    // Case 4: backslash escape
+    if string.glob_match("foo\\*", "foo*") != 1 {
+        println("FAIL 4: 'foo\\*' should match literal 'foo*'")
+        exit(1)
+    }
+    if string.glob_match("foo\\*", "foobar") != 0 {
+        println("FAIL 4: 'foo\\*' should NOT match 'foobar' (escape disables wildcard)")
+        exit(1)
+    }
+    println("  PASS 4: backslash escape")
+
+    // Case 5: plain glob_match — * crosses /
+    if string.glob_match("src/*.c", "src/sub/foo.c") != 1 {
+        println("FAIL 5: 'src/*.c' under glob_match should match 'src/sub/foo.c'")
+        exit(1)
+    }
+    println("  PASS 5: glob_match allows * to cross /")
+
+    // Case 6: glob_match_pathname — * does NOT cross /
+    if string.glob_match_pathname("src/*.c", "src/foo.c") != 1 {
+        println("FAIL 6: pathname 'src/*.c' should match 'src/foo.c'")
+        exit(1)
+    }
+    if string.glob_match_pathname("src/*.c", "src/sub/foo.c") != 0 {
+        println("FAIL 6: pathname 'src/*.c' should NOT match 'src/sub/foo.c'")
+        exit(1)
+    }
+    println("  PASS 6: glob_match_pathname stops * at /")
+
+    // Case 7: svn:ignore-style patterns (the headline use case).
+    if string.glob_match("*.o", "build.o") != 1 {
+        println("FAIL 7: '*.o' should match 'build.o'")
+        exit(1)
+    }
+    if string.glob_match("*.bak", "notes.txt") != 0 {
+        println("FAIL 7: '*.bak' should NOT match 'notes.txt'")
+        exit(1)
+    }
+    if string.glob_match(".svn", ".svn") != 1 {
+        println("FAIL 7: literal '.svn' should match '.svn'")
+        exit(1)
+    }
+    println("  PASS 7: svn:ignore patterns")
+
+    // Case 8: empty corner cases
+    if string.glob_match("", "") != 1 {
+        println("FAIL 8: empty pattern matches empty string")
+        exit(1)
+    }
+    if string.glob_match("*", "") != 1 {
+        println("FAIL 8: '*' matches empty string")
+        exit(1)
+    }
+    if string.glob_match("", "x") != 0 {
+        println("FAIL 8: empty pattern does NOT match non-empty")
+        exit(1)
+    }
+    println("  PASS 8: empty pattern / string corner cases")
+
+    // Case 9: syntax error — unmatched bracket. POSIX fnmatch returns
+    // FNM_NOMATCH for malformed patterns on most libc implementations
+    // (glibc specifically), but the libc behaviour is unspecified by
+    // POSIX. Both results (-1 syntax-error or 0 no-match) are
+    // acceptable; what we lock here is "doesn't crash and doesn't
+    // falsely report a match".
+    r = string.glob_match("[abc", "a")
+    if r == 1 {
+        println("FAIL 9: malformed pattern '[abc' must NOT match (got 1)")
+        exit(1)
+    }
+    println("  PASS 9: malformed pattern returns 0 or -1 (got ${r})")
+
+    println("=== All cases passed ===")
+}

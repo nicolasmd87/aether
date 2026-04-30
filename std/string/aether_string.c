@@ -8,6 +8,10 @@
 #include <limits.h>
 #include <stdint.h>  // SIZE_MAX (not in <limits.h> on MinGW)
 
+#ifndef _WIN32
+#include <fnmatch.h>  // POSIX glob-pattern matching (string_glob_match_raw)
+#endif
+
 // Helper: get data pointer and length from either AetherString* or plain char*
 static inline const char* str_data(const void* s) {
     if (!s) return "";
@@ -773,4 +777,134 @@ AetherString* string_format_list(const char* fmt, void* args) {
     AetherString* result = string_new_with_length(out, pos);
     free(out);
     return result;
+}
+
+/* ─── string_glob_match_raw ─────────────────────────────────────────
+ * Glob-pattern matching. POSIX delegates to fnmatch(3); Windows gets
+ * a pure-C implementation covering the same surface (`*`, `?`, `[…]`,
+ * `[!…]`, `[a-z]`, `\*` / `\?`, plus the FNM_PATHNAME flag — when set,
+ * `*` / `?` / `[…]` do not match a literal `/`).
+ *
+ * Aether-callable input is `string` (auto-unwrapped to `const char*`
+ * by the extern boundary's #297 unwrap). The Aether-side `flags` int
+ * is a SENTINEL, NOT the libc fnmatch flag word: pass 0 for plain
+ * matching, any non-zero value for the pathname-aware form. The C
+ * side translates that sentinel into the platform's actual
+ * FNM_PATHNAME constant before calling libc fnmatch — `FNM_PATHNAME`
+ * is 0x01 on glibc/musl but 0x02 on macOS / BSD libc, so passing the
+ * raw Aether-side int through to fnmatch directly produced wrong
+ * results on macOS (the literal `1` was interpreted as
+ * `FNM_NOESCAPE` rather than `FNM_PATHNAME`, allowing `*` to cross
+ * `/` in the pathname-aware form). The wrapper layer
+ * (`glob_match_pathname`) passes 1 unconditionally; the translation
+ * happens here.
+ *
+ * Returns: 1 = match, 0 = no match, -1 = pattern syntax error
+ * (unmatched bracket).
+ * ────────────────────────────────────────────────────────────────── */
+
+#ifdef _WIN32
+/* Windows lacks libc fnmatch. Recursive matcher: walks pattern and
+ * string together, with `*` triggering a rest-of-string search. The
+ * recursion depth is bounded by the number of `*` segments in the
+ * pattern; flat patterns (no `*`) tail-match in O(|s|). */
+static int win_glob_match(const char* p, const char* s, int pathname_flag) {
+    while (*p) {
+        if (*p == '*') {
+            /* Skip consecutive '*'s. */
+            while (*p == '*') p++;
+            if (!*p) {
+                /* Trailing '*' matches everything remaining — except
+                 * '/' under FNM_PATHNAME. */
+                if (pathname_flag) {
+                    while (*s) {
+                        if (*s == '/') return 0;
+                        s++;
+                    }
+                    return 1;
+                }
+                return 1;
+            }
+            while (*s) {
+                int r = win_glob_match(p, s, pathname_flag);
+                if (r) return r;
+                if (pathname_flag && *s == '/') return 0;
+                s++;
+            }
+            return win_glob_match(p, s, pathname_flag);  /* try empty tail */
+        }
+        if (*p == '?') {
+            if (!*s) return 0;
+            if (pathname_flag && *s == '/') return 0;
+            p++;
+            s++;
+            continue;
+        }
+        if (*p == '[') {
+            if (!*s) return 0;
+            if (pathname_flag && *s == '/') return 0;
+            const char* class_start = p;
+            p++;
+            int negate = 0;
+            if (*p == '!' || *p == '^') { negate = 1; p++; }
+            int matched = 0;
+            char c = *s;
+            int first = 1;
+            while (*p && (*p != ']' || first)) {
+                first = 0;
+                char low = *p;
+                if (*p == '\\' && *(p + 1)) { low = *(p + 1); p += 2; }
+                else                         { p++; }
+                char high = low;
+                if (*p == '-' && *(p + 1) && *(p + 1) != ']') {
+                    p++;
+                    if (*p == '\\' && *(p + 1)) { high = *(p + 1); p += 2; }
+                    else                         { high = *p; p++; }
+                }
+                if (c >= low && c <= high) matched = 1;
+            }
+            if (!*p) {
+                /* Unmatched bracket — pattern is malformed. */
+                (void)class_start;
+                return -1;
+            }
+            p++;  /* consume ']' */
+            if (matched == negate) return 0;
+            s++;
+            continue;
+        }
+        if (*p == '\\' && *(p + 1)) {
+            if (*s != *(p + 1)) return 0;
+            p += 2;
+            s++;
+            continue;
+        }
+        if (*p != *s) return 0;
+        p++;
+        s++;
+    }
+    return *s == '\0' ? 1 : 0;
+}
+#endif
+
+int string_glob_match_raw(const char* pattern, const char* s, int flags) {
+    if (!pattern || !s) return 0;
+#ifdef _WIN32
+    /* On Windows, treat any non-zero flag as the pathname-aware form.
+     * The plain (flags=0) and path (flags=1) forms are the only two
+     * we expose Aether-side, so this collapses correctly. */
+    return win_glob_match(pattern, s, flags ? 1 : 0);
+#else
+    /* Translate the Aether-side sentinel (0 = plain, non-zero =
+     * pathname-aware) into the platform's actual FNM_PATHNAME bit.
+     * Without this translation, macOS's fnmatch treats the raw `1`
+     * as FNM_NOESCAPE (since on BSD libc FNM_PATHNAME is 0x02, not
+     * 0x01) and `*` is allowed to cross `/` in pathname mode —
+     * the symptom that surfaced on the Mac/Clang CI lane. */
+    int libc_flags = (flags != 0) ? FNM_PATHNAME : 0;
+    int r = fnmatch(pattern, s, libc_flags);
+    if (r == 0)            return 1;
+    if (r == FNM_NOMATCH)  return 0;
+    return -1;  /* any other libc error code maps to syntax-error */
+#endif
 }
