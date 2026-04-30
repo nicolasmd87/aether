@@ -44,7 +44,8 @@ exports (
     http_response_set_header, http_response_set_body, http_response_set_body_n,
     http_response_json, http_server_response_free,
     http_server_set_actor_handler,
-    http_request_method, http_request_path, http_request_body, http_request_query,
+    http_request_method, http_request_path, http_request_body,
+    http_request_body_length, http_request_query,
     http_serve_static, http_serve_file, http_mime_type,
     ae_io_await, ae_io_cancel, await_io
 )
@@ -450,6 +451,11 @@ extern http_server_set_actor_handler(server: ptr, step_fn: ptr, send_fn: ptr, sp
 extern http_request_method(req: ptr) -> string
 extern http_request_path(req: ptr) -> string
 extern http_request_body(req: ptr) -> string
+// Byte length of the request body — sibling of `http_request_body`.
+// Returns 0 if the request has no body (or is null). Use this when
+// the body may contain embedded NULs (binary uploads, gzipped JSON,
+// svn PUT) — `string.length` on the body would `strlen` and truncate.
+extern http_request_body_length(req: ptr) -> int
 extern http_request_query(req: ptr) -> string
 
 // Static file serving

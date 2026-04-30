@@ -79,6 +79,7 @@ void http_server_set_actor_handler(HttpServer* s, void (*sf)(void*), void (*snf)
 const char* http_request_method(HttpRequest* r) { (void)r; return ""; }
 const char* http_request_path(HttpRequest* r) { (void)r; return ""; }
 const char* http_request_body(HttpRequest* r) { (void)r; return ""; }
+int http_request_body_length(HttpRequest* r) { (void)r; return 0; }
 const char* http_request_query(HttpRequest* r) { (void)r; return ""; }
 #else
 
@@ -2831,6 +2832,10 @@ const char* http_request_path(HttpRequest* req) {
 
 const char* http_request_body(HttpRequest* req) {
     return (req && req->body) ? req->body : "";
+}
+
+int http_request_body_length(HttpRequest* req) {
+    return (req && req->body) ? (int)req->body_length : 0;
 }
 
 const char* http_request_query(HttpRequest* req) {

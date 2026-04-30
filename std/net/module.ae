@@ -25,7 +25,8 @@ exports (
     http_response_set_header, http_response_set_body, http_response_set_body_n,
     http_response_json, http_server_response_free,
     http_server_set_actor_handler,
-    http_request_method, http_request_path, http_request_body, http_request_query,
+    http_request_method, http_request_path, http_request_body,
+    http_request_body_length, http_request_query,
     http_serve_static, http_serve_file, http_mime_type,
     ae_io_await, ae_io_cancel,
     ae_pipe_open, ae_pipe_write_fd, ae_fd_write, ae_fd_close,
@@ -108,6 +109,9 @@ extern http_server_set_actor_handler(server: ptr, step_fn: ptr, send_fn: ptr, sp
 extern http_request_method(req: ptr) -> string
 extern http_request_path(req: ptr) -> string
 extern http_request_body(req: ptr) -> string
+// See std/http/module.ae for the rationale; body_length avoids
+// strlen-truncation on binary bodies.
+extern http_request_body_length(req: ptr) -> int
 extern http_request_query(req: ptr) -> string
 
 // Static file serving

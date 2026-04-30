@@ -1,0 +1,101 @@
+// Test: http.request_body_length accessor.
+//
+// Sibling of http.request_body — exposes HttpRequest::body_length so
+// callers can read NUL-bearing payloads (svn PUT, image uploads, gzip-
+// compressed bodies) without `string.length(http.request_body(req))`
+// strlen-truncating at the first embedded zero. Section A.1 of
+// aether_changes_needed.md / fresh-aether-requests.md from the
+// svn-aether port.
+//
+// What this guards: that the C accessor exists, is exported through
+// std.http (and std.net), is reachable from a request-handler in the
+// actor-dispatch mode, returns 0 on null input, and matches the byte
+// count of the body the server received. The deeper binary-safety
+// property — that the parser preserves NULs end-to-end — is a
+// separate concern (the parser strdup's the body); this test does
+// NOT depend on that.
+//
+// Cases:
+//   1. handler reads `request_body_length` for a known-length body
+//   2. null-input safety: http.request_body_length(0) returns 0
+//   3. body returned via header is the count we sent
+
+import std.http
+import std.string
+
+const PORT = 18103
+
+handle_post(req: ptr, res: ptr, ud: ptr) {
+    blen = http.request_body_length(req)
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "X-Body-Len", "${blen}")
+    http.response_set_body(res, "ok")
+}
+
+message Go { raw: ptr }
+message Noop {}
+
+actor Srv {
+    state s = 0
+    receive {
+        Go(raw) -> {
+            s = raw
+            http.server_start(raw)
+        }
+    }
+}
+
+actor Helper {
+    state x = 0
+    receive { Noop() -> { x = 1 } }
+}
+
+main() {
+    println("=== http.request_body_length accessor test ===")
+
+    // Case 2 first — null safety, no networking needed.
+    if http.request_body_length(0) != 0 {
+        println("FAIL 2: http.request_body_length(0) != 0")
+        exit(1)
+    }
+    println("  PASS 2: null req returns 0")
+
+    raw = http.server_create(PORT)
+    http.server_post(raw, "/echo", handle_post, 0)
+    spawn(Helper())
+    a = spawn(Srv())
+    a ! Go { raw: raw }
+    sleep(300)
+
+    // Case 1+3: non-binary body, length should be exact byte count.
+    body = "hello-world-12345"
+    expected = string.length(body)
+    resp = http.post_raw("http://127.0.0.1:${PORT}/echo", body, "text/plain")
+    if resp == 0 {
+        println("FAIL 1: post_raw returned null")
+        exit(1)
+    }
+
+    if http.response_status_code(resp) != 200 {
+        println("FAIL 1: status = ${http.response_status_code(resp)}, expected 200")
+        exit(1)
+    }
+
+    hdrs = http.response_headers_str(resp)
+    expected_header = "X-Body-Len: ${expected}"
+    if string.contains(hdrs, expected_header) == 0 {
+        println("FAIL 3: expected '${expected_header}' in response headers, got:")
+        println(hdrs)
+        exit(1)
+    }
+    println("  PASS 1+3: handler read body_length=${expected} matching client-sent count")
+
+    http.response_free(resp)
+
+    http.server_stop(raw)
+    sleep(200)
+    http.server_free(raw)
+
+    println("=== All cases passed ===")
+    exit(0)
+}

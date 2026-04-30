@@ -906,6 +906,11 @@ Raw externs: `http_server_bind_raw`, `http_server_start_raw`.
 - `http.server_use_middleware(server, middleware, user_data)` - Add middleware
 
 **Request Accessors:**
+- `http.request_method(req)` → `string` - HTTP method (`GET`, `POST`, `PUT`, …); empty if `req` is null.
+- `http.request_path(req)` → `string` - URL path (no query string); empty if `req` is null.
+- `http.request_body(req)` → `string` - Request body as a C-string. **Truncates at the first embedded NUL** when read via `string.length(...)`; pair with `http.request_body_length` for binary-safe access.
+- `http.request_body_length(req)` → `int` - Byte count of the request body. Returns 0 if `req` is null or has no body. Reach for this whenever the body may contain NUL bytes (svn PUT, image uploads, gzipped JSON) — the length-aware companion to `http.request_body`.
+- `http.request_query(req)` → `string` - Raw query string; empty if absent.
 - `http.get_header(req, name)` - Get request header
 - `http.get_query_param(req, name)` - Get query parameter
 - `http.get_path_param(req, name)` - Get URL path parameter

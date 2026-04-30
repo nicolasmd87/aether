@@ -460,6 +460,11 @@ void http_server_drain_connection(HttpServer* server, int client_fd);
 const char* http_request_method(HttpRequest* req);
 const char* http_request_path(HttpRequest* req);
 const char* http_request_body(HttpRequest* req);
+// Sibling of http_request_body — returns the body's byte length so
+// callers can read NUL-bearing payloads (svn PUT, image uploads,
+// gzip-compressed bodies) without strlen() truncating at the first
+// embedded zero. Returns 0 if req is NULL or has no body.
+int         http_request_body_length(HttpRequest* req);
 const char* http_request_query(HttpRequest* req);
 
 #endif

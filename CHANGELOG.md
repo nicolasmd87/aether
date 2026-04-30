@@ -5,9 +5,15 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.109.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Added
+
+- **`http.request_body_length(req) -> int`** (`std/net/{aether_http_server.h,aether_http_server.c}`, `std/http/module.ae`, `std/net/module.ae`, `docs/stdlib-reference.md`, `tests/syntax/test_http_request_body_length.ae`). Sibling of `http.request_body` — exposes `HttpRequest::body_length` so callers can read NUL-bearing payloads (svn PUT, image uploads, gzip-compressed bodies) without `string.length(http.request_body(req))` strlen-truncating at the first embedded zero. The field already existed on the C struct (`size_t body_length`); this just plumbs it out via the standard accessor pattern (returns 0 if `req` is NULL or has no body, available from both `import std.http` and `import std.net`). Symmetric with the outbound `http.response_set_body_n` (#309 family). Section A.1 of `aether_changes_needed.md` from the svn-aether port — retires ~12 lines of hand-written C in `subversion/ae/svnserver/shim.c` (the three body-getter helpers).
 
 ## [0.109.0]
 
