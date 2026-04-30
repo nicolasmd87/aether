@@ -173,6 +173,18 @@ const char* type_to_string(Type* type);
 int types_equal(Type* a, Type* b);
 Type* clone_type(Type* type);
 
+/* True when `t` is a typed pointer to the cons-cell `StringSeq`
+ * runtime struct (see std/collections/aether_stringseq.h) — i.e.
+ * Aether-side `*StringSeq`. Used by typechecker + codegen to
+ * dispatch on cons-cell-typed match expressions, literal targets,
+ * and field types. Centralised here so the struct-name literal
+ * lives in exactly one place. */
+int is_string_seq_ptr_type(const Type* t);
+
+/* Build a fresh `*StringSeq` Type. Caller owns and must `free_type`
+ * it. */
+Type* make_string_seq_ptr_type(void);
+
 // AST Node functions
 ASTNode* create_ast_node(ASTNodeType type, const char* value, int line, int column);
 void add_child(ASTNode* parent, ASTNode* child);

@@ -1,0 +1,239 @@
+// Regression test for the closure-free *StringSeq combinators:
+// reverse / concat / take / drop. These four are pure structural
+// ops over the cons cells — no callbacks, no Aether-function-from-C
+// invocation, refcount-correct on shared tails.
+//
+// Closure-bearing siblings (map / filter / foldl) are deferred to
+// a separate change set once the Aether-callback-from-C bridge is
+// settled; they're explicitly out of scope for the *StringSeq
+// PR. See docs/sequences.md § Combinators for the cut-line.
+
+import std.string
+
+extern exit(code: int)
+
+// Walk the seq and join with "," for assertions. Same shape as the
+// pattern_match test's walk_join helper.
+walk_join(s: *StringSeq, acc: string) -> string {
+    match s {
+        []      -> {
+            return acc
+        }
+        [h | t] -> {
+            sep = ""
+            if string.length(acc) > 0 {
+                sep = ","
+            }
+            return walk_join(t, string.concat(string.concat(acc, sep), h))
+        }
+    }
+    return acc
+}
+
+main() {
+    // ---- reverse ----------------------------------------------------
+
+    // Empty input
+    e = string.seq_reverse(string.seq_empty())
+    if string.seq_is_empty(e) != 1 {
+        println("FAIL 1a: reverse(empty) should be empty")
+        exit(1)
+    }
+
+    // Five elements; head/tail order flips end-to-end
+    s = string.split_to_seq("a,b,c,d,e", ",")
+    r = string.seq_reverse(s)
+    if string.seq_length(r) != 5 {
+        println("FAIL 1b: reverse length=${string.seq_length(r)}, want 5")
+        exit(1)
+    }
+    j = walk_join(r, "")
+    if string.equals(j, "e,d,c,b,a") != 1 {
+        println("FAIL 1c: reverse=${j}, want e,d,c,b,a")
+        exit(1)
+    }
+
+    // Reversing twice round-trips back to the original order.
+    r2 = string.seq_reverse(r)
+    j2 = walk_join(r2, "")
+    if string.equals(j2, "a,b,c,d,e") != 1 {
+        println("FAIL 1d: reverse-twice=${j2}, want a,b,c,d,e")
+        exit(1)
+    }
+
+    string.seq_free(r)
+    string.seq_free(r2)
+    println("  PASS 1: reverse round-trip + empty edge case")
+
+    // ---- concat -----------------------------------------------------
+
+    a = string.split_to_seq("x,y", ",")
+    b = string.split_to_seq("1,2,3", ",")
+    c = string.seq_concat(a, b)
+    if string.seq_length(c) != 5 {
+        println("FAIL 2a: concat length=${string.seq_length(c)}, want 5")
+        exit(1)
+    }
+    cj = walk_join(c, "")
+    if string.equals(cj, "x,y,1,2,3") != 1 {
+        println("FAIL 2b: concat=${cj}, want x,y,1,2,3")
+        exit(1)
+    }
+
+    // After freeing the result, `b` (which the result shared) must
+    // still be walkable — concat copies `a` but shares `b`.
+    string.seq_free(c)
+    if string.seq_length(b) != 3 {
+        println("FAIL 2c: after freeing concat result, b.length=${string.seq_length(b)}, want 3")
+        exit(1)
+    }
+    bj = walk_join(b, "")
+    if string.equals(bj, "1,2,3") != 1 {
+        println("FAIL 2d: shared tail b after free=${bj}, want 1,2,3")
+        exit(1)
+    }
+    string.seq_free(a)
+    string.seq_free(b)
+
+    // Empty edges
+    empty_a = string.seq_concat(string.seq_empty(), string.split_to_seq("p,q", ","))
+    if string.seq_length(empty_a) != 2 {
+        println("FAIL 2e: concat(empty, [p,q]).length=${string.seq_length(empty_a)}")
+        exit(1)
+    }
+    string.seq_free(empty_a)
+
+    empty_b = string.seq_concat(string.split_to_seq("r,s", ","), string.seq_empty())
+    if string.seq_length(empty_b) != 2 {
+        println("FAIL 2f: concat([r,s], empty).length=${string.seq_length(empty_b)}")
+        exit(1)
+    }
+    string.seq_free(empty_b)
+
+    println("  PASS 2: concat with shared tail + empty edges")
+
+    // ---- take -------------------------------------------------------
+
+    src = string.split_to_seq("alpha,beta,gamma,delta,epsilon", ",")
+
+    t0 = string.seq_take(src, 0)
+    if string.seq_is_empty(t0) != 1 {
+        println("FAIL 3a: take(s, 0) should be empty")
+        exit(1)
+    }
+    string.seq_free(t0)
+
+    t3 = string.seq_take(src, 3)
+    if string.seq_length(t3) != 3 {
+        println("FAIL 3b: take(s, 3).length=${string.seq_length(t3)}")
+        exit(1)
+    }
+    if string.equals(walk_join(t3, ""), "alpha,beta,gamma") != 1 {
+        println("FAIL 3c: take(s, 3)")
+        exit(1)
+    }
+
+    // Asking for more than the spine has should clamp to the length.
+    t99 = string.seq_take(src, 99)
+    if string.seq_length(t99) != 5 {
+        println("FAIL 3d: take(s, 99).length=${string.seq_length(t99)}, want 5")
+        exit(1)
+    }
+    string.seq_free(t99)
+
+    // Negative n — same as take(0): empty.
+    tneg = string.seq_take(src, -3)
+    if string.seq_is_empty(tneg) != 1 {
+        println("FAIL 3e: take(s, -3) should be empty")
+        exit(1)
+    }
+    string.seq_free(tneg)
+
+    // The result is an independent spine; freeing it must NOT touch src.
+    string.seq_free(t3)
+    if string.seq_length(src) != 5 {
+        println("FAIL 3f: take's free affected src; src.length=${string.seq_length(src)}")
+        exit(1)
+    }
+
+    println("  PASS 3: take + clamps + independent spine")
+
+    // ---- drop -------------------------------------------------------
+
+    d0 = string.seq_drop(src, 0)
+    if string.seq_length(d0) != 5 {
+        println("FAIL 4a: drop(s, 0).length=${string.seq_length(d0)}")
+        exit(1)
+    }
+    string.seq_free(d0)
+
+    d3 = string.seq_drop(src, 3)
+    if string.seq_length(d3) != 2 {
+        println("FAIL 4b: drop(s, 3).length=${string.seq_length(d3)}")
+        exit(1)
+    }
+    if string.equals(walk_join(d3, ""), "delta,epsilon") != 1 {
+        println("FAIL 4c: drop(s, 3)")
+        exit(1)
+    }
+
+    d99 = string.seq_drop(src, 99)
+    if string.seq_is_empty(d99) != 1 {
+        println("FAIL 4d: drop past end should be empty")
+        exit(1)
+    }
+    string.seq_free(d99)
+
+    dneg = string.seq_drop(src, -1)
+    if string.seq_length(dneg) != 5 {
+        println("FAIL 4e: drop(s, -1).length=${string.seq_length(dneg)}")
+        exit(1)
+    }
+    string.seq_free(dneg)
+
+    // drop returns a retained tail-pointer of `src`. After freeing
+    // `d3`, `src` must still be walkable end-to-end.
+    string.seq_free(d3)
+    sj = walk_join(src, "")
+    if string.equals(sj, "alpha,beta,gamma,delta,epsilon") != 1 {
+        println("FAIL 4f: src corrupted after dropping its tail")
+        exit(1)
+    }
+
+    string.seq_free(src)
+    println("  PASS 4: drop + clamps + retained-tail invariant")
+
+    // ---- combinator interplay --------------------------------------
+
+    // take + drop on the same input partition the spine: take(n) ++
+    // drop(n) should equal the original.
+    in5 = string.split_to_seq("p,q,r,s,t", ",")
+    front = string.seq_take(in5, 2)
+    back = string.seq_drop(in5, 2)
+    rebuilt = string.seq_concat(front, back)
+    if string.equals(walk_join(rebuilt, ""), "p,q,r,s,t") != 1 {
+        println("FAIL 5: take(2) ++ drop(2) != original")
+        exit(1)
+    }
+    string.seq_free(front)
+    string.seq_free(back)
+    string.seq_free(rebuilt)
+    string.seq_free(in5)
+    println("  PASS 5: take(n) ++ drop(n) round-trips the spine")
+
+    // reverse(reverse(s)) is identity for any s.
+    in6 = string.split_to_seq("zeta,eta,theta", ",")
+    once = string.seq_reverse(in6)
+    twice = string.seq_reverse(once)
+    if string.equals(walk_join(twice, ""), "zeta,eta,theta") != 1 {
+        println("FAIL 6: reverse(reverse(s)) != s")
+        exit(1)
+    }
+    string.seq_free(once)
+    string.seq_free(twice)
+    string.seq_free(in6)
+    println("  PASS 6: reverse(reverse(s)) == s")
+
+    println("OK")
+    exit(0)
+}

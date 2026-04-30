@@ -106,7 +106,19 @@ plays that role), no interfaces.
   storage, not through the `fs.read_binary` wrapper.
 - **Reserved keywords that trip users up**: `state`, `match`,
   `message` (actor-model hangover). Fails in extern param names too.
-  Rename to `st`, `is_match`, `msg`.
+  Rename to `st`, `is_match`, `msg`. `after` parses as something
+  scanner-special too — rename locals to `b_after` / `tail_after`
+  if you hit a "Expected statement in block" at an `if x = call(),
+  …` use site.
+- **Runtime sequence of strings → `*StringSeq`, not `string[]`.**
+  `string[]` lowers to bare `const char**` (no length, no refcount).
+  `*StringSeq` (`std.string` surface — `string.seq_cons`,
+  `string.seq_head`, `string.seq_tail`, `string.seq_length`,
+  `string.seq_free`, etc.) is O(1) head/tail/cons/length, refcount-
+  aware, structurally shared, pattern-matches with `[h|t]`. Same
+  `[a, b, c]` literal builds a cons chain when target is
+  `*StringSeq` (message field) or a static C array when target is
+  `string[]`. `string.split_to_seq` is the runtime entry point.
 - **Trailing closure brace must be on the call's line.** `f(x) { … }`
   attaches as a trailing closure; `f(x)\n{ … }` is parsed as a
   separate bare-brace block. The compiler warns on the next-line

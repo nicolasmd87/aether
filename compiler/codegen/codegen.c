@@ -1151,6 +1151,24 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "#include <time.h>");
     print_line(gen, "#include <setjmp.h>");
     print_line(gen, "#include \"aether_panic.h\"");
+    /* Cons-cell sequence type — std.collections.string_seq.
+     *
+     * We include the header unconditionally rather than gating on
+     * "program uses *StringSeq" because:
+     *   1. Detecting use requires walking every type annotation in
+     *      the AST, including transitively-imported externs.
+     *   2. The header is small (one struct + 10 prototypes, only
+     *      <stddef.h> transitively) so the cost of including it
+     *      always is negligible.
+     *   3. The full struct definition is required at the call site
+     *      whenever a `match` arm pattern-matches `[h|t]` against a
+     *      *StringSeq, because the lowered C reads `s->head` /
+     *      `s->tail` directly. A forward decl wouldn't be enough.
+     *   4. The runtime header path is wired via tools/ae.c's -I
+     *      flags (-I.../std/collections), and libaether.a (or the
+     *      from-source fallback build) provides the symbols.
+     */
+    print_line(gen, "#include \"aether_stringseq.h\"");
     print_line(gen, "#ifdef _WIN32");
     print_line(gen, "#define NOMINMAX");
     print_line(gen, "#include <windows.h>");

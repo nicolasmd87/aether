@@ -1,0 +1,96 @@
+// Regression test for `match` arm dispatch over *StringSeq cons cells.
+//
+// Surface under test:
+//   - `[]` arm fires when the matched expression is NULL (empty seq);
+//     compiles to `_match_seq == NULL`.
+//   - `[h | t]` arm fires when the matched expression is non-NULL;
+//     binds `h: string = s->head` and `t: *StringSeq = s->tail`.
+//     Recursive `walk(t)` composes because tail is properly typed.
+//   - Unused-binding optimisation: when the arm body doesn't reference
+//     `h` or `t`, the codegen skips the binding declaration but still
+//     emits the NULL check (matches the existing pattern_needs_array
+//     optimisation for the int-array path).
+//   - Existing int-array `[]` / `[h|t]` lowering is unaffected: it
+//     keeps using the slice-style `_match_arr` + `_match_len` shape.
+
+import std.string
+
+extern exit(code: int)
+
+// Walk a seq, accumulating into a comma-joined string, exercising
+// both [] and [h|t] arms with both bindings used.
+walk_join(s: *StringSeq, acc: string) -> string {
+    match s {
+        []      -> {
+            return acc
+        }
+        [h | t] -> {
+            sep = ""
+            if string.length(acc) > 0 {
+                sep = ","
+            }
+            return walk_join(t, string.concat(string.concat(acc, sep), h))
+        }
+    }
+    return acc
+}
+
+// Count cells using only the empty-arm + tail recursion. Tail is
+// referenced; head is not — exercises the unused-head optimisation.
+count_cells(s: *StringSeq, acc: int) -> int {
+    match s {
+        []      -> {
+            return acc
+        }
+        [h | t] -> {
+            return count_cells(t, acc + 1)
+        }
+    }
+    return acc
+}
+
+main() {
+    // ---- Case 1: empty seq matches `[]` arm ----
+    e = string.seq_empty()
+    n1 = count_cells(e, 0)
+    if n1 != 0 {
+        println("FAIL 1: empty count=${n1}, want 0")
+        exit(1)
+    }
+    println("  PASS 1: [] arm matches empty seq")
+
+    // ---- Case 2: head/tail decompose; both bindings used ----
+    s = string.split_to_seq("alpha,beta,gamma", ",")
+    joined = walk_join(s, "")
+    if string.equals(joined, "alpha,beta,gamma") != 1 {
+        println("FAIL 2: walk_join=${joined}, want alpha,beta,gamma")
+        exit(1)
+    }
+    string.seq_free(s)
+    println("  PASS 2: [h|t] arm decomposes head + tail correctly")
+
+    // ---- Case 3: tail-only binding (head unused) ----
+    s3 = string.split_to_seq("a,b,c,d,e", ",")
+    n3 = count_cells(s3, 0)
+    if n3 != 5 {
+        println("FAIL 3: count=${n3}, want 5")
+        exit(1)
+    }
+    string.seq_free(s3)
+    println("  PASS 3: [h|t] arm with unused head still walks tail")
+
+    // ---- Case 4: nested match — pattern recovery from a returned tail ----
+    // A bigger seq, walked one head at a time. Demonstrates that
+    // tail-typed-as-*StringSeq composes through recursive walks.
+    s4 = string.split_to_seq("one,two,three,four,five,six,seven", ",")
+    j4 = walk_join(s4, "")
+    if string.equals(j4, "one,two,three,four,five,six,seven") != 1 {
+        println("FAIL 4: deep walk=${j4}")
+        exit(1)
+    }
+    string.seq_free(s4)
+    println("  PASS 4: deep recursive walk preserves order")
+
+    println("OK")
+    exit(0)
+}

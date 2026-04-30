@@ -1,12 +1,12 @@
 {
-  "name": "Aether Erlang",
+  "name": "Aether",
   "type": "dark",
   "colors": {
-    "editor.background": "#1e1e1e",
-    "editor.foreground": "#d4d4d4",
-    "editorLineNumber.foreground": "#858585",
-    "editorCursor.foreground": "#aeafad",
-    "editor.selectionBackground": "#264f78",
+    "editor.background":             "#1e1e1e",
+    "editor.foreground":             "#d4d4d4",
+    "editorLineNumber.foreground":   "#858585",
+    "editorCursor.foreground":       "#aeafad",
+    "editor.selectionBackground":    "#264f78",
     "editor.lineHighlightBackground": "#2a2a2a"
   },
   "tokenColors": [
@@ -15,7 +15,8 @@
       "scope": [
         "comment",
         "comment.line",
-        "comment.block"
+        "comment.block",
+        "punctuation.definition.comment"
       ],
       "settings": {
         "foreground": "#6a9955",
@@ -26,87 +27,180 @@
       "name": "Strings",
       "scope": [
         "string",
-        "string.quoted"
+        "string.quoted",
+        "string.quoted.double.aether"
       ],
       "settings": {
-        "foreground": "#FFCC00"
+        "foreground": "#ce9178"
       }
     },
     {
-      "name": "Numbers and Constants",
+      "name": "Escape sequences inside strings",
+      "scope": [
+        "constant.character.escape",
+        "constant.character.escape.aether"
+      ],
+      "settings": {
+        "foreground": "#d7ba7d"
+      }
+    },
+    {
+      "name": "String interpolation delimiters",
+      "scope": [
+        "punctuation.section.interpolation",
+        "meta.interpolation"
+      ],
+      "settings": {
+        "foreground": "#d4d4d4"
+      }
+    },
+    {
+      "name": "Numbers",
       "scope": [
         "constant.numeric",
-        "constant.language.boolean"
+        "constant.numeric.aether"
       ],
       "settings": {
-        "foreground": "#d19a66"
+        "foreground": "#b5cea8"
       }
     },
     {
-      "name": "Control Keywords",
+      "name": "Boolean and null literals",
       "scope": [
-        "keyword.control.aether",
-        "keyword.control.flow.aether",
-        "keyword.control",
-        "keyword.control.flow",
-        "storage.type.aether",
-        "storage.type",
-        "keyword.other.aether",
-        "keyword.declaration.aether"
+        "constant.language.boolean",
+        "constant.language.null",
+        "constant.language.aether"
       ],
       "settings": {
-        "foreground": "#e06c75",
+        "foreground": "#569cd6"
+      }
+    },
+    {
+      "name": "Control flow keywords",
+      "scope": [
+        "keyword.control",
+        "keyword.control.aether",
+        "keyword.control.flow",
+        "keyword.control.flow.aether"
+      ],
+      "settings": {
+        "foreground": "#c586c0"
+      }
+    },
+    {
+      "name": "Storage and declaration keywords",
+      "scope": [
+        "storage.type",
+        "storage.type.aether",
+        "storage.modifier",
+        "storage.modifier.aether",
+        "keyword.declaration.aether",
+        "keyword.other.aether"
+      ],
+      "settings": {
+        "foreground": "#569cd6",
         "fontStyle": "bold"
       }
     },
     {
-      "name": "Function Names",
+      "name": "Built-in primitive types",
       "scope": [
-        "entity.name.function",
-        "entity.name.tag",
-        "support.function"
+        "support.type.primitive.aether",
+        "support.type.builtin.aether"
       ],
       "settings": {
-        "foreground": "#e06c75"
+        "foreground": "#4ec9b0"
       }
     },
     {
-      "name": "Main Function",
+      "name": "User-defined types",
+      "scope": [
+        "entity.name.type",
+        "entity.name.type.aether",
+        "entity.name.struct",
+        "entity.name.actor",
+        "entity.name.message",
+        "support.type"
+      ],
+      "settings": {
+        "foreground": "#4ec9b0"
+      }
+    },
+    {
+      "name": "Function definitions",
+      "scope": [
+        "entity.name.function",
+        "entity.name.function.aether"
+      ],
+      "settings": {
+        "foreground": "#dcdcaa"
+      }
+    },
+    {
+      "name": "main() entry point",
       "scope": [
         "entity.name.function.main",
+        "entity.name.function.main.aether",
         "support.function.main"
       ],
       "settings": {
-        "foreground": "#d19a66"
+        "foreground": "#dcdcaa",
+        "fontStyle": "italic bold"
+      }
+    },
+    {
+      "name": "Function call sites",
+      "scope": [
+        "meta.function-call",
+        "support.function",
+        "support.function.aether"
+      ],
+      "settings": {
+        "foreground": "#dcdcaa"
       }
     },
     {
       "name": "Variables",
       "scope": [
         "variable",
-        "variable.other"
+        "variable.other",
+        "variable.other.aether",
+        "variable.parameter"
       ],
       "settings": {
-        "foreground": "#d4d4d4"
+        "foreground": "#9cdcfe"
       }
     },
     {
       "name": "Operators",
       "scope": [
-        "keyword.operator"
+        "keyword.operator",
+        "keyword.operator.aether"
       ],
       "settings": {
         "foreground": "#d4d4d4"
       }
     },
     {
-      "name": "Types",
+      "name": "Cons-cell pattern punctuation [h | t]",
       "scope": [
-        "entity.name.type",
-        "support.type"
+        "meta.pattern.cons.aether",
+        "punctuation.separator.cons.aether"
       ],
       "settings": {
-        "foreground": "#56b6c2"
+        "foreground": "#c586c0"
+      }
+    },
+    {
+      "name": "Punctuation (braces, brackets, parens, semicolons)",
+      "scope": [
+        "punctuation.section",
+        "punctuation.definition",
+        "punctuation.terminator",
+        "punctuation.separator"
+      ],
+      "settings": {
+        "foreground": "#d4d4d4"
       }
     }
   ]

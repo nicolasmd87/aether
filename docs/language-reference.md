@@ -89,6 +89,32 @@ string[5] names;           // Array of 5 strings
 float[100] values;         // Array of 100 floats
 ```
 
+### Sequence Types (`*StringSeq`)
+
+`*StringSeq` is a cons-cell linked list of strings — Erlang/Elixir-shaped, with O(1) head/tail/cons/length and refcount-based structural sharing. Empty list is the `NULL` pointer; each cell carries a cached length.
+
+```aether
+import std.string
+
+main() {
+    s = string.seq_empty()
+    s = string.seq_cons("c", s)
+    s = string.seq_cons("b", s)
+    s = string.seq_cons("a", s)        // s = a -> b -> c
+    println(string.seq_length(s))       // 3 (O(1))
+
+    // Pattern-match destructure works directly:
+    match s {
+        []      -> { /* end */ }
+        [h | t] -> { println(h); /* h: string, t: *StringSeq */ }
+    }
+
+    string.seq_free(s)
+}
+```
+
+The full surface lives in `std.string` (alongside `string.array_*` for the legacy `AetherStringArray` shape). See [sequences.md](sequences.md) for the worked examples and the literal-disambiguation rule (`[a, b, c]` builds a cons chain when the target type is `*StringSeq`, vs a static C array when the target is `string[]`).
+
 ### Numeric Literal Formats
 
 Integer literals support hex, octal, and binary notation. Underscore separators are allowed anywhere in digits for readability.
