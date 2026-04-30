@@ -1,0 +1,103 @@
+// Regression test for context-sensitive `[a, b, c]` literal
+// disambiguation against *StringSeq. Same source syntax, two
+// lowerings:
+//   - target type *StringSeq → right-fold cons chain
+//   - target type string[]   → static C array (existing behaviour)
+//
+// Contexts that propagate the target type into the literal:
+//   - message-field initializer (the driving use case)
+//   - other contexts that could carry the literal end up needing
+//     this same stamping rule; they're added as those contexts
+//     become reachable from real code (Aether currently lacks
+//     `name: Type = expr` local declarations, so the variable-
+//     decl context can't be exercised end-to-end yet).
+
+import std.string
+
+extern exit(code: int)
+
+// String[] message — existing static-array path. Must keep working.
+message Urls { sites: string[], count: int }
+
+// *StringSeq message — new cons-chain path.
+message Sites { sites: *StringSeq }
+
+// One actor handles both messages so the test is sequential, not
+// racy: it counts confirmations and exits only when both branches
+// are verified.
+actor Verifier {
+    state seen_array = 0
+    state seen_seq = 0
+
+    receive {
+        Urls(sites, count) -> {
+            if string.equals(sites[0], "alpha") != 1 {
+                println("FAIL static-array sites[0]=${sites[0]}")
+                exit(1)
+            }
+            if string.equals(sites[1], "beta") != 1 {
+                println("FAIL static-array sites[1]=${sites[1]}")
+                exit(1)
+            }
+            if string.equals(sites[2], "gamma") != 1 {
+                println("FAIL static-array sites[2]=${sites[2]}")
+                exit(1)
+            }
+            if count != 3 {
+                println("FAIL static-array count=${count}, want 3")
+                exit(1)
+            }
+            seen_array = 1
+            if seen_seq == 1 {
+                println("OK")
+                exit(0)
+            }
+        }
+
+        Sites(sites) -> {
+            if string.seq_length(sites) != 3 {
+                println("FAIL cons length=${string.seq_length(sites)}, want 3")
+                exit(1)
+            }
+            t0 = sites
+            if string.equals(string.seq_head(t0), "alpha") != 1 {
+                println("FAIL cons[0]=${string.seq_head(t0)}, want alpha")
+                exit(1)
+            }
+            t1 = string.seq_tail(t0)
+            if string.equals(string.seq_head(t1), "beta") != 1 {
+                println("FAIL cons[1]=${string.seq_head(t1)}, want beta")
+                exit(1)
+            }
+            t2 = string.seq_tail(t1)
+            if string.equals(string.seq_head(t2), "gamma") != 1 {
+                println("FAIL cons[2]=${string.seq_head(t2)}, want gamma")
+                exit(1)
+            }
+            t3 = string.seq_tail(t2)
+            if string.seq_is_empty(t3) != 1 {
+                println("FAIL cons should terminate after gamma")
+                exit(1)
+            }
+            seen_seq = 1
+            if seen_array == 1 {
+                println("OK")
+                exit(0)
+            }
+        }
+    }
+}
+
+main() {
+    v = spawn(Verifier())
+
+    // Both messages share the same `[...]` literal syntax. The
+    // typechecker dispatches by target field type — Urls.sites
+    // gets a static C array, Sites.sites gets a cons chain.
+    v ! Urls  { sites: ["alpha", "beta", "gamma"], count: 3 }
+    v ! Sites { sites: ["alpha", "beta", "gamma"] }
+
+    sleep(1000)
+    println("FAIL: timed out before both messages were verified")
+    exit(1)
+}

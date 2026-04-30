@@ -53,18 +53,13 @@
         "path": "./aether.tmLanguage.json"
       }
     ],
-    "configurationDefaults": {
-      "editor.tokenColorCustomizations": {
-        "textMateRules": [
-          {
-            "scope": "string.quoted.double.aether",
-            "settings": {
-              "foreground": "#FFCC00"
-            }
-          }
-        ]
+    "themes": [
+      {
+        "label": "Aether",
+        "uiTheme": "vs-dark",
+        "path": "./themes/aether.json"
       }
-    },
+    ],
     "configuration": {
       "title": "Aether",
       "properties": {

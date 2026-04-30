@@ -200,6 +200,20 @@ Type* clone_type(Type* type) {
     return new_type;
 }
 
+int is_string_seq_ptr_type(const Type* t) {
+    return t && t->kind == TYPE_PTR && t->element_type &&
+           t->element_type->kind == TYPE_STRUCT &&
+           t->element_type->struct_name &&
+           strcmp(t->element_type->struct_name, "StringSeq") == 0;
+}
+
+Type* make_string_seq_ptr_type(void) {
+    Type* t = create_type(TYPE_PTR);
+    t->element_type = create_type(TYPE_STRUCT);
+    t->element_type->struct_name = strdup("StringSeq");
+    return t;
+}
+
 // AST Node functions
 ASTNode* create_ast_node(ASTNodeType type, const char* value, int line, int column) {
     ASTNode* node = malloc(sizeof(ASTNode));
