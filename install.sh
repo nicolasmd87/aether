@@ -366,25 +366,24 @@ install_editor_extension() {
     local editor_cmd="$1"
     local editor_name="$2"
     local ext_dir="$3"
-    local version=$(cat "$(dirname "$0")/VERSION" 2>/dev/null | tr -d '[:space:]' || echo "0.0.0")
-    local ext_name="aether-language-$version"
-    local ext_path="$ext_dir/$ext_name"
     local src_dir="$(dirname "$0")/editor/vscode"
+    local installer="$src_dir/install.sh"
 
-    if [ ! -d "$src_dir" ]; then
-        warn "  Extension source not found at $src_dir"
+    if [ ! -d "$src_dir" ] || [ ! -x "$installer" ]; then
+        warn "  Extension installer not found at $installer"
         return 1
     fi
 
+    # Delegate to editor/vscode/install.sh — single source of truth for
+    # which files ship and what folder name they ship under. Earlier
+    # this function maintained its own copy of that logic and silently
+    # drifted: it was naming the folder after the project VERSION
+    # (e.g. aether-language-0.105.0) and copying only 5 of the 8
+    # required files, so a release-built install would shadow the
+    # editor-side script's correct install with a folder that was
+    # missing themes/, the icon-theme manifest, and the README.
     info "Installing Aether extension for $editor_name..."
-    mkdir -p "$ext_path"
-    cp "$src_dir/package.json" "$ext_path/"
-    cp "$src_dir/aether.tmLanguage.json" "$ext_path/"
-    cp "$src_dir/language-configuration.json" "$ext_path/"
-    [ -f "$src_dir/icon.png" ] && cp "$src_dir/icon.png" "$ext_path/"
-    [ -f "$src_dir/icon-module.svg" ] && cp "$src_dir/icon-module.svg" "$ext_path/"
-    ok "  Extension installed to $ext_path"
-    warn "  Restart $editor_name for changes to take effect"
+    "$installer" "$ext_dir" || return 1
     return 0
 }
 
