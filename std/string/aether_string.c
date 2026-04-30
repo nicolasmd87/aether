@@ -786,11 +786,18 @@ AetherString* string_format_list(const char* fmt, void* args) {
  * `*` / `?` / `[…]` do not match a literal `/`).
  *
  * Aether-callable input is `string` (auto-unwrapped to `const char*`
- * by the extern boundary's #297 unwrap). The path-aware variant is
- * just this same function with flags=1; the wrapper layer passes
- * the right libc constant on POSIX (FNM_PATHNAME == 1 on every
- * platform we target — verified by checking glibc, musl, BSD, macOS;
- * the Windows path takes the literal int 1).
+ * by the extern boundary's #297 unwrap). The Aether-side `flags` int
+ * is a SENTINEL, NOT the libc fnmatch flag word: pass 0 for plain
+ * matching, any non-zero value for the pathname-aware form. The C
+ * side translates that sentinel into the platform's actual
+ * FNM_PATHNAME constant before calling libc fnmatch — `FNM_PATHNAME`
+ * is 0x01 on glibc/musl but 0x02 on macOS / BSD libc, so passing the
+ * raw Aether-side int through to fnmatch directly produced wrong
+ * results on macOS (the literal `1` was interpreted as
+ * `FNM_NOESCAPE` rather than `FNM_PATHNAME`, allowing `*` to cross
+ * `/` in the pathname-aware form). The wrapper layer
+ * (`glob_match_pathname`) passes 1 unconditionally; the translation
+ * happens here.
  *
  * Returns: 1 = match, 0 = no match, -1 = pattern syntax error
  * (unmatched bracket).
@@ -888,7 +895,14 @@ int string_glob_match_raw(const char* pattern, const char* s, int flags) {
      * we expose Aether-side, so this collapses correctly. */
     return win_glob_match(pattern, s, flags ? 1 : 0);
 #else
-    int r = fnmatch(pattern, s, flags);
+    /* Translate the Aether-side sentinel (0 = plain, non-zero =
+     * pathname-aware) into the platform's actual FNM_PATHNAME bit.
+     * Without this translation, macOS's fnmatch treats the raw `1`
+     * as FNM_NOESCAPE (since on BSD libc FNM_PATHNAME is 0x02, not
+     * 0x01) and `*` is allowed to cross `/` in pathname mode —
+     * the symptom that surfaced on the Mac/Clang CI lane. */
+    int libc_flags = (flags != 0) ? FNM_PATHNAME : 0;
+    int r = fnmatch(pattern, s, libc_flags);
     if (r == 0)            return 1;
     if (r == FNM_NOMATCH)  return 0;
     return -1;  /* any other libc error code maps to syntax-error */
