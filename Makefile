@@ -649,38 +649,51 @@ examples: compiler ae
 	@echo ===================================
 	@.\build\ae.exe examples
 else
-examples: compiler
+examples: compiler ae stdlib
 	@echo "==================================="
 	@echo "  Building Aether Examples"
+	@echo "  Parallel: $(NPROC) jobs"
 	@echo "==================================="
 	@$(MKDIR) $(BUILD_DIR)/examples $(BUILD_DIR)/examples/basics $(BUILD_DIR)/examples/actors $(BUILD_DIR)/examples/applications $(BUILD_DIR)/examples/c-interop $(BUILD_DIR)/examples/stdlib
-	@pass=0; fail=0; \
-	for src in $$(find examples -name '*.ae' | grep -v '/lib/' | grep -v '/packages/' | grep -v '/embedded-java/' | grep -v '/host-.*-demo\.ae$$' | sort); do \
-		name=$$(echo $$src | sed 's|examples/||;s|\.ae$$||'); \
-		dir=$$(dirname $$src); \
-		extra_c=""; \
-		if [ -d "$$dir" ]; then \
-			extra_c=$$(find "$$dir" -maxdepth 1 -name '*.c' 2>/dev/null | tr '\n' ' '); \
-		fi; \
-		printf "  %-30s " "$$name"; \
-		out_c="$(BUILD_DIR)/examples/$$name.c"; \
-		if ! ./build/aetherc$(EXE_EXT) $$src $$out_c 2>/tmp/ae_err.txt; then \
-			echo "FAIL (aetherc)"; \
-			cat /tmp/ae_err.txt 2>/dev/null | head -5; \
-			fail=$$((fail + 1)); \
-		elif ! $(CC) $(CFLAGS) $$out_c $$extra_c $(RUNTIME_SRC) $(STD_SRC) $(STD_REACTOR_SRC) $(COLLECTIONS_SRC) \
-		         -o $(BUILD_DIR)/examples/$$name$(EXE_EXT) $(LDFLAGS) 2>/tmp/cc_err.txt; then \
-			echo "FAIL (gcc)"; \
-			cat /tmp/cc_err.txt 2>/dev/null | head -20; \
-			fail=$$((fail + 1)); \
-		else \
-			echo "OK"; \
-			pass=$$((pass + 1)); \
-		fi; \
-	done; \
+	@tmpdir=$$(mktemp -d); \
+	script="$$tmpdir/build_one.sh"; \
+	printf '#!/bin/sh\n'                                                                            > "$$script"; \
+	printf 'src="$$1"; tmpdir="$$2"; root="$$3"\n'                                                  >> "$$script"; \
+	printf 'name=$$(echo "$$src" | sed "s|examples/||;s|\\.ae$$||")\n'                              >> "$$script"; \
+	printf 'key=$$(echo "$$name" | sed "s|/|_|g")\n'                                                >> "$$script"; \
+	printf 'dir=$$(dirname "$$src")\n'                                                              >> "$$script"; \
+	printf 'extra_c=""\n'                                                                           >> "$$script"; \
+	printf 'if [ -d "$$dir" ]; then\n'                                                              >> "$$script"; \
+	printf '  extra_c=$$(find "$$dir" -maxdepth 1 -name "*.c" 2>/dev/null | tr "\\n" " ")\n'        >> "$$script"; \
+	printf 'fi\n'                                                                                   >> "$$script"; \
+	printf 'out_c="$$root/$(BUILD_DIR)/examples/$$name.c"\n'                                        >> "$$script"; \
+	printf 'mkdir -p "$$(dirname "$$out_c")"\n'                                                     >> "$$script"; \
+	printf 'if ! "$$root/build/aetherc$(EXE_EXT)" "$$src" "$$out_c" 2>"$$tmpdir/$$key.aetherc.err"; then\n' >> "$$script"; \
+	printf '  printf "  %%-30s %%s\\n" "$$name" "FAIL (aetherc)"\n'                                 >> "$$script"; \
+	printf '  head -5 "$$tmpdir/$$key.aetherc.err"\n'                                               >> "$$script"; \
+	printf '  touch "$$tmpdir/FAIL_$$key"\n'                                                        >> "$$script"; \
+	printf '  exit 1\n'                                                                             >> "$$script"; \
+	printf 'fi\n'                                                                                   >> "$$script"; \
+	printf 'if ! $(CC) $(CFLAGS) "$$out_c" $$extra_c "$$root/$(BUILD_DIR)/libaether.a" -o "$$root/$(BUILD_DIR)/examples/$$name$(EXE_EXT)" $(LDFLAGS) 2>"$$tmpdir/$$key.gcc.err"; then\n' >> "$$script"; \
+	printf '  printf "  %%-30s %%s\\n" "$$name" "FAIL (gcc)"\n'                                     >> "$$script"; \
+	printf '  head -20 "$$tmpdir/$$key.gcc.err"\n'                                                  >> "$$script"; \
+	printf '  touch "$$tmpdir/FAIL_$$key"\n'                                                        >> "$$script"; \
+	printf '  exit 1\n'                                                                             >> "$$script"; \
+	printf 'fi\n'                                                                                   >> "$$script"; \
+	printf 'printf "  %%-30s %%s\\n" "$$name" "OK"\n'                                               >> "$$script"; \
+	printf 'touch "$$tmpdir/PASS_$$key"\n'                                                          >> "$$script"; \
+	chmod +x "$$script"; \
+	root=$$(pwd); \
+	find examples -name '*.ae' \
+	    | grep -v '/lib/' | grep -v '/packages/' | grep -v '/embedded-java/' | grep -v '/host-.*-demo\.ae$$' \
+	    | sort \
+	    | xargs -P $(NPROC) -I{} "$$script" "{}" "$$tmpdir" "$$root"; \
+	pass=$$(ls "$$tmpdir"/PASS_* 2>/dev/null | wc -l | tr -d ' '); \
+	fail=$$(ls "$$tmpdir"/FAIL_* 2>/dev/null | wc -l | tr -d ' '); \
 	echo ""; \
 	echo "  $$pass passed, $$fail failed"; \
 	echo "  Binaries in $(BUILD_DIR)/examples/"; \
+	rm -rf "$$tmpdir"; \
 	if [ "$$fail" -gt 0 ]; then exit 1; fi
 endif
 
