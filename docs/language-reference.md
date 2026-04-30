@@ -142,19 +142,40 @@ All numeric literal formats work with bitwise operators and in any expression co
 Variables support both explicit types and automatic type inference:
 
 ```aether
-// Type inference (recommended)
-x = 10;
-y = 20;
-name = "Alice";
-pi = 3.14159;
+// Type inference (recommended) — bare assignment is the canonical form
+x = 10
+y = 20
+name = "Alice"
+pi = 3.14159
 
 // Explicit types (optional)
-int z = 30;
-string greeting = "Hello";
-float temperature = 98.6;
+int z = 30
+string greeting = "Hello"
+float temperature = 98.6
 ```
 
 Variables are inferred from their initialization or usage context.
+
+**`let` / `var` are optional keywords**, accepted but not required. Bare Python-style assignment is the canonical form and is what most stdlib code uses. `let x = 10` and `var x = 10` parse identically to `x = 10`. There is no semantic distinction between `let` and `var` — Aether is not Rust; mutability is a property of the binding's later use, not its declaration.
+
+**Semicolons are optional.** Aether parses end-of-line as a statement terminator. The samples above use no semicolons; older samples in this doc may show `;` for clarity. Either is fine.
+
+### Casting between types
+
+Aether has **no general-purpose cast operator**. The `as` keyword is reserved for two specific cases:
+- `import mod as alias` — module aliasing (only inside `import` statements)
+- `expr as *StructName` — pointer-overlay struct cast (only with a leading `*` and a struct name; see [§ Pointer-to-struct type](#pointer-to-struct-type--structname-and-expr-as-structname) below)
+
+`buf as string`, `n as int`, `p as ptr` and similar primitive casts **do not parse** — `as` strictly requires `* StructName` after it. Convert between primitives this way instead:
+
+| From → To | How |
+|---|---|
+| `int` → `ptr` (e.g. passing an int to a `ptr`-typed extern param) | Implicit. The compiler emits `(void*)(intptr_t)` automatically at the call site. |
+| `string` → C `const char*` (passing a `string` to a C extern) | Implicit. The auto-unwrap injects `aether_string_data(arg)` at call sites for `string`-typed extern parameters. |
+| `int` → `string` | `string.from_int(n)` (and `string.from_long(n)`, `string.from_float(f)`). |
+| C `const char*` → Aether `string` | Assignment to a `string`-typed variable, or returning from a function declared `-> string`. The returned `ptr` is treated as a borrowed C-string until it crosses into refcounted-string territory. |
+| `int` ↔ `int64` / `byte` ↔ `int` | Implicit safe widenings (`byte → int`, `int → int64`). The narrowing direction (`int → byte`) requires a literal-range check and truncates non-literals at runtime. See [§ `byte`](#byte--unsigned-8-bit). |
+| Reinterpret a raw `ptr` as a typed struct view | `expr as *StructName` (the only `as` form for values). |
 
 ### Null
 
@@ -188,31 +209,42 @@ Constants are emitted as `#define` in generated C — zero runtime cost.
 
 ## Functions
 
-Functions support type inference for parameters and return types:
+Aether functions have **two canonical declaration forms** — pick by whether you want explicit types:
 
 ```aether
-// Type inference (recommended)
+// 1. Inferred (no type annotations) — the most compact form
 add(a, b) {
-    return a + b;
+    return a + b
 }
 
 greet(name) {
-    print("Hello, ");
-    print(name);
-    print("\n");
+    println("Hello, ${name}")
 }
 
-// Explicit types (optional, for clarity)
-int add_explicit(int a, int b) {
-    return a + b;
+// 2. Explicit types — the recommended form for stdlib / public APIs.
+//    Parameter types after `:`, return type after `->`.
+add(a: int, b: int) -> int {
+    return a + b
 }
 
-void print_hello() {
-    print("Hello\n");
+greet(name: string) -> string {
+    return "Hello, ${name}"
 }
 ```
 
-Functions can return values or `void`. The `main()` function is the entry point.
+Both forms parse cleanly. The `name(params) -> ReturnType { … }` shape is what every stdlib module uses (`std/string/module.ae`, `std/bytes/module.ae`, …) — match that style for new code.
+
+**Form to avoid: C-style prefix `int add(int a, int b) { … }`.** This form parses for backwards compatibility but is not the recommended style and isn't used in any stdlib module. New code should use the arrow form (`add(a: int, b: int) -> int { … }`) instead.
+
+**Void functions** simply omit the `-> Type` annotation:
+
+```aether
+print_hello() {
+    println("Hello")
+}
+```
+
+There is no `void` keyword in the return-type position — a missing return-type annotation IS the void declaration. The `main()` function is the entry point and is always void.
 
 ### Default arguments
 
@@ -816,6 +848,8 @@ main() {
 ```
 
 The cast is a view, not an allocation — the operand pointer's lifetime is the caller's problem (the same contract as raw `extern` interaction). Reach for this only when the storage is C-allocated and Aether wants to manipulate fields. For Aether-owned data, use the normal struct-literal form (`Point { x: 1, y: 2 }`) so refcounting and lifetime tracking apply.
+
+**`as` requires `*StructName` — there is no general-purpose primitive cast.** The parser strictly expects a `*` then an identifier after `as`. Forms like `buf as string`, `n as int`, `raw as ptr` do not parse. For converting between primitive types, see the [Casting between types](#casting-between-types) table above — most conversions are either implicit (Aether's type system inserts the necessary cast in the generated C) or use a named helper (`string.from_int`, `string.from_long`, …).
 
 The `as` keyword is the same token used for `import x as y` aliasing; the two parses don't collide because import-aliasing is recognised only inside `import` statements. Full semantics (operand type rules, error cases, the shared-token interaction) are in [c-interop.md § Struct overlay on raw pointers](c-interop.md#struct-overlay-on-raw-pointers--structname-and-expr-as-structname).
 
