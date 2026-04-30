@@ -1,41 +1,121 @@
 #!/bin/bash
-# Install Aether Language Support for VS Code/Cursor (Linux/macOS)
-# Run this script from the project root: ./editor/vscode/install.sh
+# Install Aether Language Support for VS Code / Cursor (Linux/macOS).
+# Run from anywhere: `./editor/vscode/install.sh` (paths resolved from
+# this script's own directory).
 
-set -e
+set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-EXT_NAME="aether-language-0.1.0"
 
-install_extension() {
-    local target_path="$1"
-    local editor_name="$2"
-    
-    echo "Installing Aether language support for $editor_name..."
-    echo "Target: $target_path"
-    
-    cd "$SCRIPT_DIR"
-    
-    mkdir -p "$target_path"
-    cp "$SCRIPT_DIR/package.json" "$target_path/"
-    cp "$SCRIPT_DIR/aether.tmLanguage.json" "$target_path/"
-    cp "$SCRIPT_DIR/language-configuration.json" "$target_path/"
-    
-    echo "✓ Extension installed successfully!"
-    echo "Please restart VS Code/Cursor for changes to take effect."
-    echo "Note: Make sure aether-lsp is in your PATH for LSP features."
-}
-
-# Detect VS Code or Cursor
-if [ -d "$HOME/.cursor" ]; then
-    echo "Detected Cursor installation"
-    install_extension "$HOME/.cursor/extensions/$EXT_NAME" "Cursor"
-elif [ -d "$HOME/.vscode" ]; then
-    echo "Detected VS Code installation"
-    install_extension "$HOME/.vscode/extensions/$EXT_NAME" "VS Code"
-else
-    echo "Error: Neither VS Code nor Cursor installation found."
-    echo "Please install VS Code or Cursor first."
+# Read the version straight from package.json so the installed-folder
+# name tracks the manifest. Avoids the trap of bumping package.json's
+# `version` and forgetting to update a hardcoded EXT_NAME here, which
+# is what made earlier installs ship without the themes/ payload.
+VERSION="$(awk -F'"' '/"version"/ {print $4; exit}' "$SCRIPT_DIR/package.json")"
+if [ -z "$VERSION" ]; then
+    echo "Error: failed to read version from package.json" >&2
     exit 1
 fi
+EXT_BASENAME="aether-language"
+EXT_DIR_NAME="${EXT_BASENAME}-${VERSION}"
 
+# Every file VS Code needs to load the language, grammar, theme, and
+# icons. Adding a new asset (e.g. a contrib/ snippet file)? Add it
+# here too — silently skipping it shipped a broken extension before.
+copy_extension_assets() {
+    local target_dir="$1"
+    mkdir -p "$target_dir/themes" "$target_dir/out"
+
+    # Manifest + grammar + language config (always required).
+    cp "$SCRIPT_DIR/package.json"                 "$target_dir/"
+    cp "$SCRIPT_DIR/aether.tmLanguage.json"       "$target_dir/"
+    cp "$SCRIPT_DIR/language-configuration.json"  "$target_dir/"
+
+    # Color theme (file-icon theme + UI-color theme). Without these,
+    # VS Code falls back to its default theme and the user sees the
+    # generic colours rather than the Aether palette — the surprise
+    # this script existed to hide.
+    cp "$SCRIPT_DIR/aether-icon-theme.json"       "$target_dir/"
+    cp "$SCRIPT_DIR/themes/aether.json"           "$target_dir/themes/"
+
+    # Icons.
+    cp "$SCRIPT_DIR/icon-module.svg"              "$target_dir/"
+    cp "$SCRIPT_DIR/icon.png"                     "$target_dir/"
+
+    # README — VS Code's extension panel displays this when the user
+    # clicks the extension entry.
+    [ -f "$SCRIPT_DIR/README.md" ] && cp "$SCRIPT_DIR/README.md" "$target_dir/"
+
+    # LSP client bundle. The repo ships a pre-built `out/extension.js`
+    # so end users don't need node/npm to install. If the bundle is
+    # missing (someone wiped `out/` without rebuilding) we still copy
+    # everything else and warn — the extension then falls back to
+    # syntax-only mode, which is degraded but not broken.
+    if [ -f "$SCRIPT_DIR/out/extension.js" ]; then
+        cp "$SCRIPT_DIR/out/extension.js" "$target_dir/out/"
+    else
+        echo "  Warning: out/extension.js not found; LSP client won't auto-start." >&2
+        echo "           Build it with: cd $SCRIPT_DIR && npm install && npm run build" >&2
+    fi
+}
+
+install_extension() {
+    local extensions_root="$1"
+    local editor_name="$2"
+
+    echo "Installing Aether language support v${VERSION} for ${editor_name}..."
+    echo "Target: ${extensions_root}/${EXT_DIR_NAME}"
+
+    # Remove any prior install of the same extension family (any
+    # version) so stale assets from older releases don't shadow new
+    # ones. Two naming patterns to catch:
+    #   1. `aether-language-<version>` — folders this script produces.
+    #   2. `aether.aether-language-<version>` — folders the VS Code
+    #      Marketplace produces (publisher-id prefixed). Past
+    #      marketplace installs co-existing with side-loaded ones
+    #      caused exactly this "I installed but nothing changed"
+    #      symptom — VS Code prefers the publisher-prefixed flavour.
+    # Bounded to the Aether-language basename — never touch unrelated
+    # extension folders.
+    if [ -d "$extensions_root" ]; then
+        find "$extensions_root" -maxdepth 1 -type d \
+            \( -name "${EXT_BASENAME}-*" -o -name "aether.${EXT_BASENAME}-*" \) \
+            -exec rm -rf {} + 2>/dev/null || true
+    fi
+
+    copy_extension_assets "${extensions_root}/${EXT_DIR_NAME}"
+
+    echo "✓ Extension installed successfully."
+    echo "  Restart ${editor_name} for the language to register."
+    echo "  Theme: open the command palette → 'Color Theme' → 'Aether'."
+    echo "  LSP:   ensure 'aether-lsp' is on PATH (or set 'aether.lsp.path')."
+}
+
+# Resolve install target. Both editors keep their extensions under
+# ~/.<editor>/extensions/. Cursor wins if both are installed, since it
+# inherits VS Code's extension protocol and is what most Aether devs
+# run today; pass an explicit override via $1 to install elsewhere
+# (root install.sh delegates here with the editor's extensions dir).
+TARGET_OVERRIDE="${1:-}"
+if [ -n "$TARGET_OVERRIDE" ]; then
+    # Infer the editor name from the override path so the success
+    # message reads "Restart Cursor" / "Restart VS Code" rather than
+    # the generic "Restart custom path" the script used to print.
+    case "$TARGET_OVERRIDE" in
+        *.cursor/extensions*)        target_label="Cursor" ;;
+        *.vscode/extensions*)        target_label="VS Code" ;;
+        *.vscode-insiders/extensions*) target_label="VS Code Insiders" ;;
+        *.cursor-server/extensions*) target_label="Cursor (remote)" ;;
+        *)                           target_label="your editor" ;;
+    esac
+    install_extension "$TARGET_OVERRIDE" "$target_label"
+elif [ -d "$HOME/.cursor/extensions" ]; then
+    install_extension "$HOME/.cursor/extensions" "Cursor"
+elif [ -d "$HOME/.vscode/extensions" ]; then
+    install_extension "$HOME/.vscode/extensions" "VS Code"
+else
+    echo "Error: neither VS Code nor Cursor extensions directory found." >&2
+    echo "       Tried: ~/.cursor/extensions, ~/.vscode/extensions"      >&2
+    echo "       Override with: $0 /path/to/extensions"                  >&2
+    exit 1
+fi

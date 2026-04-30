@@ -1,7 +1,7 @@
 AETHER_COMPILER = ../../../build/aetherc
 CC = gcc
-CFLAGS = -O3 -march=native -I../../../compiler -I../../../runtime -I../../../runtime/actors -I../../../runtime/scheduler -I../../../runtime/config -I../../../runtime/utils -I../../../std -I../../../std/string -I../../../std/io -I../../../std/math -I../../../std/net -I../../../std/collections -I../../../std/json
-LDFLAGS = -pthread -lm
+CFLAGS = -O3 -march=native -flto -fno-plt -I../../../compiler -I../../../runtime -I../../../runtime/actors -I../../../runtime/scheduler -I../../../runtime/config -I../../../runtime/utils -I../../../std -I../../../std/string -I../../../std/io -I../../../std/math -I../../../std/net -I../../../std/collections -I../../../std/json
+LDFLAGS = -flto -pthread -lm
 RUNTIME_SRCS = ../../../runtime/scheduler/multicore_scheduler.c \
                ../../../runtime/scheduler/aether_io_poller_epoll.c \
                ../../../runtime/scheduler/aether_io_poller_kqueue.c \

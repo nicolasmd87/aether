@@ -35,6 +35,11 @@ int contains_send_expression(ASTNode* node) {
     return 0;
 }
 
+// Tree-shake of merged-but-unused stdlib functions runs in
+// module_prune_unreachable() before typecheck — see aether_module.c.
+// Codegen no longer needs a separate pass; by this point the AST only
+// contains functions the user actually reaches.
+
 static int is_inlineable_scalar(int type_kind) {
     switch (type_kind) {
         case TYPE_INT: case TYPE_INT64: case TYPE_PTR:
@@ -1700,6 +1705,8 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
             }
         }
     }
+
+    // (reachable_funcs computed earlier, before the forward-decl loop.)
 
     for (int i = 0; i < program->child_count; i++) {
         ASTNode* child = program->children[i];

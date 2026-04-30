@@ -1,8 +1,14 @@
 .PHONY: all clean ping_pong counting thread_ring fork_join skynet
 
 CC = gcc
-CFLAGS = -O3 -march=native -pthread -Wall
-LDFLAGS = -pthread
+# -flto / -fno-plt match the Aether and C++ release flag set so the
+# cross-language benchmark comparison is on equal footing. Languages
+# whose compilers already enable LTO under `--release` (Rust via
+# Cargo.toml profile, Pony, Zig ReleaseFast, Go) need no Makefile
+# change here. Bytecode runtimes (Erlang, Elixir, Java, Scala) have no
+# equivalent knob; their .beam / .class targets stay as-is.
+CFLAGS = -O3 -march=native -flto -fno-plt -pthread -Wall
+LDFLAGS = -flto -pthread
 
 all: ping_pong counting thread_ring fork_join skynet
 

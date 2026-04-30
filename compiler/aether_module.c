@@ -1506,3 +1506,212 @@ void module_merge_into_program(ASTNode* program) {
     }
 }
 
+// ----------------------------------------------------------------------------
+// Reachability-based pruning of merged AST
+//
+// `module_merge_into_program` clones every exported function from every
+// imported module (plus its transitive helpers) into the program AST.
+// Many of those functions never get called from the user's program —
+// most stdlib modules expose far more surface than any one program uses.
+//
+// Without filtering, the C compiler then has to compile (and the linker
+// has to discard) thousands of dead functions per build. Removing them
+// at the AST level skips that wasted gcc work entirely AND skips the
+// equivalent typecheck work, since the typechecker walks every top-
+// level decl in the program AST.
+//
+// Algorithm: classic mark-and-sweep over the call graph.
+//   1. Seed the reachable set from main + actor handlers + exports +
+//      every non-imported (user-written) function and builder.
+//   2. Walk each seed, collecting AST_FUNCTION_CALL targets and bare
+//      AST_IDENTIFIER references that name a top-level function.
+//   3. For each newly-discovered name, find its definition in the
+//      program AST and walk it the same way. Repeat until fixed point.
+//   4. Sweep: drop any AST_FUNCTION_DEFINITION / AST_BUILDER_FUNCTION
+//      whose `is_imported` flag is set and whose name is NOT in the
+//      reachable set. Constants stay (they're cheap, and pruning them
+//      would need an additional reachability pass keyed on identifier
+//      references — TODO follow-up if measurement shows it matters).
+//
+// Qualified call sites carry dotted names (`os.argv0`); codegen rewrites
+// dot-to-underscore at emission. We normalise the same way when adding
+// to the set so it matches the prefixed function-definition names that
+// `module_merge_into_program` produced (`os_argv0`).
+// ----------------------------------------------------------------------------
+
+typedef struct {
+    char** names;
+    int count;
+    int capacity;
+} NameSet;
+
+static int nameset_contains(const NameSet* s, const char* name) {
+    if (!name) return 0;
+    for (int i = 0; i < s->count; i++) {
+        if (strcmp(s->names[i], name) == 0) return 1;
+    }
+    return 0;
+}
+
+static int nameset_add(NameSet* s, const char* name) {
+    if (!name) return 0;
+    char buf[256];
+    const char* key = name;
+    if (strchr(name, '.')) {
+        size_t n = strlen(name);
+        if (n >= sizeof(buf)) n = sizeof(buf) - 1;
+        for (size_t i = 0; i < n; i++) {
+            char c = name[i];
+            buf[i] = (c == '.') ? '_' : c;
+        }
+        buf[n] = '\0';
+        key = buf;
+    }
+    if (nameset_contains(s, key)) return 0;
+    if (s->count >= s->capacity) {
+        int new_cap = s->capacity ? s->capacity * 2 : 64;
+        char** nn = realloc(s->names, sizeof(char*) * new_cap);
+        if (!nn) return 0;
+        s->names = nn;
+        s->capacity = new_cap;
+    }
+    s->names[s->count++] = strdup(key);
+    return 1;
+}
+
+static void nameset_free(NameSet* s) {
+    for (int i = 0; i < s->count; i++) free(s->names[i]);
+    free(s->names);
+    s->names = NULL;
+    s->count = s->capacity = 0;
+}
+
+static void prune_collect_calls(ASTNode* node, NameSet* seen, NameSet* worklist) {
+    if (!node) return;
+    if (node->type == AST_FUNCTION_CALL && node->value) {
+        if (nameset_add(seen, node->value)) {
+            nameset_add(worklist, node->value);
+        }
+    }
+    // Bare identifiers can name a function passed as a callback, taken
+    // by address, or stored in a variable for later dispatch. Adding
+    // every identifier name is a sound over-approximation: non-function
+    // names won't match any function definition and harmlessly dead-end.
+    if (node->type == AST_IDENTIFIER && node->value) {
+        if (nameset_add(seen, node->value)) {
+            nameset_add(worklist, node->value);
+        }
+    }
+    // Member access used as a value (no following call paren), e.g.
+    // `cb = string.split`. The parser stores the namespace as
+    // children[0] (an AST_IDENTIFIER) and the field name in `value`,
+    // so reconstruct the dotted form so nameset_add normalises it
+    // to the same C symbol as a direct `string.split(...)` call site.
+    if (node->type == AST_MEMBER_ACCESS && node->value &&
+        node->child_count > 0 && node->children[0] &&
+        node->children[0]->type == AST_IDENTIFIER && node->children[0]->value) {
+        char qualified[256];
+        snprintf(qualified, sizeof(qualified), "%s.%s",
+                 node->children[0]->value, node->value);
+        if (nameset_add(seen, qualified)) {
+            nameset_add(worklist, qualified);
+        }
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        prune_collect_calls(node->children[i], seen, worklist);
+    }
+}
+
+static ASTNode* prune_find_function(ASTNode* program, const char* name) {
+    if (!program || !name) return NULL;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* c = program->children[i];
+        if (!c || !c->value) continue;
+        if ((c->type == AST_FUNCTION_DEFINITION || c->type == AST_BUILDER_FUNCTION) &&
+            strcmp(c->value, name) == 0) {
+            return c;
+        }
+    }
+    return NULL;
+}
+
+void module_prune_unreachable(ASTNode* program) {
+    if (!program) return;
+
+    NameSet reachable = {0};
+    NameSet worklist = {0};
+
+    // Seed: main, non-imported user functions, actor decls, exports.
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* c = program->children[i];
+        if (!c) continue;
+        switch (c->type) {
+            case AST_MAIN_FUNCTION:
+            case AST_ACTOR_DEFINITION:
+            case AST_EXPORT_STATEMENT:
+                prune_collect_calls(c, &reachable, &worklist);
+                break;
+            case AST_FUNCTION_DEFINITION:
+            case AST_BUILDER_FUNCTION:
+                if (!c->is_imported) {
+                    prune_collect_calls(c, &reachable, &worklist);
+                }
+                break;
+            default:
+                break;
+        }
+    }
+
+    // Closure: drain worklist, walking each newly reachable function.
+    // For each name we also pull in any imported function whose prefixed
+    // form ends with `_<name>` — that's how glob-import (`import mathlist
+    // (*)`) and selective-import (`import mathlist [cube]`) callers reach
+    // a merged `mathlist_cube` by writing the bare `cube`. Without this
+    // suffix match the prune sweep would drop those merged bodies even
+    // though user code does call them.
+    while (worklist.count > 0) {
+        char* name = worklist.names[--worklist.count];
+        ASTNode* fn = prune_find_function(program, name);
+        if (fn) prune_collect_calls(fn, &reachable, &worklist);
+
+        size_t name_len = strlen(name);
+        for (int i = 0; i < program->child_count; i++) {
+            ASTNode* c = program->children[i];
+            if (!c || !c->value || !c->is_imported) continue;
+            if (c->type != AST_FUNCTION_DEFINITION && c->type != AST_BUILDER_FUNCTION) continue;
+            size_t cv_len = strlen(c->value);
+            if (cv_len > name_len + 1 &&
+                c->value[cv_len - name_len - 1] == '_' &&
+                strcmp(c->value + cv_len - name_len, name) == 0) {
+                if (nameset_add(&reachable, c->value)) {
+                    nameset_add(&worklist, c->value);
+                }
+            }
+        }
+        free(name);
+    }
+    free(worklist.names);
+
+    // Sweep: drop imported functions/builders that the closure never
+    // reached. Compaction is in-place; freeing the dead AST sub-trees
+    // releases the memory the typechecker would otherwise traverse.
+    int kept = 0;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* c = program->children[i];
+        int drop = 0;
+        if (c && c->is_imported && c->value &&
+            (c->type == AST_FUNCTION_DEFINITION || c->type == AST_BUILDER_FUNCTION) &&
+            !nameset_contains(&reachable, c->value)) {
+            drop = 1;
+        }
+        if (drop) {
+            free_ast_node(c);
+        } else {
+            program->children[kept++] = c;
+        }
+    }
+    program->child_count = kept;
+
+    nameset_free(&reachable);
+}
+

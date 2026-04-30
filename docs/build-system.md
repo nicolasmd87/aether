@@ -58,6 +58,17 @@ Both add C files to the build — they are additive when both are present.
 | **Good for** | C helpers your program always needs | Renderer backends, platform variants |
 | **Works with** | `ae build` and `ae run` | `ae build` and `ae run` |
 
+### `--quick` for fast iteration
+
+By default, `ae build` runs the C compiler with `-O2` to match release-quality codegen. For tight edit/build/test loops where binary speed isn't critical, pass `--quick` to drop to `-O0 -g`:
+
+```sh
+ae build src/main.ae           # release-shape, -O2 (default)
+ae build src/main.ae --quick   # iteration-shape, -O0 -g
+```
+
+`--quick` typically halves the gcc step on small programs, at the cost of unoptimised codegen. `ae run` already uses `-O0` regardless, since cache hits dominate over a single optimised compile.
+
 ### Resolving the build target
 
 `ae build` accepts either a path to a `.ae` file or a `[[bin]]` name from `aether.toml`. The two are equivalent:
@@ -75,11 +86,20 @@ If you run `ae build` from a subdirectory and there's no `aether.toml` in the cu
 
 ## Build Cache
 
-`ae` caches compiled binaries in `~/.aether/cache/` using an FNV64 hash of source content, compiler mtime, runtime library mtime, and build flags.
+Both `ae run` and `ae build` cache compiled binaries in `~/.aether/cache/`. The cache key is an FNV64 hash of:
 
-**Cost breakdown of a run:**
-- Cache hit: fork + exec of the cached binary, nothing else.
-- Cache miss: full aetherc front-end + gcc compile + link. Dominant cost is gcc; aetherc is a small fraction.
+- The source file's content
+- The `aetherc` binary's mtime (recompile invalidates everything)
+- `libaether.a`'s mtime (stdlib rebuild invalidates everything)
+- Every `--extra` C file's *content* (editing an FFI shim invalidates the cache, not just touching it)
+- The optimisation level (`-O0` for `ae run` and `ae build --quick`, `-O2` for default `ae build`)
+
+`ae run` and `ae build` use separate cache slots so toggling between them doesn't churn one entry back and forth.
+
+**Cost breakdown of a build:**
+- Cache hit (`ae build`): copy the cached binary to the requested output path. Sub-millisecond on local disk.
+- Cache hit (`ae run`): fork + exec the cached binary directly.
+- Cache miss: full `aetherc` front-end + gcc compile + link. Dominant cost is gcc; `aetherc` is a small fraction.
 - First macOS run: an extra one-time pause while the OS performs its Gatekeeper check on the newly compiled binary. Subsequent runs of the same cached binary are hit-path.
 
 ```bash
@@ -87,7 +107,7 @@ ae cache          # Show cache location and entry count
 ae cache clear    # Delete all cached builds
 ```
 
-Cache entries are invalidated automatically when source or compiler changes.
+Wasm builds, `--emit=lib`, and `--namespace` SDK generation skip the cache (different artefact shapes; each will get its own cache layout when measurement justifies it).
 
 ---
 
