@@ -115,6 +115,10 @@ typedef enum {
     TYPE_UINT64,
     TYPE_FLOAT,
     TYPE_BOOL,
+    TYPE_BYTE,          // unsigned 8-bit (`unsigned char` in C). Type-precision
+                        // for struct fields, function params, returns, locals.
+                        // For bulk byte storage, use std.bytes (the mutable
+                        // buffer) — `byte` is the single-octet primitive only.
     TYPE_STRING,
     TYPE_ACTOR_REF,
     TYPE_MESSAGE,

@@ -39,9 +39,38 @@ Aether is a statically-typed, compiled language combining Erlang-inspired actor 
 | `float` | 64-bit floating point | `3.14`, `-0.5` |
 | `string` | UTF-8 encoded strings | `"Hello"` |
 | `bool` | Boolean type | `true`, `false` |
+| `byte` | Unsigned 8-bit (0..255) | `byte b = 0xFF` |
 | `void` | No value (for functions) | - |
 | `long` | 64-bit signed integer | `long x = 0` |
 | `ptr` | Raw pointer (for C interop) | `null` |
+
+#### `byte` — unsigned 8-bit
+
+The `byte` type maps to `unsigned char` in C. Use it for type-precision in struct fields, function parameters, returns, and locals where a value is genuinely an octet — packed-tag bytes (`flags & 0x80`), opcode discriminators, NaN-boxing pointer tags, network protocol headers, on-disk file format fields. For *bulk* byte storage (binary buffers, byte arrays), reach for `std.bytes` (the mutable byte buffer) instead.
+
+```aether
+struct OpCode {
+    byte op
+    byte flags
+    int  imm
+}
+
+set_tag(t: byte) -> byte {
+    return t & 0x7F     // bitwise byte op byte → byte
+}
+
+main() {
+    byte b = 0xA5
+    byte high = b & 0xF0    // stays byte
+    n = b + 1               // byte + int → int (promotes)
+}
+```
+
+**Range check on integer literals.** Assigning an out-of-range integer literal to a `byte` slot is a compile-time error: `byte b = 256` is rejected. Non-literal int → byte assignments compile and truncate at runtime (`byte b = some_int` keeps the low 8 bits), matching how other narrowings (`int64 → int`) behave.
+
+**Arithmetic.** `byte op byte → byte`; mixed `byte op int → int` (the wider type wins). This keeps NaN-boxing / packed-tag patterns expressible (`tag & 0x07` stays a byte) while letting general arithmetic widen naturally.
+
+**C-side mapping.** `byte` lowers to `unsigned char` in the generated C, not `uint8_t`. The two are typedef-compatible on most platforms but C's strict-aliasing rules give `unsigned char *` an exemption (it can alias *any* type for read/write); `uint8_t *` does not. Since `byte` is exactly the type used to inspect the bytes of other types' storage, `unsigned char` is the right choice.
 
 ### Composite Types
 

@@ -569,6 +569,7 @@ void emit_actor_to_header(CodeGenerator* gen, ASTNode* actor) {
                                 case TYPE_FLOAT: c_type = "float"; break;
                                 case TYPE_STRING: c_type = "const char*"; break;
                                 case TYPE_BOOL: c_type = "int"; break;
+                                case TYPE_BYTE: c_type = "unsigned char"; break;
                                 default: c_type = "int"; break;
                             }
                             fprintf(gen->header_file, ", %s %s", c_type, field->name);
@@ -652,6 +653,15 @@ const char* get_c_type(Type* type) {
         case TYPE_UINT64: return "uint64_t";
         case TYPE_FLOAT: return "float";
         case TYPE_BOOL: return "int";
+        /* `unsigned char` (not `uint8_t`) so the compiler's strict-aliasing
+         * exemption applies: code may legally read or write any other
+         * type's bytes through an `unsigned char *`. uint8_t is a typedef
+         * of `unsigned char` on most platforms but the C standard does
+         * not require it; using uint8_t* to scrape bytes from another
+         * type's storage is technically a strict-aliasing violation.
+         * `unsigned char` is the right C type for "the octet at this
+         * address" semantics — which is exactly what `byte` means. */
+        case TYPE_BYTE: return "unsigned char";
         case TYPE_STRING: return "const char*";
         case TYPE_VOID: return "void";
         case TYPE_ACTOR_REF: {
@@ -767,6 +777,7 @@ static const char* get_abi_type(Type* type) {
         case TYPE_UINT64: return "uint64_t";
         case TYPE_FLOAT:  return "float";
         case TYPE_BOOL:   return "int32_t";
+        case TYPE_BYTE:   return "unsigned char";
         case TYPE_STRING: return "const char*";
         case TYPE_VOID:   return "void";
         case TYPE_PTR:    return "AetherValue*";

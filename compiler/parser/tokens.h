@@ -58,6 +58,7 @@ typedef enum {
     TOKEN_UINT64,
     TOKEN_FLOAT,
     TOKEN_BOOL,
+    TOKEN_BYTE,             // 'byte' type — unsigned 8-bit (`unsigned char` in C)
     TOKEN_STRING,
     TOKEN_ACTOR_REF,
     TOKEN_MESSAGE,

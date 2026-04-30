@@ -1,0 +1,106 @@
+// Regression test for the `byte` primitive type.
+//
+// `byte` is unsigned 8-bit (`unsigned char` in C). Type-precision for
+// struct fields, function parameters, returns, and locals. For bulk
+// byte storage use `std.bytes` — this is the single-octet primitive.
+//
+// Cases:
+//   1. byte local: read, write, arithmetic.
+//   2. byte struct field round-trip.
+//   3. byte function parameter + return.
+//   4. byte → int implicit widen.
+//   5. byte op byte → byte (NaN-boxing / packed-tag arithmetic).
+//   6. byte op int → int (mixed widens to int).
+//   7. byte bitwise (& | ^ << >>) preserves byte typing on byte op byte.
+//   8. Hex / binary / octal literals at the 0..255 boundary.
+//   9. Non-literal int → byte assignment compiles (runtime truncate).
+//
+// The compile-error case (out-of-range integer literal → byte) is
+// covered separately by tests/regression/test_byte_literal_range_error.ae
+// since this file has to compile cleanly to test the runtime cases.
+
+extern exit(code: int)
+
+struct OpCode {
+    byte op
+    byte flags
+    int  imm
+}
+
+set_tag(t: byte) -> byte {
+    return t
+}
+
+main() {
+    // Case 1: byte local.
+    byte b = 7
+    if b != 7 { println("FAIL 1a: b=${b}"); exit(1) }
+    b = 200
+    if b != 200 { println("FAIL 1b: b=${b}"); exit(1) }
+    println("  PASS 1: byte local read/write")
+
+    // Case 2: struct field.
+    o = OpCode { op: 7, flags: 128, imm: 9999 }
+    if o.op != 7 { println("FAIL 2a: o.op=${o.op}"); exit(1) }
+    if o.flags != 128 { println("FAIL 2b: o.flags=${o.flags}"); exit(1) }
+    if o.imm != 9999 { println("FAIL 2c: o.imm=${o.imm}"); exit(1) }
+    println("  PASS 2: byte struct fields round-trip alongside int")
+
+    // Case 3: function parameter + return.
+    r = set_tag(42)
+    if r != 42 { println("FAIL 3: set_tag=${r}"); exit(1) }
+    println("  PASS 3: byte function param + return")
+
+    // Case 4: byte → int implicit widen.
+    byte bb = 200
+    n = bb + 1
+    if n != 201 { println("FAIL 4: n=${n}"); exit(1) }
+    println("  PASS 4: byte→int implicit widen in arithmetic")
+
+    // Case 5: byte op byte → byte (stays byte).
+    byte x = 7
+    byte y = 8
+    byte sum = x + y
+    if sum != 15 { println("FAIL 5: sum=${sum}"); exit(1) }
+    println("  PASS 5: byte op byte → byte (NaN-boxing path)")
+
+    // Case 6: byte + int → int (mixed widens).
+    byte b6 = 100
+    n6 = b6 + 50
+    if n6 != 150 { println("FAIL 6: n6=${n6}"); exit(1) }
+    println("  PASS 6: byte op int → int (mixed widens)")
+
+    // Case 7: bitwise on bytes.
+    byte mask = 0x0F
+    byte v    = 0xA5
+    byte and  = v & mask
+    if and != 5 { println("FAIL 7a: and=${and}"); exit(1) }
+    byte or = v | mask
+    if or != 175 { println("FAIL 7b: or=${or}"); exit(1) }
+    byte xor = v ^ mask
+    if xor != 170 { println("FAIL 7c: xor=${xor}"); exit(1) }
+    byte shl = (1 & 0xFF) << 4
+    if shl != 16 { println("FAIL 7d: shl=${shl}"); exit(1) }
+    println("  PASS 7: bitwise byte op byte preserves byte typing")
+
+    // Case 8: literals at the boundary.
+    byte zero = 0
+    byte max  = 255
+    byte hex  = 0xFF
+    byte bin  = 0b1111_1111
+    byte oct  = 0o377
+    if zero != 0 { println("FAIL 8a"); exit(1) }
+    if max != 255 { println("FAIL 8b"); exit(1) }
+    if hex != 255 { println("FAIL 8c"); exit(1) }
+    if bin != 255 { println("FAIL 8d"); exit(1) }
+    if oct != 255 { println("FAIL 8e"); exit(1) }
+    println("  PASS 8: hex / binary / octal literals at 0..255 boundary")
+
+    // Case 9: non-literal int → byte runtime truncate.
+    int big = 300
+    byte trunc = big
+    if trunc != 44 { println("FAIL 9: trunc=${trunc}, want 44 (300 mod 256)"); exit(1) }
+    println("  PASS 9: non-literal int → byte truncates at runtime")
+
+    println("OK")
+}
