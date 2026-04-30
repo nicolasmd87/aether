@@ -594,6 +594,13 @@ int compile_source(const char* input_path, const char* output_path) {
     // Step 2.6: Merge pure Aether module functions into program AST
     module_merge_into_program(program);
 
+    // Step 2.65: Tree-shake imported functions the program never calls.
+    // Reduces typecheck and gcc compile time on programs that only use
+    // a slice of large stdlib modules. Must run after merge (so the
+    // closure can see merged helpers) and before typecheck (so dead
+    // bodies don't slow it down). See module_prune_unreachable.
+    module_prune_unreachable(program);
+
     // Step 2.7: --emit=lib capability-empty check.
     // In lib mode the output is consumed by another process (Java host,
     // Python script, etc.) that owns network/filesystem/process access.

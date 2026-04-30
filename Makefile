@@ -280,29 +280,35 @@ test-fast: compiler-fast
 	./build/test_runner$(EXE_EXT)
 
 # test-valgrind / test-asan / test-memory: link the test runner's own
-# main() from TEST_SRC together with the compiler-as-library sources.
-# Must use COMPILER_LIB_SRC (no aetherc.c) — linking COMPILER_SRC here
-# pulls in aetherc's main() and collides with test_main.c's main().
-# The test-fast target at line ~275 is the reference pattern.
-test-valgrind: compiler
+# main() from TEST_SRC against pre-built flavoured archives instead of
+# recompiling the full stdlib + compiler-lib sources every invocation.
+# Each archive bakes the right instrumentation in once (asan, memory
+# tracking, or -O0 -g for valgrind). See `stdlib-{asan,memory,dbg}`
+# rules above. The archives must use COMPILER_LIB_SRC (no aetherc.c)
+# so test_main.c's main() doesn't collide with aetherc's.
+test-valgrind: compiler stdlib-dbg
 	@echo "==================================="
 	@echo "Running Tests with Valgrind"
 	@echo "==================================="
-	$(CC) $(CFLAGS) -O0 -g $(TEST_SRC) $(COMPILER_LIB_SRC) $(RUNTIME_SRC) $(STD_SRC) $(STD_REACTOR_SRC) $(COLLECTIONS_SRC) -Icompiler -Istd -Istd/collections -o build/test_runner$(EXE_EXT) $(LDFLAGS)
+	$(CC) $(CFLAGS_NO_OPT) $(DBG_OPT) $(TEST_SRC) build/dbg/libaether_compiler.a build/dbg/libaether.a -Icompiler -Istd -Istd/collections -o build/test_runner$(EXE_EXT) $(LDFLAGS)
 	valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1 ./build/test_runner$(EXE_EXT)
 
-test-asan: compiler
+test-asan: compiler stdlib-asan
 	@echo "==================================="
 	@echo "Running Tests with AddressSanitizer"
 	@echo "==================================="
-	$(CC) -fsanitize=address -fsanitize=leak -fno-omit-frame-pointer -O1 -g $(TEST_SRC) $(COMPILER_LIB_SRC) $(RUNTIME_SRC) $(STD_SRC) $(STD_REACTOR_SRC) $(COLLECTIONS_SRC) -Icompiler -Istd -Istd/collections -o build/test_runner_asan$(EXE_EXT) $(LDFLAGS) -lpthread -lm
+	$(CC) $(CFLAGS_NO_OPT) $(ASAN_OPT) $(ASAN_FLAGS) $(TEST_SRC) build/asan/libaether_compiler.a build/asan/libaether.a -Icompiler -Istd -Istd/collections -o build/test_runner_asan$(EXE_EXT) $(LDFLAGS)
+ifeq ($(shell uname -s),Linux)
 	ASAN_OPTIONS=detect_leaks=1:halt_on_error=1 ./build/test_runner_asan$(EXE_EXT)
+else
+	ASAN_OPTIONS=halt_on_error=1 ./build/test_runner_asan$(EXE_EXT)
+endif
 
-test-memory: compiler
+test-memory: compiler stdlib-memory
 	@echo "==================================="
 	@echo "Running Memory Tracking Tests"
 	@echo "==================================="
-	$(CC) $(CFLAGS) -DAETHER_MEMORY_TRACKING $(TEST_SRC) $(COMPILER_LIB_SRC) $(RUNTIME_SRC) $(STD_SRC) $(STD_REACTOR_SRC) $(COLLECTIONS_SRC) -Icompiler -Istd -Istd/collections -o build/test_runner_mem$(EXE_EXT) $(LDFLAGS)
+	$(CC) $(CFLAGS) $(MEM_FLAGS) $(TEST_SRC) build/memory/libaether_compiler.a build/memory/libaether.a -Icompiler -Istd -Istd/collections -o build/test_runner_mem$(EXE_EXT) $(LDFLAGS)
 	./build/test_runner_mem$(EXE_EXT)
 
 test-manual-runtime: compiler
@@ -709,11 +715,11 @@ examples-run: examples
 		echo ""; \
 	done
 
-lsp: compiler
+lsp: compiler stdlib
 	@echo "==================================="
 	@echo "Building Aether LSP Server ($(DETECTED_OS))"
 	@echo "==================================="
-	$(CC) $(CFLAGS) lsp/main.c lsp/aether_lsp.c $(COMPILER_LIB_SRC) $(RUNTIME_SRC) $(STD_SRC) $(STD_REACTOR_SRC) $(COLLECTIONS_SRC) $(LDFLAGS) -Icompiler -Istd -o build/aether-lsp$(EXE_EXT)
+	$(CC) $(CFLAGS) lsp/main.c lsp/aether_lsp.c build/libaether_compiler.a build/libaether.a -Icompiler -Istd -Istd/collections -o build/aether-lsp$(EXE_EXT) $(LDFLAGS)
 	@echo "✓ LSP Server built successfully: build/aether-lsp$(EXE_EXT)"
 
 apkg:
@@ -780,8 +786,8 @@ docs-serve: docs docs-server
 	@echo ""
 	./build/docs-server$(EXE_EXT)
 
-# Precompiled stdlib archive
-stdlib: $(STD_OBJS) $(STD_REACTOR_OBJS) $(COLLECTIONS_OBJS) $(RUNTIME_OBJS)
+# Precompiled stdlib archive — runtime + std for user programs.
+stdlib: $(STD_OBJS) $(STD_REACTOR_OBJS) $(COLLECTIONS_OBJS) $(RUNTIME_OBJS) build/libaether_compiler.a
 	@echo "Creating precompiled stdlib archive..."
 	@ar rcs build/libaether.a $(STD_OBJS) $(STD_REACTOR_OBJS) $(COLLECTIONS_OBJS) $(RUNTIME_OBJS)
 	@echo "✓ Stdlib archive created: build/libaether.a"
@@ -790,6 +796,102 @@ ifeq ($(shell uname -s),Linux)
 	@$(CC) -shared -fPIC -o build/libaether_sandbox.so runtime/libaether_sandbox_preload.c -ldl -lrt 2>/dev/null || true
 	@test -f build/libaether_sandbox.so && echo "✓ Sandbox preload: build/libaether_sandbox.so" || true
 endif
+
+# Compiler-as-library archive — COMPILER_LIB_SRC without aetherc.c's main().
+# Consumed by the LSP server and the sanitizer test runners. Kept separate
+# from libaether.a because user programs never need the compiler embedded.
+build/libaether_compiler.a: $(COMPILER_LIB_OBJS)
+	@echo "Creating compiler-as-library archive..."
+	@ar rcs $@ $(COMPILER_LIB_OBJS)
+	@echo "✓ Compiler-lib archive created: $@"
+
+# Sanitizer / debug-flavoured archives.
+#
+# AddressSanitizer instrumentation only catches issues in code it touches
+# at compile time — running asan-instrumented test code against an
+# uninstrumented stdlib leaves any leak/UB in std/* invisible.
+# Same logic for AETHER_MEMORY_TRACKING (the macro adds counters inside
+# aether_memory.c that need to be defined when stdlib code calls into it)
+# and for the -O0 -g shape that valgrind needs for legible traces.
+#
+# Building flavoured archives once per flavour lets each test runner
+# link instantly while preserving full coverage. Pattern rules emit to
+# `build/<flavour>-obj/...` so the default obj/ tree is untouched.
+
+CFLAGS_NO_OPT := $(filter-out -O3 -O2 -O1 -O0,$(CFLAGS))
+# Apple Clang on arm64 doesn't accept -fsanitize=leak (LeakSanitizer is
+# bundled into ASan at runtime on Darwin). On Linux gcc/clang it must be
+# requested explicitly. Platform-detect to keep both green.
+ifeq ($(shell uname -s),Linux)
+ASAN_FLAGS    := -fsanitize=address -fsanitize=leak -fno-omit-frame-pointer
+else
+ASAN_FLAGS    := -fsanitize=address -fno-omit-frame-pointer
+endif
+ASAN_OPT      := -O1 -g
+MEM_FLAGS     := -DAETHER_MEMORY_TRACKING
+DBG_OPT       := -O0 -g
+
+ASAN_OBJ_DIR := build/asan-obj
+MEM_OBJ_DIR  := build/memory-obj
+DBG_OBJ_DIR  := build/dbg-obj
+
+ASAN_LIB_OBJS = $(STD_SRC:%.c=$(ASAN_OBJ_DIR)/%.o) \
+                $(STD_REACTOR_SRC:%.c=$(ASAN_OBJ_DIR)/%.o) \
+                $(COLLECTIONS_SRC:%.c=$(ASAN_OBJ_DIR)/%.o) \
+                $(RUNTIME_SRC:%.c=$(ASAN_OBJ_DIR)/%.o)
+ASAN_COMPILER_LIB_OBJS = $(COMPILER_LIB_SRC:%.c=$(ASAN_OBJ_DIR)/%.o)
+
+MEM_LIB_OBJS = $(STD_SRC:%.c=$(MEM_OBJ_DIR)/%.o) \
+               $(STD_REACTOR_SRC:%.c=$(MEM_OBJ_DIR)/%.o) \
+               $(COLLECTIONS_SRC:%.c=$(MEM_OBJ_DIR)/%.o) \
+               $(RUNTIME_SRC:%.c=$(MEM_OBJ_DIR)/%.o)
+MEM_COMPILER_LIB_OBJS = $(COMPILER_LIB_SRC:%.c=$(MEM_OBJ_DIR)/%.o)
+
+DBG_LIB_OBJS = $(STD_SRC:%.c=$(DBG_OBJ_DIR)/%.o) \
+               $(STD_REACTOR_SRC:%.c=$(DBG_OBJ_DIR)/%.o) \
+               $(COLLECTIONS_SRC:%.c=$(DBG_OBJ_DIR)/%.o) \
+               $(RUNTIME_SRC:%.c=$(DBG_OBJ_DIR)/%.o)
+DBG_COMPILER_LIB_OBJS = $(COMPILER_LIB_SRC:%.c=$(DBG_OBJ_DIR)/%.o)
+
+$(ASAN_OBJ_DIR)/%.o: %.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(CFLAGS_NO_OPT) $(ASAN_OPT) $(ASAN_FLAGS) -c $< -o $@
+
+$(MEM_OBJ_DIR)/%.o: %.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(CFLAGS) $(MEM_FLAGS) -c $< -o $@
+
+$(DBG_OBJ_DIR)/%.o: %.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(CFLAGS_NO_OPT) $(DBG_OPT) -c $< -o $@
+
+build/asan/libaether.a: $(ASAN_LIB_OBJS)
+	@mkdir -p build/asan
+	@ar rcs $@ $(ASAN_LIB_OBJS)
+
+build/asan/libaether_compiler.a: $(ASAN_COMPILER_LIB_OBJS)
+	@mkdir -p build/asan
+	@ar rcs $@ $(ASAN_COMPILER_LIB_OBJS)
+
+build/memory/libaether.a: $(MEM_LIB_OBJS)
+	@mkdir -p build/memory
+	@ar rcs $@ $(MEM_LIB_OBJS)
+
+build/memory/libaether_compiler.a: $(MEM_COMPILER_LIB_OBJS)
+	@mkdir -p build/memory
+	@ar rcs $@ $(MEM_COMPILER_LIB_OBJS)
+
+build/dbg/libaether.a: $(DBG_LIB_OBJS)
+	@mkdir -p build/dbg
+	@ar rcs $@ $(DBG_LIB_OBJS)
+
+build/dbg/libaether_compiler.a: $(DBG_COMPILER_LIB_OBJS)
+	@mkdir -p build/dbg
+	@ar rcs $@ $(DBG_COMPILER_LIB_OBJS)
+
+stdlib-asan: build/asan/libaether.a build/asan/libaether_compiler.a
+stdlib-memory: build/memory/libaether.a build/memory/libaether_compiler.a
+stdlib-dbg: build/dbg/libaether.a build/dbg/libaether_compiler.a
 
 # Self-test: compiler on itself
 self-test: compiler
@@ -1424,7 +1526,7 @@ asan-check: clean
 	  fi
 	@echo "✓ ASan clean — no memory errors detected"
 
-.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime test-install test-release-archive benchmark benchmark-ui examples run compile repl clean help self-test install stats stdlib ci ci-windows docker-ci docker-ci-windows docker-build-ci valgrind-check asan-check ci-coop ci-wasm ci-embedded ci-portability docker-ci-wasm docker-ci-embedded contrib-host-check contrib-aether-ui-check benchmark-aether-ui
+.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime test-install test-release-archive benchmark benchmark-ui examples run compile repl clean help self-test install stats stdlib stdlib-asan stdlib-memory stdlib-dbg ci ci-windows docker-ci docker-ci-windows docker-build-ci valgrind-check asan-check ci-coop ci-wasm ci-embedded ci-portability docker-ci-wasm docker-ci-embedded contrib-host-check contrib-aether-ui-check benchmark-aether-ui
 
 # Cross-language benchmark UI (alias for benchmark)
 benchmark-ui: benchmark

@@ -181,13 +181,21 @@ static unsigned long long fnv64_file(const char* path) {
     return h;
 }
 
-// Compute a cache key from: source content + compiler mtime + lib mtime + flags
-// Returns 0 if source cannot be read (caching disabled)
-static unsigned long long compute_cache_key(const char* ae_file, const char* flags) {
+// Compute a cache key from: source content + compiler mtime + lib mtime +
+// every --extra C file's content + optimisation level + arbitrary salt.
+// Returns 0 if the source can't be read (caching disabled for this build).
+//
+// Hashing extra-file *content* (not just mtime) closes a real correctness
+// gap: editing an FFI shim like `--extra renderer.c` would otherwise let
+// a stale cache entry mask the change.
+static unsigned long long compute_cache_key(const char* ae_file,
+                                            const char* extra_files,
+                                            const char* opt_level,
+                                            const char* extra_salt) {
     unsigned long long src_hash = fnv64_file(ae_file);
     if (src_hash == 0) return 0;
 
-    char key_buf[1024];
+    char key_buf[2048];
     int pos = 0;
     pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, "%016llx", src_hash);
 
@@ -196,7 +204,20 @@ static unsigned long long compute_cache_key(const char* ae_file, const char* fla
         pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, ":%lld", (long long)st.st_mtime);
     if (tc.has_lib && stat(tc.lib, &st) == 0)
         pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, ":%lld", (long long)st.st_mtime);
-    snprintf(key_buf + pos, sizeof(key_buf) - pos, ":%s:O0", flags ? flags : "");
+
+    if (extra_files && extra_files[0]) {
+        char tmp[8192];
+        strncpy(tmp, extra_files, sizeof(tmp) - 1);
+        tmp[sizeof(tmp) - 1] = '\0';
+        for (char* tok = strtok(tmp, " \t"); tok; tok = strtok(NULL, " \t")) {
+            unsigned long long fh = fnv64_file(tok);
+            pos += snprintf(key_buf + pos, sizeof(key_buf) - pos, ":%016llx", fh);
+        }
+    }
+
+    snprintf(key_buf + pos, sizeof(key_buf) - pos, ":%s:%s",
+             opt_level ? opt_level : "O0",
+             extra_salt ? extra_salt : "");
 
     unsigned long long h = fnv64_str(key_buf);
     return h ? h : 1ULL;
@@ -398,6 +419,36 @@ static void mkdirs(const char* path) {
         }
     }
     mkdir_p(tmp);
+}
+
+// Stream-copy src → dst, preserving the source file's permission bits
+// so executables stay executable and libs stay non-executable. Returns
+// 1 on success, 0 on any I/O failure. Used by the build cache to
+// materialise a cached binary at the user-requested output path (and
+// the inverse to store a freshly built binary in the cache slot).
+static int copy_file(const char* src, const char* dst) {
+    FILE* in = fopen(src, "rb");
+    if (!in) return 0;
+    FILE* out = fopen(dst, "wb");
+    if (!out) { fclose(in); return 0; }
+    char buf[8192];
+    size_t n;
+    int ok = 1;
+    while ((n = fread(buf, 1, sizeof(buf), in)) > 0) {
+        if (fwrite(buf, 1, n, out) != n) { ok = 0; break; }
+    }
+    if (ferror(in)) ok = 0;
+    fclose(in);
+    fclose(out);
+#ifndef _WIN32
+    if (ok) {
+        struct stat src_st;
+        if (stat(src, &src_st) == 0) {
+            chmod(dst, src_st.st_mode & 07777);
+        }
+    }
+#endif
+    return ok;
 }
 
 static char* get_basename(const char* path) {
@@ -1593,12 +1644,30 @@ static int cmd_run(int argc, char** argv) {
 
     char c_file[2048], exe_file[2048], cmd[16384];
 
+    // Merge toml [[bin]] extra_sources into extra_files BEFORE the cache
+    // check. Otherwise editing an FFI shim listed in aether.toml wouldn't
+    // invalidate the cached exe (extras content is part of the cache key).
+    {
+        char toml_extra_pre[8192] = "";
+        if (get_extra_sources_for_bin(file, toml_extra_pre, sizeof(toml_extra_pre))) {
+            fprintf(stderr,
+                "Warning: aether.toml [[bin]] extra_sources for '%s' "
+                "exceeded 8 KiB; tail entries were dropped. Split the "
+                "array into fewer, larger shims or report as a toolchain "
+                "bug.\n", file);
+        }
+        if (toml_extra_pre[0]) {
+            if (extra_files[0]) strncat(extra_files, " ", sizeof(extra_files) - strlen(extra_files) - 1);
+            strncat(extra_files, toml_extra_pre, sizeof(extra_files) - strlen(extra_files) - 1);
+        }
+    }
+
     // --- Cache check ---
     // ae run uses -O0 (fast dev builds). Check if we have a cached exe for
-    // this exact source + compiler combination.
+    // this exact source + compiler + extras combination.
     bool using_cache = false;
     char cached_exe[1024] = "";
-    unsigned long long cache_key = compute_cache_key(file, "");
+    unsigned long long cache_key = compute_cache_key(file, extra_files, "O0", "run");
     if (cache_key != 0) {
         init_cache_dir();
         snprintf(cached_exe, sizeof(cached_exe), "%s/%016llx" EXE_EXT, s_cache_dir, cache_key);
@@ -1649,22 +1718,9 @@ static int cmd_run(int argc, char** argv) {
         return 1;
     }
 
-    // Step 2: Compile .c to executable with runtime (-O0 for fast dev builds)
-    // Merge extra_sources from aether.toml [[bin]] with any --extra CLI args.
-    // 8 KiB matches the fgets line buffer in get_extra_sources_for_bin;
-    // overflow warns below rather than silently mangling the link command.
-    char toml_extra[8192] = "";
-    if (get_extra_sources_for_bin(file, toml_extra, sizeof(toml_extra))) {
-        fprintf(stderr,
-            "Warning: aether.toml [[bin]] extra_sources for '%s' "
-            "exceeded 8 KiB; tail entries were dropped. Split the "
-            "array into fewer, larger shims or report as a toolchain "
-            "bug.\n", file);
-    }
-    if (toml_extra[0]) {
-        if (extra_files[0]) strncat(extra_files, " ", sizeof(extra_files) - strlen(extra_files) - 1);
-        strncat(extra_files, toml_extra, sizeof(extra_files) - strlen(extra_files) - 1);
-    }
+    // Step 2: Compile .c to executable with runtime (-O0 for fast dev builds).
+    // toml [[bin]] extra_sources were already merged into extra_files above
+    // (before the cache check), so no further reading is needed here.
     const char* run_extra = extra_files[0] ? extra_files : NULL;
     build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, false, run_extra);
     // Show stderr (gcc warnings like -Wformat) even in non-verbose mode
@@ -3379,6 +3435,7 @@ static int cmd_build(int argc, char** argv) {
     char extra_files[8192] = "";
 
     const char* target = NULL;
+    bool quick = false;
 
     // Reset emit mode to the default (exe-only) for this build.
     g_emit_exe = true;
@@ -3387,6 +3444,8 @@ static int cmd_build(int argc, char** argv) {
     for (int i = 0; i < argc; i++) {
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             output_name = argv[++i];
+        } else if (strcmp(argv[i], "--quick") == 0) {
+            quick = true;
         } else if (strcmp(argv[i], "--target") == 0 && i + 1 < argc) {
             target = argv[++i];
         } else if (strcmp(argv[i], "--extra") == 0 && i + 1 < argc) {
@@ -3488,7 +3547,8 @@ static int cmd_build(int argc, char** argv) {
 
     if (!file) {
         fprintf(stderr, "Error: No input file specified.\n");
-        fprintf(stderr, "Usage: ae build <file.ae> [-o output] [--extra file.c]\n");
+        fprintf(stderr, "Usage: ae build <file.ae> [-o output] [--extra file.c] [--quick]\n");
+        fprintf(stderr, "  --quick    Compile with -O0 -g for faster iteration (default: -O2)\n");
         return 1;
     }
 
@@ -3587,6 +3647,53 @@ static int cmd_build(int argc, char** argv) {
         return 1;
     }
 
+    // Merge toml [[bin]] extra_sources into extra_files BEFORE the cache
+    // check so an FFI shim edit invalidates the cached exe (extras
+    // content is part of the cache key).
+    {
+        char toml_extra_pre[8192] = "";
+        if (get_extra_sources_for_bin(file, toml_extra_pre, sizeof(toml_extra_pre))) {
+            fprintf(stderr,
+                "Warning: aether.toml [[bin]] extra_sources for '%s' "
+                "exceeded 8 KiB; tail entries were dropped. Split the "
+                "array into fewer, larger shims or report as a toolchain "
+                "bug.\n", file);
+        }
+        if (toml_extra_pre[0]) {
+            if (extra_files[0]) strncat(extra_files, " ", sizeof(extra_files) - strlen(extra_files) - 1);
+            strncat(extra_files, toml_extra_pre, sizeof(extra_files) - strlen(extra_files) - 1);
+        }
+    }
+
+    // --- Build cache ---
+    // Cache native --emit=exe builds only. wasm uses a different toolchain
+    // (emcc emits .js + .wasm) and --emit=lib produces a different artefact
+    // type; both deserve their own cache shape later. --namespace mode
+    // produces SDKs in subdirectories, also out of scope.
+    bool cache_eligible = !is_wasm && g_emit_exe && !g_emit_lib;
+    char cached_exe[1024] = "";
+    unsigned long long cache_key = 0;
+    if (cache_eligible) {
+        cache_key = compute_cache_key(file, extra_files,
+                                      quick ? "O0" : "O2",
+                                      "build");
+        if (cache_key != 0) {
+            init_cache_dir();
+            snprintf(cached_exe, sizeof(cached_exe), "%s/%016llx" EXE_EXT,
+                     s_cache_dir, cache_key);
+            if (path_exists(cached_exe)) {
+                if (tc.verbose) fprintf(stderr, "[cache] hit: %016llx\n", cache_key);
+                if (copy_file(cached_exe, exe_file)) {
+                    printf("Built (cache hit): %s\n", exe_file);
+                    return 0;
+                }
+                if (tc.verbose) fprintf(stderr, "[cache] copy failed; falling through to rebuild\n");
+            } else if (tc.verbose) {
+                fprintf(stderr, "[cache] miss: %016llx\n", cache_key);
+            }
+        }
+    }
+
     printf("Building %s%s...\n", file, is_wasm ? " (wasm)" : "");
 
     // Step 1: .ae to .c
@@ -3605,33 +3712,16 @@ static int cmd_build(int argc, char** argv) {
         return 1;
     }
 
-    // Step 2: .c to executable (or wasm) with runtime
+    // Step 2: .c to executable (or wasm) with runtime.
+    // toml [[bin]] extra_sources were already merged into extra_files
+    // above (before the cache check), so no further reading is needed.
     if (is_wasm) {
         if (!build_wasm_cmd(cmd, sizeof(cmd), c_file, exe_file)) {
             return 1;
         }
     } else {
-        // Merge extra_sources from aether.toml [[bin]] with any --extra CLI args.
-        // Buffer sized to match the TOML-line fgets buffer in
-        // get_extra_sources_for_bin (also 8 KiB). Projects hitting even
-        // this limit should split into multiple [[bin]] entries or
-        // consolidate shims — see the truncation warning below.
-        {
-            char toml_extra[8192] = "";
-            if (get_extra_sources_for_bin(file, toml_extra, sizeof(toml_extra))) {
-                fprintf(stderr,
-                    "Warning: aether.toml [[bin]] extra_sources for '%s' "
-                    "exceeded 8 KiB; tail entries were dropped. Split the "
-                    "array into fewer, larger shims or report as a toolchain "
-                    "bug.\n", file);
-            }
-            if (toml_extra[0]) {
-                if (extra_files[0]) strncat(extra_files, " ", sizeof(extra_files) - strlen(extra_files) - 1);
-                strncat(extra_files, toml_extra, sizeof(extra_files) - strlen(extra_files) - 1);
-            }
-        }
         const char* extra = extra_files[0] ? extra_files : NULL;
-        build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, true, extra);
+        build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, !quick, extra);
     }
 
     int build_ret = tc.verbose ? run_cmd(cmd) : run_cmd_quiet(cmd);
@@ -3641,7 +3731,7 @@ static int cmd_build(int argc, char** argv) {
             build_wasm_cmd(cmd, sizeof(cmd), c_file, exe_file);
         } else {
             const char* extra = extra_files[0] ? extra_files : NULL;
-            build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, true, extra);
+            build_gcc_cmd(cmd, sizeof(cmd), c_file, exe_file, !quick, extra);
         }
         run_cmd(cmd);
         fprintf(stderr, "Build failed.\n");
@@ -3674,6 +3764,16 @@ static int cmd_build(int argc, char** argv) {
         }
     }
 #endif
+
+    // Populate the build cache so the next identical-input build is a
+    // copy-from-cache instead of an aetherc + gcc round-trip.
+    if (cache_eligible && cache_key != 0 && cached_exe[0]) {
+        if (!copy_file(exe_file, cached_exe)) {
+            if (tc.verbose) fprintf(stderr, "[cache] write failed for %016llx\n", cache_key);
+        } else if (tc.verbose) {
+            fprintf(stderr, "[cache] wrote: %016llx\n", cache_key);
+        }
+    }
 
     printf("Built: %s\n", exe_file);
     if (is_wasm) {

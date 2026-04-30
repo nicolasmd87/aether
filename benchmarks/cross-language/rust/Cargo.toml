@@ -24,3 +24,12 @@ name = "skynet"
 path = "src/skynet.rs"
 
 [dependencies]
+
+# Match the LTO + opt-level Aether and C/C++ benchmarks now use, so the
+# cross-language comparison reflects each compiler's release-grade
+# codegen. Without these overrides Cargo's default release profile
+# leaves `lto = false`, which puts Rust at an unfair disadvantage.
+[profile.release]
+lto = "fat"
+codegen-units = 1
+panic = "abort"
