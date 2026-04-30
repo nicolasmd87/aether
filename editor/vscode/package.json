@@ -1,11 +1,12 @@
 {
   "name": "aether-language",
   "displayName": "Aether Language Support",
-  "description": "Syntax highlighting, color themes, and language support for Aether - a modern actor-based programming language",
-  "version": "0.4.2",
+  "description": "Syntax highlighting, color theme, and Language Server integration for Aether — a modern actor-based programming language.",
+  "version": "0.6.0",
   "publisher": "aether",
   "icon": "icon.png",
   "license": "MIT",
+  "main": "./out/extension.js",
   "repository": {
     "type": "git",
     "url": "https://github.com/nicolasmd87/aether"
@@ -20,10 +21,11 @@
     "concurrency",
     "programming-language",
     "syntax-highlighting",
-    "type-inference"
+    "type-inference",
+    "language-server"
   ],
   "engines": {
-    "vscode": "^1.60.0"
+    "vscode": "^1.75.0"
   },
   "categories": [
     "Programming Languages"
@@ -65,8 +67,13 @@
       "properties": {
         "aether.lsp.path": {
           "type": "string",
-          "default": "aether-lsp",
-          "description": "Path to Aether LSP server executable"
+          "default": "",
+          "description": "Path to the aether-lsp executable. Leave empty to auto-detect (PATH, then ~/.local/bin, /usr/local/bin, and the workspace's build/aether-lsp)."
+        },
+        "aether.lsp.enable": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start the Aether language server when an .ae file is opened. Disable for syntax-only mode."
         },
         "aether.lsp.trace.server": {
           "type": "string",
@@ -76,10 +83,23 @@
             "verbose"
           ],
           "default": "off",
-          "description": "Traces the communication between VS Code and the language server"
+          "description": "Traces the JSON-RPC traffic between VS Code and the language server."
         }
       }
     }
+  },
+  "scripts": {
+    "build": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --target=node18 --minify",
+    "watch": "esbuild src/extension.ts --bundle --outfile=out/extension.js --external:vscode --format=cjs --platform=node --target=node18 --sourcemap --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "@types/vscode": "^1.75.0",
+    "esbuild": "^0.20.0",
+    "typescript": "^5.3.0"
   }
 }
-

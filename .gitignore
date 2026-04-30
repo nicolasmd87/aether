@@ -83,6 +83,12 @@ zig_minimal
 *~
 .idea/
 
+# VS Code extension build artefacts (ship the bundled out/extension.js,
+# but keep node_modules and the source-map debug bundle out of the repo)
+editor/vscode/node_modules/
+editor/vscode/out/extension.js.map
+editor/vscode/*.vsix
+
 # OS
 .DS_Store
 Thumbs.db

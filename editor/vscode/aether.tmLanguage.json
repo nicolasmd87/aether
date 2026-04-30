@@ -246,7 +246,12 @@
       ]
     },
     "operators": {
+      "comment": "Order matters: longer literals first so `->` wins over `-`, `==` over `=`, etc. The pattern arrow gets its own scope so the theme can render it as the dispatch glyph it is rather than just another operator.",
       "patterns": [
+        {
+          "name": "keyword.operator.arrow.aether",
+          "match": "->"
+        },
         {
           "name": "keyword.operator.assignment.aether",
           "match": "(\\+=|-=|\\*=|/=|%=|<<=|>>=|&=|\\|=|\\^=|=)"

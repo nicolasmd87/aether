@@ -1,13 +1,41 @@
 {
   "name": "Aether",
   "type": "dark",
+  "comments": [
+    "Palette tuned for the actor-with-pattern-matching dialect Aether",
+    "is. Message names render as warm amber (atom-like — they're",
+    "compile-time tags that flow through the message bus). Actors and",
+    "structs are coloured distinctly so a glance tells you which kind",
+    "of definition you're looking at. Pattern arrows `->`, the cons-",
+    "cell pipe `|`, and the actor send / ask operators (`!`, `?`)",
+    "share a coral hue so the dispatch shape of a function pops at a",
+    "distance. Other scopes track the One-Dark-Pro family so any",
+    "Aether file looks at home alongside the rest of a polyglot repo."
+  ],
   "colors": {
-    "editor.background":             "#1e1e1e",
-    "editor.foreground":             "#d4d4d4",
-    "editorLineNumber.foreground":   "#858585",
-    "editorCursor.foreground":       "#aeafad",
-    "editor.selectionBackground":    "#264f78",
-    "editor.lineHighlightBackground": "#2a2a2a"
+    "editor.background":              "#181a1f",
+    "editor.foreground":              "#d8d8d8",
+    "editorLineNumber.foreground":    "#4b5263",
+    "editorLineNumber.activeForeground": "#abb2bf",
+    "editorCursor.foreground":        "#e5c07b",
+    "editor.selectionBackground":     "#3e4451",
+    "editor.lineHighlightBackground": "#21252b",
+    "editor.selectionHighlightBackground": "#2c313a",
+    "editorBracketMatch.background":  "#3e4451",
+    "editorBracketMatch.border":      "#56b6c2",
+    "editorIndentGuide.background":   "#2c313a",
+    "editorIndentGuide.activeBackground": "#3e4451",
+    "editorWhitespace.foreground":    "#3b4048",
+    "editorGutter.background":        "#181a1f",
+    "editorWidget.background":        "#21252b",
+    "editorHoverWidget.background":   "#21252b",
+    "editorHoverWidget.border":       "#3e4451",
+    "editorSuggestWidget.background": "#21252b",
+    "editorSuggestWidget.border":     "#181a1f",
+    "editorSuggestWidget.selectedBackground": "#2c313a",
+    "editorError.foreground":         "#e06c75",
+    "editorWarning.foreground":       "#e5c07b",
+    "editorInfo.foreground":          "#56b6c2"
   },
   "tokenColors": [
     {
@@ -19,7 +47,7 @@
         "punctuation.definition.comment"
       ],
       "settings": {
-        "foreground": "#6a9955",
+        "foreground": "#5c6370",
         "fontStyle": "italic"
       }
     },
@@ -31,7 +59,7 @@
         "string.quoted.double.aether"
       ],
       "settings": {
-        "foreground": "#ce9178"
+        "foreground": "#98c379"
       }
     },
     {
@@ -41,17 +69,19 @@
         "constant.character.escape.aether"
       ],
       "settings": {
-        "foreground": "#d7ba7d"
+        "foreground": "#56b6c2"
       }
     },
     {
       "name": "String interpolation delimiters",
       "scope": [
         "punctuation.section.interpolation",
-        "meta.interpolation"
+        "punctuation.section.interpolation.begin.aether",
+        "punctuation.section.interpolation.end.aether",
+        "meta.interpolation.aether"
       ],
       "settings": {
-        "foreground": "#d4d4d4"
+        "foreground": "#e06c75"
       }
     },
     {
@@ -61,22 +91,23 @@
         "constant.numeric.aether"
       ],
       "settings": {
-        "foreground": "#b5cea8"
+        "foreground": "#d19a66"
       }
     },
     {
-      "name": "Boolean and null literals",
+      "name": "Boolean / null / self literals",
       "scope": [
         "constant.language.boolean",
         "constant.language.null",
         "constant.language.aether"
       ],
       "settings": {
-        "foreground": "#569cd6"
+        "foreground": "#d19a66",
+        "fontStyle": "italic"
       }
     },
     {
-      "name": "Control flow keywords",
+      "name": "Control flow keywords (match, receive, if, return, spawn, ...)",
       "scope": [
         "keyword.control",
         "keyword.control.aether",
@@ -84,11 +115,12 @@
         "keyword.control.flow.aether"
       ],
       "settings": {
-        "foreground": "#c586c0"
+        "foreground": "#c678dd",
+        "fontStyle": "italic"
       }
     },
     {
-      "name": "Storage and declaration keywords",
+      "name": "Storage and declaration keywords (actor, struct, message, state, ...)",
       "scope": [
         "storage.type",
         "storage.type.aether",
@@ -98,32 +130,52 @@
         "keyword.other.aether"
       ],
       "settings": {
-        "foreground": "#569cd6",
-        "fontStyle": "bold"
+        "foreground": "#61afef"
       }
     },
     {
-      "name": "Built-in primitive types",
+      "name": "Built-in primitive types (int, string, bool, ...)",
       "scope": [
         "support.type.primitive.aether",
         "support.type.builtin.aether"
       ],
       "settings": {
-        "foreground": "#4ec9b0"
+        "foreground": "#56b6c2"
       }
     },
     {
-      "name": "User-defined types",
+      "name": "Message names — read like atoms, the dispatch tags between actors",
+      "scope": [
+        "entity.name.message.aether",
+        "entity.name.type.message"
+      ],
+      "settings": {
+        "foreground": "#e5c07b",
+        "fontStyle": "bold"
+      }
+    },
+    {
+      "name": "Actor names",
+      "scope": [
+        "entity.name.actor.aether",
+        "entity.name.type.actor"
+      ],
+      "settings": {
+        "foreground": "#56b6c2",
+        "fontStyle": "bold"
+      }
+    },
+    {
+      "name": "Struct names and other user-defined types",
       "scope": [
         "entity.name.type",
         "entity.name.type.aether",
         "entity.name.struct",
-        "entity.name.actor",
-        "entity.name.message",
+        "entity.name.struct.aether",
         "support.type"
       ],
       "settings": {
-        "foreground": "#4ec9b0"
+        "foreground": "#e5c07b"
       }
     },
     {
@@ -133,7 +185,8 @@
         "entity.name.function.aether"
       ],
       "settings": {
-        "foreground": "#dcdcaa"
+        "foreground": "#61afef",
+        "fontStyle": "bold"
       }
     },
     {
@@ -144,23 +197,23 @@
         "support.function.main"
       ],
       "settings": {
-        "foreground": "#dcdcaa",
-        "fontStyle": "italic bold"
+        "foreground": "#61afef",
+        "fontStyle": "bold italic"
       }
     },
     {
-      "name": "Function call sites",
+      "name": "Function call sites (bare and namespaced)",
       "scope": [
         "meta.function-call",
         "support.function",
         "support.function.aether"
       ],
       "settings": {
-        "foreground": "#dcdcaa"
+        "foreground": "#56b6c2"
       }
     },
     {
-      "name": "Variables",
+      "name": "Variables and parameters",
       "scope": [
         "variable",
         "variable.other",
@@ -168,39 +221,69 @@
         "variable.parameter"
       ],
       "settings": {
-        "foreground": "#9cdcfe"
+        "foreground": "#abb2bf"
       }
     },
     {
-      "name": "Operators",
+      "name": "Pattern arrow `->` — the dispatch glyph for receive arms and function returns",
       "scope": [
-        "keyword.operator",
-        "keyword.operator.aether"
+        "keyword.operator.arrow.aether",
+        "keyword.operator.pattern.aether",
+        "punctuation.separator.arrow"
       ],
       "settings": {
-        "foreground": "#d4d4d4"
+        "foreground": "#e06c75",
+        "fontStyle": "bold"
       }
     },
     {
-      "name": "Cons-cell pattern punctuation [h | t]",
+      "name": "Cons-cell pattern `[h | t]` — pipe is a join, not an or",
       "scope": [
         "meta.pattern.cons.aether",
         "punctuation.separator.cons.aether"
       ],
       "settings": {
-        "foreground": "#c586c0"
+        "foreground": "#e06c75",
+        "fontStyle": "bold"
       }
     },
     {
-      "name": "Punctuation (braces, brackets, parens, semicolons)",
+      "name": "Actor send `!` and ask `?` operators",
+      "scope": [
+        "keyword.operator.actor.aether"
+      ],
+      "settings": {
+        "foreground": "#c678dd",
+        "fontStyle": "bold"
+      }
+    },
+    {
+      "name": "Assignment, comparison, logical, arithmetic, bitwise operators",
+      "scope": [
+        "keyword.operator",
+        "keyword.operator.aether",
+        "keyword.operator.assignment.aether",
+        "keyword.operator.comparison.aether",
+        "keyword.operator.logical.aether",
+        "keyword.operator.arithmetic.aether",
+        "keyword.operator.bitwise.aether",
+        "keyword.operator.type.pointer.aether"
+      ],
+      "settings": {
+        "foreground": "#c678dd"
+      }
+    },
+    {
+      "name": "Punctuation (braces, brackets, parens, semicolons, commas)",
       "scope": [
         "punctuation.section",
         "punctuation.definition",
         "punctuation.terminator",
-        "punctuation.separator"
+        "punctuation.separator",
+        "punctuation.accessor.aether"
       ],
       "settings": {
-        "foreground": "#d4d4d4"
+        "foreground": "#abb2bf"
       }
     }
   ]

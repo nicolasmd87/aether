@@ -321,6 +321,8 @@ main() {
 
 After module orchestration, the compiler clones each module's function and constant AST nodes into the main program with namespace-prefixed names (`double_it` → `mymath_double_it`). Intra-module calls, constant references, and constant-to-constant references (e.g., `const DOUBLE_BASE = BASE * 2`) are renamed automatically. Function parameters and local variables correctly shadow module constants — `check(SCALE) { return SCALE }` returns the parameter, not the module constant `SCALE`. This makes the entire downstream pipeline (type inference, type checking, codegen) work without modification — merged functions are just regular top-level functions.
 
+**Tree-shake of unused merges.** Immediately after merging and before typechecking, `module_prune_unreachable` runs a mark-and-sweep over the program AST. It seeds reachability from `main`, every actor handler, every `export` statement, and every non-imported user function/builder, then closes over `AST_FUNCTION_CALL`, `AST_IDENTIFIER`, and `AST_MEMBER_ACCESS` references — including suffix matches that handle glob-import (`import mymath (*)`) and selective-import (`import mymath [cube]`) shorthands. Imported function and builder definitions outside the closure are dropped from the AST so the typechecker doesn't walk them and the C compiler doesn't emit them. Constants stay (cheap, and pruning them would need a separate pass keyed on identifier references). The whole pass is invisible to user code; programs that *do* call every imported function build identically before and after.
+
 **What's supported:**
 - Functions (with type inference from call sites)
 - Constants (`const NAME = value`), including constants referencing other constants

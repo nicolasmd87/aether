@@ -103,5 +103,18 @@ char* module_resolve_local_path(const char* module_path);   // "mypackage.utils"
 // Call after module_orchestrate() and before typecheck_program().
 void module_merge_into_program(ASTNode* program);
 
+// Tree-shake the merged program AST: remove imported function and
+// builder definitions that no user-reachable code transitively calls.
+// Roots: main(), actor handlers, exports, and any non-imported user
+// function/builder. Closure: every function-call target named anywhere
+// in those roots' bodies, recursively through merged code.
+//
+// Run AFTER module_merge_into_program (so the closure can see merged
+// helpers) and BEFORE typecheck_program (so the typechecker doesn't
+// burn time walking dead bodies). Reduces both aetherc typecheck time
+// and the size of the C output gcc has to compile, on programs that
+// only use a slice of large stdlib modules.
+void module_prune_unreachable(ASTNode* program);
+
 #endif // AETHER_MODULE_H
 
