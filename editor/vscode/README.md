@@ -1,93 +1,112 @@
 # Aether Language Support
 
-Official Visual Studio Code extension for the [Aether programming language](https://github.com/nicolasmd87/aether).
+Visual Studio Code (and Cursor) support for the
+[Aether programming language](https://github.com/nicolasmd87/aether).
 
-## Features
+## What you get
 
-- **Syntax Highlighting** - Full syntax highlighting for Aether source files (`.ae`)
-- **Erlang-Inspired Color Theme** - Custom color theme designed specifically for Aether's actor-based syntax
-- **File Icons** - Distinctive yellow "ae" icons for Aether source files
-- **Language Configuration** - Auto-closing brackets, comments, and intelligent indentation
+- **Syntax highlighting** for `.ae` files, scoped specifically for actor
+  definitions, message types, struct types, pattern arrows (`->`),
+  cons-cell patterns (`[h | t]`), and the actor send / ask operators
+  (`!`, `?`).
+- **Color theme** tuned for Aether's dispatch-heavy style. Message
+  names render warm amber so they read as the compile-time tags they
+  are, actor names cyan, control keywords magenta-italic, and pattern
+  arrows / cons pipes coral-bold so the shape of a `receive` block
+  pops at a distance.
+- **File icon** — a yellow-on-dark "ae" badge for `.ae` files.
+- **Language configuration** — auto-closing brackets, comment toggle,
+  smart indent.
 
-## Aether Language
+## Activating the theme
 
-Aether is a modern programming language featuring:
+Themes are global in VS Code, not per-language, so you have to opt in:
 
-- **Actor-based Concurrency** - Built-in support for concurrent programming with the actor model
-- **Type Inference** - Smart type inference that reduces boilerplate while maintaining type safety
-- **Pattern Matching** - Powerful pattern matching for elegant control flow
-- **Memory Safety** - Arena-based memory management for predictable performance
+1. Open a `.ae` file (loads the extension).
+2. Command palette → **`Preferences: Color Theme`** → **Aether**.
 
-## Syntax Highlighting
+The syntax grammar runs regardless of the active theme — every theme
+gets at least the standard scope colors. The Aether theme adds the
+finer-grained palette described above.
 
-The extension provides comprehensive syntax highlighting with Erlang-inspired colors:
+## Installation
 
-- **Control Keywords** (`if`, `else`, `for`, `while`, `return`) - Red
-- **Actor Keywords** (`receive`, `send`, `spawn`, `actor`) - Red
-- **Function Names** - Red (except `main()` which is yellow)
-- **Declarations** (`message`, `actor`, `struct`, `state`) - Purple
-- **Strings** - Dark green
-- **Numbers & Constants** - Yellow
-- **Comments** - Gray-green (italic)
-- **Types** - Cyan
+### From source
 
-## Getting Started
+```bash
+./editor/vscode/install.sh
+```
 
-1. Install this extension
-2. Open or create an `.ae` file
-3. Select the **"Aether Erlang"** color theme (Ctrl+K Ctrl+T)
-4. Start coding!
+The script:
 
-## Example Code
+- Reads the version straight from `package.json` so the installed
+  folder name tracks the manifest.
+- Removes any prior `aether-language-*` directory before copying so
+  stale assets from older releases can't shadow the new ones.
+- Copies the full asset set (manifest, grammar, language config,
+  theme, icon-theme, both icon files, README) into
+  `~/.cursor/extensions/` (Cursor) or `~/.vscode/extensions/`
+  (VS Code).
+- Supports an explicit override target:
+  `./install.sh /path/to/extensions`.
+
+Restart your editor after installing.
+
+### From a `.vsix`
+
+Standard `vsce package` workflow if you've installed `vsce` (a
+follow-up will publish official releases to the marketplace; for
+now the install script is the supported path).
+
+## Language Server Protocol
+
+The extension currently ships syntax + theme only. The Aether LSP
+server (`aether-lsp`, built by `make lsp`) exposes diagnostics,
+hover, and completion over stdio, but a wired-in LSP client extension
+is on the roadmap rather than in this build. For now you can drive
+the server through any generic LSP client setup — see
+[`lsp/README.md`](../../lsp/README.md) for the protocol surface and
+launch shape.
+
+## Example
 
 ```aether
-struct Point {
-    x,
-    y
-}
+import std.string
 
-distance(p1, p2) {
-    dx = p2.x - p1.x
-    dy = p2.y - p1.y
-    return dx * dx + dy * dy
+message Tick { count: int }
+
+actor Heartbeat {
+    state ticks = 0
+
+    receive {
+        Tick(count) -> {
+            ticks = ticks + 1
+            if ticks % 10 == 0 {
+                println("heartbeat ${ticks}")
+            }
+        }
+    }
 }
 
 main() {
-    p1 = Point { x: 0, y: 0 }
-    p2 = Point { x: 3, y: 4 }
-    d = distance(p1, p2)
-    print(d)  // 25
+    h = spawn(Heartbeat())
+    i = 0
+    while i < 100 {
+        h ! Tick { count: i }
+        i = i + 1
+    }
 }
 ```
 
 ## Requirements
 
-- Visual Studio Code 1.60.0 or higher
+- Visual Studio Code 1.60.0+ (or Cursor on the same protocol level)
 
-## Installation
+## Reporting issues
 
-Install from VSIX:
-1. Download the latest `.vsix` file
-2. Open VS Code
-3. Go to Extensions (Ctrl+Shift+X)
-4. Click the "..." menu → "Install from VSIX..."
-5. Select the downloaded file
-
-## Contribution
-
-Found a bug or have a feature request? Please open an issue on the [GitHub repository](https://github.com/nicolasmd87/aether).
+Open an issue at
+[github.com/nicolasmd87/aether/issues](https://github.com/nicolasmd87/aether/issues).
 
 ## License
 
-This extension is licensed under the MIT License. See the [LICENSE](../../LICENSE) file for details.
-
-## Links
-
-- [Aether GitHub Repository](https://github.com/nicolasmd87/aether)
-- [Language Documentation](../../docs/language-reference.md)
-- [Getting Started Guide](../../docs/getting-started.md)
-
----
-
-**Enjoy coding with Aether!** 
-
+MIT — see the [LICENSE](../../LICENSE) at the repo root.
