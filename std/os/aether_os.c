@@ -71,7 +71,24 @@ static int win_launch(const char* prog, void* argv_list, void* env_list,
 int os_system(const char* cmd) {
     if (!cmd) return -1;
     if (!aether_sandbox_check("exec", cmd)) return -1;
-    return system(cmd);
+    int status = system(cmd);
+    if (status == -1) return -1;
+#ifdef _WIN32
+    /* Windows's system() already returns the exit code directly. */
+    return status;
+#else
+    /* POSIX system() returns a wait-status word: low byte = signal,
+     * high byte = exit code on normal exit. Aether's contract (per
+     * docs/stdlib-reference.md) is "returns exit code" — match the
+     * shape of os_run's exit-code handling (line ~493): normal
+     * termination → WEXITSTATUS, signal → 128 + signum (shell
+     * convention), abnormal → -1. Pre-fix, callers had to `>> 8`
+     * by hand on POSIX and not on Windows; that's a cross-platform
+     * inconsistency the contract didn't promise. */
+    if (WIFEXITED(status))   return WEXITSTATUS(status);
+    if (WIFSIGNALED(status)) return 128 + WTERMSIG(status);
+    return -1;
+#endif
 }
 
 char* os_exec_raw(const char* cmd) {

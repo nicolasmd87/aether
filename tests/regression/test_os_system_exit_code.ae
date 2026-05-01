@@ -1,0 +1,54 @@
+// Regression test for os.system returning the exit code (not the
+// raw POSIX wait-status word). Surfaced by aetherBuild — they had
+// to right-shift by 8 to recover the actual exit code on POSIX,
+// which would have given wrong results on Windows where system()
+// already returns the exit code directly.
+//
+// Aether's contract (docs/stdlib-reference.md): "Run shell command,
+// returns exit code (0 = success, POSIX convention)". The C side
+// now applies WEXITSTATUS / WTERMSIG translation so the contract
+// matches across POSIX and Windows.
+//
+// Cases:
+//   1. Success (exit 0)
+//   2. Explicit nonzero exit (exit 5)
+//   3. Common nonzero (exit 1)
+//   4. Larger code (exit 42)
+
+import std.os
+
+extern exit(code: int)
+
+main() {
+    println("=== os.system exit-code regression ===")
+
+    rc0 = os.system("true")
+    if rc0 != 0 {
+        println("FAIL 1: os.system('true') = ${rc0}, expected 0")
+        exit(1)
+    }
+    println("  PASS 1: success returns 0")
+
+    rc5 = os.system("sh -c 'exit 5'")
+    if rc5 != 5 {
+        println("FAIL 2: os.system('exit 5') = ${rc5}, expected 5 (was probably ${rc5}, raw wait-status before fix)")
+        exit(1)
+    }
+    println("  PASS 2: explicit exit 5 returns 5")
+
+    rc1 = os.system("false")
+    if rc1 != 1 {
+        println("FAIL 3: os.system('false') = ${rc1}, expected 1")
+        exit(1)
+    }
+    println("  PASS 3: false returns 1")
+
+    rc42 = os.system("sh -c 'exit 42'")
+    if rc42 != 42 {
+        println("FAIL 4: os.system('exit 42') = ${rc42}, expected 42")
+        exit(1)
+    }
+    println("  PASS 4: explicit exit 42 returns 42")
+
+    println("=== All cases passed ===")
+}

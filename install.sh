@@ -217,6 +217,14 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
     mkdir -p "$SRC_DIR"
     cp -r runtime "$SRC_DIR/" 2>/dev/null || true
     cp -r std     "$SRC_DIR/" 2>/dev/null || true
+    # Trim install-noise that confuses external consumers
+    # (aetherBuild and the like). runtime/examples/ holds standalone
+    # benches with their own main() — never link-suitable.
+    # runtime/io/ is an orphaned poller hub; the active poller
+    # variants live under runtime/scheduler/. Both trip naive
+    # `find runtime -name '*.c'` consumers.
+    rm -rf "$SRC_DIR/runtime/examples" 2>/dev/null || true
+    rm -rf "$SRC_DIR/runtime/io"       2>/dev/null || true
 
     # Register installed version in ~/.aether/versions/ so that:
     # - 'ae version list' shows it as "installed"

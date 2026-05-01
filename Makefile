@@ -460,6 +460,7 @@ test-release-archive: compiler ae stdlib
 	done && \
 	cp -r runtime "$$reldir/share/aether/" && \
 	cp -r std     "$$reldir/share/aether/" && \
+	rm -rf "$$reldir/share/aether/runtime/examples" "$$reldir/share/aether/runtime/io" && \
 	echo "  Created release layout in $$reldir" && \
 	echo "  Packing tarball..." && \
 	(cd "$$reldir" && tar -czf "$$tmpdir/aether-test.tar.gz" *) && \
@@ -967,6 +968,16 @@ install: release ae stdlib
 	@install -d $(PREFIX)/share/aether
 	@cp -R runtime $(PREFIX)/share/aether/
 	@cp -R std     $(PREFIX)/share/aether/
+	@# Trim install-noise that confuses external consumers (aetherBuild
+	@# and the like). runtime/examples/ holds standalone benches with
+	@# their own main() — never link-suitable. runtime/io/ is an
+	@# orphaned poller hub the main aetherc build doesn't use; the
+	@# active poller variants live under runtime/scheduler/. Both
+	@# trip naive `find runtime -name '*.c'` consumers. See
+	@# new_nic_consideration.md for the broader "drop sources from
+	@# install" question (Option C in aetherBuild's ask 3).
+	@rm -rf $(PREFIX)/share/aether/runtime/examples
+	@rm -rf $(PREFIX)/share/aether/runtime/io
 	@echo "✓ Installed successfully"
 	@echo ""
 	@echo "Run: ae version"
