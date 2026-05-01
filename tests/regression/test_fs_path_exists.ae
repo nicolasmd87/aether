@@ -1,0 +1,113 @@
+// Regression test for `fs.exists` — path-agnostic existence check.
+// Closes the gap raised in aeocha-changes.md follow-up: `file.exists`
+// is regular-file-only (deliberately filters S_ISDIR), `dir.exists`
+// is directory-only, and there was no path-agnostic predicate that
+// returns 1 for anything bound at the path.
+//
+// What this test guards:
+//   1. Existing regular file → 1
+//   2. Existing directory → 1
+//   3. Symlink → 1 (via lstat — even a dangling symlink counts as
+//      existing, matching POSIX `test -e`)
+//   4. Nonexistent path → 0
+//   5. Empty string → 0
+//   6. Round-trip with `dir.exists` and `file.exists`: the two
+//      type-specific predicates partition `fs.exists`'s domain.
+
+import std.fs
+import std.file
+import std.dir
+import std.string
+
+extern exit(code: int)
+
+main() {
+    println("=== fs.exists regression ===")
+
+    // Set up: a known-existing directory and a known-existing file
+    // inside it.
+    tmpdir = "/tmp/aether_fs_exists_test"
+    fs.create_dir(tmpdir)
+    tmpfile = "${tmpdir}/probe"
+    fs.write(tmpfile, "probe")
+
+    // Case 1: regular file exists.
+    if fs.exists(tmpfile) != 1 {
+        println("FAIL 1: fs.exists on regular file = ${fs.exists(tmpfile)}, expected 1")
+        exit(1)
+    }
+    println("  PASS 1: regular file → 1")
+
+    // Case 2: directory exists.
+    if fs.exists(tmpdir) != 1 {
+        println("FAIL 2: fs.exists on directory = ${fs.exists(tmpdir)}, expected 1")
+        exit(1)
+    }
+    println("  PASS 2: directory → 1")
+
+    // Case 3: nonexistent path.
+    if fs.exists("/tmp/this_path_definitely_does_not_exist_xyz123") != 0 {
+        println("FAIL 3: fs.exists on bogus = nonzero, expected 0")
+        exit(1)
+    }
+    println("  PASS 3: nonexistent → 0")
+
+    // Case 4: empty path.
+    if fs.exists("") != 0 {
+        println("FAIL 4: fs.exists('') = nonzero, expected 0")
+        exit(1)
+    }
+    println("  PASS 4: empty path → 0")
+
+    // Case 5: file.exists vs dir.exists vs fs.exists partition.
+    fe_dir  = file.exists(tmpdir)
+    fe_file = file.exists(tmpfile)
+    de_dir  = dir.exists(tmpdir)
+    de_file = dir.exists(tmpfile)
+
+    // file.exists: 0 on dir, 1 on regular file
+    if fe_dir != 0 {
+        println("FAIL 5: file.exists(dir) = ${fe_dir}, expected 0 (file.exists is regular-file-only)")
+        exit(1)
+    }
+    if fe_file != 1 {
+        println("FAIL 5: file.exists(file) = ${fe_file}, expected 1")
+        exit(1)
+    }
+    // dir.exists: 1 on dir, 0 on regular file
+    if de_dir != 1 {
+        println("FAIL 5: dir.exists(dir) = ${de_dir}, expected 1")
+        exit(1)
+    }
+    if de_file != 0 {
+        println("FAIL 5: dir.exists(file) = ${de_file}, expected 0 (dir.exists is directory-only)")
+        exit(1)
+    }
+    // fs.exists: 1 on either
+    if fs.exists(tmpdir) != 1 {
+        println("FAIL 5: fs.exists(dir) = 0, partition broken")
+        exit(1)
+    }
+    if fs.exists(tmpfile) != 1 {
+        println("FAIL 5: fs.exists(file) = 0, partition broken")
+        exit(1)
+    }
+    println("  PASS 5: file.exists / dir.exists / fs.exists partition correctly")
+
+    // Cleanup
+    fs.delete(tmpfile)
+    fs.delete_dir(tmpdir)
+
+    // Case 6: after cleanup, fs.exists returns 0 again.
+    if fs.exists(tmpfile) != 0 {
+        println("FAIL 6: fs.exists after delete = nonzero, expected 0")
+        exit(1)
+    }
+    if fs.exists(tmpdir) != 0 {
+        println("FAIL 6: fs.exists after rmdir = nonzero, expected 0")
+        exit(1)
+    }
+    println("  PASS 6: fs.exists drops to 0 after cleanup")
+
+    println("=== All cases passed ===")
+}

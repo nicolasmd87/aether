@@ -15,6 +15,12 @@ char* file_read_all_raw(File* file);
 int file_write_raw(File* file, const char* data, int length);
 int file_close(File* file);
 int file_exists(const char* path);
+/* Path-agnostic existence check: 1 if anything is at `path`
+ * (regular file, directory, symlink, fifo, …), 0 otherwise.
+ * Distinct from file_exists (regular-file-only) and dir_exists
+ * (directory-only). Uses lstat so dangling symlinks count as
+ * existing — matches POSIX `test -e`. */
+int fs_path_exists(const char* path);
 int file_delete_raw(const char* path);
 int file_size_raw(const char* path);
 int file_mtime(const char* path);

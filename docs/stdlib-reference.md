@@ -505,7 +505,7 @@ main() {
 - `file.close(handle)` - Close file
 - `file.size(path)` → `(int, string)` - Get size in bytes
 - `file.delete(path)` → `string` - Delete file
-- `file.exists(path)` - 1 if exists, 0 otherwise (infallible)
+- `file.exists(path)` - 1 if a **regular file** is at `path`, 0 otherwise. Returns 0 for directories, even if they exist — see `fs.exists` for the path-agnostic check.
 
 Raw externs: `file_open_raw`, `file_read_all_raw`, `file_write_raw`, `file_delete_raw`, `file_size_raw`.
 
@@ -537,7 +537,7 @@ main() {
 - `dir.create(path)` → `string` - Create directory, return error string
 - `dir.delete(path)` → `string` - Delete empty directory, return error string
 - `dir.list(path)` → `(ptr, string)` - List contents (caller must `dir.list_free`)
-- `dir.exists(path)` - 1 if exists, 0 otherwise (infallible)
+- `dir.exists(path)` - 1 if a **directory** is at `path`, 0 otherwise. Returns 0 for regular files, even if they exist — see `fs.exists` for the path-agnostic check.
 - `dir.list_free(list)` - Free directory listing
 
 Raw externs: `dir_create_raw`, `dir_delete_raw`, `dir_list_raw`.
@@ -595,6 +595,7 @@ main() {
 ```
 
 **Functions (beyond those re-exported from `std.file`/`std.dir`/`std.path`):**
+- `fs.exists(path)` → `int` - **Path-agnostic** existence check: 1 if anything is at `path` (regular file, directory, symlink, fifo, ...), 0 otherwise. Distinct from `file.exists` (regular-file-only) and `dir.exists` (directory-only) — those filter by type, this one doesn't. Uses `lstat(2)` so a dangling symlink counts as existing — matches POSIX `test -e`. Reach for this in tooling that probes whether a path is bound without caring what's there (build-system runtime-path discovery, "did the user pass a real path?" CLI validation).
 - `fs.write_atomic(path, data, length)` → `string` - Stage to `<path>.tmp.<pid>.<n>`, fsync, rename over destination. Binary-safe via explicit length.
 - `fs.write_binary(path, data, length)` → `string` - Non-atomic `fopen("wb")` + `fwrite` + `fclose`. Binary-safe via explicit length. Cheaper than `write_atomic` when a partial file on crash is acceptable (scratch writes, caches).
 - `fs.rename(from, to)` → `string` - POSIX `rename(2)` wrapper. Atomic when source and target are on the same filesystem.
