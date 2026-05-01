@@ -460,6 +460,7 @@ test-release-archive: compiler ae stdlib
 	done && \
 	cp -r runtime "$$reldir/share/aether/" && \
 	cp -r std     "$$reldir/share/aether/" && \
+	rm -rf "$$reldir/share/aether/runtime/examples" "$$reldir/share/aether/runtime/io" && \
 	echo "  Created release layout in $$reldir" && \
 	echo "  Packing tarball..." && \
 	(cd "$$reldir" && tar -czf "$$tmpdir/aether-test.tar.gz" *) && \
@@ -917,7 +918,7 @@ release: clean
 	@echo "==================================="
 	@echo "Building Optimized Release"
 	@echo "==================================="
-	@$(MKDIR)
+	@$(MKDIR) build
 	@echo "Compiling with -O3 -DNDEBUG -flto -Werror..."
 	@$(CC) -O3 -DNDEBUG -flto -Werror -Icompiler -Iruntime -Istd -Istd/collections \
 		$(COMPILER_SRC) $(STD_SRC) $(COLLECTIONS_SRC) \
@@ -943,37 +944,40 @@ install: release ae stdlib
 	@install -m 755 build/aetherc-release$(EXE_EXT) $(PREFIX)/bin/aetherc
 	@install -d $(PREFIX)/lib/aether
 	@install -m 644 build/libaether.a $(PREFIX)/lib/aether/
-	@for dir in runtime runtime/actors runtime/scheduler runtime/utils \
-	            runtime/memory runtime/config std std/string std/math std/net \
-	            std/collections std/json std/fs std/log std/io std/dl; do \
-		if [ -d $$dir ]; then \
-			install -d $(PREFIX)/include/aether/$$dir; \
-			for h in $$dir/*.h; do \
-				[ -f "$$h" ] && install -m 644 "$$h" $(PREFIX)/include/aether/$$dir/ 2>/dev/null || true; \
-			done; \
-		fi; \
+	@# Headers: walk the runtime/ and std/ trees and mirror every .h
+	@# into $(PREFIX)/include/aether. Whole-tree copy (rather than the
+	@# per-subdir enumeration this used to do) so new modules don't
+	@# silently fall off the install — any module added under std/ or
+	@# any new subdir under std/http/, std/collections/ etc. is
+	@# captured automatically.
+	@install -d $(PREFIX)/include/aether
+	@cd runtime && find . -name '*.h' -print | while read h; do \
+		install -d "$(PREFIX)/include/aether/runtime/$$(dirname $$h)"; \
+		install -m 644 "$$h" "$(PREFIX)/include/aether/runtime/$$h"; \
 	done
-	@install -d $(PREFIX)/share/aether/runtime
-	@install -d $(PREFIX)/share/aether/std
-	@for subdir in actors scheduler memory config utils; do \
-		if [ -d "runtime/$$subdir" ]; then \
-			install -d $(PREFIX)/share/aether/runtime/$$subdir; \
-			for f in runtime/$$subdir/*.c runtime/$$subdir/*.h; do \
-				[ -f "$$f" ] && install -m 644 "$$f" $(PREFIX)/share/aether/runtime/$$subdir/ 2>/dev/null || true; \
-			done; \
-		fi; \
+	@cd std && find . -name '*.h' -print | while read h; do \
+		install -d "$(PREFIX)/include/aether/std/$$(dirname $$h)"; \
+		install -m 644 "$$h" "$(PREFIX)/include/aether/std/$$h"; \
 	done
-	@for f in runtime/*.c runtime/*.h; do \
-		[ -f "$$f" ] && install -m 644 "$$f" $(PREFIX)/share/aether/runtime/ 2>/dev/null || true; \
-	done
-	@for subdir in string math net collections json fs log io; do \
-		if [ -d "std/$$subdir" ]; then \
-			install -d $(PREFIX)/share/aether/std/$$subdir; \
-			for f in std/$$subdir/*.c std/$$subdir/*.h; do \
-				[ -f "$$f" ] && install -m 644 "$$f" $(PREFIX)/share/aether/std/$$subdir/ 2>/dev/null || true; \
-			done; \
-		fi; \
-	done
+	@# Sources + module.ae descriptors: same whole-tree copy. The
+	@# compiler resolver looks for `share/aether/std/<mod>/module.ae`
+	@# (compiler/aether_module.c:491) on every `import std.X`, so
+	@# every module dir — including the Aether-only ones (file, dir,
+	@# path, list, map, host, intarr, tcp) — needs its module.ae
+	@# present here for the install to be functional.
+	@install -d $(PREFIX)/share/aether
+	@cp -R runtime $(PREFIX)/share/aether/
+	@cp -R std     $(PREFIX)/share/aether/
+	@# Trim install-noise that confuses external consumers (aetherBuild
+	@# and the like). runtime/examples/ holds standalone benches with
+	@# their own main() — never link-suitable. runtime/io/ is an
+	@# orphaned poller hub the main aetherc build doesn't use; the
+	@# active poller variants live under runtime/scheduler/. Both
+	@# trip naive `find runtime -name '*.c'` consumers. See
+	@# new_nic_consideration.md for the broader "drop sources from
+	@# install" question (Option C in aetherBuild's ask 3).
+	@rm -rf $(PREFIX)/share/aether/runtime/examples
+	@rm -rf $(PREFIX)/share/aether/runtime/io
 	@echo "✓ Installed successfully"
 	@echo ""
 	@echo "Run: ae version"

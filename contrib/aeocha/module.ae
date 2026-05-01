@@ -1,271 +1,275 @@
 // Aeocha — BDD-style test framework for Aether
 // MIT License — Copyright (c) 2025 Aether Programming Language Contributors
 //
-// Uses trailing blocks and _ctx builder context injection for
-// describe/it/before/after_each spec structure.
-// Run with: ae run my_test.ae
-// Exit code 0 = all passed, 1 = failures
+// Spec framework with describe / it / before_each / after_each, built
+// on Aether's trailing blocks + closures + the _ctx builder
+// context-injection pattern.
+//
+// Usage:
+//
+//     import contrib.aeocha
+//
+//     main() {
+//         fw = aeocha.init()
+//         aeocha.describe(fw, "Counter") {
+//             aeocha.before_each(fw) callback {
+//                 reset()
+//             }
+//             aeocha.it(fw, "starts at zero") callback {
+//                 aeocha.assert_eq(fw, count(), 0, "initial")
+//             }
+//             aeocha.it(fw, "increments") callback {
+//                 increment()
+//                 aeocha.assert_eq(fw, count(), 1, "after one inc")
+//             }
+//         }
+//         aeocha.run_summary(fw)
+//     }
+//
+// Run with: aeb test  (or `ae run my_test.ae` if you prefer no harness).
+// Exit code 0 = all passed, 1 = failures.
+//
+// Why fw is threaded through every call: Aether rejects mutable
+// assignment to module-level identifiers, and `const` of a function
+// call is a typecheck error, so the framework can't keep its
+// passed/failed/depth counters as module-level globals. Every entry
+// point takes the framework context (`fw`) explicitly. See
+// aeocha-changes.md TODO item (1) and the const-call gate landed in
+// PR 325 for the upstream gates that drove this shape.
+//
+// `after_each` is the survivor; bare `after` was deleted because it
+// collides with Aether's actor-receive `after N -> { ... }` timeout
+// syntax (TODO item 2).
 
-import std.list
-import std.map
+// Inline-extern the std.list / std.map runtime symbols rather than
+// `import std.list` / `import std.map`. The import-expansion path
+// for an imported contrib module does not currently route bare
+// `list_new` / `map_new` calls inside that module through the
+// matching std externs — they end up implicitly declared at the
+// emit site and conflict with the proper extern decl that lands
+// later in the same TU. Inline-externing is the same workaround
+// pattern documented for #309-era stdlib uses (svnae port pre-0.106).
+extern list_new() -> ptr
+extern list_add_raw(list: ptr, item: ptr) -> int
+extern list_get_raw(list: ptr, index: int) -> ptr
+extern list_size(list: ptr) -> int
+
+extern map_new() -> ptr
+extern map_put_raw(map: ptr, key: string, value: ptr) -> int
+extern map_get_raw(map: ptr, key: string) -> ptr
+extern map_has(map: ptr, key: string) -> int
+
+extern string_contains(str: string, substring: string) -> int
+extern string_equals(a: string, b: string) -> int
 
 exports (
-    before, after, before_each, after_each,
-    it, describe,
-    fail, assert_true, assert_false, assert_eq, assert_str_eq,
-    assert_not_eq, assert_gt, assert_contains,
-    assert_null, assert_not_null,
+    init,
+    describe, it,
+    before_each, after_each,
+    fail, assert_true, assert_false,
+    assert_eq, assert_str_eq, assert_not_eq, assert_gt,
+    assert_contains, assert_null, assert_not_null,
     run_summary
 )
 
 // ---------------------------------------------------------------------------
-// State — test runner accumulates results
+// Framework context — counters and depth, threaded through every call
 // ---------------------------------------------------------------------------
 
-// Global counters
-_passed = ref(0)
-_failed = ref(0)
-_depth  = ref(0)
-
-// ---------------------------------------------------------------------------
-// Indentation helper
-// ---------------------------------------------------------------------------
-
-_indent() {
-    d = ref_get(_depth)
-    for (i = 0; i < d; i++) {
-        print("  ")
-    }
+// Build a fresh framework context. Holds the test-run counters
+// (passed / failed) and the indentation depth (depth) as refs. The
+// caller threads the returned ptr through every aeocha.* call; the
+// suite contexts created by describe() carry it as an inner field.
+init() -> ptr {
+    fw = map_new()
+    map_put_raw(fw, "passed", ref(0))
+    map_put_raw(fw, "failed", ref(0))
+    map_put_raw(fw, "depth",  ref(0))
+    return fw
 }
 
 // ---------------------------------------------------------------------------
 // Suite context — what describe() returns for _ctx injection
 //
-// A suite holds:
-//   "name"     - string
-//   "befores"  - list of boxed closures (run before each it())
-//   "afters"   - list of boxed closures (run after each it())
-//   "its"      - list of { name, test_fn } entries
-//   "children" - list of child suite contexts (nested describes)
+// Each suite holds:
+//   "name"     — string label for printing
+//   "befores"  — list of boxed closures (run before each it())
+//   "afters"   — list of boxed closures (run after each it())
+//   "fw"       — back-pointer to the framework context (so it / assertions
+//                inside the trailing block can find passed/failed/depth)
 // ---------------------------------------------------------------------------
 
-_suite_new(name: string) {
+_suite_new(name: string, fw: ptr) -> ptr {
     s = map_new()
-    map_put(s, "name", name)
-    map_put(s, "befores", list.new())
-    map_put(s, "afters", list.new())
+    map_put_raw(s, "name", name)
+    map_put_raw(s, "befores", list_new())
+    map_put_raw(s, "afters",  list_new())
+    map_put_raw(s, "fw",      fw)
     return s
 }
 
-// ---------------------------------------------------------------------------
-// DSL functions — used inside describe() trailing blocks
-// ---------------------------------------------------------------------------
-
-// before() callback { ... }
-// Registers a setup closure to run before each it() in this describe block.
-before(_ctx: ptr, setup: fn) {
-    bl, _ = map.get(_ctx, "befores")
-    list.add(bl, box_closure(setup))
+// Return the framework context for a given _ctx (which may itself be
+// the framework context if the call is at top level, or a suite
+// context if the call is inside a describe trailing block).
+_fw_of(ctx: ptr) -> ptr {
+    if map_has(ctx, "fw") == 1 {
+        f = map_get_raw(ctx, "fw")
+        return f
+    }
+    return ctx
 }
 
-// after() callback { ... }
-// Registers a teardown closure to run after each it() in this describe block.
-after(_ctx: ptr, teardown: fn) {
-    al, _ = map.get(_ctx, "afters")
-    list.add(al, box_closure(teardown))
+// ---------------------------------------------------------------------------
+// describe() — top-level grouping. Trailing-block-driven; the block
+// receives the suite context as _ctx so before_each/after_each/it
+// register against it.
+// ---------------------------------------------------------------------------
+
+describe(_ctx: ptr, description: string) -> ptr {
+    fw = _fw_of(_ctx)
+    depth_ref = map_get_raw(fw, "depth")
+    d = ref_get(depth_ref)
+    for (i = 0; i < d; i++) { print("  ") }
+    println(description)
+    ref_set(depth_ref, d + 1)
+    return _suite_new(description, fw)
 }
 
-// before_each() callback { ... }
-// Alias for before()
+// ---------------------------------------------------------------------------
+// before_each / after_each — register hooks against the surrounding
+// describe's suite context.
+// ---------------------------------------------------------------------------
+
 before_each(_ctx: ptr, setup: fn) {
-    before(_ctx, setup)
+    bl = map_get_raw(_ctx, "befores")
+    list_add_raw(bl, box_closure(setup))
 }
 
-// after_each() callback { ... }
-// Alias for after_each()
 after_each(_ctx: ptr, teardown: fn) {
-    after(_ctx, teardown)
+    al = map_get_raw(_ctx, "afters")
+    list_add_raw(al, box_closure(teardown))
 }
 
-// it("description") callback { ... }
-// Runs the test immediately with before/after hooks from the current suite.
+// ---------------------------------------------------------------------------
+// it() — one test case. Runs all befores, then the test, then all
+// afters. Failure is communicated by assertions inside the test body
+// bumping the framework's failed counter; we snapshot the count
+// before and after to know whether anything failed in this run.
+// ---------------------------------------------------------------------------
+
 it(_ctx: ptr, description: string, test_fn: fn) {
-    // Run all before hooks
-    befores, _ = map.get(_ctx, "befores")
-    n_before = list.size(befores)
+    fw = _fw_of(_ctx)
+    passed_ref = map_get_raw(fw, "passed")
+    failed_ref = map_get_raw(fw, "failed")
+    depth_ref = map_get_raw(fw, "depth")
+
+    // Run before hooks
+    befores = map_get_raw(_ctx, "befores")
+    n_before = list_size(befores)
     for (i = 0; i < n_before; i++) {
-        bh, _ = list.get(befores, i)
-        hook = unbox_closure(bh)
-        call(hook)
+        bh = list_get_raw(befores, i)
+        call(unbox_closure(bh))
     }
 
-    // Run the test
-    _indent()
-    // The test signals failure by calling fail() which sets a flag
-    _test_failed = ref(0)
-    _current_failure = ref(0)
-    map_put(_ctx, "_test_failed", _test_failed)
-    map_put(_ctx, "_failure_msg", _current_failure)
-
+    old_failed = ref_get(failed_ref)
     call(test_fn)
 
-    if ref_get(_test_failed) == 0 {
+    // Indent + result line
+    d = ref_get(depth_ref)
+    for (i = 0; i < d; i++) { print("  ") }
+    if ref_get(failed_ref) == old_failed {
         print("\x1b[32m  ✓\x1b[0m ${description}\n")
-        ref_set(_passed, ref_get(_passed) + 1)
+        ref_set(passed_ref, ref_get(passed_ref) + 1)
     } else {
         print("\x1b[31m  ✗\x1b[0m ${description}\n")
-        ref_set(_failed, ref_get(_failed) + 1)
     }
 
-    ref_free(_test_failed)
-    ref_free(_current_failure)
-
-    // Run all after hooks
-    afters, _ = map.get(_ctx, "afters")
-    n_after = list.size(afters)
+    // Run after hooks
+    afters = map_get_raw(_ctx, "afters")
+    n_after = list_size(afters)
     for (i = 0; i < n_after; i++) {
-        ah, _ = list.get(afters, i)
-        hook = unbox_closure(ah)
-        call(hook)
+        ah = list_get_raw(afters, i)
+        call(unbox_closure(ah))
     }
 }
 
 // ---------------------------------------------------------------------------
-// describe() — the top-level grouping function
-//
-// Groups tests. Nests arbitrarily.
-// Creates a suite context, runs the block (which registers before/after/it),
-// and can be nested.
+// Assertions — every one takes the framework context so it can bump
+// the failed counter when the check doesn't hold. They print the
+// failure inline and continue (no exit), letting the surrounding it()
+// see the bumped counter and mark the case red.
 // ---------------------------------------------------------------------------
 
-describe(description: string) {
-    _indent()
-    println(description)
-    ref_set(_depth, ref_get(_depth) + 1)
-    s = _suite_new(description)
-    // The trailing block will run with s as _ctx, populating it
-    // via before(), after(), it(), and nested describe() calls
-    return s
-}
-
-// After a describe block finishes, pop depth
-// (The compiler pops context automatically after trailing blocks,
-//  but we need to decrement depth. This is called via the context stack.)
-_describe_done() {
-    ref_set(_depth, ref_get(_depth) - 1)
-}
-
-// ---------------------------------------------------------------------------
-// Assertions
-// ---------------------------------------------------------------------------
-
-// Get the current test's failure flag from context
-// (Assertions look up the _ctx stack for the innermost it() context)
-
-// fail() — unconditional test failure
-fail(msg: string) {
+fail(fw: ptr, msg: string) {
+    failed_ref = map_get_raw(fw, "failed")
     print("\x1b[31m      FAIL: ${msg}\x1b[0m\n")
-    ref_set(_passed, ref_get(_passed))  // no-op, just for clarity
-    // Signal failure via exit since we can't easily reach the ref
-    // from nested closures. Tests that call fail() abort immediately.
-    ref_set(_failed, ref_get(_failed) + 1)
-    // Don't exit — let after hooks run. Instead, the test is already
-    // counted as failed. Subsequent assertions in the same it() are skipped
-    // by convention (caller should return after fail).
+    ref_set(failed_ref, ref_get(failed_ref) + 1)
 }
 
-// assert_true(condition, message)
-assert_true(condition: int, msg: string) {
+assert_true(fw: ptr, condition: int, msg: string) {
     if condition == 0 {
-        print("\x1b[31m      FAIL: ${msg} — expected true\x1b[0m\n")
-        ref_set(_failed, ref_get(_failed) + 1)
-        ref_set(_passed, ref_get(_passed) - 1)  // undo the pre-counted pass
+        fail(fw, "${msg} — expected true")
     }
 }
 
-// assert_false(condition, message)
-assert_false(condition: int, msg: string) {
+assert_false(fw: ptr, condition: int, msg: string) {
     if condition != 0 {
-        print("\x1b[31m      FAIL: ${msg} — expected false\x1b[0m\n")
-        ref_set(_failed, ref_get(_failed) + 1)
-        ref_set(_passed, ref_get(_passed) - 1)
+        fail(fw, "${msg} — expected false")
     }
 }
 
-// assert_eq(actual, expected) — integer equality
-assert_eq(actual: int, expected: int, msg: string) {
+assert_eq(fw: ptr, actual: int, expected: int, msg: string) {
     if actual != expected {
-        print("\x1b[31m      FAIL: ${msg} — expected ${expected}, got ${actual}\x1b[0m\n")
-        ref_set(_failed, ref_get(_failed) + 1)
-        ref_set(_passed, ref_get(_passed) - 1)
+        fail(fw, "${msg} — expected ${expected}, got ${actual}")
     }
 }
 
-// assert_str_eq(actual, expected) — string equality
-assert_str_eq(actual: string, expected: string, msg: string) {
-    if str_eq(actual, expected) == 0 {
-        print("\x1b[31m      FAIL: ${msg} — expected '${expected}', got '${actual}'\x1b[0m\n")
-        ref_set(_failed, ref_get(_failed) + 1)
-        ref_set(_passed, ref_get(_passed) - 1)
+assert_str_eq(fw: ptr, actual: string, expected: string, msg: string) {
+    if string_equals(actual, expected) == 0 {
+        fail(fw, "${msg} — expected '${expected}', got '${actual}'")
     }
 }
 
-// assert_not_eq(actual, expected) — integer inequality
-assert_not_eq(actual: int, expected: int, msg: string) {
+assert_not_eq(fw: ptr, actual: int, expected: int, msg: string) {
     if actual == expected {
-        print("\x1b[31m      FAIL: ${msg} — expected not ${expected}\x1b[0m\n")
-        ref_set(_failed, ref_get(_failed) + 1)
-        ref_set(_passed, ref_get(_passed) - 1)
+        fail(fw, "${msg} — expected not ${expected}")
     }
 }
 
-// assert_gt(actual, expected) — greater than
-assert_gt(actual: int, expected: int, msg: string) {
+assert_gt(fw: ptr, actual: int, expected: int, msg: string) {
     if actual <= expected {
-        print("\x1b[31m      FAIL: ${msg} — expected > ${expected}, got ${actual}\x1b[0m\n")
-        ref_set(_failed, ref_get(_failed) + 1)
-        ref_set(_passed, ref_get(_passed) - 1)
+        fail(fw, "${msg} — expected > ${expected}, got ${actual}")
     }
 }
 
-// assert_contains(haystack, needle) — string contains
-// String contains check
-assert_contains(haystack: string, needle: string, msg: string) {
-    if string.contains(haystack, needle) == 0 {
-        print("\x1b[31m      FAIL: ${msg} — '${haystack}' does not contain '${needle}'\x1b[0m\n")
-        ref_set(_failed, ref_get(_failed) + 1)
-        ref_set(_passed, ref_get(_passed) - 1)
+assert_contains(fw: ptr, haystack: string, needle: string, msg: string) {
+    if string_contains(haystack, needle) == 0 {
+        fail(fw, "${msg} — '${haystack}' does not contain '${needle}'")
     }
 }
 
-// assert_null(value, message) — pointer is null/zero
-assert_null(value: ptr, msg: string) {
+assert_null(fw: ptr, value: ptr, msg: string) {
     if value != 0 {
-        print("\x1b[31m      FAIL: ${msg} — expected null\x1b[0m\n")
-        ref_set(_failed, ref_get(_failed) + 1)
-        ref_set(_passed, ref_get(_passed) - 1)
+        fail(fw, "${msg} — expected null")
     }
 }
 
-// assert_not_null(value, message) — pointer is non-null
-assert_not_null(value: ptr, msg: string) {
+assert_not_null(fw: ptr, value: ptr, msg: string) {
     if value == 0 {
-        print("\x1b[31m      FAIL: ${msg} — expected non-null\x1b[0m\n")
-        ref_set(_failed, ref_get(_failed) + 1)
-        ref_set(_passed, ref_get(_passed) - 1)
+        fail(fw, "${msg} — expected non-null")
     }
 }
 
 // ---------------------------------------------------------------------------
-// Runner — summary and exit code
+// Runner — print summary, exit(1) if anything failed
 // ---------------------------------------------------------------------------
 
-// Call at the end of main() to print summary and exit with appropriate code.
-// Print summary and exit(1) if any tests failed.
-run_summary() {
-    passed = ref_get(_passed)
-    failed = ref_get(_failed)
-    total = passed + failed
+run_summary(fw: ptr) {
+    passed_ref = map_get_raw(fw, "passed")
+    failed_ref = map_get_raw(fw, "failed")
+    depth_ref = map_get_raw(fw, "depth")
+    passed = ref_get(passed_ref)
+    failed = ref_get(failed_ref)
 
     println("")
     if failed == 0 {
@@ -276,10 +280,9 @@ run_summary() {
     }
     println("")
 
-    // Cleanup global refs
-    ref_free(_passed)
-    ref_free(_failed)
-    ref_free(_depth)
+    ref_free(passed_ref)
+    ref_free(failed_ref)
+    ref_free(depth_ref)
 
     if failed > 0 {
         exit(1)

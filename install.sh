@@ -194,36 +194,37 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
         cp build/libaether.a "$LIB_DIR/libaether.a"
     fi
 
-    # Headers (preserve directory structure for relative includes)
-    for dir in runtime runtime/actors runtime/scheduler runtime/utils \
-               runtime/memory runtime/config std std/string std/io std/math \
-               std/net std/collections std/json std/fs std/log std/http \
-               std/file std/dir std/path std/tcp std/list std/map std/os; do
-        if [ -d "$dir" ]; then
-            mkdir -p "$INCLUDE_DIR/$dir"
-            for h in "$dir"/*.h; do
-                [ -f "$h" ] && cp "$h" "$INCLUDE_DIR/$dir/" 2>/dev/null || true
-            done
-        fi
+    # Headers (preserve directory structure for relative includes).
+    # Whole-tree walk rather than per-subdir enumeration so new
+    # modules added under std/ or new subdirs under std/http/ etc.
+    # don't silently fall off the install.
+    mkdir -p "$INCLUDE_DIR"
+    (cd runtime && find . -name '*.h' -print) | while read -r h; do
+        mkdir -p "$INCLUDE_DIR/runtime/$(dirname "$h")"
+        cp "runtime/$h" "$INCLUDE_DIR/runtime/$h" 2>/dev/null || true
+    done
+    (cd std && find . -name '*.h' -print) | while read -r h; do
+        mkdir -p "$INCLUDE_DIR/std/$(dirname "$h")"
+        cp "std/$h" "$INCLUDE_DIR/std/$h" 2>/dev/null || true
     done
 
-    # Runtime source (fallback for linking)
-    mkdir -p "$SRC_DIR/runtime" "$SRC_DIR/std"
-    cp -r runtime/*.c runtime/*.h "$SRC_DIR/runtime/" 2>/dev/null || true
-    for subdir in actors scheduler memory config utils; do
-        if [ -d "runtime/$subdir" ]; then
-            mkdir -p "$SRC_DIR/runtime/$subdir"
-            cp runtime/$subdir/*.c runtime/$subdir/*.h "$SRC_DIR/runtime/$subdir/" 2>/dev/null || true
-        fi
-    done
-    for subdir in string math net collections json fs log io file dir path tcp http list map os; do
-        if [ -d "std/$subdir" ]; then
-            mkdir -p "$SRC_DIR/std/$subdir"
-            cp std/$subdir/*.c std/$subdir/*.h "$SRC_DIR/std/$subdir/" 2>/dev/null || true
-            # Copy module.ae files for import system
-            cp std/$subdir/*.ae "$SRC_DIR/std/$subdir/" 2>/dev/null || true
-        fi
-    done
+    # Runtime + stdlib source (sources are the fallback the compiler
+    # falls through to for relinking; module.ae descriptors are what
+    # the resolver looks up on `import std.X`). Whole-tree copy means
+    # every module's full content lands — including Aether-only
+    # modules (file, dir, path, list, map, host, intarr, tcp) whose
+    # only payload is module.ae.
+    mkdir -p "$SRC_DIR"
+    cp -r runtime "$SRC_DIR/" 2>/dev/null || true
+    cp -r std     "$SRC_DIR/" 2>/dev/null || true
+    # Trim install-noise that confuses external consumers
+    # (aetherBuild and the like). runtime/examples/ holds standalone
+    # benches with their own main() — never link-suitable.
+    # runtime/io/ is an orphaned poller hub; the active poller
+    # variants live under runtime/scheduler/. Both trip naive
+    # `find runtime -name '*.c'` consumers.
+    rm -rf "$SRC_DIR/runtime/examples" 2>/dev/null || true
+    rm -rf "$SRC_DIR/runtime/io"       2>/dev/null || true
 
     # Register installed version in ~/.aether/versions/ so that:
     # - 'ae version list' shows it as "installed"

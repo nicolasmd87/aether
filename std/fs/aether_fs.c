@@ -11,6 +11,7 @@ char* file_read_all_raw(File* f) { (void)f; return NULL; }
 int file_write_raw(File* f, const char* d, int l) { (void)f; (void)d; (void)l; return 0; }
 int file_close(File* f) { (void)f; return 0; }
 int file_exists(const char* p) { (void)p; return 0; }
+int fs_path_exists(const char* p) { (void)p; return 0; }
 int file_delete_raw(const char* p) { (void)p; return 0; }
 int file_size_raw(const char* p) { (void)p; return -1; }
 int file_mtime(const char* p) { (void)p; return 0; }
@@ -177,6 +178,31 @@ int file_exists(const char* path) {
 
     struct stat st;
     return (stat(path, &st) == 0 && !S_ISDIR(st.st_mode));
+}
+
+/* Path-agnostic existence check: returns 1 if anything is at `path`
+ * (regular file, directory, symlink, fifo, socket, …), 0 otherwise.
+ * Distinct from `file_exists` (which is regular-file-only) and
+ * `dir_exists` (directory-only) — those are the type-specific
+ * predicates. Use `fs_path_exists` when the caller doesn't care
+ * what kind of thing is there, only whether the path is bound.
+ *
+ * Uses lstat so a dangling symlink reports as existing — matches
+ * POSIX `test -e` and the conventional "is this path bound?"
+ * shell idiom. Empty / NULL path returns 0. */
+int fs_path_exists(const char* path) {
+    if (!path || !*path) return 0;
+    if (!aether_sandbox_check("fs_read", path)) return 0;
+
+#ifdef _WIN32
+    /* Windows lacks lstat; stat is fine — symlinks behave like
+     * their target on Windows by default. */
+    struct stat st;
+    return stat(path, &st) == 0 ? 1 : 0;
+#else
+    struct stat st;
+    return lstat(path, &st) == 0 ? 1 : 0;
+#endif
 }
 
 int file_delete_raw(const char* path) {

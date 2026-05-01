@@ -11,7 +11,7 @@
 
 exports (
     file_open_raw, file_close, file_read_all_raw, file_write_raw,
-    file_exists, file_delete_raw, file_size_raw, file_mtime,
+    file_exists, fs_path_exists, file_delete_raw, file_size_raw, file_mtime,
     dir_exists, dir_create_raw, dir_delete_raw, dir_list_raw,
     fs_mkdir_p_raw,
     fs_symlink_raw, fs_readlink_raw, fs_is_symlink, fs_unlink_raw,
@@ -22,7 +22,7 @@ exports (
     dir_list_count, dir_list_get, dir_list_free,
     path_join, path_dirname, path_basename, path_extension, path_is_absolute,
     fs_glob_raw, fs_glob_multi_raw,
-    open, read, write, delete, size,
+    open, read, write, delete, size, exists,
     create_dir, delete_dir, mkdir_p,
     symlink, readlink, unlink,
     list_dir, glob, glob_multi,
@@ -35,6 +35,13 @@ extern file_close(file: ptr) -> int
 extern file_read_all_raw(file: ptr) -> string
 extern file_write_raw(file: ptr, data: string, length: int) -> int
 extern file_exists(path: string) -> int
+// Path-agnostic existence check: 1 if anything is at `path`
+// (regular file, directory, symlink, fifo, ...), 0 otherwise.
+// Distinct from `file_exists` (regular-file-only) and
+// `dir_exists` (directory-only). Use this when the caller doesn't
+// care what kind of thing is there — only whether the path is bound.
+// Matches POSIX `test -e`.
+extern fs_path_exists(path: string) -> int
 extern file_delete_raw(path: string) -> int
 extern file_size_raw(path: string) -> int
 
@@ -193,6 +200,16 @@ size(path: string) -> {
         return 0, "cannot stat file"
     }
     return s, ""
+}
+
+// Does anything exist at `path`? Returns 1 for any kind of
+// filesystem entry (regular file, directory, symlink, fifo, ...),
+// 0 if nothing is there or `path` is empty. Use this when you don't
+// care whether the target is a file or a directory — for type-
+// specific checks reach for `file.exists` (regular-file-only) or
+// `dir.exists` (directory-only). Matches POSIX `test -e`.
+exists(path: string) -> int {
+    return fs_path_exists(path)
 }
 
 // Create a directory. Returns "" on success, error on failure.
