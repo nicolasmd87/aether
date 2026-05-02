@@ -205,6 +205,7 @@ TEST_SRC = tests/runtime/test_harness.c \
            tests/runtime/test_zerocopy.c \
            tests/runtime/test_actor_pool.c \
            tests/runtime/test_lockfree_mailbox.c \
+           tests/runtime/test_send_buffer.c \
            tests/runtime/test_scheduler_optimizations.c \
            tests/runtime/test_spsc_queue.c \
            tests/runtime/test_worksteal_race.c \
