@@ -242,7 +242,136 @@ TEST_CATEGORY(send_buffer_force_flush_empty_is_noop, TEST_CATEGORY_RUNTIME) {
     ASSERT_TRUE(g_send_buffer.target == NULL);
 }
 
-// Test 10: send_buffer_pending reports the current count.
+// Test 10a: SPSC-can't-fit → mailbox fallback path. Force SPSC near
+// capacity (so spsc_enqueue_batch's all-or-nothing check rejects the
+// whole batch), then flush. Mailbox takes a prefix; the suffix
+// remains in the buffer.
+//
+// Each input message carries a unique payload so we can detect any
+// double-send (a regression where the same message ends up in two
+// sinks). Today no double-send is possible: spsc_enqueue_batch is
+// all-or-nothing — it returns either `count` (all queued) or `0`
+// (none queued). The mailbox then sees a buffer that nothing has
+// taken from. Locking that invariant in here so a future refactor
+// that switches SPSC to partial-batch semantics doesn't silently
+// regress (line 39 sends from buffer[0]; if SPSC ever returns a
+// partial count, those messages would get sent twice).
+//
+// Acceptance: every input message appears exactly once across SPSC
+// + mailbox + leftover-buffer combined. No duplicates, no missing.
+TEST_CATEGORY(send_buffer_flush_no_double_send, TEST_CATEGORY_RUNTIME) {
+    reset_send_buffer(0);
+    ActorBase* actor = make_same_core_actor(0);
+    ASSERT_NOT_NULL(actor);
+
+    // Lazy-allocate SPSC up front so we can pre-fill it.
+    actor->spsc_queue = calloc(1, sizeof(SPSCQueue));
+    ASSERT_NOT_NULL(actor->spsc_queue);
+    spsc_queue_init(actor->spsc_queue);
+
+    // Pre-fill SPSC to within ~5 slots of capacity. Any negative
+    // payload distinguishes pre-existing messages from the test's
+    // input messages (which use payloads 1..N).
+    int spsc_prefill = SPSC_QUEUE_SIZE - 5;
+    for (int i = 0; i < spsc_prefill; i++) {
+        Message msg = message_create_simple(99, 0, -1 - i);
+        ASSERT_TRUE(spsc_enqueue(actor->spsc_queue, msg) == 1);
+    }
+
+    // Set up the test's send buffer with N distinct messages.
+    // N is chosen large enough that SPSC + mailbox can't hold all
+    // of them: 5 SPSC slots + 32 mailbox slots = 37 max in flight,
+    // so 50 input messages forces the partial-send / leftover path.
+    const int N = 50;
+    g_send_buffer.target = actor;
+    g_send_buffer.count = N;
+    for (int i = 0; i < N; i++) {
+        // Payload 1..N — positive and distinct per message.
+        g_send_buffer.buffer[i] = message_create_simple(7, 0, i + 1);
+    }
+
+    send_buffer_flush();
+
+    // Drain SPSC + mailbox + leftover buffer, count payload occurrences.
+    // Index 1..N is what the test sent; anything outside that range
+    // is the pre-fill noise (negative).
+    int seen[N + 1];
+    memset(seen, 0, sizeof(seen));
+
+    Message drained[SPSC_QUEUE_SIZE];
+    int spsc_n = spsc_dequeue_batch(actor->spsc_queue, drained, SPSC_QUEUE_SIZE);
+    for (int i = 0; i < spsc_n; i++) {
+        intptr_t v = drained[i].payload_int;
+        if (v >= 1 && v <= N) seen[v]++;
+    }
+
+    Message mb_drained[64];
+    int mb_n = mailbox_receive_batch(&actor->mailbox, mb_drained, 64);
+    for (int i = 0; i < mb_n; i++) {
+        intptr_t v = mb_drained[i].payload_int;
+        if (v >= 1 && v <= N) seen[v]++;
+    }
+
+    for (int i = 0; i < g_send_buffer.count; i++) {
+        intptr_t v = g_send_buffer.buffer[i].payload_int;
+        if (v >= 1 && v <= N) seen[v]++;
+    }
+
+    // Each input message must appear exactly once across the three
+    // sinks. Duplicates indicate the double-send bug.
+    int duplicates = 0;
+    int missing = 0;
+    for (int i = 1; i <= N; i++) {
+        if (seen[i] > 1) duplicates++;
+        if (seen[i] == 0) missing++;
+    }
+    ASSERT_EQ(0, duplicates);
+    ASSERT_EQ(0, missing);
+
+    free_actor(actor);
+    reset_send_buffer(0);
+}
+
+// Test 10b: SPSC rejects + mailbox fully accepts. Forces the
+// mailbox-success-after-SPSC-failure branch (lines 41-43 of
+// aether_send_buffer.c). SPSC pre-filled to leave fewer free slots
+// than the batch needs (so spsc_enqueue_batch's all-or-nothing
+// check rejects), but the batch is small enough to fit entirely
+// in the mailbox (which holds 32).
+TEST_CATEGORY(send_buffer_flush_mailbox_fully_accepts, TEST_CATEGORY_RUNTIME) {
+    reset_send_buffer(0);
+    ActorBase* actor = make_same_core_actor(0);
+    ASSERT_NOT_NULL(actor);
+
+    actor->spsc_queue = calloc(1, sizeof(SPSCQueue));
+    ASSERT_NOT_NULL(actor->spsc_queue);
+    spsc_queue_init(actor->spsc_queue);
+
+    // Leave only 4 free SPSC slots — any batch > 4 will be rejected.
+    for (int i = 0; i < SPSC_QUEUE_SIZE - 5; i++) {
+        ASSERT_TRUE(spsc_enqueue(actor->spsc_queue,
+                                 message_create_simple(99, 0, -1 - i)) == 1);
+    }
+
+    // 10 messages: rejected by SPSC (need 10 slots, only 4 free),
+    // accepted entirely by mailbox (10 < 32 capacity).
+    g_send_buffer.target = actor;
+    g_send_buffer.count = 10;
+    for (int i = 0; i < 10; i++) {
+        g_send_buffer.buffer[i] = message_create_simple(7, 0, i + 1);
+    }
+
+    send_buffer_flush();
+
+    ASSERT_EQ(0, g_send_buffer.count);                  // fully drained
+    ASSERT_EQ(1, atomic_load(&actor->active));          // mailbox-success path set this
+    ASSERT_EQ(10, atomic_load(&actor->mailbox.count));  // all in mailbox
+
+    free_actor(actor);
+    reset_send_buffer(0);
+}
+
+// Test 11: send_buffer_pending reports the current count.
 TEST_CATEGORY(send_buffer_pending_reports_count, TEST_CATEGORY_RUNTIME) {
     reset_send_buffer(0);
     ActorBase* actor = make_same_core_actor(0);
