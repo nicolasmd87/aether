@@ -505,6 +505,83 @@ static bool get_exe_dir(char* buf, size_t size) {
 #  pragma GCC diagnostic push
 #  pragma GCC diagnostic ignored "-Wformat-truncation"
 #endif
+
+// ---------------------------------------------------------------------------
+// Recursive directory walker — emits `-I<path>` for `root` and every
+// subdirectory it contains, space-separated, into `out`. Used to build
+// `tc.include_flags` dynamically rather than maintaining a hardcoded
+// list (issue #329 follow-on item 2). The hardcoded list silently
+// missed `std/bytes`, `std/cryptography`, `std/zlib`, `std/dl`,
+// `std/config`, `std/actors`, and the entire `std/http*` tree as
+// those modules landed; the walker doesn't.
+//
+// Returns 1 on success, 0 if the buffer would overflow (caller can
+// surface that as a fatal error — 4 KiB is enough for any reasonable
+// install layout, and overflow means the layout grew beyond what
+// `tc.include_flags` can hold).
+// ---------------------------------------------------------------------------
+
+static int append_include_one_dir(char* out, size_t out_size, size_t* pos, const char* path) {
+    size_t path_len = strlen(path);
+    // " -I<path>" needs path_len + 4 bytes plus the NUL.
+    size_t need = (*pos == 0 ? 0 : 1) + 2 + path_len + 1;
+    if (*pos + need >= out_size) return 0;
+    if (*pos != 0) out[(*pos)++] = ' ';
+    out[(*pos)++] = '-';
+    out[(*pos)++] = 'I';
+    memcpy(out + *pos, path, path_len);
+    *pos += path_len;
+    out[*pos] = '\0';
+    return 1;
+}
+
+static int walk_dirs_emit_includes(const char* root, char* out, size_t out_size, size_t* pos) {
+    if (!root || !*root) return 1;
+    // Emit the root itself first.
+    if (!append_include_one_dir(out, out_size, pos, root)) return 0;
+
+#ifdef _WIN32
+    char pattern[1024];
+    snprintf(pattern, sizeof(pattern), "%s\\*", root);
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(pattern, &fd);
+    if (h == INVALID_HANDLE_VALUE) return 1;
+    do {
+        const char* name = fd.cFileName;
+        if (name[0] == '.' &&
+            (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'))) continue;
+        if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) continue;
+        char child[1024];
+        snprintf(child, sizeof(child), "%s\\%s", root, name);
+        if (!walk_dirs_emit_includes(child, out, out_size, pos)) {
+            FindClose(h);
+            return 0;
+        }
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+#else
+    DIR* d = opendir(root);
+    if (!d) return 1;
+    struct dirent* ent;
+    while ((ent = readdir(d)) != NULL) {
+        const char* name = ent->d_name;
+        if (name[0] == '.' &&
+            (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'))) continue;
+        char child[1024];
+        snprintf(child, sizeof(child), "%s/%s", root, name);
+        struct stat st;
+        if (stat(child, &st) != 0) continue;
+        if (!S_ISDIR(st.st_mode)) continue;
+        if (!walk_dirs_emit_includes(child, out, out_size, pos)) {
+            closedir(d);
+            return 0;
+        }
+    }
+    closedir(d);
+#endif
+    return 1;
+}
+
 static void discover_toolchain(void) {
     char exe_dir[1024] = {0};
     bool found_exe_dir = get_exe_dir(exe_dir, sizeof(exe_dir));
@@ -739,17 +816,29 @@ found_root:
                 tc.has_lib ? "found" : "not found, using source fallback");
     }
 
-    // Build include flags and source file lists
+    // Build include flags and source file lists.
+    //
+    // Dynamic walk over the runtime/ and std/ subtrees rather than the
+    // hardcoded list this used to hold — the hardcoded version silently
+    // dropped new modules as they landed (`std/bytes`, `std/cryptography`,
+    // `std/zlib`, `std/dl`, `std/config`, `std/actors`, all of `std/http*`
+    // were missing on `main` until #329 surfaced it). The walker can't
+    // miss anything; new modules are picked up the next build.
     if (tc.dev_mode) {
-        snprintf(tc.include_flags, sizeof(tc.include_flags),
-            "-I%s/runtime -I%s/runtime/actors -I%s/runtime/scheduler "
-            "-I%s/runtime/utils -I%s/runtime/memory -I%s/runtime/config "
-            "-I%s/std -I%s/std/string -I%s/std/io -I%s/std/math "
-            "-I%s/std/net -I%s/std/collections -I%s/std/json "
-            "-I%s/std/fs -I%s/std/log",
-            tc.root, tc.root, tc.root, tc.root, tc.root, tc.root,
-            tc.root, tc.root, tc.root, tc.root, tc.root, tc.root,
-            tc.root, tc.root, tc.root);
+        size_t pos = 0;
+        tc.include_flags[0] = '\0';
+        char rt[1024], stdroot[1024];
+        snprintf(rt, sizeof(rt), "%s/runtime", tc.root);
+        snprintf(stdroot, sizeof(stdroot), "%s/std", tc.root);
+        if (!walk_dirs_emit_includes(rt, tc.include_flags, sizeof(tc.include_flags), &pos) ||
+            !walk_dirs_emit_includes(stdroot, tc.include_flags, sizeof(tc.include_flags), &pos)) {
+            // Buffer overflow — fall back to a minimal -I that gets
+            // through the build. Caller will see warnings on missing
+            // headers; the layout has outgrown the include_flags
+            // capacity and needs to be bumped.
+            fprintf(stderr,
+                    "Warning: include-flag buffer overflow during dev-tree walk; some -I dirs dropped.\n");
+        }
 
         if (!tc.has_lib) {
             snprintf(tc.runtime_srcs, sizeof(tc.runtime_srcs),
@@ -801,30 +890,27 @@ found_root:
                 tc.root, tc.root, tc.root);
         }
     } else {
-        // Installed layout: headers in include/aether/, source in share/aether/
-        // Include both paths so source compilation can find headers via either route
-        snprintf(tc.include_flags, sizeof(tc.include_flags),
-            "-I%s/include/aether/runtime -I%s/include/aether/runtime/actors "
-            "-I%s/include/aether/runtime/scheduler -I%s/include/aether/runtime/utils "
-            "-I%s/include/aether/runtime/memory -I%s/include/aether/runtime/config "
-            "-I%s/include/aether/std -I%s/include/aether/std/string "
-            "-I%s/include/aether/std/io -I%s/include/aether/std/math "
-            "-I%s/include/aether/std/net -I%s/include/aether/std/collections "
-            "-I%s/include/aether/std/json -I%s/include/aether/std/fs "
-            "-I%s/include/aether/std/log "
-            "-I%s/share/aether/runtime -I%s/share/aether/runtime/actors "
-            "-I%s/share/aether/runtime/scheduler -I%s/share/aether/runtime/utils "
-            "-I%s/share/aether/runtime/memory -I%s/share/aether/runtime/config "
-            "-I%s/share/aether/std -I%s/share/aether/std/string "
-            "-I%s/share/aether/std/io -I%s/share/aether/std/math "
-            "-I%s/share/aether/std/net -I%s/share/aether/std/collections "
-            "-I%s/share/aether/std/json -I%s/share/aether/std/fs "
-            "-I%s/share/aether/std/log",
-            tc.root, tc.root, tc.root, tc.root, tc.root, tc.root,
-            tc.root, tc.root, tc.root, tc.root, tc.root, tc.root,
-            tc.root, tc.root, tc.root, tc.root, tc.root, tc.root,
-            tc.root, tc.root, tc.root, tc.root, tc.root, tc.root,
-            tc.root, tc.root, tc.root, tc.root, tc.root, tc.root);
+        // Installed layout: headers in include/aether/, source in
+        // share/aether/. Walk both trees — include/ is the canonical
+        // header location, share/ stays in the include-path while the
+        // from-source fallback is supported (#329 is tracking the
+        // longer-term question of dropping share/ source entirely).
+        size_t pos = 0;
+        tc.include_flags[0] = '\0';
+        char inc_rt[1024], inc_std[1024], shr_rt[1024], shr_std[1024];
+        snprintf(inc_rt,  sizeof(inc_rt),  "%s/include/aether/runtime", tc.root);
+        snprintf(inc_std, sizeof(inc_std), "%s/include/aether/std",     tc.root);
+        snprintf(shr_rt,  sizeof(shr_rt),  "%s/share/aether/runtime",   tc.root);
+        snprintf(shr_std, sizeof(shr_std), "%s/share/aether/std",       tc.root);
+        int ok =
+            walk_dirs_emit_includes(inc_rt,  tc.include_flags, sizeof(tc.include_flags), &pos) &&
+            walk_dirs_emit_includes(inc_std, tc.include_flags, sizeof(tc.include_flags), &pos) &&
+            walk_dirs_emit_includes(shr_rt,  tc.include_flags, sizeof(tc.include_flags), &pos) &&
+            walk_dirs_emit_includes(shr_std, tc.include_flags, sizeof(tc.include_flags), &pos);
+        if (!ok) {
+            fprintf(stderr,
+                    "Warning: include-flag buffer overflow during installed-tree walk; some -I dirs dropped.\n");
+        }
 
         // Source fallback: when libaether.a is not available, compile from share/aether/
         if (!tc.has_lib) {
@@ -5454,6 +5540,70 @@ static int cmd_cache(int argc, char** argv) {
 }
 
 // --------------------------------------------------------------------------
+// `ae cflags` — pkg-config-style include + link flags for external tools.
+// Issue #329 follow-on item 1. External tooling can `$(ae cflags)` instead
+// of carrying its own copy of the include-path / lib-path layout (which
+// the install always knows better than any caller does).
+// --------------------------------------------------------------------------
+
+static int cmd_cflags(int argc, char** argv) {
+    bool want_cflags = true;
+    bool want_libs   = true;
+
+    // Optional refinement: callers that only need one half (compile- or
+    // link-side) can pass --cflags / --libs to subset the output. With
+    // no arguments, both are emitted on one line — pkg-config behaviour.
+    for (int i = 0; i < argc; i++) {
+        if (strcmp(argv[i], "--cflags") == 0) {
+            want_libs = false;
+        } else if (strcmp(argv[i], "--libs") == 0) {
+            want_cflags = false;
+        } else if (strcmp(argv[i], "--help") == 0 || strcmp(argv[i], "-h") == 0) {
+            printf("Usage: ae cflags [--cflags|--libs]\n");
+            printf("  Print -I and link flags so external builds can:\n");
+            printf("      gcc your.c $(ae cflags) -o your\n");
+            printf("  Without arguments, prints both. Pass --cflags or --libs to subset.\n");
+            return 0;
+        } else {
+            fprintf(stderr, "ae cflags: unknown option '%s'\n", argv[i]);
+            return 1;
+        }
+    }
+
+    int wrote_anything = 0;
+
+    if (want_cflags && tc.include_flags[0]) {
+        fputs(tc.include_flags, stdout);
+        wrote_anything = 1;
+    }
+
+    if (want_libs) {
+        // Library: always link against -laether plus the platform's
+        // pthread / math libs that every Aether program needs. The
+        // explicit `-L<dir>` keeps `-laether` resolvable even when the
+        // install path isn't on the linker's default search list.
+        if (tc.has_lib && tc.lib[0]) {
+            char libdir[1024];
+            strncpy(libdir, tc.lib, sizeof(libdir) - 1);
+            libdir[sizeof(libdir) - 1] = '\0';
+            // Strip /libaether.a from the end → libdir.
+            char* slash = strrchr(libdir, '/');
+            if (!slash) slash = strrchr(libdir, '\\');
+            if (slash) *slash = '\0';
+            if (wrote_anything) fputc(' ', stdout);
+            printf("-L%s -laether", libdir);
+            wrote_anything = 1;
+        }
+        if (wrote_anything) fputc(' ', stdout);
+        fputs("-pthread -lm", stdout);
+        wrote_anything = 1;
+    }
+
+    if (wrote_anything) fputc('\n', stdout);
+    return 0;
+}
+
+// --------------------------------------------------------------------------
 // Help and main
 // --------------------------------------------------------------------------
 
@@ -5470,6 +5620,7 @@ static void print_usage(void) {
     printf("  test [file|dir]      Discover and run tests\n");
     printf("  add <package>        Add a dependency\n");
     printf("  cache [clear]        Show or clear build cache\n");
+    printf("  cflags               Print -I/-L/-laether for embedding in external builds\n");
     printf("  examples             List and run example programs\n");
     printf("  repl                 Start interactive REPL\n");
     printf("  version              Show version / manage installed versions\n");
@@ -5550,6 +5701,7 @@ int main(int argc, char** argv) {
     if (strcmp(cmd, "examples") == 0) return cmd_examples(sub_argc, sub_argv);
     if (strcmp(cmd, "add") == 0)      return cmd_add(sub_argc, sub_argv);
     if (strcmp(cmd, "cache") == 0)    return cmd_cache(sub_argc, sub_argv);
+    if (strcmp(cmd, "cflags") == 0)   return cmd_cflags(sub_argc, sub_argv);
     if (strcmp(cmd, "repl") == 0)     return cmd_repl();
 
     fprintf(stderr, "Unknown command '%s'. Run 'ae help' for usage.\n", cmd);

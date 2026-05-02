@@ -81,6 +81,7 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->header_path = NULL;
     gen->emit_exe = 1;
     gen->emit_lib = 0;
+    gen->emit_main_target = NULL;
     gen->generated_functions = NULL;
     gen->generated_function_count = 0;
     // Initialize defer tracking
@@ -911,6 +912,123 @@ static void emit_lib_alias_stubs(CodeGenerator* gen, ASTNode* program) {
         }
         fprintf(gen->output, ");\n}\n");
     }
+}
+
+// --emit-main=<func> shim. Issue #268.3.
+//
+// Emits a thin `int main(int argc, char** argv)` that calls the named
+// Aether function. Lets one source compile to both a loadable library
+// (`aether_*` exports) AND a regular binary (with this main as entry),
+// closing the symmetry between --emit=exe and --emit=lib.
+//
+// Validation:
+//   - The target must be a top-level Aether function defined in this TU
+//     (not an extern, not an actor/struct/message). Compile error if
+//     missing or wrong shape.
+//   - Zero parameters required (the shim is a 'no-arg entry'; passing
+//     argv into the Aether function is a separate, larger feature).
+//   - Return type may be int / int32 / int64 (passed through as exit
+//     code) or void (always returns 0). Other return types are an
+//     error — the C `main` signature is fixed.
+static void emit_main_shim_for_target(CodeGenerator* gen, ASTNode* program) {
+    if (!gen || !gen->emit_main_target || !program) return;
+    if (!gen->emit_lib) {
+        // --emit-main is only meaningful with --emit=lib; if the user
+        // is on --emit=exe, the program already has its own main()
+        // (or would, via AST_MAIN_FUNCTION). Quietly ignore rather
+        // than fail — the flag combination is the user's choice.
+        return;
+    }
+
+    const char* target = gen->emit_main_target;
+    ASTNode* fn = NULL;
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* c = program->children[i];
+        ASTNode* candidate = c;
+        if (c && c->type == AST_EXPORT_STATEMENT && c->child_count > 0) {
+            candidate = c->children[0];
+        }
+        if (!candidate || !candidate->value) continue;
+        if (candidate->type != AST_FUNCTION_DEFINITION) continue;
+        if (strcmp(candidate->value, target) != 0) continue;
+        fn = candidate;
+        break;
+    }
+    if (!fn) {
+        char msg[256];
+        snprintf(msg, sizeof(msg),
+                 "--emit-main=%s: no top-level function named '%s' in this translation unit",
+                 target, target);
+        AetherError e = {NULL, NULL, 0, 0, msg,
+                         "name a function defined at the top level of this file (or one of its directly-merged modules)",
+                         NULL, AETHER_ERR_NONE};
+        aether_error_report(&e);
+        return;
+    }
+
+    // Reject non-zero-arg targets — the shim signature is fixed.
+    int param_count = 0;
+    for (int p = 0; p < fn->child_count; p++) {
+        ASTNode* c = fn->children[p];
+        if (c->type == AST_GUARD_CLAUSE || c->type == AST_BLOCK) continue;
+        if (c->type == AST_VARIABLE_DECLARATION || c->type == AST_PATTERN_VARIABLE ||
+            c->type == AST_PATTERN_LITERAL    || c->type == AST_PATTERN_LIST     ||
+            c->type == AST_PATTERN_CONS       || c->type == AST_PATTERN_STRUCT) {
+            param_count++;
+        }
+    }
+    if (param_count != 0) {
+        char msg[256];
+        snprintf(msg, sizeof(msg),
+                 "--emit-main=%s: target function takes %d parameter(s); the shim entry must be zero-arg",
+                 target, param_count);
+        AetherError e = {NULL, NULL, fn->line, fn->column, msg,
+                         "rewrite the target as a zero-arg wrapper, or call it from a zero-arg helper that the shim points at",
+                         NULL, AETHER_ERR_NONE};
+        aether_error_report(&e);
+        return;
+    }
+
+    // Decide whether to forward the target's return value as the exit code.
+    int returns_int = 0;
+    int returns_void = 0;
+    if (fn->node_type) {
+        switch (fn->node_type->kind) {
+            case TYPE_INT: case TYPE_INT64:
+                returns_int = 1; break;
+            case TYPE_VOID: case TYPE_UNKNOWN:
+                returns_void = 1; break;
+            default:
+                break;
+        }
+    } else {
+        returns_void = 1;
+    }
+    if (!returns_int && !returns_void && !has_return_value(fn)) {
+        returns_void = 1;
+    }
+    if (!returns_int && !returns_void) {
+        char msg[256];
+        snprintf(msg, sizeof(msg),
+                 "--emit-main=%s: target function's return type isn't int / int32 / int64 / void; can't be forwarded as a process exit code",
+                 target);
+        AetherError e = {NULL, NULL, fn->line, fn->column, msg,
+                         "make the target return int (the exit code) or void",
+                         NULL, AETHER_ERR_NONE};
+        aether_error_report(&e);
+        return;
+    }
+
+    fprintf(gen->output, "\n/* --- main(argc,argv) shim (--emit-main=%s) --- */\n", target);
+    fprintf(gen->output, "int main(int argc, char** argv) {\n");
+    fprintf(gen->output, "    (void)argc; (void)argv;\n");
+    if (returns_int) {
+        fprintf(gen->output, "    return (int)%s();\n", target);
+    } else {
+        fprintf(gen->output, "    %s();\n", target);
+        fprintf(gen->output, "    return 0;\n");
+    }
+    fprintf(gen->output, "}\n");
 }
 
 // Emit a typedef for a tuple type if not already emitted
@@ -2012,6 +2130,11 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     // the public FFI surface. Must come after all normal function emission
     // so the aliases see the wrapped functions via their forward decls.
     emit_lib_alias_stubs(gen, program);
+
+    // --emit-main=<func> shim: with --emit=lib, append a thin main(argc,argv)
+    // that calls the named function. Closes the exe/lib symmetry — one .c
+    // ships as both a loadable library and a binary. Issue #268.3.
+    emit_main_shim_for_target(gen, program);
 
     // Close header file if emitting
     if (gen->emit_header && gen->header_file) {

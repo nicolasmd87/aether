@@ -2,7 +2,7 @@
   "name": "aether-language",
   "displayName": "Aether Language Support",
   "description": "Syntax highlighting, color theme, and Language Server integration for Aether — a modern actor-based programming language.",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "publisher": "aether",
   "icon": "icon.png",
   "license": "MIT",
