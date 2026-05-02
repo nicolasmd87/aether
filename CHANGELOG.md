@@ -9,11 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
-## [0.111.0]
+## [current]
 
 ### Added
 
 - **`#line` source-map directives in generated C — gcc errors / gdb breakpoints / gcov reports point at `.ae` source** (`compiler/ast.{c,h}`, `compiler/aetherc.c`, `compiler/aether_module.c`, `compiler/codegen/{codegen.c,codegen.h,codegen_internal.h,codegen_stmt.c,codegen_func.c}`, `tests/integration/source_map_line_directives/`). Until now, `aetherc` lowered `.ae` → `.c` with no source-position metadata, so `gcc` warnings and segfaults inside the generated code reported against post-merge C-line space (which jumbles user code with stdlib glue and module-imported helpers in arbitrary order). The fix threads source-file paths through the AST: a new `source_file` field on `ASTNode` is populated by `ast_stamp_source_file()` after each parse — once for the top-level program, once per imported module — so cloned-by-`module_merge_into_program` nodes preserve their original file. Codegen's new `codegen_maybe_emit_line()` writes `#line N "src.ae"` directives (dedup'd: back-to-back nodes on the same line emit one directive) at every `generate_statement` and `generate_function_definition` entry. Path is escaped (`\\` for backslashes, `\"` for quotes) so paths with those chars round-trip through the C preprocessor. Phase 1 of the coverage-instrumentation work — Phase 2 will add `make ci-coverage` (gcov + lcov/gcovr) on top, since `gcov` reads `#line` directives natively and produces `.ae.gcov` reports automatically once this lands.
+
+## [0.111.0]
+
+### Added
 
 - **`make contrib` + `make install-contrib` — per-machine prebuilt static libs for contrib modules** (`Makefile`, `tests/scripts/contrib_build.sh` (new), `contrib/sqlite/README.md`). Until now, `make install` shipped only the core toolchain (`build/aetherc`, `build/ae`, `libaether.a`, `runtime/`, `std/`); `contrib/` was source-only, leaving downstream projects to point `extra_sources` at `contrib/sqlite/aether_sqlite.c` inside a source checkout. The new pair fixes that. `make contrib` probes per-module system deps (sqlite3, python3, lua, perl, ruby, duktape, tcl) and compiles each available bridge to `build/contrib/libaether_<module>.a`; absent deps are skipped, never failed. `make install-contrib` then installs the built `.a`s to `$(PREFIX)/lib/aether/` plus each module's `module.ae` + headers to `$(PREFIX)/share/aether/contrib/<module>/`, trimming tests/benchmarks/example noise. Downstream `aether.toml` simplifies to `link_flags = "-laether_sqlite -lsqlite3"` — symmetric with `-laether` for the core. v1 covers `sqlite` + the six in-process host bridges (python/lua/perl/ruby/js/tcl); `host/{java,go,tinygo}`, `aether_ui`, `tinyweb`, `aeocha`, `climate_http_tests` deferred (different build shapes, different decisions still pending).
 
