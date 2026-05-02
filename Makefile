@@ -344,6 +344,17 @@ ci-coverage-clean:
 	@$(RM) -r build/coverage 2>/dev/null || true
 	@echo "✓ Coverage data cleaned (cov-obj/.gcno files retained for reuse)"
 
+# ci-coverage-html — wraps ci-coverage with an HTML/JSON report via
+# gcovr. Auto-bootstraps gcovr in a project-local venv at
+# build/cov-venv/ if it's not already on PATH (modern Debian/Ubuntu
+# refuse `pip install` system-wide without --break-system-packages,
+# so a self-contained venv is the friendliest path).
+#
+# After running, open build/coverage/index.html in a browser. JSON
+# is also written to coverage.json for CI / dashboard pickup.
+ci-coverage-html: ci-coverage
+	@bash tests/scripts/coverage_html.sh
+
 test-asan: compiler stdlib-asan
 	@echo "==================================="
 	@echo "Running Tests with AddressSanitizer"
@@ -1698,7 +1709,7 @@ asan-check: clean
 	  fi
 	@echo "✓ ASan clean — no memory errors detected"
 
-.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime test-install test-release-archive benchmark benchmark-ui examples run compile repl clean help self-test install stats stdlib stdlib-asan stdlib-memory stdlib-dbg ci ci-windows docker-ci docker-ci-windows docker-build-ci valgrind-check asan-check ci-coop ci-wasm ci-embedded ci-portability docker-ci-wasm docker-ci-embedded contrib-host-check contrib-aether-ui-check benchmark-aether-ui contrib install-contrib stdlib-cov ci-coverage ci-coverage-clean
+.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime test-install test-release-archive benchmark benchmark-ui examples run compile repl clean help self-test install stats stdlib stdlib-asan stdlib-memory stdlib-dbg ci ci-windows docker-ci docker-ci-windows docker-build-ci valgrind-check asan-check ci-coop ci-wasm ci-embedded ci-portability docker-ci-wasm docker-ci-embedded contrib-host-check contrib-aether-ui-check benchmark-aether-ui contrib install-contrib stdlib-cov ci-coverage ci-coverage-clean ci-coverage-html
 
 # Cross-language benchmark UI (alias for benchmark)
 benchmark-ui: benchmark
