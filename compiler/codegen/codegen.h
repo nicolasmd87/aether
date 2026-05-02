@@ -32,6 +32,14 @@ typedef struct {
     // time (#265). NULL is fine — `__FILE__` then emits "(unknown)".
     const char* source_file;
 
+    // Last (file, line) pair emitted as a `#line N "path"` directive,
+    // tracked so codegen_maybe_emit_line() doesn't re-emit identical
+    // directives for every node sitting on the same source line.
+    // last_line_file is borrowed (lives in some ASTNode->source_file
+    // owned by the AST tree); never freed by codegen.
+    const char* last_line_file;
+    int last_line_num;
+
     // Header generation (--emit-header)
     int emit_header;         // Whether to emit a C header file
     FILE* header_file;       // Output stream for header
@@ -206,6 +214,7 @@ void ensure_tuple_typedef(CodeGenerator* gen, Type* type);
 void indent(CodeGenerator* gen);
 void print_indent(CodeGenerator* gen);
 void print_line(CodeGenerator* gen, const char* format, ...);
+void codegen_maybe_emit_line(CodeGenerator* gen, const ASTNode* node);
 void print_expression(CodeGenerator* gen, ASTNode* expr);
 const char* get_c_type(Type* type);
 const char* get_c_operator(const char* aether_op);

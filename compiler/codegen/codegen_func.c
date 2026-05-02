@@ -424,6 +424,12 @@ void propagate_tuple_type_to_calls(ASTNode* node, const char* func_name, Type* t
 void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
     if (!func || (func->type != AST_FUNCTION_DEFINITION && func->type != AST_BUILDER_FUNCTION)) return;
 
+    // Emit a `#line` directive at the function's definition line so
+    // codegen sees a clean reset every time it crosses into a new
+    // function — important when the merged program intermixes
+    // user-written and module-imported functions in arbitrary order.
+    codegen_maybe_emit_line(gen, func);
+
     // If function returns a tuple with UNKNOWN elements, scan all returns and merge
     if (func->node_type && func->node_type->kind == TYPE_TUPLE) {
         merge_return_tuple_types(func, func->node_type);

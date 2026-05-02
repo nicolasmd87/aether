@@ -508,7 +508,13 @@ int compile_source(const char* input_path, const char* output_path) {
     if (verbose_mode) printf("Step 2: Parsing...\n");
     Parser* parser = create_parser(tokens, token_count);
     ASTNode* program = parse_program(parser);
-    
+
+    // Stamp every parsed node with its source path so codegen can
+    // emit `#line N "path"` directives. Imported-module nodes get
+    // their own path stamped by module_parse_file before clone, so
+    // re-stamping the merged tree later is a no-op for them.
+    if (program) ast_stamp_source_file(program, input_path);
+
     if (!program) {
         report_compilation_failure();
         // Cleanup

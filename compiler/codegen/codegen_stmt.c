@@ -850,6 +850,13 @@ static void collect_if_branch_vars(ASTNode* body, const char** out, int* count, 
 void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
     if (!stmt) return;
 
+    // Emit `#line N "src.ae"` so gcc errors, gdb breakpoints, and
+    // gcov reports reference the .ae source the user wrote, not the
+    // mid-file position of the merged .c output. Dedup'd inside
+    // codegen_maybe_emit_line — back-to-back statements on the same
+    // source line emit one directive, not two.
+    codegen_maybe_emit_line(gen, stmt);
+
     switch (stmt->type) {
         case AST_CONST_DECLARATION: {
             // Local constant: const <type> <name> = <value>;
