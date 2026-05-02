@@ -432,15 +432,63 @@ static int get_exe_directory(char* buf, size_t bufsz) {
     return 1;
 }
 
-char* module_resolve_stdlib_path(const char* module_name) {
-    /* 4 KiB buffer (was 1 KiB) — covers any plausible AETHER_HOME or
-     * exe_dir prefix even with deeply-nested module paths. The
-     * previous 1 KiB triggered -Wformat-truncation under -Werror
-     * once dot-to-slash conversion was added (the format-truncation
-     * analyser sums prefix + 512-byte module path + suffix and
-     * concludes 1024 may not be enough). */
+// Walk the standard install-prefix search order looking for
+// `<root>/<converted>/module.ae`, where root is "std" or "contrib".
+// All toolchain-bundled module trees (std/, contrib/) live under
+// the same `share/aether/<root>/` prefix once installed, and use the
+// same five-tier discovery: CWD-local → AETHER_HOME → exe-relative
+// (handles ~/.local, /usr/local, custom prefixes uniformly) →
+// ~/.aether → /usr/local. Factored out of module_resolve_stdlib_path
+// so contrib resolves the same way.
+static char* resolve_pkg_path(const char* root, const char* converted) {
     char path[4096];
 
+    // Try 1: Local development path (relative to CWD)
+    snprintf(path, sizeof(path), "%s/%s/module.ae", root, converted);
+    if (access(path, F_OK) == 0) return strdup(path);
+
+    // Try 2: Installed path via AETHER_HOME
+    const char* aether_home = getenv("AETHER_HOME");
+    if (aether_home && aether_home[0]) {
+        snprintf(path, sizeof(path), "%s/share/aether/%s/%s/module.ae", aether_home, root, converted);
+        if (access(path, F_OK) == 0) return strdup(path);
+        snprintf(path, sizeof(path), "%s/%s/%s/module.ae", aether_home, root, converted);
+        if (access(path, F_OK) == 0) return strdup(path);
+    }
+
+    // Try 3: Relative to the running aetherc binary. This is the
+    // canonical lookup for installed downstream consumers — `ae
+    // build` invokes aetherc from $prefix/bin/, so $exe_dir/../
+    // points at the install prefix and ../share/aether/<root>/
+    // finds the module.ae regardless of which prefix was used at
+    // install time.
+    char exe_dir[512];
+    if (get_exe_directory(exe_dir, sizeof(exe_dir))) {
+        snprintf(path, sizeof(path), "%s/../share/aether/%s/%s/module.ae", exe_dir, root, converted);
+        if (access(path, F_OK) == 0) return strdup(path);
+        snprintf(path, sizeof(path), "%s/../%s/%s/module.ae", exe_dir, root, converted);
+        if (access(path, F_OK) == 0) return strdup(path);
+        snprintf(path, sizeof(path), "%s/../lib/%s/%s/module.ae", exe_dir, root, converted);
+        if (access(path, F_OK) == 0) return strdup(path);
+    }
+
+    // Try 4: User home directory (~/.aether)
+    const char* home = get_user_home_dir();
+    if (home && home[0]) {
+        snprintf(path, sizeof(path), "%s/.aether/share/aether/%s/%s/module.ae", home, root, converted);
+        if (access(path, F_OK) == 0) return strdup(path);
+    }
+
+#ifndef _WIN32
+    // Try 5: System install locations (POSIX only)
+    snprintf(path, sizeof(path), "/usr/local/share/aether/%s/%s/module.ae", root, converted);
+    if (access(path, F_OK) == 0) return strdup(path);
+#endif
+
+    return NULL;
+}
+
+char* module_resolve_stdlib_path(const char* module_name) {
     // Convert dots to slashes so `std.http.client` resolves to
     // `std/http/client/module.ae` rather than the literal `std/http.client/`
     // (which would never exist on disk). Mirrors what the local-path
@@ -454,45 +502,20 @@ char* module_resolve_stdlib_path(const char* module_name) {
     for (char* p = converted; *p; p++) {
         if (*p == '.') *p = '/';
     }
+    return resolve_pkg_path("std", converted);
+}
 
-    // Try 1: Local development path (relative to CWD)
-    snprintf(path, sizeof(path), "std/%s/module.ae", converted);
-    if (access(path, F_OK) == 0) return strdup(path);
-
-    // Try 2: Installed path via AETHER_HOME
-    const char* aether_home = getenv("AETHER_HOME");
-    if (aether_home && aether_home[0]) {
-        snprintf(path, sizeof(path), "%s/share/aether/std/%s/module.ae", aether_home, converted);
-        if (access(path, F_OK) == 0) return strdup(path);
-        snprintf(path, sizeof(path), "%s/std/%s/module.ae", aether_home, converted);
-        if (access(path, F_OK) == 0) return strdup(path);
+char* module_resolve_contrib_path(const char* module_name) {
+    // Same dot-to-slash conversion as the stdlib resolver — required
+    // for nested contrib modules like `contrib.host.python` →
+    // `contrib/host/python/module.ae`.
+    char converted[512];
+    strncpy(converted, module_name, sizeof(converted) - 1);
+    converted[sizeof(converted) - 1] = '\0';
+    for (char* p = converted; *p; p++) {
+        if (*p == '.') *p = '/';
     }
-
-    // Try 3: Relative to the running aetherc binary
-    char exe_dir[512];
-    if (get_exe_directory(exe_dir, sizeof(exe_dir))) {
-        snprintf(path, sizeof(path), "%s/../share/aether/std/%s/module.ae", exe_dir, converted);
-        if (access(path, F_OK) == 0) return strdup(path);
-        snprintf(path, sizeof(path), "%s/../std/%s/module.ae", exe_dir, converted);
-        if (access(path, F_OK) == 0) return strdup(path);
-        snprintf(path, sizeof(path), "%s/../lib/std/%s/module.ae", exe_dir, converted);
-        if (access(path, F_OK) == 0) return strdup(path);
-    }
-
-    // Try 4: User home directory (~/.aether)
-    const char* home = get_user_home_dir();
-    if (home && home[0]) {
-        snprintf(path, sizeof(path), "%s/.aether/share/aether/std/%s/module.ae", home, converted);
-        if (access(path, F_OK) == 0) return strdup(path);
-    }
-
-#ifndef _WIN32
-    // Try 5: System install locations (POSIX only)
-    snprintf(path, sizeof(path), "/usr/local/share/aether/std/%s/module.ae", converted);
-    if (access(path, F_OK) == 0) return strdup(path);
-#endif
-
-    return NULL;
+    return resolve_pkg_path("contrib", converted);
 }
 
 // Resolve a local module path (e.g., "mypackage.utils") to a file path.
@@ -662,6 +685,8 @@ static char* resolve_import_path(ASTNode* import_node) {
     char* file_path;
     if (strncmp(module_path, "std.", 4) == 0) {
         file_path = module_resolve_stdlib_path(module_path + 4);
+    } else if (strncmp(module_path, "contrib.", 8) == 0) {
+        file_path = module_resolve_contrib_path(module_path + 8);
     } else {
         file_path = module_resolve_local_path(module_path);
     }
@@ -680,6 +705,8 @@ static char* resolve_import_path(ASTNode* import_node) {
 
     if (strncmp(prefix, "std.", 4) == 0) {
         file_path = module_resolve_stdlib_path(prefix + 4);
+    } else if (strncmp(prefix, "contrib.", 8) == 0) {
+        file_path = module_resolve_contrib_path(prefix + 8);
     } else {
         file_path = module_resolve_local_path(prefix);
     }

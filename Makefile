@@ -990,6 +990,86 @@ install: release ae stdlib
 	@echo ""
 	@echo "Run: ae version"
 
+# -----------------------------------------------------------------
+# contrib — build per-module static libs (libaether_<x>.a) for every
+# contrib module whose system dependency is installed on this machine.
+#
+# contrib/ is a source-tree organising prefix; downstream consumes
+# individual artifacts, not a bundled lib. Each module's bridge .c
+# compiles to its own .a, named after the module — sqlite →
+# libaether_sqlite.a, host/python → libaether_host_python.a, etc.
+#
+# Probe-and-build by design: machines without sqlite3-dev get no
+# libaether_sqlite.a. The same module.ae still installs (so
+# `import contrib.sqlite` resolves), but the link step fails loudly
+# if the user actually imports a module whose .a wasn't built.
+# Matches the per-build --with= capability-opt-in philosophy.
+#
+# Modules covered (v1):
+#   - sqlite                    (-lsqlite3)
+#   - host/{python,lua,perl,ruby,js,tcl}
+# Out of scope for v1: host/{java,go,tinygo} (separate-process or
+# JNI-style bridges, different build shape), aether_ui, tinyweb,
+# aeocha, climate_http_tests.
+# -----------------------------------------------------------------
+contrib:
+	@bash tests/scripts/contrib_build.sh
+
+# install-contrib — install the .a archives built by `make contrib`
+# plus each module's module.ae and headers. Trims test/example noise
+# the same way `install:` trims runtime/examples and runtime/io.
+#
+# Layout:
+#   $(PREFIX)/lib/aether/libaether_<module>.a       — link target
+#   $(PREFIX)/share/aether/contrib/<module>/module.ae — import resolver
+#   $(PREFIX)/share/aether/contrib/<module>/*.h     — public headers
+#
+# Downstream aether.toml then references the module by name:
+#   [build]
+#   link_flags = "-laether_sqlite -lsqlite3"
+install-contrib: contrib
+	@echo "==================================="
+	@echo "Installing contrib modules to $(PREFIX)"
+	@echo "==================================="
+	@if [ ! -f build/contrib/MANIFEST ]; then \
+		echo "  No manifest — run 'make contrib' first."; exit 1; \
+	fi
+	@install -d $(PREFIX)/lib/aether
+	@install -d $(PREFIX)/share/aether/contrib
+	@# Install built archives. Manifest lines: <name> <path> (tab-separated).
+	@awk -F'\t' 'NF>=2 { print $$1, $$2 }' build/contrib/MANIFEST | \
+		while read -r name path; do \
+			[ -z "$$name" ] && continue; \
+			install -m 644 "$$path" "$(PREFIX)/lib/aether/libaether_$$name.a"; \
+			printf "  lib/aether/libaether_%s.a\n" "$$name"; \
+		done
+	@# Mirror the contrib source tree for module.ae + headers.
+	@# Trim noise: tests, benchmarks, example .ae, build scripts,
+	@# CI scripts, and the modules we don't ship in v1
+	@# (aether_ui, climate_http_tests, host/{java,go,tinygo},
+	@# tinyweb, aeocha — see contrib: target comment).
+	@cp -R contrib $(PREFIX)/share/aether/
+	@rm -rf $(PREFIX)/share/aether/contrib/aether_ui
+	@rm -rf $(PREFIX)/share/aether/contrib/climate_http_tests
+	@rm -rf $(PREFIX)/share/aether/contrib/tinyweb
+	@rm -rf $(PREFIX)/share/aether/contrib/aeocha
+	@rm -rf $(PREFIX)/share/aether/contrib/host/java
+	@rm -rf $(PREFIX)/share/aether/contrib/host/go
+	@rm -rf $(PREFIX)/share/aether/contrib/host/tinygo
+	@rm -rf $(PREFIX)/share/aether/contrib/host/aether
+	@find $(PREFIX)/share/aether/contrib -type d -name tests       -exec rm -rf {} + 2>/dev/null || true
+	@find $(PREFIX)/share/aether/contrib -type d -name benchmarks  -exec rm -rf {} + 2>/dev/null || true
+	@find $(PREFIX)/share/aether/contrib -type f -name 'example_*.ae' -delete 2>/dev/null || true
+	@find $(PREFIX)/share/aether/contrib -type f -name 'test_*.sh' -delete 2>/dev/null || true
+	@find $(PREFIX)/share/aether/contrib -type f -name 'build.sh'  -delete 2>/dev/null || true
+	@find $(PREFIX)/share/aether/contrib -type f -name 'ci.sh'     -delete 2>/dev/null || true
+	@# Drop the .c files now that they're compiled into .a — no
+	@# reason to ship sources alongside the archive. Keep .h so
+	@# downstream callers that #include the bridge header can.
+	@find $(PREFIX)/share/aether/contrib -type f -name '*.c' -delete 2>/dev/null || true
+	@find $(PREFIX)/share/aether/contrib -type f -name '*.m' -delete 2>/dev/null || true
+	@echo "✓ Contrib installed"
+
 # Run an Aether program (compile + execute)
 run: compiler
 ifndef FILE
@@ -1539,7 +1619,7 @@ asan-check: clean
 	  fi
 	@echo "✓ ASan clean — no memory errors detected"
 
-.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime test-install test-release-archive benchmark benchmark-ui examples run compile repl clean help self-test install stats stdlib stdlib-asan stdlib-memory stdlib-dbg ci ci-windows docker-ci docker-ci-windows docker-build-ci valgrind-check asan-check ci-coop ci-wasm ci-embedded ci-portability docker-ci-wasm docker-ci-embedded contrib-host-check contrib-aether-ui-check benchmark-aether-ui
+.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime test-install test-release-archive benchmark benchmark-ui examples run compile repl clean help self-test install stats stdlib stdlib-asan stdlib-memory stdlib-dbg ci ci-windows docker-ci docker-ci-windows docker-build-ci valgrind-check asan-check ci-coop ci-wasm ci-embedded ci-portability docker-ci-wasm docker-ci-embedded contrib-host-check contrib-aether-ui-check benchmark-aether-ui contrib install-contrib
 
 # Cross-language benchmark UI (alias for benchmark)
 benchmark-ui: benchmark
