@@ -67,14 +67,16 @@ DirList* fs_glob_multi_raw(void* l) { (void)l; return NULL; }
 #include <stdlib.h>
 #include <string.h>
 #include <errno.h>
+#include <fcntl.h>            // open() / O_CREAT / O_EXCL / O_NOFOLLOW
 #include <sys/stat.h>
+#include <sys/types.h>
 #ifndef _WIN32
 #include <unistd.h>
 #endif
 
 #ifdef _WIN32
     #include <direct.h>
-    #include <io.h>            // _unlink (for fs_unlink_raw on Windows)
+    #include <io.h>            // _open / _unlink for atomic-write + delete
     #include <process.h>       // _getpid (for fs_write_atomic_raw tmp path)
     #include <windows.h>
     #define mkdir(path, mode) _mkdir(path)
@@ -228,6 +230,18 @@ int file_mtime(const char* path) {
     return (int)st.st_mtime;
 }
 
+// Like file_mtime but distinguishes "stat failed" (returns -1) from
+// "file's mtime happens to be 0" (returns 0 — the Unix epoch). The
+// older `file_mtime` collapses both into 0, swallowing the error.
+// Aether-side callers should prefer `fs.mtime` (Go-style result tuple).
+int file_mtime_raw(const char* path) {
+    if (!path) return -1;
+
+    struct stat st;
+    if (stat(path, &st) != 0) return -1;
+    return (int)st.st_mtime;
+}
+
 // Directory operations
 int dir_exists(const char* path) {
     if (!path) return 0;
@@ -239,6 +253,25 @@ int dir_exists(const char* path) {
 int dir_create_raw(const char* path) {
     if (!path) return 0;
     return mkdir(path, 0755) == 0 ? 1 : 0;
+}
+
+// Like dir_create_raw, but with an explicit mode. Lets users create
+// private directories (e.g. 0700 for keys) atomically — without the
+// mkdir-then-chmod race window the previous "always 0755 + shell out
+// to chmod" workaround opened. Mode is masked with 0777 to keep
+// callers from accidentally setting bits the kernel would reinterpret.
+// Windows `mkdir` ignores mode (Win32 doesn't have POSIX permission
+// bits at the directory layer); the parameter is accepted for API
+// portability and discarded there.
+int dir_create_mode_raw(const char* path, int mode) {
+#ifdef _WIN32
+    (void)mode;
+    if (!path) return 0;
+    return _mkdir(path) == 0 ? 1 : 0;
+#else
+    if (!path) return 0;
+    return mkdir(path, (mode_t)(mode & 0777)) == 0 ? 1 : 0;
+#endif
 }
 
 int dir_delete_raw(const char* path) {
@@ -395,8 +428,48 @@ int fs_write_atomic_raw(const char* path, const char* data, int length) {
     unsigned long n = ++s_counter;
     snprintf(tmp, sizeof(tmp), "%s.tmp.%ld.%lu", path, pid, n);
 
-    FILE* fp = fopen(tmp, "wb");
-    if (!fp) return 0;
+    // CVE-class: an attacker who can predict the tmp filename (and
+    // both pid + counter are predictable) could plant a symlink at
+    // the tmp path before this open and have the subsequent fwrite
+    // overwrite the symlink's target. The previous `fopen(tmp, "wb")`
+    // followed symlinks happily.
+    //
+    // Fix: open with O_CREAT | O_EXCL — refuses to open if `tmp`
+    // already exists (a symlink, regular file, or any other file
+    // type). On POSIX additionally pass O_NOFOLLOW as defence-in-
+    // depth: if `tmp` somehow appears as a symlink between the EXCL
+    // check and the create, the kernel still refuses to follow.
+    //
+    // Permissions track what the previous fopen would have produced:
+    // 0666 modified by the process umask (so users with a relaxed
+    // umask still get group/world write if that's their convention).
+#ifdef _WIN32
+    int fd = _open(tmp,
+                   _O_WRONLY | _O_CREAT | _O_EXCL | _O_BINARY,
+                   _S_IREAD | _S_IWRITE);
+#else
+    mode_t um = umask(0);
+    umask(um);
+    int fd = open(tmp,
+                  O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW,
+                  0666 & ~um);
+#endif
+    if (fd < 0) return 0;
+#ifdef _WIN32
+    FILE* fp = _fdopen(fd, "wb");
+#else
+    FILE* fp = fdopen(fd, "wb");
+#endif
+    if (!fp) {
+#ifdef _WIN32
+        _close(fd);
+        _unlink(tmp);
+#else
+        close(fd);
+        unlink(tmp);
+#endif
+        return 0;
+    }
 
     size_t written = (want > 0) ? fwrite(bytes, 1, want, fp) : 0;
     int fwrite_ok = (written == want);

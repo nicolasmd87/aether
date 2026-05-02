@@ -262,8 +262,35 @@ main() {
     a = spawn(SrvActor())
     a ! StartSrv { raw: raw }
 
-    // Brief grace period for the actor to bind the port.
-    sleep(500)
+    // Wait until the listen socket is actually bound and answering.
+    // Previously this was a fixed `sleep(500)`, which raced with the
+    // server's bind on Windows mingw CI (slower scheduler hand-off
+    // and slower socket-set-up than POSIX) and produced sporadic
+    // "recv timeout or I/O error" failures on Test 1. A poll-until-
+    // ready loop synchronises on the real bind event instead of
+    // guessing a timing — same shape as the http_server_sse test
+    // already uses.
+    ready = 0
+    i = 0
+    while i < 200 {
+        sleep(25)
+        probe_req = client.request("GET", "${base_url()}/ok")
+        if probe_req != null {
+            client.set_timeout(probe_req, 1)
+            probe_resp, probe_err = client.send_request(probe_req)
+            client.request_free(probe_req)
+            if probe_err == "" {
+                client.response_free(probe_resp)
+                ready = 1
+                i = 200
+            }
+        }
+        i = i + 1
+    }
+    if ready == 0 {
+        println("FAIL: server never reached ready state after 5s")
+        exit(1)
+    }
 
     // ---- Test 1: request_set_header round-trip ----
     print("Test 1: request_set_header round-trip\n")

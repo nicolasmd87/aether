@@ -25,8 +25,14 @@ if [ -z "$flags" ]; then
 fi
 
 # Spot-check: every previously-missing stdlib subdir must show up.
+# Normalise backslashes to forward slashes first — Windows mingw and
+# MSYS2 produce paths with '\' separators while the rest of the world
+# uses '/'. Both are valid -I arguments to gcc; the dedup-via-walker
+# guarantee we want to test (#329's stale-list fix) is path-separator
+# agnostic.
+flags_normalized=$(printf %s "$flags" | tr '\\' '/')
 for needle in std/cryptography std/zlib std/dl std/config std/actors std/http; do
-    if ! printf %s "$flags" | grep -q -- "-I.*$needle"; then
+    if ! printf %s "$flags_normalized" | grep -q -- "-I.*$needle"; then
         echo "  [FAIL] ae_cflags: missing -I for $needle (the dynamic walker should pick it up)"
         echo "  ---- output ----"
         echo "$flags"

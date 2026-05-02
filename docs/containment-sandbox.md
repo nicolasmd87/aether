@@ -383,6 +383,25 @@ beyond what the outer sandbox grants.
 | `"echo *"` | Prefix match | `echo hello`, `echo goodbye` |
 | `"exact.host"` | Exact only | Only `exact.host` |
 
+### Path resolution before fs match
+
+For `fs_read` / `fs_write` grants the LD_PRELOAD layer resolves the
+resource path with `realpath(3)` *before* running the pattern match.
+This closes the path-identity bypass: a grant for `/tmp/*` can no
+longer be subverted by `/tmp/../etc/shadow`, and a symlink under a
+granted prefix can no longer escape it.
+
+When the path doesn't exist yet (writing a new file), the resolver
+falls back to resolving the parent directory and reattaching the
+basename — the kernel will refuse the create syscall otherwise, and
+the parent must be real for any meaningful operation. If even the
+parent can't be resolved (truly unusable path), the original string
+is matched as a baseline — same behaviour as before this fix, so the
+gate never silently tightens or loosens at the edges.
+
+Non-fs categories (`tcp`, `env`, `exec`) carry no path semantics;
+their resources are matched verbatim.
+
 ## Scope boundaries
 
 The sandbox mediates stdlib I/O only. These are the places its enforcement line sits, and where it deliberately stops.
