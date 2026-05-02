@@ -174,6 +174,14 @@ plays that role), no interfaces.
   If `aetherc --version` disagrees with CHANGELOG `[current]` or
   with `cat VERSION`, the local tags are behind: `git fetch --tags`,
   then `make clean && make`.
+- **Coverage path is gcc `--coverage` + gcov, no custom mapper.**
+  As of PR #352 codegen emits `#line N "src.ae"` directives, and
+  gcov reads them natively — so `gcc --coverage` on a generated .c
+  produces a `src.ae.gcov` (line + branch hits against .ae source)
+  with no extra plumbing. When wiring `make ci-coverage` (Phase 2),
+  the work is just adding `-fprofile-arcs -ftest-coverage` to the
+  build (mirror the `build/asan-obj/` variant pattern), running the
+  tests, and shelling `gcov` over the .gcda files.
 
 ## Branch / PR conventions
 
