@@ -293,6 +293,47 @@ test-valgrind: compiler stdlib-dbg
 	$(CC) $(CFLAGS_NO_OPT) $(DBG_OPT) $(TEST_SRC) build/dbg/libaether_compiler.a build/dbg/libaether.a -Icompiler -Istd -Istd/collections -o build/test_runner$(EXE_EXT) $(LDFLAGS)
 	valgrind --leak-check=full --show-leak-kinds=all --track-origins=yes --error-exitcode=1 ./build/test_runner$(EXE_EXT)
 
+# -----------------------------------------------------------------
+# ci-coverage — build with `gcc --coverage`, run the C-level test
+# suite, then walk the .gcda files with gcov to produce per-source
+# `.c.gcov` and (thanks to PR #352's #line directives) `.ae.gcov`
+# reports under build/coverage/. A summary is printed to stdout and
+# written to build/coverage/SUMMARY for downstream tooling.
+#
+# Scope: the C-level test_runner only. The 397 `.ae` regression tests
+# under `make test-ae` use the user-facing `ae build` pipeline which
+# doesn't currently inject --coverage into gcc; extending coverage to
+# that path is a follow-up (`ae build --coverage`).
+#
+# Optional richer reports: gcovr (HTML) and lcov+genhtml (browsable
+# HTML) are picked up if installed, skipped with a notice if not.
+# Probe-and-degrade matches the contrib_build.sh philosophy.
+#
+# Not part of `make ci` — coverage rebuild is slow and the test data
+# only becomes useful when read by a human. Run on demand.
+# -----------------------------------------------------------------
+ci-coverage: compiler stdlib-cov
+	@echo "==================================="
+	@echo "  Building coverage-instrumented test runner"
+	@echo "==================================="
+	@$(CC) $(CFLAGS_NO_OPT) $(COV_OPT) $(COV_FLAGS) $(TEST_SRC) \
+		build/cov/libaether_compiler.a build/cov/libaether.a \
+		-Icompiler -Istd -Istd/collections \
+		-o build/test_runner_cov$(EXE_EXT) $(LDFLAGS)
+	@echo ""
+	@echo "==================================="
+	@echo "  Running tests with coverage counters"
+	@echo "==================================="
+	@./build/test_runner_cov$(EXE_EXT) || true
+	@echo ""
+	@bash tests/scripts/coverage_report.sh
+
+ci-coverage-clean:
+	@echo "Cleaning coverage data..."
+	@find build/cov-obj -name '*.gcda' -delete 2>/dev/null || true
+	@$(RM) -r build/coverage 2>/dev/null || true
+	@echo "✓ Coverage data cleaned (cov-obj/.gcno files retained for reuse)"
+
 test-asan: compiler stdlib-asan
 	@echo "==================================="
 	@echo "Running Tests with AddressSanitizer"
@@ -844,6 +885,15 @@ DBG_OPT       := -O0 -g
 ASAN_OBJ_DIR := build/asan-obj
 MEM_OBJ_DIR  := build/memory-obj
 DBG_OBJ_DIR  := build/dbg-obj
+# Coverage variant — `gcc --coverage` is shorthand for
+# `-fprofile-arcs -ftest-coverage` at compile and `-lgcov` at link.
+# Produces .gcno files alongside .o (instrumentation) and .gcda
+# files alongside the running binary (counters). gcov walks the .c
+# (and follows #line directives — see PR #352) to produce both
+# `<file>.c.gcov` and the `.ae.gcov` we actually want.
+COV_FLAGS    := --coverage
+COV_OPT      := -O0 -g
+COV_OBJ_DIR  := build/cov-obj
 
 ASAN_LIB_OBJS = $(STD_SRC:%.c=$(ASAN_OBJ_DIR)/%.o) \
                 $(STD_REACTOR_SRC:%.c=$(ASAN_OBJ_DIR)/%.o) \
@@ -863,6 +913,12 @@ DBG_LIB_OBJS = $(STD_SRC:%.c=$(DBG_OBJ_DIR)/%.o) \
                $(RUNTIME_SRC:%.c=$(DBG_OBJ_DIR)/%.o)
 DBG_COMPILER_LIB_OBJS = $(COMPILER_LIB_SRC:%.c=$(DBG_OBJ_DIR)/%.o)
 
+COV_LIB_OBJS = $(STD_SRC:%.c=$(COV_OBJ_DIR)/%.o) \
+               $(STD_REACTOR_SRC:%.c=$(COV_OBJ_DIR)/%.o) \
+               $(COLLECTIONS_SRC:%.c=$(COV_OBJ_DIR)/%.o) \
+               $(RUNTIME_SRC:%.c=$(COV_OBJ_DIR)/%.o)
+COV_COMPILER_LIB_OBJS = $(COMPILER_LIB_SRC:%.c=$(COV_OBJ_DIR)/%.o)
+
 $(ASAN_OBJ_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(CFLAGS_NO_OPT) $(ASAN_OPT) $(ASAN_FLAGS) -c $< -o $@
@@ -874,6 +930,10 @@ $(MEM_OBJ_DIR)/%.o: %.c
 $(DBG_OBJ_DIR)/%.o: %.c
 	@mkdir -p $(dir $@)
 	@$(CC) $(CFLAGS_NO_OPT) $(DBG_OPT) -c $< -o $@
+
+$(COV_OBJ_DIR)/%.o: %.c
+	@mkdir -p $(dir $@)
+	@$(CC) $(CFLAGS_NO_OPT) $(COV_OPT) $(COV_FLAGS) -c $< -o $@
 
 build/asan/libaether.a: $(ASAN_LIB_OBJS)
 	@mkdir -p build/asan
@@ -899,9 +959,18 @@ build/dbg/libaether_compiler.a: $(DBG_COMPILER_LIB_OBJS)
 	@mkdir -p build/dbg
 	@ar rcs $@ $(DBG_COMPILER_LIB_OBJS)
 
+build/cov/libaether.a: $(COV_LIB_OBJS)
+	@mkdir -p build/cov
+	@ar rcs $@ $(COV_LIB_OBJS)
+
+build/cov/libaether_compiler.a: $(COV_COMPILER_LIB_OBJS)
+	@mkdir -p build/cov
+	@ar rcs $@ $(COV_COMPILER_LIB_OBJS)
+
 stdlib-asan: build/asan/libaether.a build/asan/libaether_compiler.a
 stdlib-memory: build/memory/libaether.a build/memory/libaether_compiler.a
 stdlib-dbg: build/dbg/libaether.a build/dbg/libaether_compiler.a
+stdlib-cov: build/cov/libaether.a build/cov/libaether_compiler.a
 
 # Self-test: compiler on itself
 self-test: compiler
@@ -1619,7 +1688,7 @@ asan-check: clean
 	  fi
 	@echo "✓ ASan clean — no memory errors detected"
 
-.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime test-install test-release-archive benchmark benchmark-ui examples run compile repl clean help self-test install stats stdlib stdlib-asan stdlib-memory stdlib-dbg ci ci-windows docker-ci docker-ci-windows docker-build-ci valgrind-check asan-check ci-coop ci-wasm ci-embedded ci-portability docker-ci-wasm docker-ci-embedded contrib-host-check contrib-aether-ui-check benchmark-aether-ui contrib install-contrib
+.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-memory test-manual-runtime test-install test-release-archive benchmark benchmark-ui examples run compile repl clean help self-test install stats stdlib stdlib-asan stdlib-memory stdlib-dbg ci ci-windows docker-ci docker-ci-windows docker-build-ci valgrind-check asan-check ci-coop ci-wasm ci-embedded ci-portability docker-ci-wasm docker-ci-embedded contrib-host-check contrib-aether-ui-check benchmark-aether-ui contrib install-contrib stdlib-cov ci-coverage ci-coverage-clean
 
 # Cross-language benchmark UI (alias for benchmark)
 benchmark-ui: benchmark
