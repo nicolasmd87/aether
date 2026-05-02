@@ -160,6 +160,13 @@ typedef struct ASTNode {
                                // such functions as `static` so each TU gets
                                // a private copy and the linker doesn't see
                                // them as duplicate symbols.
+    char* source_file;         // Originating .ae path (set by ast_stamp_source_file
+                               // after parse). Codegen uses this to emit `#line N
+                               // "path"` directives so gcc/gdb/gcov see .ae line
+                               // numbers, not the merged-.c position. NULL for
+                               // synthetic nodes the parser/typechecker invent
+                               // out of thin air; codegen falls back to the last
+                               // known file in that case.
 } ASTNode;
 
 // Type functions
@@ -192,6 +199,14 @@ void free_ast_node(ASTNode* node);
 ASTNode* clone_ast_node(ASTNode* node);
 void print_ast(ASTNode* node, int indent);
 const char* ast_node_type_to_string(ASTNodeType type);
+
+// Recursively stamp `source_file` on every node in the subtree that
+// doesn't already have one. Idempotent — nodes cloned from imported
+// modules already carry their original file, so re-stamping the merged
+// program leaves them alone. Called once per file right after
+// parse_program returns. Codegen reads node->source_file to emit
+// `#line N "path"` directives so gcc/gdb/gcov see .ae line numbers.
+void ast_stamp_source_file(ASTNode* node, const char* path);
 
 // Utility functions
 ASTNode* create_literal_node(Token* token);

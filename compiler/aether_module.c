@@ -657,6 +657,12 @@ ASTNode* module_parse_file(const char* file_path) {
     Parser* parser = create_parser(tokens, token_count);
     ASTNode* ast = parse_program(parser);
 
+    // Stamp every node with the source path before this AST gets
+    // cloned into the merged program. The clone preserves
+    // source_file, so codegen can emit `#line N "path"` directives
+    // pointing at the right .ae file even after module merging.
+    if (ast) ast_stamp_source_file(ast, file_path);
+
     // Cleanup
     for (int i = 0; i < token_count; i++) {
         free_token(tokens[i]);

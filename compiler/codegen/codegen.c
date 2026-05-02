@@ -97,6 +97,9 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->ask_temp_counter = 0;
     // Counter for message-send array hoist variables
     gen->msg_arr_counter = 0;
+    // #line-directive dedup state
+    gen->last_line_file = NULL;
+    gen->last_line_num = 0;
     gen->match_result_var = NULL;
     gen->preempt_loops = 0;
     gen->current_func_return_type = NULL;
@@ -598,13 +601,40 @@ void emit_actor_to_header(CodeGenerator* gen, ASTNode* actor) {
 
 void print_line(CodeGenerator* gen, const char* format, ...) {
     print_indent(gen);
-    
+
     va_list args;
     va_start(args, format);
     vfprintf(gen->output, format, args);
     va_end(args);
-    
+
     fprintf(gen->output, "\n");
+}
+
+// Emit a `#line N "path"` directive when this node sits on a source
+// line different from the last-emitted directive. Idempotent — back-
+// to-back nodes on the same line trigger no output. NULL nodes,
+// nodes without a source_file (synthetic), and nodes with line <= 0
+// are silently skipped — codegen falls through to the previously
+// active `#line`, which is safe because we always have one set by
+// the start of the first real function. Path is emitted with `"`
+// and `\\` escaped so paths containing those characters round-trip
+// through the C preprocessor.
+void codegen_maybe_emit_line(CodeGenerator* gen, const ASTNode* node) {
+    if (!gen || !node) return;
+    if (!node->source_file || node->line <= 0) return;
+    if (gen->last_line_file &&
+        node->line == gen->last_line_num &&
+        strcmp(node->source_file, gen->last_line_file) == 0) {
+        return;
+    }
+    fprintf(gen->output, "#line %d \"", node->line);
+    for (const char* p = node->source_file; *p; p++) {
+        if (*p == '\\' || *p == '"') fputc('\\', gen->output);
+        fputc(*p, gen->output);
+    }
+    fprintf(gen->output, "\"\n");
+    gen->last_line_file = node->source_file;
+    gen->last_line_num = node->line;
 }
 
 // Check if a name is a C/C++ reserved keyword that would cause compilation errors

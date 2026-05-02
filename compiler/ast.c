@@ -227,6 +227,7 @@ ASTNode* create_ast_node(ASTNodeType type, const char* value, int line, int colu
     node->column = column;
     node->annotation = NULL;
     node->is_imported = 0;
+    node->source_file = NULL;
     return node;
 }
 
@@ -250,6 +251,7 @@ ASTNode* clone_ast_node(ASTNode* node) {
     clone->node_type = clone_type(node->node_type);
     clone->annotation = node->annotation ? strdup(node->annotation) : NULL;
     clone->is_imported = node->is_imported;
+    clone->source_file = node->source_file ? strdup(node->source_file) : NULL;
 
     for (int i = 0; i < node->child_count; i++) {
         add_child(clone, clone_ast_node(node->children[i]));
@@ -269,6 +271,10 @@ void free_ast_node(ASTNode* node) {
         free(node->annotation);
     }
 
+    if (node->source_file) {
+        free(node->source_file);
+    }
+
     if (node->node_type) {
         free_type(node->node_type);
     }
@@ -280,8 +286,18 @@ void free_ast_node(ASTNode* node) {
     if (node->children) {
         free(node->children);
     }
-    
+
     free(node);
+}
+
+void ast_stamp_source_file(ASTNode* node, const char* path) {
+    if (!node || !path) return;
+    if (!node->source_file) {
+        node->source_file = strdup(path);
+    }
+    for (int i = 0; i < node->child_count; i++) {
+        ast_stamp_source_file(node->children[i], path);
+    }
 }
 
 void print_ast(ASTNode* node, int indent) {
