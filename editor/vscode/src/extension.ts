@@ -35,19 +35,25 @@ import {
 
 let client: LanguageClient | undefined;
 
-const LSP_BINARY_NAME = process.platform === 'win32' ? 'aether-lsp.exe' : 'aether-lsp';
+const EXE_SUFFIX = process.platform === 'win32' ? '.exe' : '';
+// Two valid LSP entry points, preferred in order:
+//   1. `aetherc lsp` — the language server is now embedded in the
+//      compiler binary (issue #327). One toolchain binary; one
+//      version guarantee; one PATH probe.
+//   2. `aether-lsp` — the standalone binary, kept as a transitional
+//      alias so editor configs that hardcoded the name keep working.
+const AETHERC_NAME      = 'aetherc' + EXE_SUFFIX;
+const AETHER_LSP_NAME   = 'aether-lsp' + EXE_SUFFIX;
 const OUTPUT_CHANNEL_NAME = 'Aether Language Server';
 
 // ---------------------------------------------------------------------------
-// Resolver: find an executable aether-lsp the user did not have to configure.
+// Resolver: locate the LSP entry point without per-machine configuration.
 // ---------------------------------------------------------------------------
 
 function isExecutable(p: string): boolean {
     try {
         const st = fs.statSync(p);
         if (!st.isFile()) return false;
-        // POSIX: any-x bit is enough; Windows: extension matters but we
-        // already filtered to .exe in LSP_BINARY_NAME above.
         if (process.platform === 'win32') return true;
         return (st.mode & 0o111) !== 0;
     } catch {
@@ -60,42 +66,47 @@ function expandHome(p: string): string {
     return p;
 }
 
-function searchOnPath(): string | undefined {
+// Probe a list of candidate directories for a given binary name. Returns
+// the first existing executable, or undefined.
+function findIn(dirs: readonly string[], name: string): string | undefined {
+    for (const dir of dirs) {
+        if (!dir) continue;
+        const candidate = path.join(dir, name);
+        if (isExecutable(candidate)) return candidate;
+    }
+    return undefined;
+}
+
+function pathDirs(): string[] {
     const PATH = process.env.PATH ?? '';
     const sep = process.platform === 'win32' ? ';' : ':';
-    for (const dir of PATH.split(sep)) {
-        if (!dir) continue;
-        const candidate = path.join(dir, LSP_BINARY_NAME);
-        if (isExecutable(candidate)) return candidate;
-    }
-    return undefined;
+    return PATH.split(sep);
 }
 
-function searchWorkspaceBuild(): string | undefined {
+function workspaceBuildDirs(): string[] {
+    const out: string[] = [];
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
-        const candidate = path.join(folder.uri.fsPath, 'build', LSP_BINARY_NAME);
-        if (isExecutable(candidate)) return candidate;
+        out.push(path.join(folder.uri.fsPath, 'build'));
     }
-    return undefined;
+    return out;
 }
 
-function searchCommonInstallDirs(): string | undefined {
+function commonInstallDirs(): string[] {
     const home = os.homedir();
-    const dirs = [
+    return [
         path.join(home, '.local', 'bin'),
         path.join(home, '.aether', 'bin'),
         '/usr/local/bin',
         '/opt/homebrew/bin',
     ];
-    for (const dir of dirs) {
-        const candidate = path.join(dir, LSP_BINARY_NAME);
-        if (isExecutable(candidate)) return candidate;
-    }
-    return undefined;
 }
 
 interface ResolvedLsp {
+    /** Executable to invoke. */
     binary: string;
+    /** Args to pass — `["lsp"]` for the subcommand entry, `[]` for the standalone. */
+    args: string[];
+    /** Human-readable origin for the output-channel announcement. */
     source: string;
 }
 
@@ -105,31 +116,44 @@ function resolveLspBinary(): ResolvedLsp | undefined {
 
     if (explicit) {
         const expanded = expandHome(explicit);
-        const absolute = path.isAbsolute(expanded)
-            ? expanded
-            : (searchOnPath() && path.basename(expanded) === LSP_BINARY_NAME
-                ? searchOnPath()
-                : expanded);
-        if (absolute && isExecutable(absolute)) {
-            return { binary: absolute, source: 'aether.lsp.path setting' };
+        const absolute = path.isAbsolute(expanded) ? expanded : expanded;
+        if (isExecutable(absolute)) {
+            // Inferring whether to pass `lsp` from the basename: if the
+            // user pointed at `aetherc`, run the subcommand; otherwise
+            // (`aether-lsp` or any other) pass no args.
+            const base = path.basename(absolute).toLowerCase();
+            const isAetherc = base === AETHERC_NAME.toLowerCase() ||
+                              base.replace(/\.exe$/, '') === 'aetherc';
+            return {
+                binary: absolute,
+                args: isAetherc ? ['lsp'] : [],
+                source: 'aether.lsp.path setting',
+            };
         }
-        // Explicit override that doesn't resolve is a configuration error;
-        // fall through but warn — we'd rather surface the misconfiguration
-        // than silently substitute a different binary.
         vscode.window.showWarningMessage(
             `aether.lsp.path is set to "${explicit}" but no executable was found there. ` +
             `Falling back to auto-detection.`,
         );
     }
 
-    const ws = searchWorkspaceBuild();
-    if (ws) return { binary: ws, source: 'workspace build/' };
+    // Probe each location for both names, preferring `aetherc lsp` (the
+    // single-binary path) over the standalone `aether-lsp`.
+    const probeOrder: { dirs: string[], label: string }[] = [
+        { dirs: workspaceBuildDirs(), label: 'workspace build/' },
+        { dirs: pathDirs(),           label: 'PATH'              },
+        { dirs: commonInstallDirs(),  label: 'common install dir' },
+    ];
 
-    const onPath = searchOnPath();
-    if (onPath) return { binary: onPath, source: 'PATH' };
-
-    const common = searchCommonInstallDirs();
-    if (common) return { binary: common, source: 'common install dir' };
+    for (const { dirs, label } of probeOrder) {
+        const aetherc = findIn(dirs, AETHERC_NAME);
+        if (aetherc) {
+            return { binary: aetherc, args: ['lsp'], source: `${label} (aetherc lsp)` };
+        }
+        const standalone = findIn(dirs, AETHER_LSP_NAME);
+        if (standalone) {
+            return { binary: standalone, args: [], source: `${label} (aether-lsp)` };
+        }
+    }
 
     return undefined;
 }
@@ -171,11 +195,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
     }
 
-    channel.appendLine(`[aether] Using LSP server at ${resolved.binary} (${resolved.source}).`);
+    const argDisplay = resolved.args.length ? ` ${resolved.args.join(' ')}` : '';
+    channel.appendLine(`[aether] Using LSP server: ${resolved.binary}${argDisplay} (${resolved.source}).`);
 
     const serverOptions: ServerOptions = {
-        run:   { command: resolved.binary, transport: TransportKind.stdio },
-        debug: { command: resolved.binary, transport: TransportKind.stdio },
+        run:   { command: resolved.binary, args: resolved.args, transport: TransportKind.stdio },
+        debug: { command: resolved.binary, args: resolved.args, transport: TransportKind.stdio },
     };
 
     const clientOptions: LanguageClientOptions = {

@@ -16,6 +16,7 @@
 #include <dlfcn.h>
 #include <fcntl.h>
 #include <errno.h>
+#include <limits.h>            // PATH_MAX (used by realpath fallback)
 #include <unistd.h>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -47,6 +48,71 @@ static FILE* (*real_fopen)(const char*, const char*) = NULL;
 static void* (*real_mmap)(void*, size_t, int, int, int, off_t) = NULL;
 static int (*real_mprotect)(void*, size_t, int) = NULL;
 static void* (*real_dlopen)(const char*, int) = NULL;
+
+// For fs_* categories, resolve the resource path with realpath()
+// before grant matching. Closes the path-identity bypass: an attacker
+// with a grant for `/tmp/*` could otherwise open `/tmp/../etc/shadow`
+// (or a symlink to it under /tmp) and the kernel would resolve the
+// path AFTER our pattern_match check, escalating the granted scope.
+//
+// realpath requires the path to exist. For fs_write to a freshly-
+// created file the path doesn't yet — fall back to resolving the
+// parent and reattaching the basename; the parent must exist for any
+// meaningful create syscall to succeed anyway. If even the parent
+// can't be resolved (truly unusable path), reuse the original. The
+// grant check then proceeds on the unresolved path — same behaviour
+// as before this fix, so we never tighten or loosen for these edge
+// cases relative to the prior baseline.
+//
+// `out` must point at a buffer of at least PATH_MAX. Returns 1 if
+// `out` was written with a resolved path, 0 if the original was
+// kept (caller may still use `in` directly in that case).
+static int sandbox_resolve_fs_path(const char* in, char* out, size_t out_size) {
+    if (!in || !out || out_size < PATH_MAX) return 0;
+
+    // Direct realpath: handles existing files, defeats `..` and symlinks.
+    if (realpath(in, out)) return 1;
+
+    // ENOENT: the file likely doesn't exist yet (creation case). Walk
+    // back to the parent and resolve that, then reattach the basename
+    // to the resolved parent. Anything other than ENOENT is a true
+    // failure — leave the original path as-is.
+    if (errno != ENOENT) return 0;
+
+    char tmp[4096];
+    size_t in_len = strlen(in);
+    if (in_len == 0 || in_len >= sizeof(tmp)) return 0;
+    memcpy(tmp, in, in_len + 1);
+
+    // Find the last '/'. If there is none, the parent is the cwd
+    // (`getcwd`) and the basename is the whole input.
+    char* slash = strrchr(tmp, '/');
+    const char* basename;
+    char parent_resolved[PATH_MAX];
+
+    if (slash == tmp) {
+        // Path is "/foo" — parent is "/", root is its own canonical form.
+        basename = slash + 1;
+        if (out_size < 2) return 0;
+        out[0] = '/'; out[1] = '\0';
+        if (snprintf(out, out_size, "/%s", basename) >= (int)out_size) return 0;
+        return 1;
+    }
+    if (slash) {
+        *slash = '\0';
+        basename = slash + 1;
+        if (!realpath(tmp, parent_resolved)) return 0;
+    } else {
+        // No slash → relative path. Parent is cwd.
+        basename = in;
+        if (!realpath(".", parent_resolved)) return 0;
+    }
+
+    if (snprintf(out, out_size, "%s/%s", parent_resolved, basename) >= (int)out_size) {
+        return 0;
+    }
+    return 1;
+}
 
 // Pattern matching (same logic as Aether's in-process checker)
 static int pattern_match(const char* pat, const char* resource) {
@@ -102,10 +168,21 @@ static void log_deny(const char* category, const char* resource) {
 }
 
 static int check_grant(const char* category, const char* resource) {
+    // For fs_* categories, resolve the path BEFORE matching so a grant
+    // for `/tmp/*` can't be subverted with `/tmp/../etc/shadow` or a
+    // symlink under /tmp. tcp/env/exec resources stay as-is — realpath
+    // is meaningful only for filesystem paths.
+    char resolved[PATH_MAX];
+    const char* match_target = resource;
+    if (category && strncmp(category, "fs_", 3) == 0 && resource &&
+        sandbox_resolve_fs_path(resource, resolved, sizeof(resolved))) {
+        match_target = resolved;
+    }
+
     // In-process checker takes priority (embedded Python mode)
     if (&_aether_sandbox_checker && _aether_sandbox_checker) {
-        int result = _aether_sandbox_checker(category, resource);
-        if (!result) log_deny(category, resource);
+        int result = _aether_sandbox_checker(category, match_target);
+        if (!result) log_deny(category, match_target);
         return result;
     }
     // Fall back to file-based grants (LD_PRELOAD mode)
@@ -113,10 +190,10 @@ static int check_grant(const char* category, const char* resource) {
     for (int i = 0; i < grant_count; i++) {
         if (grants[i].cat[0] == '*' && grants[i].pat[0] == '*') return 1;
         if (strcmp(grants[i].cat, category) == 0) {
-            if (pattern_match(grants[i].pat, resource)) return 1;
+            if (pattern_match(grants[i].pat, match_target)) return 1;
         }
     }
-    log_deny(category, resource);
+    log_deny(category, match_target);
     return 0;
 }
 

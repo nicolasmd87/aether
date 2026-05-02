@@ -22,8 +22,8 @@ exports (
     dir_list_count, dir_list_get, dir_list_free,
     path_join, path_dirname, path_basename, path_extension, path_is_absolute,
     fs_glob_raw, fs_glob_multi_raw,
-    open, read, write, delete, size, exists,
-    create_dir, delete_dir, mkdir_p,
+    open, read, write, delete, size, mtime, exists,
+    create_dir, create_dir_with_mode, delete_dir, mkdir_p,
     symlink, readlink, unlink,
     list_dir, glob, glob_multi,
     write_binary, write_atomic, rename, file_stat, read_binary
@@ -50,10 +50,17 @@ extern file_size_raw(path: string) -> int
 // extern with no Go-style wrapper because callers already use the 0
 // sentinel for "no mtime".
 extern file_mtime(path: string) -> int
+// `file_mtime_raw` returns the file's mtime as Unix epoch seconds, or
+// -1 if stat failed. Use this rather than `file_mtime` when you need
+// to distinguish "1970-01-01 epoch file" from "stat failed" — the
+// older `file_mtime` collapses both into 0. The `fs.mtime` wrapper
+// below builds the standard (value, err) tuple on top of it.
+extern file_mtime_raw(path: string) -> int
 
 // Directory operations - raw externs
 extern dir_exists(path: string) -> int
 extern dir_create_raw(path: string) -> int
+extern dir_create_mode_raw(path: string, mode: int) -> int
 extern dir_delete_raw(path: string) -> int
 extern dir_list_raw(path: string) -> ptr
 
@@ -202,6 +209,19 @@ size(path: string) -> {
     return s, ""
 }
 
+// Return the file's mtime as Unix epoch seconds.
+// Returns (mtime, "") on success, (0, error) on failure. Distinguishes
+// "stat failed" from "file's mtime is 0" (which the older `file_mtime`
+// extern collapses into a single sentinel). Prefer this wrapper for
+// new code; `file_mtime` stays for back-compat.
+mtime(path: string) -> {
+    m = file_mtime_raw(path)
+    if m < 0 {
+        return 0, "cannot stat file"
+    }
+    return m, ""
+}
+
 // Does anything exist at `path`? Returns 1 for any kind of
 // filesystem entry (regular file, directory, symlink, fifo, ...),
 // 0 if nothing is there or `path` is empty. Use this when you don't
@@ -215,6 +235,20 @@ exists(path: string) -> int {
 // Create a directory. Returns "" on success, error on failure.
 create_dir(path: string) -> {
     ok = dir_create_raw(path)
+    if ok == 0 {
+        return "cannot create directory"
+    }
+    return ""
+}
+
+// Like `create_dir` but with an explicit POSIX-style mode (0777-masked).
+// Use this when the directory needs to be private — e.g.
+// `fs.create_dir_with_mode("/run/myapp/keys", 448)` for 0o700 — without
+// the mkdir-then-chmod race the "always 0755 + shell out to chmod"
+// workaround would open. Windows ignores the mode at the directory
+// layer; the parameter is accepted for API portability.
+create_dir_with_mode(path: string, mode: int) -> {
+    ok = dir_create_mode_raw(path, mode)
     if ok == 0 {
         return "cannot create directory"
     }

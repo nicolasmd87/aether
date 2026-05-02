@@ -27,6 +27,7 @@
 #include "codegen/codegen.h"
 #include "aether_error.h"
 #include "aether_module.h"
+#include "../lsp/aether_lsp.h"
 
 // Compiler limits
 #define MAX_TOKENS 50000
@@ -55,6 +56,13 @@ static const char* emit_header_path = NULL;
 // both         : emit both — executable and library symbols live in one .c file.
 static bool emit_exe = true;
 static bool emit_lib = false;
+
+// --emit-main=<func> — with --emit=lib, emit a thin main(argc,argv)
+// shim that calls the named Aether function. Closes the exe/lib
+// symmetry: one .c ships as both a loadable lib AND a binary. Issue
+// #268.3. NULL when not set; the codegen ignores the shim when the
+// flag is absent or when --emit=lib isn't active.
+static const char* emit_main_target = NULL;
 
 // --with=<capability>[,<capability>...] — capability opt-ins for
 // --emit=lib. Default is capability-empty (every capability-gated
@@ -744,6 +752,7 @@ int compile_source(const char* input_path, const char* output_path) {
     if (preempt_mode) codegen->preempt_loops = 1;
     codegen->emit_exe = emit_exe ? 1 : 0;
     codegen->emit_lib = emit_lib ? 1 : 0;
+    codegen->emit_main_target = emit_main_target;  // NULL when not requested
     // Source path so codegen can expand `__FILE__` literally (#265).
     codegen->source_file = input_path;
     int errors_before_codegen = aether_error_count();
@@ -828,11 +837,276 @@ int compile_c_to_exe(const char* c_file, const char* exe_file) {
     return result == 0;
 }
 
+// ---------------------------------------------------------------------------
+// --concat-ae: source-to-source merge of multiple .ae files into one
+// synthetic .ae. Issue #268.1.
+//
+// Behaviour, line-based:
+//   1. Walk each input file. For every line whose first non-whitespace
+//      token is `import`, accumulate it into a deduped list (first
+//      occurrence wins, order preserved). All other lines are body.
+//   2. Count `main(` definitions across all files. Reject with a clear
+//      error if more than one (the merge target is one whole-program
+//      TU; two `main()`s would collide at link time).
+//   3. Emit the synthetic file as: (banner) → (deduped imports) →
+//      (each input's body, prefixed with a `// ---- <path> ----` marker
+//      so diagnostics still trace back to the original source).
+//
+// Pure source-to-source — no parser involvement, matching the issue's
+// "no `--emit=lib` involvement" contract. Edge cases the line-based
+// approach skips intentionally:
+//   - Multi-line `import { ... }` blocks (Aether doesn't have these
+//     today; if added, this function will need to switch to lexer-
+//     level tokenisation).
+//   - The string literal `"import "` or the comment `// import …`
+//     starting at column 0 — both would be (incorrectly) picked up
+//     as imports. The simpler check is correct for the canonical
+//     downstream use case (aetherBuild's generated `.build.ae` files,
+//     which have imports at the file head and never inside strings).
+// ---------------------------------------------------------------------------
+
+static char* concat_ae_read_file(const char* path) {
+    FILE* f = fopen(path, "rb");
+    if (!f) return NULL;
+    fseek(f, 0, SEEK_END);
+    long n = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    if (n < 0) { fclose(f); return NULL; }
+    char* buf = malloc((size_t)n + 1);
+    if (!buf) { fclose(f); return NULL; }
+    size_t got = fread(buf, 1, (size_t)n, f);
+    fclose(f);
+    buf[got] = '\0';
+    return buf;
+}
+
+// Trim trailing CR / spaces / tabs from a length-bounded substring.
+static size_t concat_ae_trim_trailing(const char* s, size_t len) {
+    while (len > 0 && (s[len - 1] == ' ' || s[len - 1] == '\t' || s[len - 1] == '\r')) {
+        len--;
+    }
+    return len;
+}
+
+static int concat_ae_imports_contains(char** imports, int count, const char* line, size_t len) {
+    for (int i = 0; i < count; i++) {
+        if (strncmp(imports[i], line, len) == 0 && imports[i][len] == '\0') return 1;
+    }
+    return 0;
+}
+
+static int do_concat_ae(char** inputs, int input_count, const char* output_path) {
+    char** imports        = NULL;
+    int    imports_count  = 0;
+    int    imports_cap    = 0;
+    int    main_count     = 0;
+    char** bodies         = malloc(sizeof(char*) * (size_t)input_count);
+    if (!bodies) {
+        fprintf(stderr, "Error: --concat-ae: out of memory\n");
+        return 1;
+    }
+    for (int i = 0; i < input_count; i++) bodies[i] = NULL;
+
+    for (int f = 0; f < input_count; f++) {
+        char* source = concat_ae_read_file(inputs[f]);
+        if (!source) {
+            fprintf(stderr, "Error: --concat-ae: cannot read '%s'\n", inputs[f]);
+            for (int j = 0; j < f; j++) free(bodies[j]);
+            free(bodies);
+            for (int i = 0; i < imports_count; i++) free(imports[i]);
+            free(imports);
+            return 1;
+        }
+
+        size_t cap = strlen(source) + 64;
+        char* body = malloc(cap);
+        if (!body) {
+            fprintf(stderr, "Error: --concat-ae: out of memory\n");
+            free(source);
+            for (int j = 0; j < f; j++) free(bodies[j]);
+            free(bodies);
+            for (int i = 0; i < imports_count; i++) free(imports[i]);
+            free(imports);
+            return 1;
+        }
+        size_t pos = 0;
+
+        char* p = source;
+        while (*p) {
+            char* line_start = p;
+            while (*p && *p != '\n') p++;
+            size_t raw_len = (size_t)(p - line_start);
+
+            // Trim leading whitespace for classification only — body
+            // lines stay verbatim so indent/style is preserved.
+            const char* trimmed = line_start;
+            size_t trim_len = raw_len;
+            while (trim_len > 0 && (*trimmed == ' ' || *trimmed == '\t')) {
+                trimmed++;
+                trim_len--;
+            }
+            trim_len = concat_ae_trim_trailing(trimmed, trim_len);
+
+            int is_import = (trim_len >= 7 && strncmp(trimmed, "import ", 7) == 0);
+            if (is_import) {
+                if (!concat_ae_imports_contains(imports, imports_count, trimmed, trim_len)) {
+                    if (imports_count >= imports_cap) {
+                        imports_cap = imports_cap ? imports_cap * 2 : 16;
+                        char** grown = realloc(imports, sizeof(char*) * (size_t)imports_cap);
+                        if (!grown) {
+                            fprintf(stderr, "Error: --concat-ae: out of memory\n");
+                            free(body);
+                            free(source);
+                            for (int j = 0; j < f; j++) free(bodies[j]);
+                            free(bodies);
+                            for (int i = 0; i < imports_count; i++) free(imports[i]);
+                            free(imports);
+                            return 1;
+                        }
+                        imports = grown;
+                    }
+                    char* dup = malloc(trim_len + 1);
+                    memcpy(dup, trimmed, trim_len);
+                    dup[trim_len] = '\0';
+                    imports[imports_count++] = dup;
+                }
+            } else {
+                // Verbatim copy. Detect `main(` definitions before
+                // appending so we can fail early on duplicates.
+                if (trim_len >= 5 &&
+                    strncmp(trimmed, "main", 4) == 0) {
+                    const char* m = trimmed + 4;
+                    while (*m == ' ' || *m == '\t') m++;
+                    if (*m == '(') main_count++;
+                }
+                if (pos + raw_len + 2 > cap) {
+                    cap = (pos + raw_len + 64) * 2;
+                    char* grown = realloc(body, cap);
+                    if (!grown) {
+                        fprintf(stderr, "Error: --concat-ae: out of memory\n");
+                        free(body);
+                        free(source);
+                        for (int j = 0; j < f; j++) free(bodies[j]);
+                        free(bodies);
+                        for (int i = 0; i < imports_count; i++) free(imports[i]);
+                        free(imports);
+                        return 1;
+                    }
+                    body = grown;
+                }
+                memcpy(body + pos, line_start, raw_len);
+                pos += raw_len;
+                body[pos++] = '\n';
+            }
+
+            if (*p == '\n') p++;
+        }
+        body[pos] = '\0';
+        bodies[f] = body;
+        free(source);
+    }
+
+    if (main_count > 1) {
+        fprintf(stderr,
+                "Error: --concat-ae: %d main() definitions across input files; at most one is allowed.\n",
+                main_count);
+        for (int i = 0; i < input_count; i++) free(bodies[i]);
+        free(bodies);
+        for (int i = 0; i < imports_count; i++) free(imports[i]);
+        free(imports);
+        return 1;
+    }
+
+    FILE* out = fopen(output_path, "w");
+    if (!out) {
+        fprintf(stderr, "Error: --concat-ae: cannot write '%s'\n", output_path);
+        for (int i = 0; i < input_count; i++) free(bodies[i]);
+        free(bodies);
+        for (int i = 0; i < imports_count; i++) free(imports[i]);
+        free(imports);
+        return 1;
+    }
+
+    fprintf(out, "// Generated by aetherc --concat-ae from %d file(s).\n", input_count);
+    fprintf(out, "// Imports deduped; bodies concatenated verbatim.\n\n");
+    for (int i = 0; i < imports_count; i++) {
+        fprintf(out, "%s\n", imports[i]);
+    }
+    if (imports_count > 0) fprintf(out, "\n");
+    for (int b = 0; b < input_count; b++) {
+        fprintf(out, "// ---- %s ----\n", inputs[b]);
+        fputs(bodies[b], out);
+        fprintf(out, "\n");
+    }
+    fclose(out);
+
+    for (int i = 0; i < input_count; i++) free(bodies[i]);
+    free(bodies);
+    for (int i = 0; i < imports_count; i++) free(imports[i]);
+    free(imports);
+    return 0;
+}
+
+// Parse the `--concat-ae <files...> -o <out>` tail and dispatch.
+static int run_concat_ae(int argc, char** argv, int start) {
+    const char* output = NULL;
+    char** inputs = NULL;
+    int input_count = 0;
+    int input_cap = 0;
+
+    for (int i = start; i < argc; i++) {
+        if (strcmp(argv[i], "-o") == 0) {
+            if (i + 1 >= argc) {
+                fprintf(stderr, "Error: --concat-ae: -o requires an output path\n");
+                free(inputs);
+                return 1;
+            }
+            output = argv[++i];
+        } else if (argv[i][0] == '-') {
+            fprintf(stderr, "Error: --concat-ae: unknown flag '%s'\n", argv[i]);
+            free(inputs);
+            return 1;
+        } else {
+            if (input_count >= input_cap) {
+                input_cap = input_cap ? input_cap * 2 : 8;
+                char** grown = realloc(inputs, sizeof(char*) * (size_t)input_cap);
+                if (!grown) {
+                    fprintf(stderr, "Error: --concat-ae: out of memory\n");
+                    free(inputs);
+                    return 1;
+                }
+                inputs = grown;
+            }
+            inputs[input_count++] = argv[i];
+        }
+    }
+
+    if (!output) {
+        fprintf(stderr, "Error: --concat-ae requires -o <output.ae>\n");
+        free(inputs);
+        return 1;
+    }
+    if (input_count == 0) {
+        fprintf(stderr, "Error: --concat-ae requires at least one input file\n");
+        free(inputs);
+        return 1;
+    }
+
+    int rc = do_concat_ae(inputs, input_count, output);
+    free(inputs);
+    return rc;
+}
+
 void print_help(const char* program_name) {
     printf("Aether Compiler v%s\n\n", AETHER_VERSION);
     printf("Usage:\n");
     printf("  %s <input.ae> <output.c>         Compile Aether to C\n", program_name);
     printf("  %s run <input.ae>                Compile and run immediately\n", program_name);
+    printf("  %s lsp                           Run the language server on stdio\n", program_name);
+    printf("  %s --concat-ae <files...> -o <out.ae>\n", program_name);
+    printf("                                   Discover-and-dedupe source merge — emits one\n");
+    printf("                                   synthetic .ae with each file's content, imports\n");
+    printf("                                   deduped, accepting at most one main()\n");
     printf("\n");
     printf("Options:\n");
     printf("  --version, -v                    Show version information\n");
@@ -840,6 +1114,8 @@ void print_help(const char* program_name) {
     printf("  --emit-c                         Print generated C code to stdout\n");
     printf("  --emit-header [path]             Generate C header for embedding (default: auto)\n");
     printf("  --emit=<exe|lib|both>            Output artifact (exe default, lib produces .so/.dylib)\n");
+    printf("  --emit-main=<func>               With --emit=lib: also emit a thin main(argc,argv) shim\n");
+    printf("                                   that calls <func>(). Closes the exe/lib symmetry.\n");
     printf("  --emit-namespace-manifest        Print the manifest JSON for a manifest.ae and exit\n");
     printf("  --check                          Type-check only (no code generation)\n");
     printf("  --dump-ast                       Print AST and exit (no code generation)\n");
@@ -848,11 +1124,35 @@ void print_help(const char* program_name) {
     printf("Examples:\n");
     printf("  %s hello.ae hello.c              Compile to C\n", program_name);
     printf("  %s run hello.ae                  Quick run\n", program_name);
+    printf("  %s lsp                           Run the embedded language server\n", program_name);
+    printf("  %s --concat-ae a.ae b.ae -o all.ae   Merge sources for whole-program build\n", program_name);
     printf("  %s --verbose hello.ae hello.c    Compile with timing info\n", program_name);
     printf("  %s --emit-header hello.ae hello.c  Generate hello.h for C embedding\n", program_name);
 }
 
 int main(int argc, char *argv[]) {
+    // Subcommand dispatch — checked BEFORE the flag loop so flags
+    // can't shadow it. `aetherc lsp` runs the embedded language
+    // server on stdio (same code path as the standalone aether-lsp
+    // binary, which is now a thin alias). Issue #327.
+    if (argc >= 2 && strcmp(argv[1], "lsp") == 0) {
+        LSPServer* server = lsp_server_create();
+        if (!server) {
+            fprintf(stderr, "Error: failed to create LSP server\n");
+            return 1;
+        }
+        lsp_server_run(server);
+        lsp_server_free(server);
+        return 0;
+    }
+
+    // --concat-ae: same priority as `lsp` — break out before the
+    // generic flag loop because the rest of argv is a flag-shaped
+    // list of inputs the loop would mis-classify. Issue #268.1.
+    if (argc >= 2 && strcmp(argv[1], "--concat-ae") == 0) {
+        return run_concat_ae(argc, argv, 2);
+    }
+
     // Parse flags
     int arg_offset = 1;
     while (arg_offset < argc && argv[arg_offset][0] == '-') {
@@ -917,6 +1217,17 @@ int main(int argc, char *argv[]) {
                 fprintf(stderr, "Error: --emit must be one of: exe, lib, both (got '%s')\n", val);
                 return 1;
             }
+            arg_offset++;
+        } else if (strncmp(argv[arg_offset], "--emit-main=", 12) == 0) {
+            // --emit-main=<func>: a follow-up to --emit=lib. The codegen
+            // emits a thin main() shim calling the named function, so a
+            // single .c can ship as a lib AND as an exe. Issue #268.3.
+            const char* val = argv[arg_offset] + 12;
+            if (!*val) {
+                fprintf(stderr, "Error: --emit-main= requires a function name\n");
+                return 1;
+            }
+            emit_main_target = val;
             arg_offset++;
         } else if (strncmp(argv[arg_offset], "--with=", 7) == 0) {
             // Comma-separated capability opt-ins for --emit=lib. Unknown

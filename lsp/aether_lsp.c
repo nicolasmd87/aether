@@ -516,12 +516,18 @@ void lsp_publish_diagnostics(LSPServer* server, const char* uri) {
             if (t->type == TOKEN_EOF || t->type == TOKEN_ERROR) break;
         }
 
-        /* Redirect stderr to capture parser errors */
-        FILE* old_stderr = stderr;
+        /* Redirect stderr to capture parser errors. The whole save/
+         * swap/restore dance only works on libc implementations where
+         * `stderr` is an assignable lvalue (glibc, macOS) — Windows
+         * mingw defines it as a non-assignable macro, so the entire
+         * block is gated on AETHER_HAS_FMEMOPEN (already platform-
+         * gated upstream the same way) to avoid an "lvalue required"
+         * compile error on the Windows CI matrix.
+         */
         char parse_errors[4096] = {0};
-        FILE* err_capture = NULL;
 #if AETHER_HAS_FMEMOPEN
-        err_capture = fmemopen(parse_errors, sizeof(parse_errors), "w");
+        FILE* old_stderr = stderr;
+        FILE* err_capture = fmemopen(parse_errors, sizeof(parse_errors), "w");
         if (err_capture) {
             stderr = err_capture;
         }
@@ -530,11 +536,13 @@ void lsp_publish_diagnostics(LSPServer* server, const char* uri) {
         Parser* parser = create_parser(tokens, token_count);
         ASTNode* ast = parse_program(parser);
 
+#if AETHER_HAS_FMEMOPEN
         if (err_capture) {
             fflush(err_capture);
             fclose(err_capture);
             stderr = old_stderr;
         }
+#endif
 
         /* Extract line/column from captured error messages if parse failed */
         if (parse_errors[0] != '\0') {

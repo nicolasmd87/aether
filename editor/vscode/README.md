@@ -67,17 +67,23 @@ now the install script is the supported path).
 
 ## Language Server Protocol
 
-The extension auto-starts an LSP client against `aether-lsp` (built by
-`make lsp` from the Aether repo root) on any `.ae` file open. The
-binary resolver tries (in order):
+The extension auto-starts an LSP client on any `.ae` file open. The
+language server is now embedded in `aetherc` itself (issue #327, the
+`aetherc lsp` subcommand) so a single toolchain binary is enough —
+the standalone `aether-lsp` is kept as a transitional alias for
+editor configs that hardcode the older name.
+
+The resolver tries each location in order, preferring `aetherc lsp`
+over `aether-lsp` when both are present:
 
 1. The `aether.lsp.path` setting if you've set it.
-2. `<workspace>/build/aether-lsp` — the common case for working in
-   the Aether repo itself; just `make lsp` and the extension finds it.
-3. `aether-lsp` resolved through your shell `PATH`.
-4. `~/.local/bin/aether-lsp`, `~/.aether/bin/aether-lsp`,
-   `/usr/local/bin/aether-lsp`, `/opt/homebrew/bin/aether-lsp` (covers
-   shells with non-standard `PATH` configurations and `brew` installs).
+2. `<workspace>/build/aetherc lsp` (or `aether-lsp` as fallback) —
+   the common case for working in the Aether repo itself; just
+   `make compiler` and the extension finds it.
+3. `aetherc lsp` (then `aether-lsp`) resolved through your shell
+   `PATH`.
+4. Common install directories: `~/.local/bin`, `~/.aether/bin`,
+   `/usr/local/bin`, `/opt/homebrew/bin`.
 
 If none of those find an executable, you'll see a one-time warning
 with a link to the setting; the extension stays in syntax-only mode

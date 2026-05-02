@@ -43,6 +43,12 @@ typedef struct {
     int emit_exe;            // Emit the int main(int,char**) entry point
     int emit_lib;            // Emit aether_<name> alias stubs for top-level functions
 
+    // --emit-main=<func>: with --emit=lib, also emit a thin main(argc,argv)
+    // shim that calls the named Aether function. Closes the exe/lib symmetry
+    // (issue #268.3) — one .c can ship as both a loadable lib AND a binary.
+    // NULL when not requested.
+    const char* emit_main_target;
+
     // Track generated pattern matching functions to avoid duplicates
     char** generated_functions;
     int generated_function_count;

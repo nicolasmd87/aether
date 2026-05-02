@@ -596,9 +596,11 @@ main() {
 
 **Functions (beyond those re-exported from `std.file`/`std.dir`/`std.path`):**
 - `fs.exists(path)` → `int` - **Path-agnostic** existence check: 1 if anything is at `path` (regular file, directory, symlink, fifo, ...), 0 otherwise. Distinct from `file.exists` (regular-file-only) and `dir.exists` (directory-only) — those filter by type, this one doesn't. Uses `lstat(2)` so a dangling symlink counts as existing — matches POSIX `test -e`. Reach for this in tooling that probes whether a path is bound without caring what's there (build-system runtime-path discovery, "did the user pass a real path?" CLI validation).
-- `fs.write_atomic(path, data, length)` → `string` - Stage to `<path>.tmp.<pid>.<n>`, fsync, rename over destination. Binary-safe via explicit length.
+- `fs.write_atomic(path, data, length)` → `string` - Stage to `<path>.tmp.<pid>.<n>`, fsync, rename over destination. Binary-safe via explicit length. The tmp file is created with `O_CREAT|O_EXCL|O_NOFOLLOW` so an attacker who pre-plants a symlink at the predictable tmp path can't trick the write into following it; permissions track the process umask exactly as the previous `fopen("wb")` would have.
 - `fs.write_binary(path, data, length)` → `string` - Non-atomic `fopen("wb")` + `fwrite` + `fclose`. Binary-safe via explicit length. Cheaper than `write_atomic` when a partial file on crash is acceptable (scratch writes, caches).
 - `fs.rename(from, to)` → `string` - POSIX `rename(2)` wrapper. Atomic when source and target are on the same filesystem.
+- `fs.create_dir_with_mode(path, mode)` → `string` - Like `fs.create_dir` but takes an explicit POSIX mode (0777-masked). Use this for private dirs (e.g. `0o700` for keys) — sets the bits at creation time, closing the `mkdir` → `chmod` race window. Windows ignores the mode at the directory layer; the parameter is accepted for portability.
+- `fs.mtime(path)` → `(int, string)` - File's mtime as Unix epoch seconds, in the standard `(value, err)` shape. Distinguishes "stat failed" from "file's mtime is 0 (1970 epoch)" — the older `file_mtime` extern collapsed both into a single 0 sentinel and is kept only for back-compat.
 - `fs.file_stat(path)` → `(kind, size, mtime, err)` - One `lstat(2)`; symlinks report kind 3, target is not followed.
 - `fs.read_binary(path)` → `(content, length, err)` - Length-aware read preserving embedded NULs.
 
