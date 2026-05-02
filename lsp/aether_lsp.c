@@ -525,10 +525,9 @@ void lsp_publish_diagnostics(LSPServer* server, const char* uri) {
          * compile error on the Windows CI matrix.
          */
         char parse_errors[4096] = {0};
-        FILE* err_capture = NULL;
 #if AETHER_HAS_FMEMOPEN
         FILE* old_stderr = stderr;
-        err_capture = fmemopen(parse_errors, sizeof(parse_errors), "w");
+        FILE* err_capture = fmemopen(parse_errors, sizeof(parse_errors), "w");
         if (err_capture) {
             stderr = err_capture;
         }
