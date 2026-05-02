@@ -118,9 +118,27 @@ main() {
 
 This module depends on the system `libsqlite3`. There is no
 auto-detection in the Aether toolchain (unlike OpenSSL and zlib),
-so projects that want SQLite opt in explicitly:
+so projects that want SQLite opt in explicitly.
 
-**`aether.toml`:**
+**Recommended (after `make install-contrib`):** link the prebuilt
+archive that ships with the Aether install. The bridge has already
+been compiled against your machine's `libsqlite3` headers, so all
+your project does is link it.
+
+```toml
+[[bin]]
+name = "myapp"
+path = "src/main.ae"
+
+[build]
+link_flags = "-laether_sqlite -lsqlite3"
+```
+
+`ae build` adds `-L<prefix>/lib/aether` automatically, so no path
+to the archive is needed.
+
+**Alternative (source-tree build, e.g. before `make install-contrib`
+has been run):** point `extra_sources` at the bridge `.c` directly.
 
 ```toml
 [[bin]]
@@ -131,18 +149,6 @@ extra_sources = ["contrib/sqlite/aether_sqlite.c"]
 [build]
 link_flags = "-lsqlite3"
 ```
-
-**Or on the command line:**
-
-```sh
-ae build src/main.ae \
-  --extra contrib/sqlite/aether_sqlite.c \
-  -- -lsqlite3
-```
-
-(The trailing `-- -lsqlite3` is a placeholder — `ae build` doesn't
-currently accept bare link-flag pass-through on the CLI. Use the
-`aether.toml` form.)
 
 ## Installing libsqlite3
 

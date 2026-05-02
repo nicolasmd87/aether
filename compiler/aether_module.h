@@ -97,6 +97,7 @@ ASTNode* module_parse_file(const char* file_path);
 
 // Resolve module name to file path. Returns malloc'd path or NULL. Caller frees.
 char* module_resolve_stdlib_path(const char* module_name);  // "fs" -> path
+char* module_resolve_contrib_path(const char* module_name); // "sqlite" -> path
 char* module_resolve_local_path(const char* module_path);   // "mypackage.utils" -> path
 
 // Merge pure Aether module functions into the main program AST.
