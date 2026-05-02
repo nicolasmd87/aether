@@ -107,6 +107,15 @@ static char g_with_caps[128] = "";
 static bool g_emit_exe = true;
 static bool g_emit_lib = false;
 
+// --coverage: when set, build_gcc_cmd appends `--coverage` to the gcc
+// invocation so the resulting binary writes .gcda files when run, and
+// .gcno files sit next to the .o. Pairs with `make ci-coverage` and
+// the gcov-driven report under build/coverage/. The flag also forces
+// the user-program build into -O0 -g (matching the COV_FLAGS pattern
+// in the Makefile) so gcov line numbers don't get scrambled by
+// optimisation.
+static bool g_coverage = false;
+
 // Build an aetherc command string with optional --lib flag
 static void build_aetherc_cmd(char* cmd, size_t cmd_size, const char* input, const char* output) {
     const char* emit_flag = "";
@@ -1422,6 +1431,17 @@ static int get_extra_sources_for_bin(const char* ae_file, char* out, size_t out_
 
 // --------------------------------------------------------------------------
 // Build GCC/MinGW command for linking an Aether-compiled C file
+// Optimisation-and-instrumentation flag fragment for the gcc invocation.
+// `optimize` picks -O2 vs -O0 -g; `g_coverage` overrides to -O0 -g and
+// adds --coverage (gcc shorthand for -fprofile-arcs -ftest-coverage at
+// compile + -lgcov at link). -O0 is load-bearing for coverage: at -O2
+// gcc inlines / merges blocks, and the .gcov line attribution gets
+// scrambled (a hit on line 7 might show up on line 9).
+static const char* opt_flags(bool optimize) {
+    if (g_coverage) return "-O0 -g --coverage";
+    return optimize ? "-O2" : "-O0 -g";
+}
+
 static void build_gcc_cmd(char* cmd, size_t size,
                           const char* c_file, const char* out_file,
                           bool optimize, const char* extra_files) {
@@ -1465,9 +1485,9 @@ static void build_gcc_cmd(char* cmd, size_t size,
 #endif
     char opt[600];
     if (user_cflags[0])
-        snprintf(opt, sizeof(opt), "-static %s %s", optimize ? "-O2" : "-O0 -g", user_cflags);
+        snprintf(opt, sizeof(opt), "-static %s %s", opt_flags(optimize), user_cflags);
     else
-        snprintf(opt, sizeof(opt), "-static %s", optimize ? "-O2" : "-O0 -g");
+        snprintf(opt, sizeof(opt), "-static %s", opt_flags(optimize));
     const char* win_link_libs = "-lws2_32 -lcrypt32 -lgdi32 -luser32 -ladvapi32 -lbcrypt";
     char lib_dir[1024];
     if (tc.has_lib) {
@@ -1516,10 +1536,15 @@ static void build_gcc_cmd(char* cmd, size_t size,
     // helper — the caller should invoke it twice with different modes,
     // or a future refactor can produce both artifacts in one gcc call.
     const char* emit_lib_flags = (g_emit_lib && !g_emit_exe) ? "-fPIC -shared " : "";
+    // Coverage builds skip -pipe — gcov works fine with it, but it
+    // adds nothing when -O0 -g is already forced. Keeping the flag
+    // string short helps the cmd-buffer size budget.
+    const char* base_opt = g_coverage ? opt_flags(optimize)
+                          : (optimize ? "-O2 -pipe" : "-O0 -g -pipe");
     if (user_cflags[0])
-        snprintf(opt, sizeof(opt), "%s%s %s", emit_lib_flags, optimize ? "-O2 -pipe" : "-O0 -g -pipe", user_cflags);
+        snprintf(opt, sizeof(opt), "%s%s %s", emit_lib_flags, base_opt, user_cflags);
     else
-        snprintf(opt, sizeof(opt), "%s%s", emit_lib_flags, optimize ? "-O2 -pipe" : "-O0 -g -pipe");
+        snprintf(opt, sizeof(opt), "%s%s", emit_lib_flags, base_opt);
 
     // Append aether_config.c to the compile when building a lib so the
     // aether_config_* accessors are bundled into the .so. The .c file
@@ -3526,6 +3551,8 @@ static int cmd_build(int argc, char** argv) {
     // Reset emit mode to the default (exe-only) for this build.
     g_emit_exe = true;
     g_emit_lib = false;
+    // Reset coverage flag — `ae build --coverage` enables it per-build.
+    g_coverage = false;
 
     for (int i = 0; i < argc; i++) {
         if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
@@ -3546,6 +3573,15 @@ static int cmd_build(int argc, char** argv) {
             // happen there to keep the single source of truth.
             strncpy(g_with_caps, argv[i] + 7, sizeof(g_with_caps) - 1);
             g_with_caps[sizeof(g_with_caps) - 1] = '\0';
+        } else if (strcmp(argv[i], "--coverage") == 0) {
+            // Inject `--coverage` into the gcc invocation so the binary
+            // emits .gcda files at runtime and .gcno files alongside .o
+            // at build time. The user/test runs the binary, then `gcov`
+            // walks the .gcda files and (thanks to PR #352's #line
+            // directives) produces .ae.gcov reports attributed back to
+            // .ae source. Forces -O0 -g — gcov line attribution is
+            // unreliable at -O2 because of inlining and block merging.
+            g_coverage = true;
         } else if (strncmp(argv[i], "--emit=", 7) == 0) {
             const char* val = argv[i] + 7;
             if (strcmp(val, "exe") == 0) {

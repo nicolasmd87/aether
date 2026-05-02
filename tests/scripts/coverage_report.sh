@@ -41,13 +41,24 @@ mkdir -p "$OUT_DIR"
 # in $OUT_DIR via an explicit move at the end.
 cd "$ROOT"
 
-# Collect all .gcda files. gcov needs to be invoked with the .c (or .o)
-# whose .gcda we want — it auto-discovers the .gcno from the same dir.
-# The .gcda files live alongside the .o under build/cov-obj/ because
-# that's where the .gcno file gcc embedded its filename references to.
-gcda_count=$(find "$COV_OBJ_DIR" -name '*.gcda' 2>/dev/null | wc -l)
+# Collect all .gcda files. Two sources:
+#   1. build/cov-obj/  — the C-level test runner's stdlib + runtime
+#      + compiler instrumentation (built via `stdlib-cov` Makefile
+#      pattern with `gcc --coverage`).
+#   2. build/          — per-.ae-test program .gcda files written by
+#      `ae build --coverage` (the AE_BUILD_FLAGS env var injects the
+#      flag into every `make test-ae` per-test build). Each test
+#      program's .gcda sits next to its binary in build/.
+# gcov needs to be invoked one .gcda at a time because it dedupes
+# inputs across one command line.
+gcda_count=$(
+    {
+        find "$COV_OBJ_DIR" -name '*.gcda' 2>/dev/null
+        find build -maxdepth 1 -name '*.gcda' 2>/dev/null
+    } | wc -l
+)
 if [ "$gcda_count" -eq 0 ]; then
-    echo "  No .gcda files under $COV_OBJ_DIR — did the tests actually run?"
+    echo "  No .gcda files found — did the tests actually run?"
     exit 1
 fi
 
@@ -80,7 +91,12 @@ while IFS= read -r -d '' gcda; do
     obj_dir=$(dirname "$gcda")
     base=$(basename "$gcda" .gcda)
     gcov -p -b -c -o "$obj_dir" "$base" >>/tmp/coverage_gcov.log 2>&1 || true
-done < <(find "$COV_OBJ_DIR" -name '*.gcda' -print0)
+done < <(
+    {
+        find "$COV_OBJ_DIR" -name '*.gcda' -print0 2>/dev/null
+        find build -maxdepth 1 -name '*.gcda' -print0 2>/dev/null
+    }
+)
 
 # Move all generated .gcov files into the OUT_DIR so they don't
 # litter the repo root.

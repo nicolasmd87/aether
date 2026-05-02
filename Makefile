@@ -312,7 +312,7 @@ test-valgrind: compiler stdlib-dbg
 # Not part of `make ci` — coverage rebuild is slow and the test data
 # only becomes useful when read by a human. Run on demand.
 # -----------------------------------------------------------------
-ci-coverage: compiler stdlib-cov
+ci-coverage: compiler ae stdlib-cov
 	@echo "==================================="
 	@echo "  Building coverage-instrumented test runner"
 	@echo "==================================="
@@ -322,15 +322,25 @@ ci-coverage: compiler stdlib-cov
 		-o build/test_runner_cov$(EXE_EXT) $(LDFLAGS)
 	@echo ""
 	@echo "==================================="
-	@echo "  Running tests with coverage counters"
+	@echo "  [1/2] Running C-level tests with coverage counters"
 	@echo "==================================="
 	@./build/test_runner_cov$(EXE_EXT) || true
+	@echo ""
+	@echo "==================================="
+	@echo "  [2/2] Running .ae regression tests with coverage counters"
+	@echo "==================================="
+	@# Forward --coverage to every per-test `ae build` invocation
+	@# via the AE_BUILD_FLAGS env var. The test runner picks it up
+	@# in the recipe-generated run_test.sh script.
+	@AE_BUILD_FLAGS=--coverage $(MAKE) --no-print-directory test-ae || true
 	@echo ""
 	@bash tests/scripts/coverage_report.sh
 
 ci-coverage-clean:
 	@echo "Cleaning coverage data..."
 	@find build/cov-obj -name '*.gcda' -delete 2>/dev/null || true
+	@find build -maxdepth 2 -name '*.gcda' -delete 2>/dev/null || true
+	@find build -maxdepth 2 -name '*.gcno' -delete 2>/dev/null || true
 	@$(RM) -r build/coverage 2>/dev/null || true
 	@echo "✓ Coverage data cleaned (cov-obj/.gcno files retained for reuse)"
 
@@ -379,9 +389,9 @@ test-ae: compiler ae stdlib
 	printf 'dir=$$(dirname "$$f")\n'                                                                >> "$$script"; \
 	printf 'base=$$(basename "$$f")\n'                                                              >> "$$script"; \
 	printf 'if [ -d "$$dir/lib" ]; then\n'                                                          >> "$$script"; \
-	printf '  cmd="cd $$dir && $$root/build/ae build $$base -o $$root/build/test_$$name"\n'         >> "$$script"; \
+	printf '  cmd="cd $$dir && $$root/build/ae build $$base $${AE_BUILD_FLAGS:-} -o $$root/build/test_$$name"\n' >> "$$script"; \
 	printf 'else\n'                                                                                 >> "$$script"; \
-	printf '  cmd="$$root/build/ae build $$f -o $$root/build/test_$$name"\n'                        >> "$$script"; \
+	printf '  cmd="$$root/build/ae build $$f $${AE_BUILD_FLAGS:-} -o $$root/build/test_$$name"\n'   >> "$$script"; \
 	printf 'fi\n'                                                                                   >> "$$script"; \
 	printf 'if eval "$$cmd" 2>"$$tmpdir/build_$$name.err"; then\n'                                  >> "$$script"; \
 	printf '  "$$root/build/test_$$name" >"$$tmpdir/run_$$name.out" 2>"$$tmpdir/run_$$name.err"\n'  >> "$$script"; \

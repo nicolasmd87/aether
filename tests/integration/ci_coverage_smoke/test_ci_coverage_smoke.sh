@@ -11,8 +11,9 @@
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 AETHERC="$ROOT/build/aetherc"
+AE="$ROOT/build/ae"
 
-if [ ! -x "$AETHERC" ]; then
+if [ ! -x "$AETHERC" ] || [ ! -x "$AE" ]; then
     echo "  [SKIP] ci_coverage_smoke: toolchain not built"
     exit 0
 fi
@@ -110,6 +111,42 @@ fi
 if ! grep -qE '^[ ]*#####[ ]*:[ ]*8:' "$ae_gcov"; then
     echo "  [FAIL] ci_coverage_smoke: line 8 (unreached else) not flagged as ##### in .ae.gcov"
     grep ':[[:space:]]*[78]:' "$ae_gcov"
+    exit 1
+fi
+
+# Second check: `ae build --coverage` end-to-end. Verifies the
+# user-facing flag actually reaches the gcc invocation and produces
+# .gcda + .ae.gcov, not just the dev-aetherc + manual gcc path
+# above.
+ae_demo_dir="$tmpdir/ae_build_demo"
+mkdir -p "$ae_demo_dir"
+cat > "$ae_demo_dir/demo.ae" <<'AE'
+import std.string
+
+main() {
+    n = 42
+    if n == 42 {
+        println("ok")
+    } else {
+        println("nope")
+    }
+}
+AE
+
+if ! (cd "$ae_demo_dir" && "$AE" build demo.ae --coverage -o demo >"$tmpdir/ae_build.log" 2>&1); then
+    echo "  [FAIL] ci_coverage_smoke: 'ae build --coverage' failed"
+    cat "$tmpdir/ae_build.log"
+    exit 1
+fi
+
+if ! (cd "$ae_demo_dir" && ./demo >/dev/null 2>&1); then
+    echo "  [FAIL] ci_coverage_smoke: ae-built coverage binary failed at runtime"
+    exit 1
+fi
+
+if [ ! -f "$ae_demo_dir/demo.gcda" ]; then
+    echo "  [FAIL] ci_coverage_smoke: 'ae build --coverage' did not produce demo.gcda"
+    ls "$ae_demo_dir"
     exit 1
 fi
 
