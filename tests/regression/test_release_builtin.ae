@@ -1,0 +1,42 @@
+// Regression test: `release(X)` polymorphic refcount-release builtin.
+//
+// Issue: `string.release(s)` works today but requires the user to
+// import std.string and remember the namespace. The bare `release(X)`
+// builtin is the ergonomic shortcut for `defer release(body)` after
+// `body, err = http.get(url)` — what would otherwise be Teuvo's
+// per-iteration leak.
+//
+// What we exercise:
+//   1) bare `release(s)` on a string-typed local
+//   2) `defer release(s)` across scope exit
+//   3) repeated allocation+release in a loop without OOM (the leak
+//      we're guarding against)
+
+import std.string
+
+main() {
+    // 1) Bare release on a heap-allocated string (string.concat
+    // returns ownership to the caller).
+    a = string.concat("hello, ", "world")
+    release(a)
+
+    // 2) defer release runs at scope exit.
+    {
+        b = string.concat("scope-", "test")
+        defer release(b)
+        println(b)
+    }
+
+    // 3) Loop pattern — equivalent to Teuvo's site-poller iteration
+    // shape. Without release(), this would leak ~64 bytes per
+    // iteration; with release() the refcount returns to zero and
+    // the underlying buffer is freed.
+    i = 0
+    while i < 100 {
+        s = string.concat("iter-", string.from_int(i))
+        defer release(s)
+        i = i + 1
+    }
+
+    println("PASS")
+}

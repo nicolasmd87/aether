@@ -1,0 +1,106 @@
+// Site Poller — concurrent HTTP-polling actors using all four
+//
+//   1. No `core: N` placement hint — the scheduler's least-loaded
+//      scan distributes the two actors across cores automatically.
+//   2. `defer release(body)` after each http.get_with_timeout — the
+//      per-iteration response body is released at scope exit, so a
+//      long-running poller doesn't leak memory.
+//   3. `after m_interval_ms -> { … }` — interval pulled from actor
+//      state, not a hardcoded literal.
+//   4. `http.get_with_timeout(url, 2000)` — 2s per-call ceiling so
+//      a hung site can't stall the polling actor.
+//
+// This example doesn't make real network calls (CI machines vary in
+// their resolver behaviour and network access); the poller targets
+// `does-not-resolve.invalid` so the timeout/error path is what's
+// exercised. The structural pattern is what's worth lifting into
+// real code.
+//
+// Run: ae run examples/actors/site-poller.ae
+
+import std.http
+import std.string
+
+message Poll {}
+message Stop {}
+
+actor SitePollerOne {
+    state interval_ms = 100
+    state url         = "http://does-not-resolve.invalid/one"
+    state poll_count  = 0
+    state max_polls   = 2
+
+    receive {
+        Poll -> {
+            poll_count = poll_count + 1
+
+            body, err = http.get_with_timeout(url, 2000)
+            defer release(body)
+
+            if err != "" {
+                println("one poll ${poll_count}: ${err}")
+            } else {
+                println("one poll ${poll_count}: got ${string.length(body)} bytes")
+            }
+
+            if poll_count < max_polls {
+                self ! Poll {}
+            } else {
+                self ! Stop {}
+            }
+        }
+        Stop -> {
+            println("one done")
+        }
+    } after interval_ms -> {
+        self ! Poll {}
+    }
+}
+
+actor SitePollerTwo {
+    state interval_ms = 100
+    state url         = "http://does-not-resolve.invalid/two"
+    state poll_count  = 0
+    state max_polls   = 2
+
+    receive {
+        Poll -> {
+            poll_count = poll_count + 1
+
+            body, err = http.get_with_timeout(url, 2000)
+            defer release(body)
+
+            if err != "" {
+                println("two poll ${poll_count}: ${err}")
+            } else {
+                println("two poll ${poll_count}: got ${string.length(body)} bytes")
+            }
+
+            if poll_count < max_polls {
+                self ! Poll {}
+            } else {
+                self ! Stop {}
+            }
+        }
+        Stop -> {
+            println("two done")
+        }
+    } after interval_ms -> {
+        self ! Poll {}
+    }
+}
+
+main() {
+    println("=== site-poller ===")
+
+    // No `core:` hints. The scheduler's least-loaded scan picks
+    // different cores when capacity allows.
+    p1 = spawn(SitePollerOne())
+    p1 ! Poll {}
+
+    p2 = spawn(SitePollerTwo())
+    p2 ! Poll {}
+
+    wait_for_idle()
+    println("END")
+}

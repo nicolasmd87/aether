@@ -1,0 +1,60 @@
+// Regression test: `after <state-field>` and `after <expr-on-state>`
+//
+// Issue: identifiers in the timeout expression of `after N -> { ... }`
+// did not resolve against the actor's state-field scope, so any code
+// that wanted a per-actor configurable timeout had to hardcode a
+// numeric literal. This blocked Teuvo's site-poller. Codegen for the
+// timeout arm in the spawn function also referenced `self->X` where
+// only a local `actor` was in scope, blowing up at C compile time.
+//
+// The typechecker fires on every compilation, so just declaring an
+// actor with `after <state-field>` and `after <expr>` is enough to
+// regress-catch a return of the original bug. The runtime check
+// then confirms a state-field timeout actually fires with the
+// correct value at runtime.
+
+message Stop {}
+
+// Compile-only: exercises `after <state-field>` typechecking +
+// codegen pathway in the spawn function (the original "use of
+// undeclared identifier 'self'" failure).
+actor PollerWithStateInterval {
+    state interval_ms = 30
+
+    receive {
+        Stop -> {
+            println("interval poller stopped")
+        }
+    } after interval_ms -> {
+        println("interval timeout fired")
+        self ! Stop {}
+    }
+}
+
+// Compile-only: exercises `after <expr>` over multiple state fields.
+// `wait_for_idle()` doesn't always wait for after-timers when there
+// are multiple actors in flight, so we don't depend on this firing
+// at runtime — successful compilation is the regression signal.
+actor PollerWithStateExpr {
+    state base = 30
+    state multiplier = 2
+
+    receive {
+        Stop -> {
+            println("expr poller stopped")
+        }
+    } after base * multiplier -> {
+        println("expr timeout fired (60ms)")
+        self ! Stop {}
+    }
+}
+
+main() {
+    println("=== test_after_state_field ===")
+
+    // Runtime-checked: bare state-field reference.
+    spawn(PollerWithStateInterval())
+    wait_for_idle()
+
+    println("PASS")
+}

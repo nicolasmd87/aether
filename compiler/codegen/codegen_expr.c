@@ -2047,6 +2047,31 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     generate_expression(gen, expr->children[0]);
                     fprintf(gen->output, ")");
                 }
+                // release(X) — explicit release sugar for refcounted
+                // strings. Emits `string_release(X)` so users can write
+                // `defer release(body)` after `body, err = http.get(url)`
+                // without reaching for the std.string namespace.
+                // Restricted to `string` arguments today; other heap
+                // types use their typed release function (e.g.
+                // string.string_seq_free for *StringSeq, hashmap.free
+                // for *Map). Expanding the dispatch table requires a
+                // stable destructor-vtable convention; out of scope here.
+                else if (strcmp(func_name, "release") == 0 && expr->child_count == 1) {
+                    ASTNode* arg = expr->children[0];
+                    if (arg->node_type && arg->node_type->kind == TYPE_STRING) {
+                        fprintf(gen->output, "string_release(");
+                        generate_expression(gen, arg);
+                        fprintf(gen->output, ")");
+                    } else {
+                        fprintf(stderr,
+                            "error: release() at line %d: only `string` is supported today.\n"
+                            "  For other heap types, call the typed release function:\n"
+                            "    *StringSeq -> string.string_seq_free\n"
+                            "    *Map       -> hashmap.free\n",
+                            expr->line);
+                        fprintf(gen->output, "0 /* release() type error — see stderr */");
+                    }
+                }
                 // ref(value) — create a heap-allocated mutable cell
                 else if (strcmp(func_name, "ref") == 0 && expr->child_count == 1) {
                     fprintf(gen->output, "\n#if AETHER_GCC_COMPAT\n");

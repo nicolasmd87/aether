@@ -882,11 +882,12 @@ main() {
 
 **Client (Go-style):**
 - `http.get(url)` → `(string, string)` - HTTP GET, returns `(body, err)`
+- `http.get_with_timeout(url, timeout_ms)` → `(string, string)` - HTTP GET with a per-call timeout. `timeout_ms == 0` keeps `get`'s "block forever" default; positive values are rounded up to whole seconds (the underlying `SO_RCVTIMEO`/`SO_SNDTIMEO` storage is integer seconds). For any third-party URL — without a timeout, a hung site stalls the calling actor's whole message handler.
 - `http.post(url, body, content_type)` → `(string, string)` - HTTP POST
 - `http.put(url, body, content_type)` → `(string, string)` - HTTP PUT
 - `http.delete(url)` → `(string, string)` - HTTP DELETE
 
-All four wrappers auto-free the underlying response and return an error string for transport failures or non-2xx status codes. Raw externs: `http_get_raw`, `http_post_raw`, `http_put_raw`, `http_delete_raw`.
+All wrappers auto-free the underlying response and return an error string for transport failures or non-2xx status codes. Raw externs: `http_get_raw`, `http_get_with_timeout_raw`, `http_post_raw`, `http_put_raw`, `http_delete_raw`.
 
 **Response accessors (used with raw externs):**
 - `http.response_status(response)` - Read HTTP status code (0 on transport failure)
@@ -1411,6 +1412,45 @@ Raw externs: `io_read_file_raw`, `io_write_file_raw`, `io_append_file_raw`, `io_
 - `spawn(ActorName())` - Create actor instance
 - `wait_for_idle()` - Block until all actors finish
 - `sleep(milliseconds)` - Pause execution
+- `release(s)` - Decrement an AetherString's refcount and free if it reaches zero. Sugar for `string.release(s)` — argument must be `string`-typed (other heap types call their typed release, e.g. `string.string_seq_free`). Pair with `defer` to undo allocations made by stdlib functions returning ownership: `body, err = http.get(url); defer release(body)`.
+
+---
+
+## Memory
+
+### Arena allocator (`std.arena`)
+
+A bulk allocator for short-lived raw buffers. The arena hands out memory via `arena.alloc()` but cannot free individual allocations — call `arena.reset()` to drop everything in one shot, or `arena.destroy()` to return the underlying memory to the OS.
+
+The headline use case is a polling loop or parsing pass that allocates many scratch buffers per iteration:
+
+```aether
+import std.arena
+
+main() {
+    a = arena.create(0)              // 0 = default 1 MiB block
+    defer arena.destroy(a)
+
+    iter = 0
+    while iter < 1000 {
+        arena.reset(a)               // O(1) bulk free of last iter
+        scratch = arena.alloc(a, 4096)
+        // ... use scratch for parsing, formatting, IO buffer, etc.
+        iter = iter + 1
+    }
+}
+```
+
+**Functions:**
+- `arena.create(size)` → `ptr` - Allocate an arena with the given block size in bytes (`0` = default 1 MiB). Overflow blocks chain on demand. NULL on OOM.
+- `arena.alloc(arena, bytes)` → `ptr` - Allocate `bytes` (8-byte aligned). Memory is uninitialized. NULL on OOM or null arena.
+- `arena.alloc_aligned(arena, bytes, alignment)` → `ptr` - Same as `alloc` with explicit alignment (must be a power of 2).
+- `arena.reset(arena)` - Free every allocation in one shot. Pointers become invalid.
+- `arena.destroy(arena)` - Free the arena and its memory.
+- `arena.used(arena)` → `int` - Bytes currently allocated (sum across overflow blocks).
+- `arena.size(arena)` → `int` - Total capacity (sum across overflow blocks).
+
+Arenas don't track AetherString refcounts — strings allocated through the regular stdlib still need `release()` (or `defer release(...)`); the arena is for bulk raw allocations that the user controls themselves. Avoid handing arena-allocated pointers to functions that retain them past the next `arena.reset()` or `arena.destroy()`.
 
 ---
 
