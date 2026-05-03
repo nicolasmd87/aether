@@ -199,7 +199,14 @@ typedef struct {
     int   present;  /* 0 = slot wiped (defaults), 1 = set */
 } AetherCallerInfo;
 
-static AETHER_TLS AetherCallerInfo tls_caller = { .identity_off = -1 };
+/* AETHER_TLS_SHARED rather than AETHER_TLS: aether_host.o is pulled
+ * into both the main `ae` executable AND every `--emit=lib` .so
+ * (because the .so calls notify() / manifest builders). The default
+ * Initial-Exec TLS model emits R_X86_64_TPOFF32 relocations that
+ * the linker rejects when building a shared object; the
+ * Global-Dynamic model in AETHER_TLS_SHARED works in both contexts
+ * with a sub-nanosecond extra GOT indirection per access. */
+static AETHER_TLS_SHARED AetherCallerInfo tls_caller = { .identity_off = -1 };
 
 /* Append a NUL-terminated copy of `s` to the arena. Returns the
  * starting offset on success, or -1 if there isn't room. */

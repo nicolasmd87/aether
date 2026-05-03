@@ -136,8 +136,8 @@ void aether_fire_death_hook(int actor_id, const char* reason);
 // TLS: 1 while executing inside a scheduler-wrapped step, 0 otherwise.
 // Signal handlers check this before deciding whether to recover or let
 // the signal propagate with SIG_DFL.
-extern AETHER_TLS int g_aether_in_actor_step;
-extern AETHER_TLS int g_aether_current_actor_id;
+extern AETHER_TLS_SHARED int g_aether_in_actor_step;
+extern AETHER_TLS_SHARED int g_aether_current_actor_id;
 
 #ifdef __cplusplus
 }

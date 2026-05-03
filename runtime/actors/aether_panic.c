@@ -46,10 +46,17 @@ typedef struct {
     int depth;  // number of frames currently live; innermost is frames[depth-1]
 } AetherJmpStack;
 
-static AETHER_TLS AetherJmpStack tls_stack = { .depth = 0 };
+/* AETHER_TLS_SHARED rather than AETHER_TLS: aether_panic.o is
+ * pulled into both the main `ae` executable AND `--emit=lib` .so
+ * outputs (codegen emits aether_panic_capture_stack + aether_panic
+ * at every user `panic("...")` call site). Initial-Exec TLS
+ * relocations don't work inside shared objects; Global-Dynamic
+ * works in both contexts with a tiny GOT-indirection overhead.
+ * See AETHER_TLS_SHARED in runtime/utils/aether_compiler.h. */
+static AETHER_TLS_SHARED AetherJmpStack tls_stack = { .depth = 0 };
 
-AETHER_TLS int g_aether_in_actor_step = 0;
-AETHER_TLS int g_aether_current_actor_id = -1;
+AETHER_TLS_SHARED int g_aether_in_actor_step = 0;
+AETHER_TLS_SHARED int g_aether_current_actor_id = -1;
 
 static AetherDeathHook death_hook = NULL;
 
@@ -111,8 +118,8 @@ int aether_try_depth(void) {
 // tail-call + noreturn collapse the caller frame, and backtrace()
 // inside aether_panic alone walks an already-truncated stack.
 #define AETHER_PANIC_TRACE_MAX 64
-static AETHER_TLS void* tls_panic_trace[AETHER_PANIC_TRACE_MAX];
-static AETHER_TLS int   tls_panic_trace_n = 0;
+static AETHER_TLS_SHARED void* tls_panic_trace[AETHER_PANIC_TRACE_MAX];
+static AETHER_TLS_SHARED int   tls_panic_trace_n = 0;
 
 void aether_panic_capture_stack(void) {
     tls_panic_trace_n = backtrace(tls_panic_trace, AETHER_PANIC_TRACE_MAX);
@@ -274,9 +281,9 @@ static void aether_print_stack_trace_to_stderr(void) {
 // fallback printer — so the rest of the panic plumbing is identical.
 
 #define AETHER_PANIC_TRACE_MAX 64
-static AETHER_TLS PVOID tls_panic_trace[AETHER_PANIC_TRACE_MAX];
-static AETHER_TLS USHORT tls_panic_trace_n = 0;
-static AETHER_TLS int tls_panic_sym_initialised = 0;
+static AETHER_TLS_SHARED PVOID tls_panic_trace[AETHER_PANIC_TRACE_MAX];
+static AETHER_TLS_SHARED USHORT tls_panic_trace_n = 0;
+static AETHER_TLS_SHARED int tls_panic_sym_initialised = 0;
 
 void aether_panic_capture_stack(void) {
     // Skip 1 frame (this function itself); the next frame is the
