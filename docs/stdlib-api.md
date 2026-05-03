@@ -292,6 +292,47 @@ Raw externs: `io_read_file_raw`, `io_write_file_raw`, `io_append_file_raw`, `io_
 - `os.exec(cmd)` → `(string, string)` — Run a command and capture stdout; returns `(output, err)` tuple
 - `os.getenv(name)` → `string` — Read environment variable; returns null if unset
 
+The shell-execution path passes `cmd` to `/bin/sh -c` (`cmd.exe /c` on Windows), which means quoting, glob expansion, and `$VAR` interpolation all happen before the child sees the string. **Prefer `os.run_capture` (below)** for any input that touches user data — it skips the shell entirely and is binary-safe.
+
+### Process spawn (argv-based, no shell)
+
+The argv-based path is the recommended way to launch a child binary. Argv is passed as a list of strings, no shell sits in the middle, paths with spaces / quotes / `$`-signs are safe, and there's no command-injection surface for user-provided values.
+
+- `os.run(prog, argv, env)` → `int` — Spawn `prog`, wait for it to finish, return the exit code. `argv` is a `list<ptr>` of C strings (element 0 is conventionally the program name; the OS sees this as `argv[0]` for the child). `env` is the same shape, or `null` to inherit. `prog` is looked up on `PATH` if it does not contain a slash.
+
+- `os.run_capture(prog, argv, env)` → `(stdout: string, exit_code: int, stderr: string)` — Same as `os.run`, but captures the child's stdout and stderr. The child's three outputs come back as a single tuple. The `exit_code` slot lets callers distinguish "ran cleanly" (`exit_code == 0`) from "ran but exited non-zero" — important for tools like `diff3 -m` (returns 1 on conflicts), `grep` (returns 1 on no-match), or `gcc` (returns non-zero on compile errors), where non-zero is meaningful information rather than a hard failure.
+
+Raw externs (rarely needed directly; the wrappers above are idiomatic):
+
+- `os_run(prog, argv, env)` → `int` — Same as `os.run`.
+- `os_run_capture_raw(prog, argv, env)` → `string` — Captures stdout only; exit code is discarded. Use `os.run_capture` instead unless the exit code is genuinely irrelevant.
+- `os_run_capture_status_raw(prog, argv, env)` → `(string, int, string)` — The tuple-returning extern that `os.run_capture` wraps.
+
+Worked example:
+
+```aether
+import std.os
+import std.list
+
+main() {
+    argv = list.new()
+    _ = list.add(argv, "git")
+    _ = list.add(argv, "rev-parse")
+    _ = list.add(argv, "HEAD")
+
+    stdout, exit_code, stderr = os.run_capture("git", argv, null)
+    if exit_code != 0 {
+        println("git failed (${exit_code}): ${stderr}")
+        return
+    }
+    println("HEAD is ${stdout}")
+}
+```
+
+**Capabilities and Windows portability:** `os.run` / `os.run_capture` require the `--with=os` capability when building with `--emit=lib` (capability-empty by default). Windows MSYS2 / mingw-w64 currently uses POSIX-fallback shims; a native `CreateProcessW` backend is tracked separately. The function signatures and return shapes are stable across the current Windows fallback and the future native backend.
+
+**Synchronous, no streaming.** The current API blocks until the child exits and returns the entire captured stdout / stderr. There is no streaming-stdin or incremental-stdout-read path today; if you need to feed input to a child, write your input to a temp file and have the child read from there, or pipe through a shell wrapper.
+
 ### Argv discovery
 
 - `aether_args_count()` → `int` — Number of command-line arguments
@@ -305,7 +346,7 @@ Typical use: a tool that needs to find its own binary (to locate sibling helpers
 
 - `os_execv(prog, argv_list)` → `int` — Replace the current process image with `prog`, passing an explicit argv list. `argv_list` is a `list<ptr>` of C strings (element 0 is argv[0] for the new program). On success this call **never returns**; on failure it returns `-1` and the current process keeps running. `prog` is looked up on `PATH` if it does not contain a slash. Not available on Windows — returns `-1`.
 
-Paired with `os_run` / `os_run_capture` (see PR #148), this gives Aether programs a full argv-based process-launch surface with no shell in the middle, so paths with spaces, quotes, or `$`-signs are safe. Stdio is flushed before the exec, so pre-exec diagnostics are not lost.
+Paired with `os.run` / `os.run_capture` (see [Process spawn](#process-spawn-argv-based-no-shell) above), this gives Aether programs a full argv-based process-launch surface with no shell in the middle, so paths with spaces, quotes, or `$`-signs are safe. Stdio is flushed before the exec, so pre-exec diagnostics are not lost.
 
 Example:
 

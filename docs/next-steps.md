@@ -31,7 +31,13 @@ for the common "did it fail?" case.
 Missing primitives that keep biting real users when they try to write
 tool-style Aether programs. Ordered by impact.
 
-### P1 — `os.run` / `os.run_capture` (argv-based process execution)
+### ~~P1~~ — `os.run` / `os.run_capture` (argv-based process execution) — **SHIPPED**
+
+> **Status: shipped (PR #148, exit-code tuple in #289).** See
+> [Process spawn (argv-based, no shell)](stdlib-api.md#process-spawn-argv-based-no-shell)
+> in the stdlib reference for current signatures and a worked example.
+> Section retained below for the original rationale; rationale-as-roadmap
+> rather than as a to-do.
 
 `os.system` and `os.exec` both take a single command string and hand it
 to `/bin/sh -c` (or `cmd.exe /c` on Windows). That works for trivial
@@ -44,19 +50,19 @@ The fix is a pair of argv-based APIs that bypass the shell entirely:
 
 ```aether
 // Just exit code
-code, err = os.run(["git", "clone", repo_url, target_dir])
+code = os.run(prog, argv, env)
 
 // Exit code + stdout + stderr
-code, stdout, stderr, err = os.run_capture(["ls", "-la", path_with_spaces])
+stdout, exit_code, stderr = os.run_capture(prog, argv, env)
 ```
 
 **Implementation:**
 - POSIX: `fork()` + `execvp()` + `waitpid()`. `run_capture` uses `pipe()` + non-blocking drain.
-- Windows: `CreateProcessW()` with a properly escaped command-line buffer (`CommandLineToArgvW` rules), or the `lpApplicationName` form for the no-escape path. Capture variant uses `CreatePipe()` with inherited handles.
-- `argv` accepts an Aether `list` or array of strings; no shell involved.
+- Windows: currently uses POSIX-fallback shims; native `CreateProcessW()` backend tracked separately.
+- `argv` is a `list<ptr>` of strings; no shell involved.
 
-Keep `os.system` and `os.exec` for the shell-required cases (pipe-to-grep,
-redirection, etc.) but make `os.run` the recommended default.
+`os.system` and `os.exec` remain for the shell-required cases (pipe-to-grep,
+redirection, etc.); `os.run` / `os.run_capture` are the recommended defaults.
 
 ### P2 — `fs_glob` Windows port to `FindFirstFileW`
 
@@ -70,7 +76,13 @@ and a recursive `dirent.h` walker. Needs:
 - Dot-prefix filtering consistent with POSIX (hidden files excluded by
   default, matches `..` correctly)
 
-### P3 — `aether.argv0` builtin + `os.execv` wrapper
+### ~~P3~~ — `aether.argv0` builtin + `os.execv` wrapper — **SHIPPED**
+
+> **Status: shipped.** Surfaces are `os.argv0()` (and `aether_argv0()`
+> for null-discriminating callers) and `os_execv(prog, argv_list)`.
+> See [Argv discovery](stdlib-api.md#argv-discovery) and
+> [Process replacement](stdlib-api.md#process-replacement) in the
+> stdlib reference. Section retained below for the original rationale.
 
 Two small additions that unblock "re-exec self with different args"
 and "know where the binary lives" patterns common in CLI tools:

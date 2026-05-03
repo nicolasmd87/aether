@@ -141,6 +141,14 @@ plays that role), no interfaces.
   as `ptr`, Aether sees only the leading bytes up to the first
   NUL. This is why `fs.read_binary` has a paired `_length()`
   accessor, not a single-return.
+- **Spawning a child binary uses `std.os`, not a separate process
+  module.** `os.run_capture(prog, argv, env) -> (stdout: string,
+  exit_code: int, stderr: string)` is the canonical "fork + exec +
+  wait + capture" — argv-based, no shell, binary-safe. Sibling
+  externs: `os_run` (no capture, just exit code), `os_system`
+  (legacy `system(3)` shell-out, prefer `run_capture`),
+  `os_execv` (replace current process). Don't propose a new
+  `std.process` — the surface is already there.
 
 ## Working with downstream users
 
