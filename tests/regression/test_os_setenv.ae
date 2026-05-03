@@ -1,0 +1,35 @@
+// Regression test: std.os surfaces setenv/unsetenv (issue #342).
+//
+// The C-side functions live in std.io for legacy reasons; std.os
+// re-exposes them so users reaching for `os.setenv` (alongside
+// `os.getenv`) find them where POSIX groups them.
+
+import std.os
+
+main() {
+    err = os.setenv("AE_REGRESSION_342", "found")
+    if err != "" {
+        println("FAIL setenv: ${err}")
+        return
+    }
+
+    val = os.getenv("AE_REGRESSION_342")
+    if val != "found" {
+        println("FAIL: getenv returned wrong value")
+        return
+    }
+
+    err2 = os.unsetenv("AE_REGRESSION_342")
+    if err2 != "" {
+        println("FAIL unsetenv: ${err2}")
+        return
+    }
+
+    val2 = os.getenv("AE_REGRESSION_342")
+    if val2 != null {
+        println("FAIL: variable still set after unsetenv")
+        return
+    }
+
+    println("PASS")
+}

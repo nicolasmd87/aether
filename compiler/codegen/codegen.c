@@ -1769,11 +1769,19 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
             fprintf(gen->output, "static ");
         }
 
-        // Determine return type
+        // Determine return type. Mirrors generate_function_definition's
+        // logic so the forward declaration and body always agree:
+        //   - unannotated + has return-with-value → int (legacy default)
+        //   - unannotated + no return-with-value  → void (issue #354)
         Type* ret_type = child->node_type;
         int func_has_return = has_return_value(child);
-        if ((!ret_type || ret_type->kind == TYPE_VOID || ret_type->kind == TYPE_UNKNOWN) && func_has_return) {
+        int ret_unannotated = (!ret_type
+                               || ret_type->kind == TYPE_VOID
+                               || ret_type->kind == TYPE_UNKNOWN);
+        if (ret_unannotated && func_has_return) {
             fprintf(gen->output, "int");
+        } else if (ret_unannotated) {
+            fprintf(gen->output, "void");
         } else {
             generate_type(gen, ret_type);
         }

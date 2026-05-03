@@ -1,0 +1,40 @@
+// Regression test: functions without an explicit return type and
+// without any `return <value>` should compile to a `void` C function,
+// not an `int` one — otherwise the C compiler emits
+//   "warning: non-void function does not return a value [-Wreturn-type]"
+// (issue #354).
+
+// Pure side-effect, no return value, no return type annotation.
+// Pre-#354 fix this codegen'd as `int wait_for_next_round(...) { ... }`
+// with no return statement, triggering the C-side warning.
+wait_a_bit(ms) {
+    if ms > 0 {
+        sleep(ms)
+    }
+}
+
+// Empty body — same shape, no implicit return.
+do_nothing() {
+}
+
+// Calls another void-inferred function inline.
+both() {
+    wait_a_bit(0)
+    do_nothing()
+}
+
+// Functions that DO return values stay as int (legacy default).
+add(a, b) {
+    return a + b
+}
+
+main() {
+    wait_a_bit(0)
+    do_nothing()
+    both()
+    if add(2, 3) != 5 {
+        println("FAIL: add")
+        return
+    }
+    println("PASS")
+}

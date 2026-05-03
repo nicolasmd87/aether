@@ -1239,6 +1239,8 @@ main() {
 - `os.system(cmd)` - Run shell command, returns exit code (0 = success, POSIX convention)
 - `os.exec(cmd)` → `(string, string)` - Run command and capture stdout, return `(output, err)`
 - `os.getenv(name)` - Get environment variable (returns string, or null if not set — infallible)
+- `os.setenv(name, value)` → `string` - Set environment variable, returns "" on success or an error string. Same C-side function as `io.setenv` — use `os.setenv` when you've already imported `std.os` for `os.getenv`.
+- `os.unsetenv(name)` → `string` - Unset environment variable, returns "" on success or an error string. Same C-side function as `io.unsetenv`.
 - `os.getpid()` → `int` - Process identifier of the current process. POSIX `getpid(2)`; Windows `_getpid()`. Useful for tmpfile names (`/tmp/myprog.${os.getpid()}.tmp`), per-process locks, log prefixes, and stable tagging across forked children. Returns 0 on platforms compiled without filesystem support.
 - `os.now_utc_iso8601()` → `string` - Current UTC time as ISO-8601 (`YYYY-MM-DDThh:mm:ssZ`). Returns `""` (never null) on clock/format failure. Thread-safe.
 - `aether_args_count()` → `int` - Number of command-line arguments
