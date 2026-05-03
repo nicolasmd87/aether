@@ -1,0 +1,16 @@
+// Source for the #347 panic stack-trace integration test. Builds,
+// runs, and is expected to abort with a captured stack trace on stderr.
+// The shell driver test_panic_stack_trace.sh greps the stderr output
+// for the "Stack trace" header and the panic reason.
+
+inner_helper() {
+    panic("inner reason")
+}
+
+middle_helper() {
+    inner_helper()
+}
+
+main() {
+    middle_helper()
+}

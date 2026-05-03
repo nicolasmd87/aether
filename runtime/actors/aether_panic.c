@@ -6,6 +6,17 @@
 #include <string.h>
 #include <stddef.h>
 
+// Stack-trace capture: glibc and macOS provide backtrace() /
+// backtrace_symbols() in <execinfo.h> as part of libc proper — no
+// extra link dependency. musl and other libcs don't, and Windows
+// uses CaptureStackBackTrace + DbgHelp instead. Issue #347.
+#if (defined(__GLIBC__) || defined(__APPLE__)) && !defined(__EMSCRIPTEN__)
+  #define AETHER_STACK_TRACE_BACKTRACE 1
+  #include <execinfo.h>
+#else
+  #define AETHER_STACK_TRACE_BACKTRACE 0
+#endif
+
 // ---------------------------------------------------------------------------
 // Per-thread jmp frame stack
 // ---------------------------------------------------------------------------
@@ -52,6 +63,203 @@ int aether_try_depth(void) {
 }
 
 // ---------------------------------------------------------------------------
+// Stack-trace capture (issue #347)
+//
+// Captures the current call stack via backtrace() and prints a
+// filtered, pretty-printed version to stderr before the panic
+// fallback aborts. Pretty-printing is a small parser over the
+// platform-specific backtrace_symbols() format:
+//   - glibc: "binary(symbol+offset) [address]"
+//   - macOS: "<frame#>  binary  address  symbol + offset"
+// We isolate the symbol token, optionally strip a leading underscore
+// (Mach-O convention), and rewrite `aether_<a>_<b>_…` to
+// `<a>.<b>.…` so the dotted Aether name reads back at the user
+// (`aether_std_string_concat` → `std.string.concat`).
+//
+// On platforms without backtrace() (musl, Windows, freestanding,
+// wasm), the helper is a no-op stub — callers still get the panic
+// reason; they just don't get the trace. CaptureStackBackTrace +
+// DbgHelp on Windows is a separate follow-up.
+// ---------------------------------------------------------------------------
+
+#if AETHER_STACK_TRACE_BACKTRACE
+
+// Per-thread captured backtrace, populated by aether_panic_capture_stack()
+// at the codegen call site. Read by aether_panic's fallback printer.
+// Capturing at the call site (rather than from inside aether_panic
+// itself) is what gives us the user's caller frames under -O2 —
+// tail-call + noreturn collapse the caller frame, and backtrace()
+// inside aether_panic alone walks an already-truncated stack.
+#define AETHER_PANIC_TRACE_MAX 64
+static AETHER_TLS void* tls_panic_trace[AETHER_PANIC_TRACE_MAX];
+static AETHER_TLS int   tls_panic_trace_n = 0;
+
+void aether_panic_capture_stack(void) {
+    tls_panic_trace_n = backtrace(tls_panic_trace, AETHER_PANIC_TRACE_MAX);
+}
+
+// Locate the symbol name inside a backtrace_symbols() line. Returns
+// a pointer to the start of the symbol within `line`, plus its
+// length via `*out_len`. Returns NULL if no symbol could be parsed.
+//
+// Format families:
+//   - glibc ELF: "binary(symbol+0xOFFSET) [0xADDR]"
+//                 → symbol is between '(' and '+' (or ')' if no offset)
+//   - glibc-no-debug: "binary [0xADDR]"
+//                 → no symbol; return NULL
+//   - macOS Mach-O: "<n>   binary   0xADDR   symbol + offset"
+//                 → symbol is the 4th whitespace-separated field
+static const char* aether_locate_symbol(const char* line, size_t* out_len) {
+    if (!line || !out_len) return NULL;
+
+    // glibc-shape: look for '('
+    const char* lparen = strchr(line, '(');
+    if (lparen) {
+        const char* start = lparen + 1;
+        const char* end   = start;
+        while (*end && *end != '+' && *end != ')') end++;
+        if (end > start) {
+            *out_len = (size_t)(end - start);
+            return start;
+        }
+        // Empty parens (no symbol resolved) — fall through to other shapes.
+    }
+
+    // macOS-shape: skip 3 whitespace-separated fields (frame#, binary,
+    // address), then the next non-whitespace run is the symbol.
+    const char* p = line;
+    for (int field = 0; field < 3; field++) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) return NULL;
+        while (*p && *p != ' ' && *p != '\t') p++;
+    }
+    while (*p == ' ' || *p == '\t') p++;
+    if (!*p) return NULL;
+    const char* start = p;
+    while (*p && *p != ' ' && *p != '\t' && *p != '+') p++;
+    if (p > start) {
+        *out_len = (size_t)(p - start);
+        return start;
+    }
+
+    return NULL;
+}
+
+// Pretty-print one symbol token. Writes to `out` (capacity `out_cap`,
+// always NUL-terminated). The token may include a `+offset` suffix
+// from the backtrace_symbols formatter; we drop it.
+static void aether_pretty_symbol(const char* line, char* out, size_t out_cap) {
+    if (!line || !out || out_cap == 0) return;
+    out[0] = '\0';
+
+    size_t slen = 0;
+    const char* sym = aether_locate_symbol(line, &slen);
+    if (!sym || slen == 0) return;
+
+    // Skip leading underscore (Mach-O convention on macOS).
+    if (sym[0] == '_' && slen > 1) {
+        sym++;
+        slen--;
+    }
+
+    // Match the `aether_` prefix exactly (not `aether` substring) so
+    // we only rewrite codegen'd stdlib symbols and don't molest user
+    // identifiers that happen to contain the substring.
+    int is_aether = (slen > 7 && strncmp(sym, "aether_", 7) == 0);
+    const char* body = is_aether ? sym + 7 : sym;
+    size_t      blen = is_aether ? slen - 7 : slen;
+
+    size_t pos = 0;
+    for (size_t i = 0; i < blen && pos + 1 < out_cap; i++) {
+        char c = body[i];
+        // Inside aether_-prefixed symbols, underscores are namespace
+        // separators — render them as dots. User-code symbols pass
+        // through verbatim so that local snake_case names stay
+        // recognisable in the trace.
+        if (is_aether && c == '_') c = '.';
+        out[pos++] = c;
+    }
+    out[pos] = '\0';
+}
+
+// Print up to `frames_to_capture` frames to stderr. Filters out the
+// top-of-stack panic plumbing (this function + aether_panic itself)
+// so the first frame the user sees is the one that called panic().
+//
+// Prefers the codegen-captured TLS trace when present (the codegen
+// runs aether_panic_capture_stack() before the noreturn aether_panic
+// call so the caller frames survive -O2 tail-calls). Falls back to
+// a fresh backtrace() for callers that didn't capture (contract
+// violations, signal-converted panics, runtime self-checks).
+static void aether_print_stack_trace_to_stderr(void) {
+    enum { MAX_FRAMES = AETHER_PANIC_TRACE_MAX };
+    void*  raw_frames[MAX_FRAMES];
+    void** frames;
+    int    n;
+
+    if (tls_panic_trace_n > 0) {
+        frames = tls_panic_trace;
+        n      = tls_panic_trace_n;
+    } else {
+        n = backtrace(raw_frames, MAX_FRAMES);
+        if (n <= 0) return;
+        frames = raw_frames;
+    }
+
+    char** symbols = backtrace_symbols(frames, n);
+    if (!symbols) return;
+
+    fprintf(stderr, "\nStack trace (most recent call first):\n");
+
+    // Skip our own frames: aether_print_stack_trace_to_stderr +
+    // aether_panic. Search the symbol list rather than hardcoding
+    // the count, so inlining or LTO that fuses one of them away
+    // doesn't leave a hole.
+    int start = 0;
+    for (int i = 0; i < n && i < 4; i++) {
+        const char* s = symbols[i];
+        if (s && (strstr(s, "aether_panic") || strstr(s, "print_stack_trace"))) {
+            start = i + 1;
+        }
+    }
+
+    int printed = 0;
+    char pretty[256];
+    for (int i = start; i < n; i++) {
+        aether_pretty_symbol(symbols[i], pretty, sizeof(pretty));
+        // Drop libc / dyld startup frames — they aren't useful and
+        // their names vary by platform.
+        if (pretty[0] == '\0') continue;
+        if (strcmp(pretty, "start")              == 0) break;
+        if (strcmp(pretty, "_start")             == 0) break;
+        if (strcmp(pretty, "__libc_start_main")  == 0) break;
+        if (strcmp(pretty, "__libc_start_call_main") == 0) break;
+
+        fprintf(stderr, "  %d: %s\n", printed, pretty);
+        printed++;
+
+        // Stop on main; everything below is libc/runtime startup.
+        if (strcmp(pretty, "main") == 0) break;
+    }
+
+    free(symbols);
+}
+
+#else  // !AETHER_STACK_TRACE_BACKTRACE
+
+void aether_panic_capture_stack(void) {
+    // No-op on platforms without execinfo.h (musl, Windows, wasm,
+    // freestanding). Tracing is best-effort diagnostic info — the
+    // panic path itself still works.
+}
+
+static void aether_print_stack_trace_to_stderr(void) {
+    // Nothing captured, nothing to print.
+}
+
+#endif
+
+// ---------------------------------------------------------------------------
 // Panic entry point
 // ---------------------------------------------------------------------------
 
@@ -65,11 +273,18 @@ void aether_panic(const char* reason) {
         // unreachable
     }
 
-    // No user-level try/catch. Print to stderr so the caller sees *something*
-    // even in the fallback path; then abort. In an actor context the
-    // scheduler's own frame will catch this before we get here — only
-    // non-actor threads with no frame reach the fallback.
+    // No user-level try/catch. Print the reason + a filtered stack
+    // trace to stderr so the caller sees the call path that led here,
+    // then abort. In an actor context the scheduler's own frame will
+    // catch this before we get here — only non-actor threads with no
+    // frame reach the fallback. Suppress the trace via
+    // AETHER_STACK_TRACE=0 if the noise gets in the way (e.g. tests
+    // that diff stderr line-for-line).
     fprintf(stderr, "aether: panic outside any try/catch or actor: %s\n", reason);
+    const char* trace_env = getenv("AETHER_STACK_TRACE");
+    if (!trace_env || strcmp(trace_env, "0") != 0) {
+        aether_print_stack_trace_to_stderr();
+    }
     abort();
 }
 
