@@ -71,6 +71,64 @@ Aeocha follows Aether's `_ctx` auto-injection convention (see
 | `aeocha.fail(fw, msg)` | Unconditional failure |
 | `aeocha.run_summary(fw)` | Print results, `exit(1)` on failure |
 
+### Integration-shape matchers (`expect_*`)
+
+Sit on top of the `assert_*` primitives above to absorb the bash-shaped "spawn / capture / awk-and-compare" idiom into a single Aether call. Use these when porting integration tests off shell scripts to pure Aether.
+
+**Process matchers** consume the `(stdout, exit, err)` triple from `os.run_capture(prog, argv, env)`. The triple is destructured at the binding site (Aether tuples don't pass around as a single value) and the matcher takes the relevant slot directly. The captured-stdout slot is conventionally named `out` (not `stdout`) at call sites to avoid the Windows MinGW `<stdio.h>` macro clash — see the Known limitations section below.
+
+| Function | Purpose |
+|----------|---------|
+| `aeocha.expect_exit(fw, exit_code, want, msg)` | Child exited with the expected status |
+| `aeocha.expect_no_spawn_error(fw, err, msg)` | Fork/exec itself succeeded (binary found, not denied by sandbox) |
+| `aeocha.expect_stdout_contains(fw, out, needle, msg)` | Substring of captured stdout |
+| `aeocha.expect_stdout_line_field(fw, out, prefix, n, want, msg)` | Find first line starting with `prefix`, split on space, compare field index `n` to `want`. Replaces `awk '/^Revision:/{print $2}'`-style assertions |
+| `aeocha.expect_stdout_line_count(fw, out, want, msg)` | Stdout has exactly `want` newline-separated lines (trailing-newline aware) |
+| `aeocha.expect_stdout_matches(fw, out, pattern, msg)` | At least one stdout line matches a glob pattern (`*`, `?`, `[abc]` per `std.string.glob_match`) |
+
+**HTTP matchers** consume the response handle returned by `http.get` / `http.post` / `client.send_request`. A single `resp: ptr` arg works for both v1 and v2 responses (same C struct underneath).
+
+| Function | Purpose |
+|----------|---------|
+| `aeocha.expect_http_status(fw, resp, want, msg)` | Response has the expected status code |
+| `aeocha.expect_http_no_error(fw, resp, msg)` | Transport succeeded (DNS, connect, TLS, timeout all OK). Distinct from "200 OK" — non-2xx is not a transport error |
+| `aeocha.expect_http_body_contains(fw, resp, needle, msg)` | Substring of response body |
+| `aeocha.expect_http_header(fw, resp, name, want, msg)` | Case-insensitive header equality |
+| `aeocha.expect_http_body_json_field(fw, resp, key, want, msg)` | Top-level JSON-string-field equality (`"key":"want"` substring match — sufficient for status / probe / smoke endpoints; reach for `std.json` directly for nesting or non-string values) |
+
+#### Worked example
+
+```aether
+import contrib.aeocha
+import std.os
+import std.list
+
+main() {
+    fw = aeocha.init()
+
+    // Spawn `git rev-parse HEAD` and check the output.
+    argv = list.new()
+    list.add(argv, "rev-parse")
+    list.add(argv, "HEAD")
+    out, exit_code, err = os.run_capture("/usr/bin/git", argv, null)
+    aeocha.expect_no_spawn_error(fw, err, "git found")
+    aeocha.expect_exit(fw, exit_code, 0, "git rev-parse cleanly")
+    aeocha.expect_stdout_matches(fw, out, "[0-9a-f]*", "looks like a sha")
+
+    aeocha.run_summary(fw)
+}
+```
+
+`os.run_capture` synthesises argv[0] from the prog string, so the list holds only the remaining args. See [docs/stdlib-api.md](../../docs/stdlib-api.md#process-spawn-argv-based-no-shell) for the full process-spawn surface.
+
+#### Known limitations
+
+- **Don't name a local variable `stdout` or `stderr` when calling these matchers on Windows MinGW.** `<stdio.h>` `#define`s `stdout` and `stderr` as preprocessor macros pointing at runtime stdio handles, so when Aether codegen lowers a local named `stdout` to C, MinGW rewrites it mid-declaration and the build fails. The matchers themselves use `out` for the param to dodge the clash; conventional call-site naming follows suit (`out, exit_code, err = os.run_capture(...)`). Linux GCC and Apple Clang allow the literal name through, but the consistent `out` convention is portable. This is a Windows quirk only — the underlying `os.run_capture` works fine on every platform.
+- **`expect_stderr_contains` / `expect_stderr_empty` are not yet shipped.** `os.run_capture`'s third return slot is the spawn-error string, not the child's captured stderr — fd 2 from the child currently passes through to the parent's stderr unchanged. Adding child-stderr capture is a stdlib-side change tracked separately. Until it lands, callers that need to assert on stderr can wrap the child in `/bin/sh -c 'cmd 2>&1'` and use `expect_stdout_contains` on the merged stream.
+- **`expect_stdout_line_field` splits on a single space character only** — multi-delimiter awk patterns aren't handled. Fall back to `assert_str_eq` with a hand-derived value for unusual splits.
+- **`expect_stdout_matches` uses glob patterns, not regex.** `std.string.glob_match` (POSIX fnmatch: `*`, `?`, `[abc]`) is what's available in stdlib today; PCRE-style regex is a separate ask.
+- **`expect_http_body_json_field` does compact-JSON substring matching**, not real JSON parsing. Doesn't tolerate pretty-printed whitespace between `:` and the value. For nested keys or non-string values, use `std.json` directly and call `assert_*` on the parsed result.
+
 ## Output
 
 ```
@@ -92,4 +150,7 @@ My feature
 
 - `module.ae` — The framework, `import contrib.aeocha`-able
 - `example_self_test.ae` — Self-test (11 passing). Doubles as the
-  worked example.
+  worked example for the `assert_*` primitives.
+- See `tests/integration/aeocha_expect_matchers/probe.ae` for an
+  end-to-end run of the integration-shape matchers (process
+  spawn + VCR-replayed HTTP).

@@ -61,6 +61,29 @@ extern map_has(map: ptr, key: string) -> int
 
 extern string_contains(str: string, substring: string) -> int
 extern string_equals(a: string, b: string) -> int
+// Used by the integration-shape `expect_*` matchers below to absorb
+// the bash-shaped "spawn / capture / awk-and-compare" idiom into a
+// single Aether call. Same inline-extern reasoning as the std.list /
+// std.map block above — keep contrib.aeocha standalone-importable
+// without dragging the import-expansion path through all of std.
+extern string_split(str: string, delimiter: string) -> ptr
+extern string_array_size(arr: ptr) -> int
+extern string_array_get(arr: ptr, index: int) -> ptr
+extern string_array_free(arr: ptr)
+extern string_starts_with(str: string, prefix: string) -> int
+extern string_glob_match_raw(pattern: string, s: string, flags: int) -> int
+extern string_length(str: string) -> int
+extern string_char_at(str: string, index: int) -> int
+extern string_concat(a: string, b: string) -> string
+
+// Response accessors used by the HTTP matchers. Same struct layout
+// for v1 (`std.http`) and v2 (`std.http.client`) responses, so a
+// single set of externs serves both — porter call sites can pass
+// the result of `http.get` or `client.send_request` interchangeably.
+extern http_response_status(response: ptr) -> int
+extern http_response_body(response: ptr) -> string
+extern http_response_error(response: ptr) -> string
+extern http_response_header_raw(response: ptr, name: string) -> string
 
 exports (
     init,
@@ -69,6 +92,18 @@ exports (
     fail, assert_true, assert_false,
     assert_eq, assert_str_eq, assert_not_eq, assert_gt,
     assert_contains, assert_null, assert_not_null,
+    // Integration-shape matchers — process surface
+    // (expect_stderr_* deferred; see comment near expect_stdout_line_count
+    //  for why os.run_capture stderr capture must land first.)
+    expect_exit, expect_no_spawn_error,
+    expect_stdout_contains,
+    expect_stdout_line_field,
+    expect_stdout_line_count,
+    expect_stdout_matches,
+    // Integration-shape matchers — HTTP surface
+    expect_http_status, expect_http_no_error,
+    expect_http_body_contains, expect_http_header,
+    expect_http_body_json_field,
     run_summary
 )
 
@@ -257,6 +292,256 @@ assert_null(fw: ptr, value: ptr, msg: string) {
 assert_not_null(fw: ptr, value: ptr, msg: string) {
     if value == 0 {
         fail(fw, "${msg} — expected non-null")
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Integration-shape matchers
+//
+// Built on top of the assert_* primitives above, these absorb the
+// bash-shaped "spawn / capture / awk-and-compare" idiom into a single
+// Aether call. Two flavours:
+//
+//   - Process matchers consume a `(stdout, exit, stderr)` triple from
+//     `os.run_capture(prog, argv, env)`. The triple is always passed
+//     destructured (Aether tuples don't pass around as a single value).
+//
+//   - HTTP matchers consume the response handle returned by
+//     `http.get` / `http.post` / `client.send_request`. A single
+//     `resp: ptr` arg works for both v1 and v2 responses (same C
+//     struct underneath).
+//
+// Each matcher takes (fw, ..., msg) and signals failure by calling
+// `fail(fw, ...)` — same shape as the `assert_*` primitives. None of
+// them allocate persistent state; intermediate `string_split` arrays
+// are freed before return.
+// ---------------------------------------------------------------------------
+
+// expect_exit(fw, exit_code, want, msg) — child exited with the
+// expected status. The most common shape: caller writes
+//   out, exit, err = os.run_capture(prog, argv, null)
+//   aeocha.expect_exit(fw, exit, 0, "ran cleanly")
+expect_exit(fw: ptr, exit_code: int, want: int, msg: string) {
+    if exit_code != want {
+        fail(fw, "${msg} — expected exit ${want}, got ${exit_code}")
+    }
+}
+
+// expect_no_spawn_error(fw, err, msg) — `os.run_capture`'s third
+// slot is non-empty only when fork/exec itself couldn't run (binary
+// not found, EACCES, etc.). Distinct from "ran but exited non-zero",
+// which is exit_code != 0 and err == "". Use this to assert "the
+// child actually started" before asserting on its output.
+expect_no_spawn_error(fw: ptr, err: string, msg: string) {
+    if string_equals(err, "") == 0 {
+        fail(fw, "${msg} — spawn error: '${err}'")
+    }
+}
+
+// expect_stdout_contains(fw, out, needle, msg) — captured stdout
+// has the substring somewhere. Sibling of assert_contains with a
+// slot-shaped signature for the run_capture tuple. Param is named
+// `out` not `stdout` because Windows MinGW <stdio.h> defines
+// `stdout` as a preprocessor macro (`(__acrt_iob_func(1))`) and a
+// param named `stdout` gets rewritten mid-declaration. Same
+// rationale for the other three expect_stdout_* matchers below.
+expect_stdout_contains(fw: ptr, out: string, needle: string, msg: string) {
+    if string_contains(out, needle) == 0 {
+        fail(fw, "${msg} — stdout does not contain '${needle}'")
+    }
+}
+
+// NOTE: expect_stderr_contains / expect_stderr_empty deferred —
+// `os.run_capture`'s third return slot is the spawn-error string,
+// NOT the child's captured stderr. fd 2 from the child currently
+// passes through to the parent's stderr unchanged. Adding child-
+// stderr capture is a stdlib-side change (new pipe, second drain
+// loop in std/os/aether_os.c) tracked separately. Once that lands,
+// these matchers become trivial: same shape as
+// expect_stdout_contains, just consuming the new 4th tuple slot.
+// The porter spec calls for them but the underlying capture isn't
+// there yet — so callers that need stderr today should use
+// `os.run_capture` with `2>&1` redirection inside a /bin/sh -c
+// wrapper for now, then use `expect_stdout_contains` on the merged
+// stream. See the porter's aeocha-integration-helpers spec for the
+// intended shape once stderr capture lands.
+
+// expect_stdout_line_count(fw, out, want, msg) — stdout has
+// exactly `want` newline-separated lines. Trailing-newline aware:
+// `"a\nb\n"` counts as 2 lines, not 3. (param `out`, not `stdout` —
+// see expect_stdout_contains for the Windows-MinGW reason.)
+expect_stdout_line_count(fw: ptr, out: string, want: int, msg: string) {
+    arr = string_split(out, "\n")
+    n = string_array_size(arr)
+    // string_split("a\nb\n", "\n") produces ["a", "b", ""] — drop
+    // the trailing empty when the last byte is a newline.
+    sl = string_length(out)
+    if sl > 0 {
+        if string_char_at(out, sl - 1) == 10 {
+            n = n - 1
+        }
+    }
+    string_array_free(arr)
+    if n != want {
+        fail(fw, "${msg} — expected ${want} lines, got ${n}")
+    }
+}
+
+// expect_stdout_line_field(fw, out, prefix, n, want, msg) —
+// finds the first line starting with `prefix`, splits it on a
+// single space, and compares field index `n` to `want`. This is
+// the matcher that absorbs the most bash: `out=$(...)
+// rev=$(echo "$out" | awk '/^Revision:/{print $2}')` collapses to
+// `expect_stdout_line_field(fw, out, "Revision:", 1, "3", ...)`.
+// (Param `out`, not `stdout` — Windows MinGW reason.)
+//
+// Limitations (deliberate — porter scope):
+//   - Single-character whitespace splits only (space). Tab-separated
+//     output and multi-delimiter awk patterns aren't handled here;
+//     fall back to assert_str_eq with a hand-derived value for
+//     those cases.
+//   - First match wins. Use a more specific prefix if multiple
+//     lines share a prefix and you want the second one.
+expect_stdout_line_field(fw: ptr, out: string, prefix: string,
+                          n: int, want: string, msg: string) {
+    lines = string_split(out, "\n")
+    line_count = string_array_size(lines)
+    found = 0
+    actual = ""
+    i = 0
+    while i < line_count {
+        line_ptr = string_array_get(lines, i)
+        if string_starts_with(line_ptr, prefix) == 1 {
+            // Split on single space, take field n.
+            fields = string_split(line_ptr, " ")
+            field_count = string_array_size(fields)
+            if n < field_count {
+                actual_ptr = string_array_get(fields, n)
+                actual = string_concat(actual_ptr, "")
+                found = 1
+            }
+            string_array_free(fields)
+            i = line_count
+        } else {
+            i = i + 1
+        }
+    }
+    string_array_free(lines)
+    if found == 0 {
+        fail(fw, "${msg} — no line starts with '${prefix}'")
+    } else {
+        if string_equals(actual, want) == 0 {
+            fail(fw, "${msg} — expected '${want}', got '${actual}'")
+        }
+    }
+}
+
+// expect_stdout_matches(fw, out, pattern, msg) — at least one
+// stdout line matches a glob pattern (`*`, `?`, `[abc]` per
+// std.string.glob_match). Not regex — the porter spec asks for
+// "basic" pattern matching, and stdlib has no PCRE today. For full
+// regex needs, add a separate matcher after a regex extern lands.
+// (Param `out`, not `stdout` — Windows MinGW reason.)
+expect_stdout_matches(fw: ptr, out: string, pattern: string, msg: string) {
+    lines = string_split(out, "\n")
+    line_count = string_array_size(lines)
+    found = 0
+    i = 0
+    while i < line_count {
+        line_ptr = string_array_get(lines, i)
+        if string_glob_match_raw(pattern, line_ptr, 0) == 1 {
+            found = 1
+            i = line_count
+        } else {
+            i = i + 1
+        }
+    }
+    string_array_free(lines)
+    if found == 0 {
+        fail(fw, "${msg} — no stdout line matches glob '${pattern}'")
+    }
+}
+
+// expect_http_status(fw, resp, want, msg) — response has the
+// expected HTTP status code. Works for v1 (`http.get(url)`) and v2
+// (`client.send_request(req)`) responses interchangeably.
+expect_http_status(fw: ptr, resp: ptr, want: int, msg: string) {
+    if resp == 0 {
+        fail(fw, "${msg} — null response")
+    } else {
+        actual = http_response_status(resp)
+        if actual != want {
+            fail(fw, "${msg} — expected status ${want}, got ${actual}")
+        }
+    }
+}
+
+// expect_http_no_error(fw, resp, msg) — transport succeeded (DNS,
+// connect, TLS, timeout all OK). Distinct from "200 OK" — non-2xx
+// is not a transport error. Pair with expect_http_status to assert
+// both layers.
+expect_http_no_error(fw: ptr, resp: ptr, msg: string) {
+    if resp == 0 {
+        fail(fw, "${msg} — null response")
+    } else {
+        err = http_response_error(resp)
+        if string_equals(err, "") == 0 {
+            fail(fw, "${msg} — transport error: '${err}'")
+        }
+    }
+}
+
+// expect_http_body_contains(fw, resp, needle, msg) — substring of
+// the response body. Binary-safe via the AetherString-aware
+// string.contains; embedded NULs in `body` survive the boundary as
+// long as the porter calls `client.response_body` (which preserves
+// the header) rather than the C `http_response_body_str` accessor.
+expect_http_body_contains(fw: ptr, resp: ptr, needle: string, msg: string) {
+    if resp == 0 {
+        fail(fw, "${msg} — null response")
+    } else {
+        body = http_response_body(resp)
+        if string_contains(body, needle) == 0 {
+            fail(fw, "${msg} — body does not contain '${needle}'")
+        }
+    }
+}
+
+// expect_http_header(fw, resp, name, want, msg) — case-insensitive
+// header equality. Uses the same per-header accessor v2 exposes; v1
+// responses share the C struct so this works on both.
+expect_http_header(fw: ptr, resp: ptr, name: string, want: string, msg: string) {
+    if resp == 0 {
+        fail(fw, "${msg} — null response")
+    } else {
+        actual = http_response_header_raw(resp, name)
+        if string_equals(actual, want) == 0 {
+            fail(fw, "${msg} — header '${name}' expected '${want}', got '${actual}'")
+        }
+    }
+}
+
+// expect_http_body_json_field(fw, resp, key, want, msg) —
+// top-level JSON-string-field equality. Skips parsing libraries:
+// the porter scope is "this top-level key has this string value".
+// Looks for `"key":"want"` (with optional whitespace) inside the
+// raw body. Sufficient for status / probe / smoke endpoints; reach
+// for std.json directly when nesting or non-string values matter.
+expect_http_body_json_field(fw: ptr, resp: ptr, key: string,
+                              want: string, msg: string) {
+    if resp == 0 {
+        fail(fw, "${msg} — null response")
+    } else {
+        body = http_response_body(resp)
+        // Build the canonical "key":"want" needle. Doesn't tolerate
+        // pretty-printed whitespace between `:` and the value — fine
+        // for the porter's smoke-endpoint use case where the server
+        // emits compact JSON. Document the constraint up here so the
+        // failure message points at the right fix.
+        needle = "\"${key}\":\"${want}\""
+        if string_contains(body, needle) == 0 {
+            fail(fw, "${msg} — JSON field '${key}' != '${want}' in body")
+        }
     }
 }
 
