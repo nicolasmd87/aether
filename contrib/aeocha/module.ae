@@ -98,6 +98,7 @@ exports (
     expect_exit, expect_no_spawn_error,
     expect_stdout_contains,
     expect_stdout_line_field,
+    expect_stdout_line_after,
     expect_stdout_line_count,
     expect_stdout_matches,
     // Integration-shape matchers — HTTP surface
@@ -388,20 +389,30 @@ expect_stdout_line_count(fw: ptr, out: string, want: int, msg: string) {
 }
 
 // expect_stdout_line_field(fw, out, prefix, n, want, msg) —
-// finds the first line starting with `prefix`, splits it on a
-// single space, and compares field index `n` to `want`. This is
-// the matcher that absorbs the most bash: `out=$(...)
-// rev=$(echo "$out" | awk '/^Revision:/{print $2}')` collapses to
+// finds the first line starting with `prefix`, tokenises on runs
+// of whitespace (spaces and tabs), and compares field index `n` to
+// `want`. This is the matcher that absorbs the most bash:
+// `rev=$(echo "$out" | awk '/^Revision:/{print $2}')` collapses to
 // `expect_stdout_line_field(fw, out, "Revision:", 1, "3", ...)`.
-// (Param `out`, not `stdout` — Windows MinGW reason.)
+//
+// Whitespace handling matches awk's default: any run of spaces or
+// tabs separates tokens, leading whitespace is skipped, and empty
+// tokens never appear in the field array. So a column-aligned
+// `Revision:    3` line tokenises to `["Revision:", "3"]` and
+// field 1 is `"3"` regardless of how many spaces actually separate
+// them.
+//
+// Indexing is 0-based on tokens — n=0 names the prefix token,
+// n=1 the next non-blank token. (awk's `$1`/`$2` are 1-based;
+// Aeocha is 0-based to match the rest of the matcher fleet.)
 //
 // Limitations (deliberate — porter scope):
-//   - Single-character whitespace splits only (space). Tab-separated
-//     output and multi-delimiter awk patterns aren't handled here;
-//     fall back to assert_str_eq with a hand-derived value for
-//     those cases.
 //   - First match wins. Use a more specific prefix if multiple
 //     lines share a prefix and you want the second one.
+//   - Whitespace = ASCII space + tab. Newlines have already been
+//     consumed by the per-line split.
+//
+// (Param `out`, not `stdout` — Windows MinGW reason.)
 expect_stdout_line_field(fw: ptr, out: string, prefix: string,
                           n: int, want: string, msg: string) {
     lines = string_split(out, "\n")
@@ -412,15 +423,111 @@ expect_stdout_line_field(fw: ptr, out: string, prefix: string,
     while i < line_count {
         line_ptr = string_array_get(lines, i)
         if string_starts_with(line_ptr, prefix) == 1 {
-            // Split on single space, take field n.
-            fields = string_split(line_ptr, " ")
-            field_count = string_array_size(fields)
-            if n < field_count {
-                actual_ptr = string_array_get(fields, n)
-                actual = string_concat(actual_ptr, "")
-                found = 1
+            // Tokenise on runs of whitespace (space=32, tab=9). Walk
+            // the line collecting non-whitespace spans into an
+            // imaginary array indexed by `tok_idx`; when tok_idx
+            // reaches `n` capture the span.
+            line_len = string_length(line_ptr)
+            tok_idx = 0
+            p = 0
+            while p < line_len {
+                c = string_char_at(line_ptr, p)
+                if c == 32 || c == 9 {
+                    p = p + 1
+                } else {
+                    start = p
+                    scanning = 1
+                    while scanning == 1 {
+                        if p >= line_len {
+                            scanning = 0
+                        } else {
+                            c2 = string_char_at(line_ptr, p)
+                            if c2 == 32 || c2 == 9 {
+                                scanning = 0
+                            } else {
+                                p = p + 1
+                            }
+                        }
+                    }
+                    if tok_idx == n {
+                        actual = string_substring(line_ptr, start, p)
+                        found = 1
+                        p = line_len
+                    }
+                    tok_idx = tok_idx + 1
+                }
             }
-            string_array_free(fields)
+            i = line_count
+        } else {
+            i = i + 1
+        }
+    }
+    string_array_free(lines)
+    if found == 0 {
+        fail(fw, "${msg} — no line starts with '${prefix}' or field ${n} missing")
+    } else {
+        if string_equals(actual, want) == 0 {
+            fail(fw, "${msg} — expected '${want}', got '${actual}'")
+        }
+    }
+}
+
+// expect_stdout_line_after(fw, out, prefix, want, msg) — finds
+// the first line starting with `prefix`, takes everything after
+// the prefix, trims leading and trailing whitespace, and compares
+// against `want`. Absorbs the bash idiom
+//   log=$(echo "$out" | sed -n 's/^Log: *//p')
+// which is common in svn/git-style key-value output where the
+// value can contain embedded whitespace and a single-token field
+// match wouldn't capture it correctly.
+//
+// `expect_stdout_line_field(out, "Log:", 1, ...)` would only see
+// the first whitespace-separated token after the prefix; this
+// matcher captures the entire post-prefix remainder.
+expect_stdout_line_after(fw: ptr, out: string, prefix: string,
+                          want: string, msg: string) {
+    lines = string_split(out, "\n")
+    line_count = string_array_size(lines)
+    found = 0
+    actual = ""
+    i = 0
+    while i < line_count {
+        line_ptr = string_array_get(lines, i)
+        if string_starts_with(line_ptr, prefix) == 1 {
+            plen = string_length(prefix)
+            llen = string_length(line_ptr)
+            // Skip leading whitespace immediately after the prefix.
+            start = plen
+            scanning_lead = 1
+            while scanning_lead == 1 {
+                if start >= llen {
+                    scanning_lead = 0
+                } else {
+                    c = string_char_at(line_ptr, start)
+                    if c == 32 || c == 9 {
+                        start = start + 1
+                    } else {
+                        scanning_lead = 0
+                    }
+                }
+            }
+            // Trim trailing whitespace.
+            end = llen
+            scanning_trail = 1
+            while scanning_trail == 1 {
+                if end <= start {
+                    scanning_trail = 0
+                } else {
+                    c2 = string_char_at(line_ptr, end - 1)
+                    if c2 == 32 || c2 == 9 {
+                        end = end - 1
+                    } else {
+                        scanning_trail = 0
+                    }
+                }
+            }
+            actual = string_substring(line_ptr, start, end)
+            found = 1
             i = line_count
         } else {
             i = i + 1

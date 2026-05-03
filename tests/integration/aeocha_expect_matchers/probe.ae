@@ -82,6 +82,31 @@ run_process_section(fw: ptr) {
     aeocha.expect_stdout_matches(fw, out2, "Revision: *", "log entry shape")
     println("  ✓ Revision-style key/value")
 
+    // Column-aligned output (the actual `svn info` shape from
+    // svn-aether Round 234): four spaces between key and value.
+    // Aeocha used to single-space-split here so field 1 was "" and
+    // the test author had to count spaces. Whitespace-run splitting
+    // makes field 1 = "3" regardless of spacing.
+    argv3 = list.new()
+    list.add(argv3, "-c")
+    list.add(argv3, "printf 'URL:         http://demo\\nRevision:    3\\nAuthor:      alice\\n'")
+    out3, exit3, _ = os.run_capture("/bin/sh", argv3, null)
+    aeocha.expect_exit(fw, exit3, 0, "sh column ran")
+    aeocha.expect_stdout_line_field(fw, out3, "Revision:", 1, "3", "column-aligned head rev")
+    aeocha.expect_stdout_line_field(fw, out3, "URL:", 1, "http://demo", "column-aligned url")
+    aeocha.expect_stdout_line_after(fw, out3, "Author:", "alice", "after-prefix capture")
+    println("  ✓ column-aligned key/value")
+
+    // Multi-token value via _after: log message with embedded spaces.
+    argv4 = list.new()
+    list.add(argv4, "-c")
+    list.add(argv4, "printf 'Log: first commit message\\nDate: now\\n'")
+    out4, exit4, _ = os.run_capture("/bin/sh", argv4, null)
+    aeocha.expect_exit(fw, exit4, 0, "sh log ran")
+    aeocha.expect_stdout_line_after(fw, out4, "Log:", "first commit message",
+        "_after captures multi-token value")
+    println("  ✓ multi-token line_after")
+
     // expect_stderr_* matchers deferred — see comment in
     // contrib/aeocha/module.ae explaining the os.run_capture
     // stderr-capture gap. The porter's spec lists these matchers;
