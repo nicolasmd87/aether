@@ -1054,6 +1054,28 @@ HttpResponse* http_get_raw(const char* url) {
     return resp;
 }
 
+// http_get_raw + per-call timeout. Closes Teuvo's polling-loop pain
+// where one hung site held the actor's whole AnalyzeNext handler
+// hostage. Default `http_get_raw` blocks forever for backward
+// compatibility; new callers should reach for this variant any time
+// the URL is third-party or non-local.
+HttpResponse* http_get_with_timeout_raw(const char* url, int timeout_ms) {
+    HttpRequest* req = http_request_raw("GET", url);
+    if (!req) return NULL;
+    if (timeout_ms > 0) {
+        // SO_RCVTIMEO / SO_SNDTIMEO storage is integer seconds; round
+        // up so callers asking for 50ms get a 1s timeout rather than
+        // accidentally disabling the timeout (0 = block forever). The
+        // sub-second granularity gap is documented; ms-precision
+        // timeouts are a separate change to the underlying field.
+        int secs = (timeout_ms + 999) / 1000;
+        http_request_set_timeout_raw(req, secs);
+    }
+    HttpResponse* resp = http_send_raw(req);
+    http_request_free_raw(req);
+    return resp;
+}
+
 HttpResponse* http_post_raw(const char* url, const char* body, const char* content_type) {
     HttpRequest* req = http_request_raw("POST", url);
     if (!req) return NULL;

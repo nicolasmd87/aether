@@ -48,6 +48,11 @@ typedef struct {
 // ---------------------------------------------------------------------------
 
 HttpResponse* http_get_raw(const char* url);
+// Same as http_get_raw but with a per-call timeout. timeout_ms is
+// rounded up to whole seconds because the underlying SO_RCVTIMEO /
+// SO_SNDTIMEO storage is integer seconds; pass 0 for "block forever"
+// (matches http_get_raw's default).
+HttpResponse* http_get_with_timeout_raw(const char* url, int timeout_ms);
 HttpResponse* http_post_raw(const char* url, const char* body, const char* content_type);
 HttpResponse* http_put_raw(const char* url, const char* body, const char* content_type);
 HttpResponse* http_delete_raw(const char* url);

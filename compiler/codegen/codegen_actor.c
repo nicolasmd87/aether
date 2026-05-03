@@ -657,12 +657,27 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
     print_line(gen, "}");
     print_line(gen, "#endif");
 
-    // Set timeout if actor has a receive ... after N clause
+    // Set timeout if actor has a receive ... after N clause.
+    //
+    // The timeout expression runs HERE, in spawn_<Actor>, with `actor`
+    // in scope as the freshly-allocated handle — `self` doesn't exist
+    // yet, so any state-field reference (`after m_interval_ms`) must
+    // resolve to `actor->m_interval_ms`. We swap the codegen's
+    // state-self alias to "actor" for the duration of the expression
+    // and restore it after. Without this swap the user is forced to
+    // hardcode a literal (`after 1000`) and roll their own elapsed-
+    // time math against `clock_ns()` — the workaround Teuvo's
+    // site-poller had to carry. State has already been initialised
+    // a few lines up, so the value the expression reads is the same
+    // value the actor will see once it starts running.
     if (timeout_arm && timeout_arm->child_count >= 1) {
         print_line(gen, "// Receive timeout (milliseconds -> nanoseconds)");
         print_indent(gen);
         fprintf(gen->output, "actor->timeout_ns = (uint64_t)(");
+        const char* prev_alias = gen->state_self_alias;
+        gen->state_self_alias = "actor";
         generate_expression(gen, timeout_arm->children[0]);
+        gen->state_self_alias = prev_alias;
         fprintf(gen->output, ") * 1000000ULL;\n");
         print_line(gen, "actor->last_activity_ns = (uint64_t)_aether_clock_ns();  // Start timeout countdown at spawn");
         print_line(gen, "atomic_store_explicit(&actor->active, 1, memory_order_release);  // Activate for timeout polling");

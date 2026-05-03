@@ -1,0 +1,86 @@
+// std.arena - Arena (bulk) allocator
+//
+// An arena owns a growable block of memory that it hands out via
+// arena.alloc(). Individual allocations cannot be freed; the whole
+// arena is reset (or destroyed) in one shot. Pattern:
+//
+//     a = arena.create(0)            // 0 = default 1 MiB
+//     defer arena.destroy(a)
+//     loop {
+//         arena.reset(a)             // O(1) bulk free of last iter
+//         buf = arena.alloc(a, 4096) // fill, parse, hand off, etc.
+//         …
+//     }
+//
+// Use cases:
+//   - Per-iteration scratch buffers in a polling loop (allocate
+//     freely, reset at the top of each iteration).
+//   - Short-lived parsing trees where the whole tree is discarded
+//     once parsing is done.
+//   - Building up a result you'll memcpy out before destroying the
+//     arena.
+//
+// Arenas hand out raw `ptr` memory. They do NOT track AetherString
+// refcounts — strings allocated through the regular stdlib still
+// need release() (or `defer release(...)`); the arena is for bulk
+// raw allocations the user controls themselves.
+
+import std.string
+
+exports (
+    arena_create, arena_alloc, arena_alloc_aligned,
+    arena_reset, arena_destroy,
+    arena_get_used, arena_get_size,
+    create, alloc, alloc_aligned, reset, destroy, used, size
+)
+
+// C-style externs (the escape hatch).
+extern arena_create(size: int) -> ptr
+extern arena_alloc(arena: ptr, bytes: int) -> ptr
+extern arena_alloc_aligned(arena: ptr, bytes: int, alignment: int) -> ptr
+extern arena_reset(arena: ptr)
+extern arena_destroy(arena: ptr)
+extern arena_get_used(arena: ptr) -> int
+extern arena_get_size(arena: ptr) -> int
+
+// Aether-native wrappers.
+
+// Create an arena with the given block size. Pass 0 for the runtime
+// default (1 MiB). Returns null on out-of-memory.
+create(size: int) -> ptr {
+    return arena_create(size)
+}
+
+// Allocate `bytes` from the arena (8-byte aligned). Returns null on
+// OOM or if `arena` is null. Memory is uninitialized.
+alloc(arena: ptr, bytes: int) -> ptr {
+    return arena_alloc(arena, bytes)
+}
+
+// Allocate `bytes` with explicit alignment (must be a power of 2).
+alloc_aligned(arena: ptr, bytes: int, alignment: int) -> ptr {
+    return arena_alloc_aligned(arena, bytes, alignment)
+}
+
+// Reset the arena's used pointer to zero (and free any overflow
+// blocks). All previously-allocated pointers become invalid.
+reset(arena: ptr) {
+    arena_reset(arena)
+}
+
+// Destroy the arena and free its memory. All pointers become
+// invalid.
+destroy(arena: ptr) {
+    arena_destroy(arena)
+}
+
+// Bytes currently allocated from the arena (sum across overflow
+// blocks).
+used(arena: ptr) -> int {
+    return arena_get_used(arena)
+}
+
+// Total capacity (sum across overflow blocks).
+size(arena: ptr) -> int {
+    return arena_get_size(arena)
+}

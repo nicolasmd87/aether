@@ -1,0 +1,68 @@
+// Regression test: actor placement under default (no `core:`) hint.
+//
+// Issue: scheduler_register_actor used `actor_id % num_cores` to
+// pick a worker. With small actor counts that hash collides — two
+// or three consecutive spawns can land on Core 0, leaving other
+// cores idle. When a colliding actor runs a long-running message
+// handler, sibling actors on the same core starve. Teuvo's
+// site-poller had to manually pin each actor (`core: N`) to work
+// around this.
+//
+// The fix is a least-loaded scan: when preferred_core < 0, the
+// scheduler picks the worker with the lowest (work_count +
+// actor_count) at the moment of spawn. This test exercises the
+// happy path — we only check it compiles and that many actors
+// without core hints all complete successfully (no head-of-line
+// blocking starving any of them).
+//
+// Per-core placement counts aren't observable from Aether userland,
+// so we lean on "did everyone get to run" as the regression signal.
+
+message Run {}
+message Done {}
+
+actor Worker {
+    state ran = 0
+
+    receive {
+        Run -> {
+            ran = 1
+            println("worker ran")
+        }
+        Done -> {
+            // Only here so the actor has a clean shutdown handler.
+        }
+    }
+}
+
+main() {
+    println("=== test_actor_balanced_spawn ===")
+
+    // Spawn 8 actors with no `core:` hint and message each one.
+    // Under the old hash-mod placement on a low-core box, several
+    // would pile onto Core 0 and the user would feel the difference
+    // in throughput. Here we just verify all 8 process their Run
+    // message — if the scheduler dropped any, the count would be
+    // wrong.
+    w1 = spawn(Worker())
+    w2 = spawn(Worker())
+    w3 = spawn(Worker())
+    w4 = spawn(Worker())
+    w5 = spawn(Worker())
+    w6 = spawn(Worker())
+    w7 = spawn(Worker())
+    w8 = spawn(Worker())
+
+    w1 ! Run {}
+    w2 ! Run {}
+    w3 ! Run {}
+    w4 ! Run {}
+    w5 ! Run {}
+    w6 ! Run {}
+    w7 ! Run {}
+    w8 ! Run {}
+
+    wait_for_idle()
+
+    println("PASS")
+}

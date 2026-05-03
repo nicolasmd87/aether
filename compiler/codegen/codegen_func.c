@@ -501,10 +501,21 @@ void generate_function_definition(CodeGenerator* gen, ASTNode* func) {
         fprintf(gen->output, "static ");
     }
 
-    // Determine return type: if type is void but function has return-with-value, use int
+    // Determine return type:
+    //   - unannotated + has `return <value>` → int (legacy default).
+    //   - unannotated + no return-with-value → void. Without this,
+    //     the unresolved-type fallback emitted `int` and the C
+    //     compiler warned `non-void function does not return a value`
+    //     (issue #354). Functions like `wait_for_next_round` whose
+    //     bodies are pure side-effect get a clean void signature.
     Type* ret_type = func->node_type;
-    if ((!ret_type || ret_type->kind == TYPE_VOID || ret_type->kind == TYPE_UNKNOWN) && has_return_value(func)) {
+    int ret_unannotated = (!ret_type
+                           || ret_type->kind == TYPE_VOID
+                           || ret_type->kind == TYPE_UNKNOWN);
+    if (ret_unannotated && has_return_value(func)) {
         fprintf(gen->output, "int");
+    } else if (ret_unannotated) {
+        fprintf(gen->output, "void");
     } else {
         // Multi-value return — ensure the `_tuple_T1_T2` typedef is in
         // scope before the signature references it. The return-statement

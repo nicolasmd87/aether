@@ -189,6 +189,23 @@ actor Monitor {
 
 The timeout is one-shot: it is cancelled when any message is received. The countdown starts when the actor's mailbox becomes empty. Internally, the generated step function checks `_aether_clock_ns()` against a deadline before each `mailbox_receive()` call.
 
+The timeout expression can reference actor state fields, not just integer literals — useful when the interval is configurable per-actor or computed:
+
+```aether
+actor Poller {
+    state interval_ms = 30000
+    state ticks       = 0
+
+    receive {
+        Tick -> { ticks = ticks + 1 }
+    } after interval_ms -> {
+        self ! Tick {}
+    }
+}
+```
+
+Identifiers in the timeout expression resolve against the same scope `receive` arms see — actor state fields and `self` are both in scope.
+
 ## Cooperative Preemption
 
 By default, message handlers run to completion. A tight compute loop inside a handler will block that core's scheduler thread. For programs where this is a concern, cooperative preemption can be enabled:

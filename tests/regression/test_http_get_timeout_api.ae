@@ -1,0 +1,38 @@
+// Regression test: http.get_with_timeout API contract.
+//
+// Issue: http.get blocks indefinitely on hung sites — a hung DNS
+// resolution or a server that accepts the connection but never
+// responds stalls the calling actor's whole message handler.
+// Teuvo's site-poller hit this once a third-party URL went silent.
+//
+// The fix surfaces the existing http_request_set_timeout_raw
+// (SO_RCVTIMEO / SO_SNDTIMEO) machinery via a new wrapper
+// http.get_with_timeout(url, timeout_ms). This test verifies the
+// API exists, returns the documented `(body, err)` tuple shape,
+// and surfaces an error string for an unreachable host.
+//
+// We deliberately don't test the *latency* of the timeout here —
+// CI machines vary widely on DNS lookup speed for invalid domains,
+// and the OS may resolve+fail in microseconds or seconds. The
+// contract we lock in is the shape: returns a tuple, error string
+// on failure, body empty on failure.
+
+import std.http
+import std.string
+
+main() {
+    // Unreachable host — connect should fail fast or timeout.
+    body, err = http.get_with_timeout("http://does-not-resolve.invalid/", 1000)
+
+    if err == "" {
+        println("FAIL: expected error for unreachable host, got success")
+        return
+    }
+
+    if string.length(body) > 0 {
+        println("FAIL: expected empty body on error, got non-empty")
+        return
+    }
+
+    println("PASS")
+}

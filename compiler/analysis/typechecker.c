@@ -1485,6 +1485,14 @@ int typecheck_program(ASTNode* program) {
     Type* free_builtin_type = create_type(TYPE_VOID);
     add_symbol(global_table, "free", free_builtin_type, 0, 1, 0);
 
+    // release(X) — explicit refcount-release sugar. Codegen restricts
+    // the argument type to `string` (other heap types call their typed
+    // release function). Pairs with `defer` to undo allocations made
+    // by stdlib functions returning ownership: `defer release(body)`
+    // after `body, err = http.get(url)`.
+    Type* release_type = create_type(TYPE_VOID);
+    add_symbol(global_table, "release", release_type, 0, 1, 0);
+
     // Array/collection builtins
     Type* make_type = create_type(TYPE_PTR);  // returns allocated memory
     add_symbol(global_table, "make", make_type, 0, 1, 0);
