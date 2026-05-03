@@ -8,7 +8,9 @@
  */
 
 #include "aether_host.h"
+#include "utils/aether_compiler.h"
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #ifndef AETHER_HOST_MAX_EVENTS
@@ -165,4 +167,109 @@ void manifest_clear(void) {
      * its own lifetime. */
     AetherManifest empty = {0};
     g_manifest = empty;
+}
+
+/* ---------------------------------------------------------------------
+ * Caller-info channel (issue #344). One TLS slot per thread; the host
+ * deep-copies (identity + key/value pairs) into a bounded buffer at
+ * aether_set_caller time so the host's source strings can be freed
+ * after the call returns. The Aether-side accessors return borrowed
+ * pointers into the same buffer.
+ *
+ * Layout: a single TLS arena of AETHER_CALLER_INFO_MAX_BYTES bytes
+ * holds every NUL-terminated string back-to-back. Two parallel arrays
+ * of offsets index into the arena for keys and values. The identity
+ * string is stored at offset 0 (or kept absent when set NULL).
+ *
+ * Lookup is O(n) — the per-call cap (AETHER_CALLER_INFO_MAX_ATTRS,
+ * default 32) is small enough that a linear scan beats anything with
+ * hash overhead.
+ * --------------------------------------------------------------------- */
+
+typedef struct {
+    /* arena holds NUL-terminated strings; arena_used is the byte
+     * cursor. identity_off == -1 means "no identity set". */
+    char  arena[AETHER_CALLER_INFO_MAX_BYTES];
+    int   arena_used;
+    int   identity_off;
+    int   attr_count;
+    int   key_off[AETHER_CALLER_INFO_MAX_ATTRS];
+    int   val_off[AETHER_CALLER_INFO_MAX_ATTRS];
+    int64_t deadline_ms;
+    int   present;  /* 0 = slot wiped (defaults), 1 = set */
+} AetherCallerInfo;
+
+static AETHER_TLS AetherCallerInfo tls_caller = { .identity_off = -1 };
+
+/* Append a NUL-terminated copy of `s` to the arena. Returns the
+ * starting offset on success, or -1 if there isn't room. */
+static int caller_arena_dup(AetherCallerInfo* ci, const char* s) {
+    if (!s) return -1;
+    size_t n = strlen(s) + 1;  /* include NUL */
+    if (ci->arena_used + (int)n > AETHER_CALLER_INFO_MAX_BYTES) return -1;
+    int off = ci->arena_used;
+    memcpy(ci->arena + off, s, n);
+    ci->arena_used += (int)n;
+    return off;
+}
+
+int aether_set_caller(const char* identity,
+                      const char** attr_keys,
+                      const char** attr_vals,
+                      size_t n,
+                      int64_t deadline_ms) {
+    if (n > AETHER_CALLER_INFO_MAX_ATTRS) return -1;
+    if (n > 0 && (!attr_keys || !attr_vals)) return -1;
+
+    /* Stage into a fresh struct so a partial copy on overflow leaves
+     * the previous TLS state intact. */
+    AetherCallerInfo staged = { .identity_off = -1, .deadline_ms = deadline_ms };
+
+    if (identity) {
+        int off = caller_arena_dup(&staged, identity);
+        if (off < 0) return -1;
+        staged.identity_off = off;
+    }
+
+    for (size_t i = 0; i < n; i++) {
+        if (!attr_keys[i] || !attr_vals[i]) return -1;
+        int koff = caller_arena_dup(&staged, attr_keys[i]);
+        if (koff < 0) return -1;
+        int voff = caller_arena_dup(&staged, attr_vals[i]);
+        if (voff < 0) return -1;
+        staged.key_off[i] = koff;
+        staged.val_off[i] = voff;
+    }
+    staged.attr_count = (int)n;
+    staged.present    = 1;
+
+    /* Commit. Single struct copy, no torn write across fields. */
+    tls_caller = staged;
+    return 0;
+}
+
+void aether_clear_caller(void) {
+    AetherCallerInfo empty = { .identity_off = -1 };
+    tls_caller = empty;
+}
+
+const char* aether_caller_identity(void) {
+    if (!tls_caller.present || tls_caller.identity_off < 0) return "";
+    return tls_caller.arena + tls_caller.identity_off;
+}
+
+const char* aether_caller_attribute(const char* key) {
+    if (!key || !tls_caller.present) return "";
+    for (int i = 0; i < tls_caller.attr_count; i++) {
+        const char* k = tls_caller.arena + tls_caller.key_off[i];
+        if (strcmp(k, key) == 0) {
+            return tls_caller.arena + tls_caller.val_off[i];
+        }
+    }
+    return "";
+}
+
+int64_t aether_caller_deadline_ms(void) {
+    if (!tls_caller.present) return 0;
+    return tls_caller.deadline_ms;
 }

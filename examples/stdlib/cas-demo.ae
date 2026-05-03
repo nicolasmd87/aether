@@ -1,0 +1,67 @@
+// std.cas demo — content-addressed store for built artifacts.
+//
+// The CAS keys files by the hex sha256 of their content. Puts go
+// through write-tmp + atomic rename; gets re-hash before delivering
+// so a corrupted store entry can't quietly hand back wrong bytes.
+//
+// Run: ae run examples/stdlib/cas-demo.ae
+
+import std.cas
+import std.fs
+import std.string
+
+main() {
+    println("=== std.cas demo ===")
+
+    // 1. Write a known-content payload to disk.
+    err = fs.write("/tmp/cas_demo_payload.txt", "hello cas")
+    if err != "" {
+        println("FAIL: write input: ${err}")
+        return
+    }
+
+    // 2. Publish it. The digest is the file's sha256 — content-
+    // addressable, so any process / machine that hashes the same
+    // bytes lands on the same name.
+    digest, perr = cas.put("/tmp/cas_demo_payload.txt")
+    if perr != "" {
+        println("FAIL: put: ${perr}")
+        return
+    }
+    println("published: ${digest}")
+
+    // 3. Membership check.
+    if cas.has(digest) == 0 {
+        println("FAIL: has() returned 0 after put")
+        return
+    }
+
+    // 4. Pull it back out. cas.get re-hashes on the way out; if
+    // the store entry was corrupted on disk we'd get an error
+    // here rather than silently bad bytes downstream.
+    gerr = cas.get(digest, "/tmp/cas_demo_fetched.txt")
+    if gerr != "" {
+        println("FAIL: get: ${gerr}")
+        return
+    }
+
+    body, rerr = fs.read("/tmp/cas_demo_fetched.txt")
+    if rerr != "" {
+        println("FAIL: read fetched: ${rerr}")
+        return
+    }
+    if string.equals(body, "hello cas") == 0 {
+        println("FAIL: round-trip content mismatch")
+        return
+    }
+    println("fetched ${string.length(body)} bytes, content matches")
+
+    // 5. Idempotent: re-publishing returns the same digest.
+    digest2, _ = cas.put("/tmp/cas_demo_payload.txt")
+    if string.equals(digest, digest2) == 0 {
+        println("FAIL: second put returned different digest")
+        return
+    }
+
+    println("PASS")
+}

@@ -1454,6 +1454,34 @@ main() {
 
 Arenas don't track AetherString refcounts — strings allocated through the regular stdlib still need `release()` (or `defer release(...)`); the arena is for bulk raw allocations that the user controls themselves. Avoid handing arena-allocated pointers to functions that retain them past the next `arena.reset()` or `arena.destroy()`.
 
+### Content-addressed store (`std.cas`)
+
+A small content-addressed store keyed by the hex sha256 of file contents. Useful for sharing built artifacts (`.so` files from `--emit=lib`, signed configs, anything content-addressable) between machines and runs. Puts go through write-tmp + atomic rename so partial writes never appear under the final name; gets re-hash before delivering so a corrupted store entry can't quietly hand back wrong bytes.
+
+```aether
+import std.cas
+
+main() {
+    digest, err = cas.put("./build/myplugin.so")
+    if err != "" { return }
+    println("published: ${digest}")           // hex sha256
+
+    if cas.has(digest) {
+        gerr = cas.get(digest, "./fetched.so")
+        // fetched.so's bytes hash to `digest` — verified on the way out.
+    }
+}
+```
+
+**Functions:**
+- `cas.put(file_path)` → `(string, string)` - Insert a file into the store. Returns `(digest, "")` on success or `("", err)` on failure (file missing, OOM, mkdir failure, write failure). Idempotent: re-putting the same content returns the same digest without breaking the store.
+- `cas.get(digest, dest_path)` → `string` - Copy an entry out of the store, verifying its sha256 hashes back to `digest`. Returns `""` on success or an error string on missing digest, read failure, dest write failure, or digest mismatch (corrupted entry).
+- `cas.has(digest)` → `int` - Existence check. NULL/empty-safe.
+- `cas.path(digest)` → `string` - Composes `<root>/<digest>` without touching the filesystem.
+- `cas.root()` → `string` - The CAS root: `$AETHER_CAS` if set, else `$HOME/.aether/cas`, else `/tmp/aether-cas`.
+
+The store layout is intentionally flat (one file per digest). Grow to two-level fan-out (`<digest[0:2]>/<digest[2:]>`) only if entry counts ever push filesystem dirent limits in practice.
+
 ---
 
 ## Process state

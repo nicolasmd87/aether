@@ -1,0 +1,83 @@
+// Issue #345 regression: std.cas put / has / get round-trip.
+//
+// The shell driver test_cas_roundtrip.sh sets AETHER_CAS to a clean
+// temp directory before running this so the test doesn't pollute
+// the user's real CAS at $HOME/.aether/cas.
+
+import std.cas
+import std.fs
+import std.string
+
+main() {
+    // Write a known-content payload to disk, put it in the CAS,
+    // verify the digest is the well-known sha256 of "hello cas",
+    // and round-trip the bytes back out.
+    err = fs.write("/tmp/cas_test_input.txt", "hello cas")
+    if err != "" {
+        println("FAIL: write input: ${err}")
+        return
+    }
+
+    digest, perr = cas.put("/tmp/cas_test_input.txt")
+    if perr != "" {
+        println("FAIL: put: ${perr}")
+        return
+    }
+
+    // sha256("hello cas") = ba532ff613d7df59916589e39fc6dc9dc71b61bf7fd14a2c98c12c222a6cfd39
+    expected = "ba532ff613d7df59916589e39fc6dc9dc71b61bf7fd14a2c98c12c222a6cfd39"
+    if string.equals(digest, expected) == 0 {
+        println("FAIL: digest mismatch — got ${digest} expected ${expected}")
+        return
+    }
+
+    if cas.has(digest) == 0 {
+        println("FAIL: has(digest) returned 0 after put")
+        return
+    }
+
+    // Negative existence
+    if cas.has("0000000000000000000000000000000000000000000000000000000000000000") != 0 {
+        println("FAIL: has() returned 1 for unknown digest")
+        return
+    }
+
+    // Round-trip via get
+    gerr = cas.get(digest, "/tmp/cas_test_output.txt")
+    if gerr != "" {
+        println("FAIL: get: ${gerr}")
+        return
+    }
+
+    body, rerr = fs.read("/tmp/cas_test_output.txt")
+    if rerr != "" {
+        println("FAIL: read output: ${rerr}")
+        return
+    }
+    if string.equals(body, "hello cas") == 0 {
+        println("FAIL: round-trip content mismatch")
+        return
+    }
+
+    // Idempotent put: re-putting the same file returns the same
+    // digest and doesn't break the store.
+    digest2, p2err = cas.put("/tmp/cas_test_input.txt")
+    if p2err != "" {
+        println("FAIL: second put: ${p2err}")
+        return
+    }
+    if string.equals(digest, digest2) == 0 {
+        println("FAIL: second put returned different digest")
+        return
+    }
+
+    // Negative get: unknown digest must surface an error.
+    bogus_err = cas.get("0000000000000000000000000000000000000000000000000000000000000000",
+                        "/tmp/cas_test_should_not_exist.txt")
+    if bogus_err == "" {
+        println("FAIL: get of unknown digest didn't error")
+        return
+    }
+
+    println("PASS")
+}

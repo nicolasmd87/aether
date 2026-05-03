@@ -13,7 +13,9 @@
 exports (
     notify, describe, input, event, bindings,
     java, python, ruby, go,
-    manifest_get, manifest_clear
+    manifest_get, manifest_clear,
+    aether_caller_identity, aether_caller_attribute, aether_caller_deadline_ms,
+    caller_identity, caller_attribute, caller_deadline_ms
 )
 
 // Emit an event to the host process. Returns 1 if a handler was found
@@ -79,3 +81,33 @@ extern manifest_get() -> ptr
 // Reset the captured manifest. Intended for tests and for the
 // pipeline to start each compilation from a clean slate.
 extern manifest_clear()
+
+// ---------------------------------------------------------------------------
+// Caller-info channel (issue #344) — host stamps per-call context
+// before invoking an aether_<name> export; the loaded module reads
+// it through these accessors. Trust model: this is plumbing for
+// per-call advisory context, NOT a security boundary — the host
+// always has more authority than the loaded .so, so any "signing"
+// in-process buys nothing. Treat the values as advisory.
+//
+// Pattern from the .so side:
+//     id      = host.caller_identity()         // "" if not set
+//     role    = host.caller_attribute("role")  // "" if absent
+//     dead_ms = host.caller_deadline_ms()      // 0 if not set
+// ---------------------------------------------------------------------------
+
+extern aether_caller_identity() -> string
+extern aether_caller_attribute(key: string) -> string
+extern aether_caller_deadline_ms() -> long
+
+caller_identity() -> string {
+    return aether_caller_identity()
+}
+
+caller_attribute(key: string) -> string {
+    return aether_caller_attribute(key)
+}
+
+caller_deadline_ms() -> long {
+    return aether_caller_deadline_ms()
+}
