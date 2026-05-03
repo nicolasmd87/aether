@@ -1492,7 +1492,10 @@ static void build_gcc_cmd(char* cmd, size_t size,
         snprintf(opt, sizeof(opt), "-static %s %s", opt_flags(optimize), user_cflags);
     else
         snprintf(opt, sizeof(opt), "-static %s", opt_flags(optimize));
-    const char* win_link_libs = "-lws2_32 -lcrypt32 -lgdi32 -luser32 -ladvapi32 -lbcrypt";
+    // -ldbghelp is required for the panic stack-trace path
+    // (CaptureStackBackTrace is in kernel32 / always-linked, but
+    // SymInitialize/SymFromAddr live in dbghelp). Issue #347.
+    const char* win_link_libs = "-lws2_32 -lcrypt32 -lgdi32 -luser32 -ladvapi32 -lbcrypt -ldbghelp";
     char lib_dir[1024];
     if (tc.has_lib) {
         strncpy(lib_dir, tc.lib, sizeof(lib_dir) - 1);

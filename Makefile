@@ -149,7 +149,7 @@ OBJ_DIR = $(BUILD_DIR)/obj
 # symbols (CertFreeCertificateContext, CertOpenSystemStoreW, etc.) that
 # aren't auto-linked — we add the import libs explicitly so std.net TLS
 # and std.cryptography work in Windows release binaries.
-WIN_LINK_LIBS = -static -lws2_32 -lcrypt32 -lgdi32 -luser32 -ladvapi32 -lbcrypt
+WIN_LINK_LIBS = -static -lws2_32 -lcrypt32 -lgdi32 -luser32 -ladvapi32 -lbcrypt -ldbghelp
 ifdef WINDOWS_NATIVE
     LDFLAGS += $(WIN_LINK_LIBS)
 else ifneq ($(findstring MINGW,$(DETECTED_OS)),)

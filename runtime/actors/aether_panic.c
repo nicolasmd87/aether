@@ -6,15 +6,35 @@
 #include <string.h>
 #include <stddef.h>
 
-// Stack-trace capture: glibc and macOS provide backtrace() /
-// backtrace_symbols() in <execinfo.h> as part of libc proper — no
-// extra link dependency. musl and other libcs don't, and Windows
-// uses CaptureStackBackTrace + DbgHelp instead. Issue #347.
+// Stack-trace capture (issue #347). Three platform paths:
+//
+//   - glibc / macOS:  backtrace() + backtrace_symbols() from
+//                     <execinfo.h>. Already in libc, no extra link.
+//   - Windows / MinGW: CaptureStackBackTrace from kernel32 plus
+//                     SymInitialize + SymFromAddr from dbghelp.dll.
+//                     The Makefile + ae.c link `-ldbghelp`.
+//   - Everything else (musl, wasm, freestanding): no-op stubs.
+//
+// Each path captures into the same TLS slot at the call site
+// (aether_panic_capture_stack) so the user's caller frames survive
+// `-O2` tail-call elimination of the noreturn aether_panic call.
 #if (defined(__GLIBC__) || defined(__APPLE__)) && !defined(__EMSCRIPTEN__)
   #define AETHER_STACK_TRACE_BACKTRACE 1
+  #define AETHER_STACK_TRACE_WIN32     0
   #include <execinfo.h>
+#elif defined(_WIN32)
+  #define AETHER_STACK_TRACE_BACKTRACE 0
+  #define AETHER_STACK_TRACE_WIN32     1
+  // <windows.h> defines a `min` / `max` macro that collides with
+  // Aether's `string_min` / `string_max` symbols later in the link.
+  // NOMINMAX disables those macros without affecting the underlying
+  // Win32 API surface.
+  #define NOMINMAX
+  #include <windows.h>
+  #include <dbghelp.h>
 #else
   #define AETHER_STACK_TRACE_BACKTRACE 0
+  #define AETHER_STACK_TRACE_WIN32     0
 #endif
 
 // ---------------------------------------------------------------------------
@@ -245,12 +265,135 @@ static void aether_print_stack_trace_to_stderr(void) {
     free(symbols);
 }
 
-#else  // !AETHER_STACK_TRACE_BACKTRACE
+#elif AETHER_STACK_TRACE_WIN32
+
+// Windows path: CaptureStackBackTrace lives in kernel32 (always
+// linked), SymFromAddr lives in dbghelp.dll (Makefile + ae.c add
+// -ldbghelp). The shape mirrors the POSIX path — TLS-buffered
+// frames captured at the call site, walked + pretty-printed in the
+// fallback printer — so the rest of the panic plumbing is identical.
+
+#define AETHER_PANIC_TRACE_MAX 64
+static AETHER_TLS PVOID tls_panic_trace[AETHER_PANIC_TRACE_MAX];
+static AETHER_TLS USHORT tls_panic_trace_n = 0;
+static AETHER_TLS int tls_panic_sym_initialised = 0;
 
 void aether_panic_capture_stack(void) {
-    // No-op on platforms without execinfo.h (musl, Windows, wasm,
-    // freestanding). Tracing is best-effort diagnostic info — the
-    // panic path itself still works.
+    // Skip 1 frame (this function itself); the next frame is the
+    // codegen call site, which is the user's panic statement.
+    tls_panic_trace_n = CaptureStackBackTrace(
+        1, AETHER_PANIC_TRACE_MAX, tls_panic_trace, NULL);
+}
+
+// Pretty-print the same way the POSIX path does: strip the
+// `aether_` prefix on namespace symbols, dot-separate the rest,
+// pass user-code symbols verbatim.
+static void aether_pretty_symbol_win(const char* sym, char* out, size_t out_cap) {
+    if (!sym || !out || out_cap == 0) return;
+    out[0] = '\0';
+
+    size_t slen = strlen(sym);
+    int is_aether = (slen > 7 && strncmp(sym, "aether_", 7) == 0);
+    const char* body = is_aether ? sym + 7 : sym;
+    size_t      blen = is_aether ? slen - 7 : slen;
+
+    size_t pos = 0;
+    for (size_t i = 0; i < blen && pos + 1 < out_cap; i++) {
+        char c = body[i];
+        if (is_aether && c == '_') c = '.';
+        out[pos++] = c;
+    }
+    out[pos] = '\0';
+}
+
+static void aether_print_stack_trace_to_stderr(void) {
+    if (tls_panic_trace_n == 0) {
+        // No call-site capture (contract violation, signal-converted
+        // panic, runtime self-check). Capture fresh from here; same
+        // -O2 caveats as POSIX apply.
+        tls_panic_trace_n = CaptureStackBackTrace(
+            1, AETHER_PANIC_TRACE_MAX, tls_panic_trace, NULL);
+        if (tls_panic_trace_n == 0) return;
+    }
+
+    HANDLE proc = GetCurrentProcess();
+    if (!tls_panic_sym_initialised) {
+        // Lazy init — SymInitialize is process-global but cheap and
+        // safe to call once per thread that actually needs symbols.
+        // SYMOPT_LOAD_LINES could be added for line numbers; deferred
+        // (PDB availability is implementation-defined under MinGW).
+        SymSetOptions(SymGetOptions() | SYMOPT_UNDNAME | SYMOPT_DEFERRED_LOADS);
+        SymInitialize(proc, NULL, TRUE);
+        tls_panic_sym_initialised = 1;
+    }
+
+    fprintf(stderr, "\nStack trace (most recent call first):\n");
+
+    // SYMBOL_INFO has a flexible array tail for the name; reserve
+    // 256 bytes for the symbol name plus the struct header.
+    enum { NAME_MAX = 255 };
+    union {
+        SYMBOL_INFO info;
+        char        bytes[sizeof(SYMBOL_INFO) + NAME_MAX + 1];
+    } sym_buf;
+    SYMBOL_INFO* sym = &sym_buf.info;
+
+    int printed = 0;
+    char pretty[256];
+    for (int i = 0; i < tls_panic_trace_n; i++) {
+        DWORD64 addr = (DWORD64)(uintptr_t)tls_panic_trace[i];
+        memset(&sym_buf, 0, sizeof(sym_buf));
+        sym->SizeOfStruct = sizeof(SYMBOL_INFO);
+        sym->MaxNameLen   = NAME_MAX;
+        DWORD64 disp = 0;
+        BOOL ok = SymFromAddr(proc, addr, &disp, sym);
+
+        if (ok && sym->Name[0] != '\0') {
+            // Skip our own panic-handler frames so the first thing
+            // the user sees is the frame that called panic().
+            if (strstr(sym->Name, "aether_panic") ||
+                strstr(sym->Name, "print_stack_trace")) {
+                continue;
+            }
+
+            aether_pretty_symbol_win(sym->Name, pretty, sizeof(pretty));
+            if (pretty[0] == '\0') {
+                // Symbol was all-prefix and got eaten by the
+                // pretty-printer — fall through to the address path.
+                snprintf(pretty, sizeof(pretty), "0x%llx",
+                         (unsigned long long)addr);
+            }
+
+            // Stop on C runtime startup frames — same heuristic as
+            // POSIX. MinGW main thread starts in main →
+            // __tmainCRTStartup → BaseThreadInitThunk →
+            // RtlUserThreadStart.
+            if (strcmp(pretty, "BaseThreadInitThunk")  == 0) break;
+            if (strcmp(pretty, "RtlUserThreadStart")   == 0) break;
+            if (strcmp(pretty, "__tmainCRTStartup")    == 0) break;
+
+            fprintf(stderr, "  %d: %s\n", printed, pretty);
+            printed++;
+
+            if (strcmp(pretty, "main") == 0) break;
+        } else {
+            // No PDB / no symbol info for this address. Show the
+            // raw address so the trace is never empty — much better
+            // than silently swallowing the frame, especially when
+            // every frame in a stripped MinGW build hits this path.
+            fprintf(stderr, "  %d: 0x%llx\n", printed,
+                    (unsigned long long)addr);
+            printed++;
+        }
+    }
+}
+
+#else  // !AETHER_STACK_TRACE_BACKTRACE && !AETHER_STACK_TRACE_WIN32
+
+void aether_panic_capture_stack(void) {
+    // No-op on platforms without backtrace() or CaptureStackBackTrace
+    // (musl, Emscripten wasm, freestanding bare-metal). Tracing is
+    // best-effort diagnostic info — the panic path itself still works.
 }
 
 static void aether_print_stack_trace_to_stderr(void) {
