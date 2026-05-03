@@ -114,6 +114,15 @@ typedef struct Interaction {
      * the test reads via vcr.last_error(). */
     char* req_headers;  /* canonical-form: "Name: Value\n..." sorted by name */
     char* req_body;     /* request body bytes, "" if absent / empty */
+    /* Response headers from the tape's `### Response headers recorded
+     * for playback:` block. Parsed but not previously propagated —
+     * dispatcher now walks this and calls http_response_set_header
+     * per line, so tapes can declare arbitrary response headers
+     * (X-* trace IDs, ETags, custom auth tokens) and have them
+     * appear in the replayed response. Empty string = tape didn't
+     * specify any response headers; dispatcher sets only Content-
+     * Type from the response-body header line as before. */
+    char* resp_headers;
 } Interaction;
 
 static Interaction* g_tape       = NULL;
@@ -146,6 +155,7 @@ static void tape_free_storage(void) {
             free(g_tape[i].note_body);
             free(g_tape[i].req_headers);
             free(g_tape[i].req_body);
+            free(g_tape[i].resp_headers);
         }
         free(g_tape);
         g_tape = NULL;
@@ -192,6 +202,12 @@ static int tape_append(const char* method, const char* path,
     e->content_type = content_type ? strdup(content_type) : NULL;
     e->req_headers  = strdup(req_headers ? req_headers : "");
     e->req_body     = strdup(req_body ? req_body : "");
+    /* resp_headers starts empty — the Aether-side parser fills it
+     * later by calling vcr_aether_set_resp_headers(idx, value) when
+     * a `### Response headers recorded for playback:` block is
+     * present in the tape. Empty string means dispatcher emits only
+     * Content-Type (the legacy single-header path). */
+    e->resp_headers = strdup("");
     /* Drain the pending-note slot — ownership transfers to this
      * interaction, so the note attaches to exactly one capture. */
     e->note_title   = g_pending_note_title;
@@ -199,9 +215,9 @@ static int tape_append(const char* method, const char* path,
     g_pending_note_title = NULL;
     g_pending_note_body  = NULL;
     if (!e->method || !e->path || !e->body || (content_type && !e->content_type)
-        || !e->req_headers || !e->req_body) {
+        || !e->req_headers || !e->req_body || !e->resp_headers) {
         free(e->method); free(e->path); free(e->body); free(e->content_type);
-        free(e->req_headers); free(e->req_body);
+        free(e->req_headers); free(e->req_body); free(e->resp_headers);
         free(e->note_title); free(e->note_body);
         return -1;
     }
@@ -897,6 +913,70 @@ void vcr_dispatch(void* req, void* res, void* ud) {
     if (e->content_type) {
         http_response_set_header(res, "Content-Type", e->content_type);
     }
+    /* Walk the tape's `### Response headers recorded for playback:`
+     * block (if present) and emit each as a real response header.
+     * Lines are "Name: Value\n"-shaped; tolerant of trailing CRLF
+     * and of trailing newlines (the parser preserves the canonical
+     * "Name: Value\n..." form, blank line at the end is normal).
+     * Skips Content-Type if it appears in the block — already set
+     * above from e->content_type, which the response-body header
+     * line is the source of truth for. */
+    if (e->resp_headers && e->resp_headers[0]) {
+        const char* p = e->resp_headers;
+        while (*p) {
+            const char* line_start = p;
+            while (*p && *p != '\n') p++;
+            size_t line_len = (size_t)(p - line_start);
+            if (*p == '\n') p++;
+            if (line_len == 0) continue;
+            /* Strip a trailing \r if present (CRLF tolerance). */
+            if (line_len > 0 && line_start[line_len - 1] == '\r') line_len--;
+            if (line_len == 0) continue;
+            /* Find the colon. Skip lines without one — defensive
+             * against malformed tape blocks; better to drop a line
+             * than to set a junk header. */
+            const char* colon = NULL;
+            for (size_t i = 0; i < line_len; i++) {
+                if (line_start[i] == ':') { colon = line_start + i; break; }
+            }
+            if (!colon) continue;
+            size_t name_len = (size_t)(colon - line_start);
+            if (name_len == 0) continue;
+            /* Value starts after ': ' or ':'; skip ASCII whitespace. */
+            const char* val_start = colon + 1;
+            const char* line_end = line_start + line_len;
+            while (val_start < line_end && (*val_start == ' ' || *val_start == '\t')) val_start++;
+            size_t val_len = (size_t)(line_end - val_start);
+            /* Stack-bounded copies — header names are bounded in
+             * practice (RFC 7230 doesn't specify a hard cap; 256 is
+             * the conventional engineering ceiling). Drop the
+             * line if it's longer rather than truncate-and-set. */
+            char name_buf[256];
+            char val_buf[4096];
+            if (name_len >= sizeof(name_buf)) continue;
+            if (val_len  >= sizeof(val_buf))  continue;
+            memcpy(name_buf, line_start, name_len);
+            name_buf[name_len] = '\0';
+            memcpy(val_buf, val_start, val_len);
+            val_buf[val_len] = '\0';
+            /* Skip Content-Type — already set from e->content_type
+             * above. The response-body header line is the canonical
+             * source; the headers block may or may not duplicate it. */
+            if (name_len == 12) {
+                int matches_ct = 1;
+                const char* ct = "Content-Type";
+                for (size_t i = 0; i < 12; i++) {
+                    char a = name_buf[i];
+                    char b = ct[i];
+                    if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+                    if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
+                    if (a != b) { matches_ct = 0; break; }
+                }
+                if (matches_ct) continue;
+            }
+            http_response_set_header(res, name_buf, val_buf);
+        }
+    }
     http_response_set_body(res, e->body);
 
     g_tape_cursor++;
@@ -1030,6 +1110,27 @@ int vcr_aether_append_interaction(const char* method, const char* path,
  * diagnostic. */
 void vcr_aether_set_load_err(const char* msg) {
     tape_set_err(msg ? msg : "");
+}
+
+/* Attach a response-headers block to the most recently appended
+ * interaction (i.e. the entry vcr_aether_append_interaction just
+ * created). Aether parser calls this after detecting a
+ * `### Response headers recorded for playback:` block in the tape;
+ * the dispatcher walks the stored value at replay time and emits
+ * each line as a real response header via http_response_set_header.
+ *
+ * Empty / NULL value is a no-op (matches the legacy "no response
+ * headers in tape, dispatcher emits only Content-Type" behaviour).
+ *
+ * Per-index variant rather than "set on the most recent" because
+ * the parser already passes the interaction index via the same
+ * walking loop; explicit-index avoids any ordering surprise if
+ * the parser is restructured later. */
+void vcr_aether_set_resp_headers(int index, const char* headers) {
+    if (index < 0 || index >= g_tape_n) return;
+    if (!headers) headers = "";
+    free(g_tape[index].resp_headers);
+    g_tape[index].resp_headers = strdup(headers);
 }
 
 /* Redaction iteration — the Aether emitter applies redactions

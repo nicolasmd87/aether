@@ -1,0 +1,129 @@
+// Smoke test for the expect_* integration-shape matchers added to
+// contrib.aeocha. Two sections, each tightly scoped per the
+// porter's "don't balloon test surface" guidance:
+//
+//   1. Process matchers — happy path against /bin/echo and
+//      /bin/sh -c. POSIX-only; skip on Windows where os.run_capture
+//      uses POSIX-fallback shims.
+//
+//   2. HTTP matchers — happy path against an in-process VCR-loaded
+//      server. Tape (expect_matchers.tape) holds one interaction
+//      with status / headers / JSON body matched by every HTTP
+//      matcher in turn.
+//
+// The test calls the matchers from main()'s scope rather than
+// wrapping them in `aeocha.describe / it` blocks. Reason:
+// `it()`-callback closures don't currently capture top-level
+// `const` or top-level actor types — the VCR section needs both —
+// and the porter's actual tests use the closure shape against
+// values declared inside the closure body anyway. The framework's
+// init / fail / run_summary surface still exercises end-to-end;
+// the closure path is exercised by the existing example_self_test.
+//
+// Failure-path coverage is left to the porter's downstream tests
+// — that's the whole "rely on focused use to find gaps" trade.
+// What we lock in here: the matchers compile, link, run end-to-end,
+// and the canonical happy-path call site doesn't fail for the
+// porter's actual data shapes.
+
+import contrib.aeocha
+import std.http.server.vcr
+import std.http
+import std.http.client
+import std.os
+import std.io
+import std.list
+import std.string
+
+extern exit(code: int)
+extern http_server_start_raw(server: ptr) -> int
+
+const PORT = 18130
+
+message StartVCR { raw: ptr }
+message Noop {}
+
+actor VCRActor {
+    state s = 0
+    receive { StartVCR(raw) -> { s = raw; http_server_start_raw(raw) } }
+}
+
+actor SchedHelper {
+    state x = 0
+    receive { Noop() -> { x = 1 } }
+}
+
+run_process_section(fw: ptr) {
+    println("\n=== expect_* — process matchers ===\n")
+
+    // /bin/echo "hello world" — note os.run_capture synthesises
+    // argv[0] from the prog string, so the list holds only the
+    // remaining args. Same convention used by the existing
+    // tests/regression/test_run_capture_status.ae.
+    argv = list.new()
+    list.add(argv, "hello world")
+    stdout, exit_code, err = os.run_capture("/bin/echo", argv, null)
+    aeocha.expect_no_spawn_error(fw, err, "spawn ok")
+    aeocha.expect_exit(fw, exit_code, 0, "echo exited cleanly")
+    aeocha.expect_stdout_contains(fw, stdout, "hello world", "stdout has greeting")
+    println("  ✓ basic echo")
+
+    // Multi-line stdout via /bin/sh -c. The middle line is
+    // "Revision: 3" — exactly the porter's awk pattern.
+    argv2 = list.new()
+    list.add(argv2, "-c")
+    list.add(argv2, "echo Path: /home; echo Revision: 3; echo Last: now")
+    stdout2, exit2, _ = os.run_capture("/bin/sh", argv2, null)
+    aeocha.expect_exit(fw, exit2, 0, "sh ran")
+    aeocha.expect_stdout_line_count(fw, stdout2, 3, "three lines")
+    aeocha.expect_stdout_line_field(fw, stdout2, "Revision:", 1, "3", "head rev")
+    aeocha.expect_stdout_matches(fw, stdout2, "Revision: *", "log entry shape")
+    println("  ✓ Revision-style key/value")
+
+    // expect_stderr_* matchers deferred — see comment in
+    // contrib/aeocha/module.ae explaining the os.run_capture
+    // stderr-capture gap. The porter's spec lists these matchers;
+    // they'll plug in once stderr capture lands as a stdlib change.
+}
+
+run_http_section(fw: ptr) {
+    println("\n=== expect_* — HTTP matchers ===\n")
+
+    tape = "tests/integration/aeocha_expect_matchers/expect_matchers.tape"
+    srv = vcr.load(tape, PORT)
+    if srv == null {
+        aeocha.fail(fw, "vcr.load returned null — tape not found?")
+        return
+    }
+    spawn(SchedHelper())
+    a = spawn(VCRActor())
+    a ! StartVCR { raw: srv }
+    sleep(500)
+
+    url = "http://127.0.0.1:${PORT}/info"
+    req = client.request("GET", url)
+    resp, cerr = client.send_request(req)
+    client.request_free(req)
+    if cerr != "" {
+        aeocha.fail(fw, "transport error: ${cerr}")
+        vcr.eject(srv)
+        return
+    }
+
+    aeocha.expect_http_no_error(fw, resp, "transport clean")
+    aeocha.expect_http_status(fw, resp, 200, "got 200")
+    aeocha.expect_http_body_contains(fw, resp, "demo", "body has demo")
+    aeocha.expect_http_header(fw, resp, "X-Node-Hash", "abc123", "node hash header")
+    aeocha.expect_http_body_json_field(fw, resp, "head", "3", "head=3 in JSON")
+    println("  ✓ all 5 HTTP matchers ran against tape")
+
+    client.response_free(resp)
+    vcr.eject(srv)
+}
+
+main() {
+    fw = aeocha.init()
+    run_process_section(fw)
+    run_http_section(fw)
+    aeocha.run_summary(fw)
+}

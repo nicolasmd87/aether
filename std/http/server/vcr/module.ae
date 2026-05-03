@@ -120,7 +120,7 @@ exports (
     vcr_get_redaction_count, vcr_get_redaction_field,
     vcr_get_redaction_pattern, vcr_get_redaction_replacement,
     vcr_aether_clear_tape, vcr_aether_append_interaction,
-    vcr_aether_set_load_err,
+    vcr_aether_set_load_err, vcr_aether_set_resp_headers,
     FIELD_PATH, FIELD_RESPONSE_BODY,
     load, eject, tape_length,
     record, flush, flush_or_check,
@@ -210,6 +210,13 @@ extern vcr_get_redaction_replacement(i: int) -> string
 extern vcr_aether_clear_tape()
 extern vcr_aether_append_interaction(method: string, path: string, status: int, content_type: string, body: string, req_headers: string, req_body: string, note_title: string, note_body: string) -> int
 extern vcr_aether_set_load_err(msg: string)
+// Response-headers setter — called by parse_one_interaction after
+// vcr_aether_append_interaction so the dispatcher can emit the
+// tape's recorded response headers (X-* trace IDs, ETags, etc.) at
+// replay time. Empty/absent → dispatcher falls back to the legacy
+// content-type-only path (preserves backward compat with tapes that
+// have no `### Response headers recorded for playback:` block).
+extern vcr_aether_set_resp_headers(index: int, headers: string)
 
 // Direct concat extern — interpolation recycles a backing buffer
 // and corrupts when the same `out` variable is rebuilt many times
@@ -1084,6 +1091,7 @@ parse_one_interaction(chunk: string) -> string {
     body = ""
     req_h = ""
     req_b = ""
+    resp_h = ""
 
     // Cursor for section walk starts at first byte after the heading line.
     p = nl_idx + 1
@@ -1120,6 +1128,17 @@ parse_one_interaction(chunk: string) -> string {
         } else if string.starts_with(sect_name, "Request body recorded") == 1 {
             block, _ = extract_code_block_at(chunk, sect_nl + 1, sect_body_end)
             req_b = string.copy(block)
+        } else if string.starts_with(sect_name, "Response headers recorded") == 1 {
+            // Capture the block. Stored verbatim — the dispatcher
+            // walks line-by-line and emits each as a real response
+            // header. Same shape we already use for req_headers,
+            // just plumbed through to a per-interaction setter
+            // because the C-side append takes a fixed positional
+            // arg list.
+            block, _ = extract_code_block_at(chunk, sect_nl + 1, sect_body_end)
+            if string.length(block) > 0 {
+                resp_h = string.copy(block)
+            }
         } else if string.starts_with(sect_name, "Response body recorded") == 1 {
             st, ct, ok = parse_response_body_header_aether(sect_name)
             if ok != 1 { return "malformed response body header" }
@@ -1128,8 +1147,6 @@ parse_one_interaction(chunk: string) -> string {
             block, _ = extract_code_block_at(chunk, sect_nl + 1, sect_body_end)
             body = string.copy(block)
         }
-        // Response headers section is parse-and-drop (we already
-        // extract content_type from the response-body header line).
 
         p = sect_body_end
     }
@@ -1139,6 +1156,14 @@ parse_one_interaction(chunk: string) -> string {
     // Append. note_title="" → setter doesn't stage a note.
     ok = vcr_aether_append_interaction(method, path, status, ctype, body, req_h, req_b, "", "")
     if ok == 0 { return "OOM appending parsed interaction" }
+    // Attach response headers to the just-appended interaction.
+    // vcr_get_tape_count() returns the count after the append, so
+    // the new entry's index is count - 1. Empty resp_h → setter
+    // is still safe (writes "" which the dispatcher treats as no-op).
+    if string.length(resp_h) > 0 {
+        idx = vcr_get_tape_count() - 1
+        vcr_aether_set_resp_headers(idx, resp_h)
+    }
     return ""
 }
 

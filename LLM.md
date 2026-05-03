@@ -143,12 +143,28 @@ plays that role), no interfaces.
   accessor, not a single-return.
 - **Spawning a child binary uses `std.os`, not a separate process
   module.** `os.run_capture(prog, argv, env) -> (stdout: string,
-  exit_code: int, stderr: string)` is the canonical "fork + exec +
-  wait + capture" — argv-based, no shell, binary-safe. Sibling
-  externs: `os_run` (no capture, just exit code), `os_system`
-  (legacy `system(3)` shell-out, prefer `run_capture`),
-  `os_execv` (replace current process). Don't propose a new
-  `std.process` — the surface is already there.
+  exit_code: int, spawn_err: string)` is the canonical "fork + exec
+  + wait + capture-stdout" — argv-based, no shell, binary-safe.
+  Caveat: only stdout is captured today; child stderr passes
+  through to the parent process. The third return slot is the
+  spawn-error string ("" on successful spawn even if exit_code != 0;
+  non-empty only on fork/exec/sandbox failure). Sibling externs:
+  `os_run` (no capture, just exit code), `os_system` (legacy
+  `system(3)` shell-out, prefer `run_capture`), `os_execv` (replace
+  current process). Don't propose a new `std.process`.
+- **HTTP client lives in two tiers, server in one.** `import
+  std.http` gives v1 client one-liners (`http.get(url) -> (body,
+  err)`, `http.post`, `http.put`, `http.delete`) plus the entire
+  server surface (`http.server_create(port)`, route handlers, etc).
+  `import std.http.client` gives a v2 builder (`client.request(method,
+  url)` → `set_header` → `set_timeout` → `send_request`) when the
+  one-liners are insufficient — anything needing custom request
+  headers, custom HTTP methods, response status discrimination,
+  per-request timeouts, or response headers. Reach for v2 by default
+  for non-trivial client work; v1 is fine for "GET, expect 200, want
+  body". Server-side stays in `std.http` (there's no v2 server). For
+  testing client code, `import std.http.server.vcr` provides
+  Servirtium-format record/replay against on-disk markdown tapes.
 
 ## Working with downstream users
 
