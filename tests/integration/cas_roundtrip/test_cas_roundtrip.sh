@@ -15,8 +15,21 @@ AE="$ROOT/build/ae"
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
+# AETHER_CAS feeds straight into the Aether runtime's mkdir/stat
+# calls, which on Windows-MinGW64 use the native libc — that libc
+# doesn't translate MSYS virtual paths like /tmp/tmp.XYZ. Convert
+# to a native (Win32-shaped, forward-slashed) path via cygpath when
+# available; on POSIX cygpath isn't installed, the conditional
+# falls through, and TMPDIR stays as-is.
+NATIVE_TMPDIR="$TMPDIR"
+if command -v cygpath >/dev/null 2>&1; then
+    NATIVE_TMPDIR="$(cygpath -m "$TMPDIR")"
+fi
+
 ACTUAL="$TMPDIR/actual.log"
-if ! AETHER_HOME="$ROOT" AETHER_CAS="$TMPDIR/cas" \
+if ! AETHER_HOME="$ROOT" \
+     AETHER_CAS="$NATIVE_TMPDIR/cas" \
+     AETHER_CAS_TEST_DIR="$NATIVE_TMPDIR" \
      "$AE" run "$SCRIPT_DIR/cas_roundtrip.ae" > "$ACTUAL" 2>"$TMPDIR/err.log"; then
     echo "  [FAIL] ae run exited non-zero"
     cat "$TMPDIR/err.log" | head -10
@@ -37,6 +50,9 @@ esac
 # should contain exactly one file, named with the well-known sha256
 # digest of "hello cas".
 EXPECTED_DIGEST="ba532ff613d7df59916589e39fc6dc9dc71b61bf7fd14a2c98c12c222a6cfd39"
+# Check via TMPDIR (the bash-side path) — the Aether runtime wrote
+# the entry at $NATIVE_TMPDIR/cas/<digest>; that's the same physical
+# file viewable from the shell side as $TMPDIR/cas/<digest>.
 if [ ! -f "$TMPDIR/cas/$EXPECTED_DIGEST" ]; then
     echo "  [FAIL] expected CAS entry not present at $TMPDIR/cas/$EXPECTED_DIGEST"
     ls -la "$TMPDIR/cas" 2>&1 | head -5
