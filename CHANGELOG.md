@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`make install-contrib` now ships `contrib.aeocha`** (`Makefile`). The `install-contrib` target was deleting `$(PREFIX)/share/aether/contrib/aeocha` post-copy alongside `aether_ui`, `tinyweb`, `host/{java,go,tinygo}` — but the rationale for that exclusion list ("modules whose build shape doesn't fit v1's .a-archive convention") doesn't apply to aeocha, which is pure Aether (`module.ae` only — no `.c` bridge, no `.a` archive). Result: porters who installed the toolchain via `make install && make install-contrib` couldn't `import contrib.aeocha` against the prefix because the module.ae wasn't there. Fix removes the spurious `rm -rf` line; aeocha now installs as `share/aether/contrib/aeocha/{module.ae,README.md,TODO.md}` (test/example noise still trimmed by the existing `find` rules). No `.a` lands in `lib/aether/` for aeocha — correct, because there's nothing to link against. Existing contrib modules unchanged.
+
 ## [0.118.0]
 
 ### Added

@@ -1191,12 +1191,13 @@ install-contrib: contrib
 	@# Trim noise: tests, benchmarks, example .ae, build scripts,
 	@# CI scripts, and the modules we don't ship in v1
 	@# (aether_ui, climate_http_tests, host/{java,go,tinygo},
-	@# tinyweb, aeocha — see contrib: target comment).
+	@# tinyweb — see contrib: target comment). aeocha is pure Aether
+	@# (no .c bridge, no .a archive) so it ships as-is — downstream
+	@# does `import contrib.aeocha` against the installed module.ae.
 	@cp -R contrib $(PREFIX)/share/aether/
 	@rm -rf $(PREFIX)/share/aether/contrib/aether_ui
 	@rm -rf $(PREFIX)/share/aether/contrib/climate_http_tests
 	@rm -rf $(PREFIX)/share/aether/contrib/tinyweb
-	@rm -rf $(PREFIX)/share/aether/contrib/aeocha
 	@rm -rf $(PREFIX)/share/aether/contrib/host/java
 	@rm -rf $(PREFIX)/share/aether/contrib/host/go
 	@rm -rf $(PREFIX)/share/aether/contrib/host/tinygo
