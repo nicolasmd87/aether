@@ -57,6 +57,8 @@ extern const char* http_request_method(void* req);
 extern const char* http_request_path(void* req);
 extern void        http_response_set_status(void* res, int code);
 extern void        http_response_set_header(void* res, const char* name, const char* value);
+extern void        http_response_add_header(void* res, const char* name, const char* value);
+extern void        http_response_clear_headers(void* res);
 extern void        http_response_set_body  (void* res, const char* body);
 
 /* Step 10: header iteration + body access. We need to walk the
@@ -910,17 +912,24 @@ void vcr_dispatch(void* req, void* res, void* ud) {
     }
 
     http_response_set_status(res, e->status);
-    if (e->content_type) {
-        http_response_set_header(res, "Content-Type", e->content_type);
-    }
+
+    /* Wipe defaults from http_response_create (Content-Type:
+     * text/html, Server: Aether/1.0). Servirtium-spec replay must
+     * serve EXACTLY what was recorded, with no Aether overlays —
+     * otherwise the wire bytes don't match what the original server
+     * sent and clients that care about response-header ordering
+     * (or repeated keys, or specific Server identity) reject the
+     * response. */
+    http_response_clear_headers(res);
+
     /* Walk the tape's `### Response headers recorded for playback:`
-     * block (if present) and emit each as a real response header.
-     * Lines are "Name: Value\n"-shaped; tolerant of trailing CRLF
-     * and of trailing newlines (the parser preserves the canonical
-     * "Name: Value\n..." form, blank line at the end is normal).
-     * Skips Content-Type if it appears in the block — already set
-     * above from e->content_type, which the response-body header
-     * line is the source of truth for. */
+     * block and emit each line verbatim, in order. Includes
+     * Content-Type if the tape recorded one (which it does, in
+     * canonical Servirtium markdown — the parser stores the body's
+     * `(<status>: <ct>)` opener AND the resp_headers block; both
+     * will normally agree). Tapes pre-dating the resp_headers
+     * field fall back to the `e->content_type` emission below. */
+    int emitted_content_type_from_block = 0;
     if (e->resp_headers && e->resp_headers[0]) {
         const char* p = e->resp_headers;
         while (*p) {
@@ -959,9 +968,8 @@ void vcr_dispatch(void* req, void* res, void* ud) {
             name_buf[name_len] = '\0';
             memcpy(val_buf, val_start, val_len);
             val_buf[val_len] = '\0';
-            /* Skip Content-Type — already set from e->content_type
-             * above. The response-body header line is the canonical
-             * source; the headers block may or may not duplicate it. */
+            /* Track whether the tape included a Content-Type line so
+             * we don't double-emit one from e->content_type below. */
             if (name_len == 12) {
                 int matches_ct = 1;
                 const char* ct = "Content-Type";
@@ -972,10 +980,21 @@ void vcr_dispatch(void* req, void* res, void* ud) {
                     if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
                     if (a != b) { matches_ct = 0; break; }
                 }
-                if (matches_ct) continue;
+                if (matches_ct) emitted_content_type_from_block = 1;
             }
-            http_response_set_header(res, name_buf, val_buf);
+            /* add_header (not set_header) — SVN/WebDAV tapes have
+             * many duplicate-keyed headers (13+ `DAV:` per response).
+             * set_header replaces on duplicate; add_header preserves
+             * order and multiplicity through to the wire serializer. */
+            http_response_add_header(res, name_buf, val_buf);
         }
+    }
+    /* Fallback: tapes without a resp_headers block (or with one that
+     * happens to omit Content-Type) still need a Content-Type so the
+     * client knows how to interpret the body. The body's response
+     * line is the canonical source for these legacy tapes. */
+    if (!emitted_content_type_from_block && e->content_type && e->content_type[0]) {
+        http_response_add_header(res, "Content-Type", e->content_type);
     }
     http_response_set_body(res, e->body);
 
@@ -1038,6 +1057,10 @@ const char* vcr_get_req_headers(int i) {
 const char* vcr_get_req_body(int i) {
     if (i < 0 || i >= g_tape_n) return "";
     return safe(g_tape[i].req_body);
+}
+const char* vcr_get_resp_headers(int i) {
+    if (i < 0 || i >= g_tape_n) return "";
+    return safe(g_tape[i].resp_headers);
 }
 int vcr_get_note_present(int i) {
     if (i < 0 || i >= g_tape_n) return 0;

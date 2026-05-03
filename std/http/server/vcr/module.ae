@@ -115,6 +115,7 @@ exports (
     vcr_set_indent_code_blocks, vcr_set_emphasize_http_verbs,
     vcr_get_tape_count, vcr_get_method, vcr_get_path, vcr_get_status,
     vcr_get_content_type, vcr_get_body, vcr_get_req_headers, vcr_get_req_body,
+    vcr_get_resp_headers,
     vcr_get_note_present, vcr_get_note_title, vcr_get_note_body,
     vcr_get_indent_code_blocks, vcr_get_emphasize_http_verbs,
     vcr_get_redaction_count, vcr_get_redaction_field,
@@ -192,6 +193,7 @@ extern vcr_get_content_type(i: int) -> string
 extern vcr_get_body(i: int) -> string
 extern vcr_get_req_headers(i: int) -> string
 extern vcr_get_req_body(i: int) -> string
+extern vcr_get_resp_headers(i: int) -> string
 extern vcr_get_note_present(i: int) -> int
 extern vcr_get_note_title(i: int) -> string
 extern vcr_get_note_body(i: int) -> string

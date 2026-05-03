@@ -299,6 +299,15 @@ void http_request_free(HttpRequest* req);
 HttpServerResponse* http_response_create();
 void http_response_set_status(HttpServerResponse* res, int code);
 void http_response_set_header(HttpServerResponse* res, const char* key, const char* value);
+/* Append a header verbatim, even if a header with the same name
+ * already exists. For protocols that allow/require repeated headers
+ * (e.g. SVN's WebDAV uses 13+ `DAV:` headers per response). The
+ * replace-on-duplicate behaviour of `set_header` collapses these. */
+void http_response_add_header(HttpServerResponse* res, const char* key, const char* value);
+/* Drop every header (including the defaults from http_response_create).
+ * Used by record/replay frameworks that need to serve exactly what
+ * was captured, with no Aether defaults overlaid. */
+void http_response_clear_headers(HttpServerResponse* res);
 void http_response_set_body(HttpServerResponse* res, const char* body);
 /* Length-aware sibling — binary-safe set_body. Use when the body
  * may contain embedded NULs (binary content, gzip output, packed
