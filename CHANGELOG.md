@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Changed
+
+- **Documented `std.os` process-spawn surface — fills a tier-coverage gap** (`LLM.md`, `docs/stdlib-api.md`, `docs/next-steps.md`). The `os.run` / `os.run_capture` / `os_execv` family shipped in PR #148 + #289 but documentation was thin: `docs/stdlib-api.md` had only a "see PR #148" pointer, `docs/next-steps.md` still listed `os.run` as a P1 to-do, and `LLM.md` had no idiom-level entry — meaning a future LLM asked "how do I spawn a child binary in Aether?" would grep the stdlib instead of getting the answer immediately. Three updates: (1) `LLM.md` gains a one-line idiom under "Idioms that keep biting" calling out `os.run_capture(prog, argv, env) -> (stdout, exit_code, stderr)` as the canonical answer with no need to propose a `std.process` module; (2) `docs/stdlib-api.md` gets a new "Process spawn (argv-based, no shell)" subsection with full signatures, return shapes, a worked git-rev-parse example, capability/Windows portability notes, and a callout that the API is currently synchronous (no streaming stdin / incremental stdout); (3) `docs/next-steps.md` marks the P1 (`os.run`) and P3 (`argv0` + `execv`) sections as **SHIPPED** with banners pointing at the stdlib reference, retaining the original rationale as historical context. No code changes.
+
 ## [0.117.0]
 
 ### Fixed
