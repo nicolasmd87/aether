@@ -17,6 +17,16 @@ typedef struct {
     char* current_actor;
     char** actor_state_vars;
     int state_var_count;
+
+    // While set, references to actor state fields emit
+    // `<alias>->field` instead of the usual `self->field`.
+    // The `spawn_<Actor>` function initialises `actor->...` at
+    // alloc time and the receive-timeout expression there has
+    // `actor` in scope but NOT `self`; setting this to "actor"
+    // for the duration of that expression lets users write
+    // `receive { … } after m_interval_ms -> { … }` instead of
+    // hardcoding the timeout. Cleared back to NULL afterwards.
+    const char* state_self_alias;
     MessageRegistry* message_registry;
     char** declared_vars;  // Track variables declared in current function
     int declared_var_count;

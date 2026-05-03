@@ -1558,7 +1558,15 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                     }
                 }
                 if (is_state_var) {
-                    fprintf(gen->output, "self->%s", expr->value);
+                    // `state_self_alias` lets the spawn-time timeout
+                    // expression resolve state fields against the
+                    // local `actor` (the only handle in scope at the
+                    // alloc site). Everywhere else the alias is NULL
+                    // and we emit the canonical `self->field`.
+                    const char* alias = gen->state_self_alias
+                                      ? gen->state_self_alias
+                                      : "self";
+                    fprintf(gen->output, "%s->%s", alias, expr->value);
                 } else {
                     fprintf(gen->output, "%s", expr->value);
                 }

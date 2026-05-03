@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>           // LONG_MAX (least-loaded placement scan)
 #include "../utils/aether_thread.h"
 #ifndef _WIN32
 #include <sched.h>
@@ -1271,12 +1272,42 @@ void scheduler_cleanup() {
 }
 
 int scheduler_register_actor(ActorBase* actor, int preferred_core) {
-    // Partitioned assignment: actor_id % num_cores
-    // This ensures perfect load balance across cores
+    // Default placement: pick the worker with the lowest combined
+    // load right now. The previous shape — `actor_id % num_cores` —
+    // gave perfect distribution only on long actor sequences; on
+    // small actor counts (think Teuvo's two-actor site-poller) two
+    // ids reliably collide on the same core and the second actor
+    // starves while the first runs a long handler.
+    //
+    // The scan is O(num_cores) of relaxed atomic loads, sub-microsecond
+    // on every reasonable box. The user-supplied `core: N` override
+    // skips it. Combining work_count (in-flight messages) and
+    // actor_count (total actors assigned) reflects both queue
+    // depth AND lifetime load; ties broken by lowest core index for
+    // deterministic placement under cold-start.
+    //
+    // Strictly better than the modulo: same-or-better distribution on
+    // small N, identical on large N (cores fill evenly anyway).
     if (preferred_core < 0) {
-        preferred_core = actor->id % num_cores;
+        if (num_cores <= 1) {
+            preferred_core = 0;
+        } else {
+            int target = 0;
+            long best  = LONG_MAX;
+            for (int c = 0; c < num_cores; c++) {
+                long load = (long)atomic_load_explicit(
+                                &schedulers[c].work_count,
+                                memory_order_relaxed)
+                          + (long)schedulers[c].actor_count;
+                if (load < best) {
+                    best = load;
+                    target = c;
+                }
+            }
+            preferred_core = target;
+        }
     }
-    
+
     Scheduler* sched = &schedulers[preferred_core];
 
     spinlock_lock(&sched->actor_lock);

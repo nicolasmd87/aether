@@ -68,6 +68,7 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->current_actor = NULL;
     gen->actor_state_vars = NULL;
     gen->state_var_count = 0;
+    gen->state_self_alias = NULL;
     gen->message_registry = create_message_registry();
     gen->declared_vars = NULL;
     gen->declared_var_count = 0;
