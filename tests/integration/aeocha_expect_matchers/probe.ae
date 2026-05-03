@@ -126,6 +126,15 @@ run_http_section(fw: ptr) {
 }
 
 main() {
+    // Skip on Windows — both sections depend on POSIX-shaped paths
+    // (/bin/echo, /bin/sh) that don't exist under MSYS2 / mingw-w64.
+    // os.run_capture itself works on Windows; only the test fixture
+    // is POSIX-shaped. Pattern matches
+    // tests/regression/test_run_capture_status.ae.
+    if os_getenv("OS") == "Windows_NT" {
+        println("  SKIP aeocha_expect_matchers: /bin/echo and /bin/sh are POSIX-shaped")
+        return
+    }
     fw = aeocha.init()
     run_process_section(fw)
     run_http_section(fw)
