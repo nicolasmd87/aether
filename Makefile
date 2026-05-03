@@ -1019,7 +1019,16 @@ release: clean
 	@echo "==================================="
 	@$(MKDIR) build
 	@echo "Compiling with -O3 -DNDEBUG -flto -Werror..."
+	@# -DAETHER_VERSION baked in from the same $(VERSION) the rest of
+	@# the build uses (highest git tag → VERSION file fallback). Without
+	@# this, compiler/aetherc.c falls back to the `v0.0.0-dev` sentinel,
+	@# and since `make install` ships this exact binary as
+	@# $(PREFIX)/bin/aetherc, every installed compiler reported the
+	@# wrong version. The dev-build aetherc (compiled via the standard
+	@# $(CFLAGS) pattern rule on line 133) has the flag and is correct;
+	@# only the release-target hand-rolled gcc invocation was missing it.
 	@$(CC) -O3 -DNDEBUG -flto -Werror -Icompiler -Iruntime -Istd -Istd/collections \
+		-DAETHER_VERSION=\"$(VERSION)\" \
 		$(COMPILER_SRC) $(STD_SRC) $(COLLECTIONS_SRC) \
 		-o build/aetherc-release$(EXE_EXT) $(LDFLAGS)
 ifeq ($(DETECTED_OS),Linux)
