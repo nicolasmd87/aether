@@ -59,6 +59,7 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor);
 /* Extern function registry — tracks param types for call-site cast emission */
 void register_extern_func(CodeGenerator* gen, ASTNode* ext);
 int is_extern_func(CodeGenerator* gen, const char* func_name);
+int is_aether_extern_func(CodeGenerator* gen, const char* func_name);
 TypeKind lookup_extern_param_kind(CodeGenerator* gen, const char* func_name, int param_idx);
 const char* lookup_extern_c_name(CodeGenerator* gen, const char* func_name);
 

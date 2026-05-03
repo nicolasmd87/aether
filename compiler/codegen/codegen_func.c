@@ -66,11 +66,21 @@ void register_extern_func(CodeGenerator* gen, ASTNode* ext) {
     int idx = gen->extern_registry_count++;
     gen->extern_registry[idx].name = strdup(ext->value);
     gen->extern_registry[idx].c_name = NULL;
+    gen->extern_registry[idx].aether_emitted = 0;
     // @extern("c_symbol") rebinds the call-site emission to a chosen
     // C symbol while keeping the Aether-side name in the namespace.
     if (ext->annotation &&
         strncmp(ext->annotation, "c_symbol:", 9) == 0) {
         gen->extern_registry[idx].c_name = strdup(ext->annotation + 9);
+    }
+    // @aether marks the extern as implemented in Aether-emitted C — the
+    // receiver dispatches on AetherString magic via str_data/str_len, so
+    // the call site must NOT unwrap to aether_string_data(s). Otherwise
+    // binary content with embedded NULs gets strlen-truncated on the
+    // receiving side. See #351.
+    if (ext->annotation &&
+        strcmp(ext->annotation, "aether_extern") == 0) {
+        gen->extern_registry[idx].aether_emitted = 1;
     }
     gen->extern_registry[idx].param_count = ext->child_count;
     gen->extern_registry[idx].params = NULL;
@@ -168,6 +178,18 @@ static int find_extern_registry_index(CodeGenerator* gen, const char* func_name)
 // Check if a function name is registered as an extern function.
 int is_extern_func(CodeGenerator* gen, const char* func_name) {
     return find_extern_registry_index(gen, func_name) >= 0;
+}
+
+// Check if a function name was declared via `@aether extern foo(...)`.
+// Used by call-site codegen to suppress the aether_string_data() unwrap
+// for string params — the receiver is Aether-emitted and its
+// str_data/str_len already dispatch on the AetherString magic header,
+// so passing the unwrapped data pointer would strlen-truncate binary
+// content at embedded NULs. See #351.
+int is_aether_extern_func(CodeGenerator* gen, const char* func_name) {
+    int idx = find_extern_registry_index(gen, func_name);
+    if (idx < 0) return 0;
+    return gen->extern_registry[idx].aether_emitted;
 }
 
 // If `func_name` was declared via @extern("c_symbol"), return the C

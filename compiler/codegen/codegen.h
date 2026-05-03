@@ -76,6 +76,13 @@ typedef struct {
                              //   via @extern("c_symbol") aether_name(...) — see #234.
         TypeKind* params;    // array of parameter kinds (TYPE_PTR, TYPE_INT, ...)
         int param_count;
+        int aether_emitted;  // 1 if declared `@aether extern foo(...)` — receiver is
+                             //   Aether-emitted C and uses str_data/str_len to dispatch
+                             //   on the magic header. Codegen suppresses
+                             //   aether_string_data() unwrap for this extern's
+                             //   string params, so binary content with embedded NULs
+                             //   round-trips intact. Closes #351 (the regression
+                             //   introduced by 718d13d's blanket auto-unwrap).
     }* extern_registry;
     int extern_registry_count;
     int extern_registry_capacity;

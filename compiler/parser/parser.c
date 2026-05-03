@@ -3338,8 +3338,36 @@ ASTNode* parse_program(Parser* parser) {
                     node = fdef;
                     break;
                 }
+                // @aether extern foo(...) — marks the extern as
+                // implemented by another Aether-emitted compilation
+                // unit. Codegen suppresses aether_string_data() unwrap
+                // at the call site so AetherString headers (with magic
+                // + length) cross the boundary intact, preserving
+                // binary content with embedded NULs. The receiver's
+                // string.length / string.char_at then dispatch through
+                // str_len's magic check and read the stored length
+                // instead of falling through to strlen(). See #351.
+                if (attr && attr->type == TOKEN_IDENTIFIER &&
+                    attr->value && strcmp(attr->value, "aether") == 0) {
+                    advance_token(parser);  // consume 'aether'
+                    // Expect `extern` to follow — the annotation only
+                    // makes sense on extern declarations.
+                    Token* ekw = peek_token(parser);
+                    if (!ekw || ekw->type != TOKEN_EXTERN) {
+                        parser_error(parser, "@aether must be followed by `extern foo(...)`");
+                        advance_token(parser);
+                        continue;
+                    }
+                    ASTNode* ext = parse_extern_declaration(parser);
+                    if (ext) {
+                        if (ext->annotation) free(ext->annotation);
+                        ext->annotation = strdup("aether_extern");
+                    }
+                    node = ext;
+                    break;
+                }
                 if (!attr || attr->type != TOKEN_EXTERN) {
-                    parser_error(parser, "unknown attribute (expected @extern(\"...\") or @c_callback)");
+                    parser_error(parser, "unknown attribute (expected @aether extern, @extern(\"...\") or @c_callback)");
                     advance_token(parser);
                     continue;
                 }

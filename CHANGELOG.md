@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`@aether extern foo(...)` annotation suppresses call-site `aether_string_data()` unwrap — fixes binary-content truncation across Aether-to-Aether extern boundaries** (`compiler/parser/parser.c`, `compiler/codegen/{codegen.h,codegen_internal.h,codegen_func.c,codegen_expr.c}`, `tests/integration/aether_extern_annotation/`). Closes #351, restores the v0.97.0 behaviour for Aether-to-Aether crossings without re-breaking the v0.97.0→v0.98.0 fix for naive C externs (#297). Background: 718d13d added a blanket `aether_string_data(s)` unwrap at every `extern foo(s: string)` call site to fix #297 (where passing AetherString headers to naive C functions like `sqlite3_exec` corrupted their input via `memcpy`/`strlen` reading magic+refcount bytes). The unwrap was correct for naive C externs but wrong for Aether-emitted ones, where the receiver's `string.length` / `string.char_at` already dispatch on the AetherString magic via `str_len`. Stripping the header at the call site forced the receiver into the `strlen()` fallback, truncating binary content at the first NUL — invisible for text but silently corrupting any binary roundtrip (svn-aether's svndiff encode/decode hit this with their varint zero bytes). The fix adds a per-extern annotation marking "this extern is implemented by Aether-emitted C, preserve the header pointer." Codegen tracks an `aether_emitted` flag in `ExternParamInfo`; the call-site unwrap condition ANDs `!is_aether_extern_func` so Aether-to-Aether crossings skip the unwrap. Bare `extern` declarations are unchanged — naive C externs continue to receive the unwrapped `const char*`. Bisect-confirmed regression range was v0.97.0 → v0.98.0 (commit 718d13d, 2026-04-28). Sample usage:
+
+  ```aether
+  // helper.ae (compiled with --emit=lib):
+  export consume_binary(s: string) { ... }
+
+  // user.ae:
+  @aether extern consume_binary(s: string)   // ← header preserved
+  extern other_c_function(s: string)         // ← still unwrapped (naive C contract)
+  ```
+
+  Acceptance: the standalone reproducer at `binary-string-extern-boundary-repro.sh` reports `length = 7` and `byte[5] = 14` from inside `consume_binary` when the extern is declared with `@aether`, restoring the round-trip semantics the svn-aether port relied on at v0.97.0.
+
 ## [0.115.0]
 
 ### Added
