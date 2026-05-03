@@ -441,6 +441,53 @@ extern parse_with_explicit_length(s: ptr) -> int
 
 The C function then takes `const void*` (or `const AetherString*`) and goes through the helpers manually. This is the escape hatch for any FFI shim that needs binary-safe length reads — declaring `s: string` would auto-unwrap and `aether_string_length` would fall back to `strlen`, truncating at the first NUL.
 
+### Aether-emitted receivers — `name: @aether string`
+
+The auto-unwrap above is correct for **naive C externs** — functions that receive a `const char*` and call `memcpy`/`strlen` on it. But `extern foo(s: string)` is also the spelling used to call into **another Aether-emitted module** (e.g. a function exported via `--emit=lib` from a separate `.ae` file). Aether-emitted receivers don't behave like naive C: their `string.length(s)` / `string.char_at(s, i)` already dispatch on the AetherString magic via `str_len`. If the call site auto-unwraps before the value crosses the boundary, the receiver's dispatch sees only payload bytes, the magic check fails, and `str_len` falls through to `strlen` — truncating binary content at the first NUL.
+
+The fix is per-param, opt-in: annotate the param with `@aether` to mark it as receiving an AetherString pointer (header preserved) rather than an unwrapped `const char*`:
+
+```aether
+// helper.ae (compiled with --emit=lib):
+export consume_binary(s: string) {
+    println("len=${string.length(s)}")   // sees stored length, not strlen
+}
+
+// caller.ae:
+extern consume_binary(s: @aether string)   // ← header preserved
+extern other_c_function(s: string)         // ← still unwrapped (naive C contract)
+```
+
+The `@aether` annotation is per-param, so a single extern can mix Aether-emitted-string params with naive-C-pointer params:
+
+```aether
+extern do_thing(aether_msg: @aether string,
+                c_path:     string) -> int
+// Codegen emits: do_thing(msg, aether_string_data(path))
+//                          ^^^                      ^^^^^
+//          header preserved                 unwrapped to const char*
+```
+
+**When to reach for it:**
+
+- Calling a function exported via `export foo(s: string) { ... }` from another `.ae` file linked into the same binary.
+- The caller's value is binary content (contains NULs, returned from `bytes.finish` / `cryptography.base64_decode` / `fs.read_binary` / etc.) and the receiver needs to see the full length, not the strlen-truncated prefix.
+
+**When NOT to reach for it:**
+
+- The receiver is hand-written C that takes `const char*`. Use bare `s: string` — the auto-unwrap is doing the right thing.
+- The receiver works on text content with no NULs. `strlen()` and the stored length agree, so either annotation works; bare is simpler.
+
+The `@aether` annotation is a sibling to the `: ptr` escape hatch above. Both opt out of the auto-unwrap; they differ in what the receiving side sees:
+
+| Param declaration | Call site emits | Receiver sees |
+|---|---|---|
+| `s: string` | `foo(aether_string_data(s))` | unwrapped `const char*` (strlen-bounded) |
+| `s: @aether string` | `foo(s)` | AetherString pointer with header — dispatches via `str_len` |
+| `s: ptr` | `foo(s)` | `void*` — caller dispatches manually with `aether_string_data` / `aether_string_length` |
+
+Closes #351. The regression range was v0.97.0 → v0.98.0 (commit 718d13d added the blanket auto-unwrap to fix #297); the `@aether` annotation restores the v0.97.0 behaviour for Aether-to-Aether crossings without re-breaking the v0.98.0 fix for naive C externs.
+
 **Length-clamp hazard for binary content.** Once the auto-unwrap has fired, a C shim that receives a `string`-typed parameter has only payload bytes — no header, no stored length. A common defensive pattern is fatal here:
 
 ```c
@@ -477,7 +524,17 @@ export slice_from(s: string, start: int, end: int) -> string {
 }
 ```
 
-For Aether libraries operating on potentially-binary input, use the explicit-length companions in `std.string`:
+**The proper fix is the `@aether` annotation on the caller's `extern` declaration** (see "Aether-emitted receivers" above). Mark the boundary on the caller side and the auto-unwrap is suppressed for that arg slot — the receiver sees the AetherString pointer intact, `string.length` reads the stored length, and binary content with embedded NULs round-trips correctly:
+
+```aether
+// caller.ae
+extern slice_from(s: @aether string, start: int, end: int) -> string
+//                ^^^^^^^ marks the receiver as Aether-emitted
+```
+
+The `slice_from` definition above can stay as-written — `string.length(s)` now sees the stored length because the header survived the boundary.
+
+**Alternative — explicit-length parameter.** If the call site is a hand-written C shim that can't use `@aether`, or you want to be defensive about the input type, the explicit-length companions in `std.string` work:
 
 ```aether
 // CORRECT — caller threads the length through; no internal strlen.
@@ -488,7 +545,7 @@ export slice_from(s: string, s_len: int, start: int, end: int) -> string {
 }
 ```
 
-`string.substring_n(s, s_len, start, end)` and `string.length_n(s, s_known)` exist specifically to make this pattern available without falling back to a C shim. If you find yourself accumulating `_n`-suffixed externs (`some_op_n`, `some_op_n_n`) at the FFI boundary, that's a sign the function should accept the length as a regular parameter on the Aether side too — not punt to C.
+`string.substring_n(s, s_len, start, end)` and `string.length_n(s, s_known)` exist specifically to make this pattern available without falling back to a C shim. If you find yourself accumulating `_n`-suffixed externs (`some_op_n`, `some_op_n_n`) at the FFI boundary, that's a sign the function should accept the length as a regular parameter on the Aether side too — or the caller's extern declaration should use `@aether` to skip the unwrap entirely.
 
 ### Struct overlay on raw pointers — `*StructName` and `expr as *StructName`
 

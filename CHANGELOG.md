@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`name: @aether string` per-param extern annotation** (`compiler/parser/parser.c`, `compiler/codegen/{codegen.h,codegen_internal.h,codegen.c,codegen_func.c,codegen_expr.c}`, `docs/c-interop.md`, `tests/integration/aether_extern_param_annotation/`). Marks an extern param as receiving an AetherString pointer (header preserved) rather than an unwrapped `const char*`. The annotation is per-param so a single extern can mix Aether-emitted-string params with naive-C-pointer params: `extern do_thing(aether_msg: @aether string, c_path: string) -> int` emits `do_thing(msg, aether_string_data(path))` at the call site. See `docs/c-interop.md` for when to reach for this.
+
+### Fixed
+
+- **Binary-content truncation across Aether-to-Aether extern boundaries** (#351). Under the v0.98.0 → v0.115.0 series, a `string` value carrying embedded NULs got strlen-truncated when it crossed an `extern` declaration whose receiver was Aether-emitted (e.g. another `--emit=lib` module's exports). Bisect-confirmed regression introduced by 718d13d (v0.97.0 → v0.98.0): that commit added a blanket `aether_string_data(s)` unwrap to fix #297 (naive C externs reading AetherString headers as data), but the unwrap conflated naive-C receivers with Aether-emitted ones. Aether-emitted receivers' `string.length` / `string.char_at` dispatch on the magic via `str_len`; stripping the header forced them into the `strlen()` fallback. Fix is opt-in via the new `@aether` per-param annotation above — bare `extern foo(s: string)` declarations preserve the v0.98.0 auto-unwrap so naive C externs (sqlite3, openssl, etc.) keep working. Acceptance: `binary-string-extern-boundary-repro.sh`-style program with `extern consume_binary(s: @aether string)` reports `length = 7` and `byte[5] = 14` from inside `consume_binary`.
+
 ## [0.115.0]
 
 ### Added

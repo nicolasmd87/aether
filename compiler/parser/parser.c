@@ -2700,6 +2700,27 @@ ASTNode* parse_extern_declaration(Parser* parser) {
 
             // Require type annotation for extern: param: type
             if (match_token(parser, TOKEN_COLON)) {
+                // Optional `@aether` annotation between `:` and the
+                // type — `name: @aether string`. Marks this specific
+                // param as receiving an AetherString header rather
+                // than the unwrapped const char*. Codegen suppresses
+                // the call-site aether_string_data() unwrap for this
+                // slot so binary content with embedded NULs survives
+                // the boundary intact. Receiver's string.length /
+                // string.char_at dispatch on the magic via str_len.
+                // See #351.
+                if (peek_token(parser) && peek_token(parser)->type == TOKEN_AT) {
+                    advance_token(parser);  // consume '@'
+                    Token* attr = peek_token(parser);
+                    if (attr && attr->type == TOKEN_IDENTIFIER &&
+                        attr->value && strcmp(attr->value, "aether") == 0) {
+                        advance_token(parser);  // consume 'aether'
+                        if (param->annotation) free(param->annotation);
+                        param->annotation = strdup("aether_param");
+                    } else {
+                        parser_error(parser, "unknown extern-param attribute (expected @aether)");
+                    }
+                }
                 Type* param_type = parse_type(parser);
                 if (param_type) {
                     param->node_type = param_type;
@@ -3374,6 +3395,20 @@ ASTNode* parse_program(Parser* parser) {
                         ASTNode* p = create_ast_node(AST_IDENTIFIER, pname->value,
                                                      pname->line, pname->column);
                         if (match_token(parser, TOKEN_COLON)) {
+                            // Same `@aether` per-param annotation as the
+                            // bare `extern foo(...)` form. See parse_extern_declaration.
+                            if (peek_token(parser) && peek_token(parser)->type == TOKEN_AT) {
+                                advance_token(parser);
+                                Token* pattr = peek_token(parser);
+                                if (pattr && pattr->type == TOKEN_IDENTIFIER &&
+                                    pattr->value && strcmp(pattr->value, "aether") == 0) {
+                                    advance_token(parser);
+                                    if (p->annotation) free(p->annotation);
+                                    p->annotation = strdup("aether_param");
+                                } else {
+                                    parser_error(parser, "unknown extern-param attribute (expected @aether)");
+                                }
+                            }
                             Type* pt = parse_type(parser);
                             p->node_type = pt ? pt : create_type(TYPE_INT);
                         } else {

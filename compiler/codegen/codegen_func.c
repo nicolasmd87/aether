@@ -74,15 +74,37 @@ void register_extern_func(CodeGenerator* gen, ASTNode* ext) {
     }
     gen->extern_registry[idx].param_count = ext->child_count;
     gen->extern_registry[idx].params = NULL;
+    gen->extern_registry[idx].params_aether = NULL;
 
     if (ext->child_count > 0) {
         gen->extern_registry[idx].params = malloc(ext->child_count * sizeof(TypeKind));
+        // First pass: detect whether any param is `@aether`-annotated.
+        // Allocate the parallel int array only if so — avoids a small
+        // per-extern allocation in the common (no-annotation) case.
+        int any_aether = 0;
+        for (int i = 0; i < ext->child_count; i++) {
+            ASTNode* param = ext->children[i];
+            if (param && param->annotation &&
+                strcmp(param->annotation, "aether_param") == 0) {
+                any_aether = 1;
+                break;
+            }
+        }
+        if (any_aether) {
+            gen->extern_registry[idx].params_aether =
+                calloc(ext->child_count, sizeof(int));
+        }
         for (int i = 0; i < ext->child_count; i++) {
             ASTNode* param = ext->children[i];
             if (param && param->node_type) {
                 gen->extern_registry[idx].params[i] = param->node_type->kind;
             } else {
                 gen->extern_registry[idx].params[i] = TYPE_UNKNOWN;
+            }
+            if (gen->extern_registry[idx].params_aether &&
+                param && param->annotation &&
+                strcmp(param->annotation, "aether_param") == 0) {
+                gen->extern_registry[idx].params_aether[i] = 1;
             }
         }
     }
@@ -193,6 +215,20 @@ TypeKind lookup_extern_param_kind(CodeGenerator* gen, const char* func_name, int
         return gen->extern_registry[idx].params[param_idx];
     }
     return TYPE_UNKNOWN;
+}
+
+// Returns 1 if the nth parameter of `func_name` was declared with the
+// `@aether` annotation (`name: @aether string`), 0 otherwise. Used by
+// call-site codegen to suppress the aether_string_data() unwrap on
+// that arg slot — receiver is Aether-emitted C and dispatches on the
+// AetherString magic via str_len; passing the unwrapped data pointer
+// would strlen-truncate binary content at embedded NULs. See #351.
+int is_aether_extern_param(CodeGenerator* gen, const char* func_name, int param_idx) {
+    int idx = find_extern_registry_index(gen, func_name);
+    if (idx < 0) return 0;
+    if (!gen->extern_registry[idx].params_aether) return 0;
+    if (param_idx < 0 || param_idx >= gen->extern_registry[idx].param_count) return 0;
+    return gen->extern_registry[idx].params_aether[param_idx];
 }
 
 // Check if an AST subtree contains a return statement with a value.

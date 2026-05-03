@@ -75,6 +75,14 @@ typedef struct {
                              //   Set to a different value when the extern was declared
                              //   via @extern("c_symbol") aether_name(...) — see #234.
         TypeKind* params;    // array of parameter kinds (TYPE_PTR, TYPE_INT, ...)
+        int* params_aether;  // 1 per index when the param was declared
+                             //   `name: @aether string` — receiver is Aether-emitted
+                             //   C and dispatches on AetherString magic via str_len.
+                             //   Codegen suppresses aether_string_data() unwrap for
+                             //   that specific arg slot, so binary content with
+                             //   embedded NULs round-trips intact. See #351. NULL
+                             //   when no param carries the annotation (saves the
+                             //   per-extern allocation in the common case).
         int param_count;
     }* extern_registry;
     int extern_registry_count;
