@@ -2509,7 +2509,8 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                                    (arg->node_type->kind == TYPE_STRING ||
                                     arg->node_type->kind == TYPE_PTR) &&
                                    is_extern_func(gen, func_name) &&
-                                   !is_stdlib_string_aware_extern(c_func_name)) {
+                                   !is_stdlib_string_aware_extern(c_func_name) &&
+                                   !is_aether_extern_param(gen, func_name, arg_printed)) {
                             // The Aether-side value typed `string` may be a
                             // wrapped AetherString* (from string.from_int,
                             // string_concat_wrapped, fs.read_binary, etc.)
@@ -2524,12 +2525,18 @@ void generate_expression(CodeGenerator* gen, ASTNode* expr) {
                             // the bare pointer for plain char*. Idempotent
                             // on either shape.
                             //
-                            // Skipped for stdlib externs that already go
-                            // through str_data/str_len internally — those
-                            // need the header pointer so their dispatch can
-                            // recover the stored length on binary content
-                            // (string_length, string_concat_wrapped, etc.).
-                            // See is_stdlib_string_aware_extern below.
+                            // Skipped for:
+                            //   1. stdlib externs that already go through
+                            //      str_data/str_len internally (they need
+                            //      the header to recover the stored length
+                            //      on binary content). See
+                            //      is_stdlib_string_aware_extern below.
+                            //   2. params declared `name: @aether string`
+                            //      — receiver is Aether-emitted C and
+                            //      dispatches on AetherString magic via
+                            //      str_len. Without this, binary content
+                            //      with embedded NULs strlen-truncates at
+                            //      the boundary (#351).
                             // Closes #297.
                             fprintf(gen->output, "aether_string_data(");
                             generate_expression(gen, arg);

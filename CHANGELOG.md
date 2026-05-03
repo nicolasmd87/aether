@@ -9,6 +9,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`name: @aether string` per-param annotation suppresses call-site `aether_string_data()` unwrap on a per-arg-slot basis — fixes binary-content truncation across Aether-to-Aether extern boundaries** (`compiler/parser/parser.c`, `compiler/codegen/{codegen.h,codegen_internal.h,codegen.c,codegen_func.c,codegen_expr.c}`, `tests/integration/aether_extern_param_annotation/`). Closes #351, restores the v0.97.0 behaviour for Aether-to-Aether crossings without re-breaking 718d13d's fix for naive C externs (#297). Background: 718d13d added a blanket `aether_string_data(s)` unwrap at every `extern foo(s: string)` call site to fix #297 (where passing AetherString headers to naive C functions like `sqlite3_exec` corrupted their input). The unwrap was correct for naive C externs but wrong for Aether-emitted ones, where the receiver's `string.length` / `string.char_at` already dispatch on the AetherString magic via `str_len`. Stripping the header forced the receiver into the `strlen()` fallback, truncating binary content at the first NUL — invisible for text, silently corrupting any binary roundtrip (svn-aether's svndiff varint zero bytes hit this). Bisect-confirmed regression range: v0.97.0 → v0.98.0 (commit 718d13d, 2026-04-28). The fix adds a per-param annotation that marks individual arg slots as receiving an AetherString pointer instead of an unwrapped `const char*`. Implementation: `parser.c` accepts `@aether` between `:` and the type in extern param lists (both bare `extern foo(...)` and `@extern("c_sym") aether_name(...)` forms); `ExternParamInfo` gains a parallel `params_aether` int* allocated only when at least one param carries the annotation; codegen exposes `is_aether_extern_param(gen, name, idx)` and the call-site unwrap condition ANDs `!is_aether_extern_param(...)`. **Per-param granularity is the discriminating advantage** over a whole-function `@aether extern` form — a single extern can mix `@aether string` (Aether-emitted receiver) and bare `string` (naive C receiver) in one signature, e.g. `extern do_thing(aether_msg: @aether string, c_path: string) -> int` emits `do_thing(msg, aether_string_data(path))` at the call site. Bare `extern` declarations and bare `string` params are unchanged — naive C externs continue to receive the unwrapped `const char*`. Sample usage:
+
+  ```aether
+  // helper.ae (compiled with --emit=lib):
+  export consume_binary(s: string) { ... }
+
+  // user.ae:
+  extern consume_binary(s: @aether string)   // ← header preserved
+  extern other_c_function(s: string)         // ← still unwrapped
+  // mixed in one signature:
+  extern do_thing(aether_msg: @aether string, c_path: string) -> int
+  ```
+
+  Acceptance: `binary-string-extern-boundary-repro.sh`-style program with `extern consume_binary(s: @aether string)` reports `length = 7` and `byte[5] = 14` from inside `consume_binary`, restoring the round-trip semantics the svn-aether port relied on at v0.97.0.
+
 ## [0.115.0]
 
 ### Added
