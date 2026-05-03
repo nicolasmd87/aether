@@ -206,6 +206,27 @@ actor Poller {
 
 Identifiers in the timeout expression resolve against the same scope `receive` arms see — actor state fields and `self` are both in scope.
 
+## Panic and Stack Traces
+
+`panic("reason")` unwinds via `aether_panic`. If a `try { ... } catch e { ... }` block (or the scheduler's per-step barrier for actor handlers) is on the stack, the panic is caught and `e` binds to the reason. If no frame catches, the runtime prints the reason to stderr along with a filtered stack trace, then aborts:
+
+```text
+aether: panic outside any try/catch or actor: divide by zero
+
+Stack trace (most recent call first):
+  0: math.safe_divide
+  1: calculate_value
+  2: main
+```
+
+The trace is captured at the call site (codegen wires `aether_panic_capture_stack` in front of every `aether_panic` call) so the user's caller frames survive `-O2` tail-call optimisation. Symbols starting with `aether_` are pretty-printed back to their dotted Aether names — `aether_std_string_concat` reads as `std.string.concat`. User-code symbols pass through verbatim.
+
+The trace is **best-effort diagnostic info**. Under `-O2`, function inlining can fuse callers into one frame; a panic deep inside a chain of small helpers may show only `main`. For richer development-time traces, build with `--cflags="-O0 -g"` (or set `AE_CFLAGS=-O0 -g`); the per-call frames return.
+
+To suppress the trace block entirely (useful for tests that diff stderr line-for-line), set `AETHER_STACK_TRACE=0` in the environment. The reason line still prints.
+
+Available on glibc-Linux and macOS today (uses `<execinfo.h>` `backtrace()` from libc proper, no extra link dependency). On musl, Windows, Emscripten, and freestanding targets the trace block is skipped — `panic`/`try`/`catch` themselves still work.
+
 ## Cooperative Preemption
 
 By default, message handlers run to completion. A tight compute loop inside a handler will block that core's scheduler thread. For programs where this is a concern, cooperative preemption can be enabled:

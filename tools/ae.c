@@ -86,7 +86,11 @@ typedef struct {
     char root[1024];           // Aether root directory
     char compiler[2048];       // Path to aetherc (root + /bin/aetherc = up to 1036 bytes)
     char lib[1024];            // Path to libaether.a (if exists)
-    char include_flags[4096];  // -I flags for GCC
+    char include_flags[16384]; // -I flags for GCC. Sized to comfortably
+                               // hold the runtime/ + std/ + contrib/
+                               // sub-tree walks (issue #334 added contrib/
+                               // and the previous 4096 ceiling started
+                               // dropping dirs at the tail end of the walk).
     char runtime_srcs[8192];   // Runtime .c files (source fallback)
     bool has_lib;              // Whether precompiled lib exists
     bool dev_mode;             // Running from source tree
@@ -1488,7 +1492,10 @@ static void build_gcc_cmd(char* cmd, size_t size,
         snprintf(opt, sizeof(opt), "-static %s %s", opt_flags(optimize), user_cflags);
     else
         snprintf(opt, sizeof(opt), "-static %s", opt_flags(optimize));
-    const char* win_link_libs = "-lws2_32 -lcrypt32 -lgdi32 -luser32 -ladvapi32 -lbcrypt";
+    // -ldbghelp is required for the panic stack-trace path
+    // (CaptureStackBackTrace is in kernel32 / always-linked, but
+    // SymInitialize/SymFromAddr live in dbghelp). Issue #347.
+    const char* win_link_libs = "-lws2_32 -lcrypt32 -lgdi32 -luser32 -ladvapi32 -lbcrypt -ldbghelp";
     char lib_dir[1024];
     if (tc.has_lib) {
         strncpy(lib_dir, tc.lib, sizeof(lib_dir) - 1);

@@ -109,6 +109,18 @@ void aether_panic(const char* reason);
 // Call once at process init.
 void aether_panic_install_signal_handlers(void);
 
+// Stack-trace capture for the codegen panic path (issue #347). Codegen
+// emits this immediately before `aether_panic(...)` so the trace is
+// taken with the caller's frames still on the stack — calling
+// backtrace() from inside aether_panic itself loses those frames
+// under -O2 because tail-call elimination collapses the caller. The
+// captured frames live in TLS until the panic fallback prints them.
+//
+// On platforms without execinfo.h (musl, Windows, wasm,
+// freestanding) this is a no-op stub. Tracing is best-effort
+// diagnostic info — never required for correct unwinding.
+void aether_panic_capture_stack(void);
+
 // Death notification. Fn is invoked with (actor_id, reason) after an actor
 // step() unwinds. NULL clears. Single global slot — if you need fan-out,
 // dispatch yourself.

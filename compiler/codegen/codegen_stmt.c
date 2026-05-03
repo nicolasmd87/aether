@@ -2245,8 +2245,15 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
         }
 
         case AST_PANIC_STATEMENT: {
-            // panic(reason_expr);  →  aether_panic(reason_expr);
+            // panic(reason_expr);  → capture backtrace at the call site,
+            // then aether_panic(reason). Capturing into TLS before the
+            // noreturn call is what gives the runtime stack-trace path
+            // (issue #347) the user's caller frames — calling backtrace()
+            // from inside aether_panic alone loses them under -O2 because
+            // tail-call + noreturn collapses the caller's frame.
             if (stmt->child_count < 1) break;
+            print_indent(gen);
+            fprintf(gen->output, "aether_panic_capture_stack();\n");
             print_indent(gen);
             fprintf(gen->output, "aether_panic(");
             generate_expression(gen, stmt->children[0]);

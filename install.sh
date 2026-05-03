@@ -217,6 +217,25 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
     mkdir -p "$SRC_DIR"
     cp -r runtime "$SRC_DIR/" 2>/dev/null || true
     cp -r std     "$SRC_DIR/" 2>/dev/null || true
+    # Contrib module.ae descriptors + headers (issue #334). With these
+    # in place, `import contrib.X` resolves the same way `import std.X`
+    # does — share/aether/contrib/<X>/module.ae sits next to
+    # share/aether/std/<X>/module.ae. The matching .a archives are
+    # built+installed separately by `make install-contrib`, which
+    # probes for system dependencies (sqlite3-dev, etc.).
+    cp -r contrib "$SRC_DIR/" 2>/dev/null || true
+    # Trim source-tree noise from contrib: tests, benchmarks, example
+    # .ae, build/CI scripts, and the .c/.m files (those compile into
+    # the libaether_<x>.a archives via `make contrib`; no value in
+    # also shipping the source).
+    find "$SRC_DIR/contrib" -type d -name tests       -exec rm -rf {} + 2>/dev/null || true
+    find "$SRC_DIR/contrib" -type d -name benchmarks  -exec rm -rf {} + 2>/dev/null || true
+    find "$SRC_DIR/contrib" -type f -name 'example_*.ae' -delete 2>/dev/null || true
+    find "$SRC_DIR/contrib" -type f -name 'test_*.sh' -delete 2>/dev/null || true
+    find "$SRC_DIR/contrib" -type f -name 'build.sh'  -delete 2>/dev/null || true
+    find "$SRC_DIR/contrib" -type f -name 'ci.sh'     -delete 2>/dev/null || true
+    find "$SRC_DIR/contrib" -type f -name '*.c' -delete 2>/dev/null || true
+    find "$SRC_DIR/contrib" -type f -name '*.m' -delete 2>/dev/null || true
     # Trim install-noise that confuses external consumers
     # (aetherBuild and the like). runtime/examples/ holds standalone
     # benches with their own main() — never link-suitable.
