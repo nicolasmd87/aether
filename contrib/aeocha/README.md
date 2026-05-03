@@ -34,6 +34,38 @@ Run with `ae run my_test.ae` or `aeb test`. Exit code is `0` if all
 tests pass, `1` if anything failed (compatible with the `aeb`
 program-test contract).
 
+### Unqualified form — `import contrib.aeocha (*)`
+
+If the `aeocha.` prefix on every line is noisy, use the glob form
+to bring every public symbol into the bare namespace (see the
+[Glob Import](../../docs/language-reference.md) section in the
+language reference). Same code, no prefixes:
+
+```aether
+import contrib.aeocha (*)
+
+main() {
+    fw = init()
+    describe(fw, "My feature") {
+        before_each(fw) callback { /* setup */ }
+        it(fw, "works") callback {
+            assert_eq(fw, 1 + 1, 2, "math")
+        }
+    }
+    run_summary(fw)
+}
+```
+
+Selective form is also supported if you only want a few names bare:
+
+```aether
+import contrib.aeocha (init, describe, it, run_summary)
+```
+
+`fw` is still passed explicitly to every matcher in either form;
+that's an aeocha-side framework choice (see [TODO.md](TODO.md)
+item 3a), not a language limitation.
+
 ## Call shape
 
 Aeocha follows Aether's `_ctx` auto-injection convention (see
