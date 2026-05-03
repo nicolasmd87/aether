@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **`make release` now bakes the correct `AETHER_VERSION` into the release binary** (`Makefile`). The `release` target's hand-rolled `gcc` invocation was missing `-DAETHER_VERSION=\"$(VERSION)\"`, so `build/aetherc-release` (which `make install` ships as `$(PREFIX)/bin/aetherc`) reported the dev sentinel `v0.0.0-dev` regardless of the git tag. Surfaced after installing 0.116.0 — `aetherc --version` showed `v0.0.0-dev` while `ae version` correctly showed `0.116.0`. Fix: add the flag to the release target's gcc line, matching what the main `$(CFLAGS)` (line 133) already does for the dev build path. The dev `build/aetherc` was unaffected.
+
 ## [0.116.0]
 
 ### Added
