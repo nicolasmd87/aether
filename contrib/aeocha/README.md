@@ -75,16 +75,16 @@ Aeocha follows Aether's `_ctx` auto-injection convention (see
 
 Sit on top of the `assert_*` primitives above to absorb the bash-shaped "spawn / capture / awk-and-compare" idiom into a single Aether call. Use these when porting integration tests off shell scripts to pure Aether.
 
-**Process matchers** consume the `(stdout, exit, stderr_or_err)` triple from `os.run_capture(prog, argv, env)`. The triple is destructured at the binding site (Aether tuples don't pass around as a single value) and the matcher takes the relevant slot directly.
+**Process matchers** consume the `(stdout, exit, err)` triple from `os.run_capture(prog, argv, env)`. The triple is destructured at the binding site (Aether tuples don't pass around as a single value) and the matcher takes the relevant slot directly. The captured-stdout slot is conventionally named `out` (not `stdout`) at call sites to avoid the Windows MinGW `<stdio.h>` macro clash — see the Known limitations section below.
 
 | Function | Purpose |
 |----------|---------|
 | `aeocha.expect_exit(fw, exit_code, want, msg)` | Child exited with the expected status |
 | `aeocha.expect_no_spawn_error(fw, err, msg)` | Fork/exec itself succeeded (binary found, not denied by sandbox) |
-| `aeocha.expect_stdout_contains(fw, stdout, needle, msg)` | Substring of captured stdout |
-| `aeocha.expect_stdout_line_field(fw, stdout, prefix, n, want, msg)` | Find first line starting with `prefix`, split on space, compare field index `n` to `want`. Replaces `awk '/^Revision:/{print $2}'`-style assertions |
-| `aeocha.expect_stdout_line_count(fw, stdout, want, msg)` | Stdout has exactly `want` newline-separated lines (trailing-newline aware) |
-| `aeocha.expect_stdout_matches(fw, stdout, pattern, msg)` | At least one stdout line matches a glob pattern (`*`, `?`, `[abc]` per `std.string.glob_match`) |
+| `aeocha.expect_stdout_contains(fw, out, needle, msg)` | Substring of captured stdout |
+| `aeocha.expect_stdout_line_field(fw, out, prefix, n, want, msg)` | Find first line starting with `prefix`, split on space, compare field index `n` to `want`. Replaces `awk '/^Revision:/{print $2}'`-style assertions |
+| `aeocha.expect_stdout_line_count(fw, out, want, msg)` | Stdout has exactly `want` newline-separated lines (trailing-newline aware) |
+| `aeocha.expect_stdout_matches(fw, out, pattern, msg)` | At least one stdout line matches a glob pattern (`*`, `?`, `[abc]` per `std.string.glob_match`) |
 
 **HTTP matchers** consume the response handle returned by `http.get` / `http.post` / `client.send_request`. A single `resp: ptr` arg works for both v1 and v2 responses (same C struct underneath).
 
@@ -110,10 +110,10 @@ main() {
     argv = list.new()
     list.add(argv, "rev-parse")
     list.add(argv, "HEAD")
-    stdout, exit_code, err = os.run_capture("/usr/bin/git", argv, null)
+    out, exit_code, err = os.run_capture("/usr/bin/git", argv, null)
     aeocha.expect_no_spawn_error(fw, err, "git found")
     aeocha.expect_exit(fw, exit_code, 0, "git rev-parse cleanly")
-    aeocha.expect_stdout_matches(fw, stdout, "[0-9a-f]*", "looks like a sha")
+    aeocha.expect_stdout_matches(fw, out, "[0-9a-f]*", "looks like a sha")
 
     aeocha.run_summary(fw)
 }
@@ -123,6 +123,7 @@ main() {
 
 #### Known limitations
 
+- **Don't name a local variable `stdout` or `stderr` when calling these matchers on Windows MinGW.** `<stdio.h>` `#define`s `stdout` and `stderr` as preprocessor macros pointing at runtime stdio handles, so when Aether codegen lowers a local named `stdout` to C, MinGW rewrites it mid-declaration and the build fails. The matchers themselves use `out` for the param to dodge the clash; conventional call-site naming follows suit (`out, exit_code, err = os.run_capture(...)`). Linux GCC and Apple Clang allow the literal name through, but the consistent `out` convention is portable. This is a Windows quirk only — the underlying `os.run_capture` works fine on every platform.
 - **`expect_stderr_contains` / `expect_stderr_empty` are not yet shipped.** `os.run_capture`'s third return slot is the spawn-error string, not the child's captured stderr — fd 2 from the child currently passes through to the parent's stderr unchanged. Adding child-stderr capture is a stdlib-side change tracked separately. Until it lands, callers that need to assert on stderr can wrap the child in `/bin/sh -c 'cmd 2>&1'` and use `expect_stdout_contains` on the merged stream.
 - **`expect_stdout_line_field` splits on a single space character only** — multi-delimiter awk patterns aren't handled. Fall back to `assert_str_eq` with a hand-derived value for unusual splits.
 - **`expect_stdout_matches` uses glob patterns, not regex.** `std.string.glob_match` (POSIX fnmatch: `*`, `?`, `[abc]`) is what's available in stdlib today; PCRE-style regex is a separate ask.
