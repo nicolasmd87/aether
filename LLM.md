@@ -43,10 +43,15 @@ Erlang's actor syntax, compiling via C.**
   + LD_PRELOAD gates the hosted interpreter's libc calls too. Guest
   direction: `--emit=lib` → Python ctypes / Java Panama / Ruby
   Fiddle SDKs auto-generated from `aether_describe()`.
-- **NOT quite Ruby/Smalltalk/Groovy's builder-style closures** 
-  — those interpret the trailing block at runtime with full reflection 
-  access. Aether compiles closures to C; `hide`/`seal except` are  
-  compile-time, and the grant list is the closure's only handle to 
+- **NOT quite Ruby/Smalltalk/Groovy's builder-style closures**
+  — those all run on a VM (MRI, the Smalltalk image, the JVM)
+  where the block has runtime reflection access to its surrounding
+  scope, regardless of whether it was reached by interpretation
+  (Ruby, classic Smalltalk) or bytecode compilation (Groovy since
+  ~2012, modern Ruby JIT). Aether is native: closures lower to plain
+  C functions with no VM behind them, so there's no run-time hook
+  for the block to reach back through. `hide` / `seal except` are
+  compile-time, and the grant list is the closure's only handle to
   privileged operations.
 
 Sandbox more info: Full comparison (who brings what — Pony's per-reference
