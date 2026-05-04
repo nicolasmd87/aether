@@ -356,6 +356,44 @@ fresh tape directly via Aether (e.g. an Aether-hosted upstream
 that needs canonical replay tapes generated from its current
 behaviour), this is the unblocker.
 
+## VCR — keep the C-API independently consumable
+
+The current driver for VCR in Aether is concrete: exercising it
+drives the design and hardening of `std.http.server` and
+`std.http.client` simultaneously. Every VCR feature has been a
+forcing function on the HTTP stack — response-headers verbatim
+emission, repeated-key headers, default-header clearing, keep-alive
+across many requests, custom verbs / WebDAV. That's the load-bearing
+reason VCR lives inside the Aether tree right now.
+
+**Possible future direction (no commitments):** the C externs in
+`aether_vcr.c` (`vcr_load_tape`, `vcr_get_*`, `vcr_dispatch`,
+`vcr_record_interaction_full`, `vcr_flush_to_tape`, plus the
+diagnostic surface — `vcr_last_kind`, `vcr_last_index`,
+`vcr_set_strict_headers`, `vcr_reset_cursor`,
+`vcr_get_resp_headers`) form a coherent C-API. If a non-Aether
+consumer ever wants to drive VCR — Java/Python/Ruby tests via a
+thin FFI wrapper, the [Servirtium](https://servirtium.dev) standard's
+shape — the C-API is what they'd link against. Aether would not
+host the bindings; those would be ecosystem-owned.
+
+If that future ever materialises, what's missing today:
+- A clean `aether_vcr.h` as the canonical C-API contract (the
+  Aether `module.ae` is that contract today).
+- A versioned C ABI (right now we change it freely under "no
+  backwards compat" for in-tree work).
+- A non-Aether build target that produces `libvcr.so` standalone
+  (separable from the rest of `libaether.a`).
+- VCR may move out to its own repo at that point.
+
+None of this is blocking. Flagged here so the rule "keep the C-API
+independently consumable" guides choices we make now —
+`vcr_last_kind` returns int (numeric enum, no Aether string
+smuggling), the dispatcher takes plain `void* req` / `void* res`
+(not Aether-typed handles), error reporting is via passive read
+slots (no actor messaging). Costs nothing to keep that property,
+and lowers the cost of any future split.
+
 ## Type system
 
 ### Type inference propagation through `select()`

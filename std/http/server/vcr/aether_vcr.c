@@ -146,6 +146,31 @@ static char* g_pending_note_body  = NULL;
  * means "no error since last clear". */
 static char* g_last_error = NULL;
 
+/* Per-dispatch outcome slots — siblings of g_last_error. Tests check
+ * these after each request. Single slot per axis (kind / index) on
+ * the assumption tests drive VCR serially and inspect immediately.
+ * If the test misses a slot read, the next dispatch overwrites; the
+ * test is responsible for the cadence, not VCR. Models the Java
+ * Servirtium ServiceMonitor's per-interaction notification but as
+ * a passive read surface (no callback, no allocation, no actor). */
+#define VCR_KIND_OK                  0
+#define VCR_KIND_PATH_OR_METHOD_DIFF 1
+#define VCR_KIND_HEADER_MISSING      2
+#define VCR_KIND_HEADER_VALUE_DIFF   3
+#define VCR_KIND_HEADER_UNEXPECTED   4
+#define VCR_KIND_TAPE_EXHAUSTED      5
+#define VCR_KIND_BODY_DIFF           6
+static int g_last_kind = VCR_KIND_OK;
+static int g_last_index = -1;
+
+/* Strict-match opt-in. When 0 (default), the dispatcher matches on
+ * (method, path) only and doesn't check request headers / body
+ * unless the tape itself constrains them (the implicit gate at
+ * line ~786). When 1, request-header and request-body checks fire
+ * unconditionally — used by tests that want to deliberately
+ * exercise the mismatch diagnostic paths. */
+static int g_strict_headers = 0;
+
 static void tape_free_storage(void) {
     if (g_tape) {
         for (int i = 0; i < g_tape_n; i++) {
@@ -170,6 +195,8 @@ static void tape_free_storage(void) {
     free(g_pending_note_title); g_pending_note_title = NULL;
     free(g_pending_note_body);  g_pending_note_body  = NULL;
     free(g_last_error);         g_last_error         = NULL;
+    g_last_kind = VCR_KIND_OK;
+    g_last_index = -1;
     /* Static mounts intentionally not freed here — mounts are
      * configured by the caller before vcr.load() and survive across
      * loads in the same process; vcr.clear_static_content() is the
@@ -687,7 +714,16 @@ static char* normalize_live_headers(const VcrHttpRequestPrefix* r) {
         const char* key = r->header_keys[i];
         const char* val = r->header_values[i] ? r->header_values[i] : "";
         if (!key) continue;
+        /* Drop wire-layer headers that the recorder shouldn't have
+         * captured and the replay can't faithfully reproduce. Host
+         * is computed from the URL by std.http.client; Connection
+         * and Content-Length are HTTP/1.1 transport concerns
+         * (keep-alive state, body length) that aren't part of the
+         * recorded protocol. Same exclusion list as the response-
+         * side normalizer in test/probe code. */
         if (icmp(key, "Host") == 0) continue;
+        if (icmp(key, "Connection") == 0) continue;
+        if (icmp(key, "Content-Length") == 0) continue;
         size_t len = strlen(key) + 2 + strlen(val) + 1;
         char* line = (char*)malloc(len);
         if (!line) {
@@ -751,6 +787,8 @@ void vcr_dispatch(void* req, void* res, void* ud) {
     (void)ud;
     if (g_tape_cursor >= g_tape_n) {
         last_err_set("tape exhausted — SUT made more requests than the tape contains");
+        g_last_kind = VCR_KIND_TAPE_EXHAUSTED;
+        g_last_index = g_tape_cursor;
         http_response_set_status(res, 599);
         http_response_set_body(res,
             "tape exhausted — SUT made more requests than the tape contains");
@@ -773,17 +811,24 @@ void vcr_dispatch(void* req, void* res, void* ud) {
             got_method ? got_method : "(null)",
             got_path   ? got_path   : "(null)");
         last_err_set(msg);
+        g_last_kind = VCR_KIND_PATH_OR_METHOD_DIFF;
+        g_last_index = g_tape_cursor;
         http_response_set_status(res, 599);
         http_response_set_body(res, msg);
         return;
     }
 
-    /* Step 10: request-headers comparison. Only enforced when the
-     * tape captured a non-blank request_headers block — empty means
-     * the tape doesn't constrain headers (today's recorder default,
-     * pre-step-10 tapes). */
+    /* Request-headers comparison. Fires when EITHER the tape captured
+     * a non-blank request_headers block (implicit gate, Step 10) OR
+     * the test explicitly opted in via vcr.set_strict_headers(1). The
+     * explicit flag lets a test enable strict matching against tapes
+     * whose request blocks have been load-time scrubbed (the canonical
+     * SVN tape's case — recorded headers like `Host: svn.apache.org`
+     * won't match what std.http.client sends to 127.0.0.1, but a test
+     * driver that wants to deliberately exercise the diagnostic paths
+     * can scrub-then-set-strict and construct exact requests). */
     const VcrHttpRequestPrefix* live_req = (const VcrHttpRequestPrefix*)req;
-    if (!is_blank(e->req_headers)) {
+    if (!is_blank(e->req_headers) || g_strict_headers) {
         char* live = normalize_live_headers(live_req);
         if (!live) {
             last_err_set("OOM normalizing live request headers");
@@ -803,6 +848,7 @@ void vcr_dispatch(void* req, void* res, void* ud) {
             char hdr_name[128];
             char msg[2048];
             int found_diag = 0;
+            int kind = VCR_KIND_HEADER_MISSING;  /* default if neither sweep narrows it */
 
             /* First sweep: recorded lines not present verbatim in live. */
             const char* p = e->req_headers;
@@ -837,6 +883,7 @@ void vcr_dispatch(void* req, void* res, void* ud) {
                                         snprintf(msg, sizeof(msg),
                                             "interaction %d: '%s' request header value differed",
                                             g_tape_cursor, hdr_name);
+                                        kind = VCR_KIND_HEADER_VALUE_DIFF;
                                         found_diag = 1;
                                         break;
                                     }
@@ -846,6 +893,7 @@ void vcr_dispatch(void* req, void* res, void* ud) {
                             snprintf(msg, sizeof(msg),
                                 "interaction %d: '%s' request header was expected but not encountered",
                                 g_tape_cursor, hdr_name);
+                            kind = VCR_KIND_HEADER_MISSING;
                             found_diag = 1;
                         }
                     }
@@ -871,6 +919,7 @@ void vcr_dispatch(void* req, void* res, void* ud) {
                             snprintf(msg, sizeof(msg),
                                 "interaction %d: '%s' request header encountered but not expected",
                                 g_tape_cursor, hdr_name);
+                            kind = VCR_KIND_HEADER_UNEXPECTED;
                             found_diag = 1;
                         }
                     }
@@ -883,8 +932,14 @@ void vcr_dispatch(void* req, void* res, void* ud) {
                 snprintf(msg, sizeof(msg),
                     "interaction %d: request headers differ — recorded:\n%s\nlive:\n%s",
                     g_tape_cursor, e->req_headers, live);
+                /* Fall-through diagnostic — neither sweep located a
+                 * single offender. Call it MISSING by default; the
+                 * detailed message is in g_last_error. */
+                kind = VCR_KIND_HEADER_MISSING;
             }
             last_err_set(msg);
+            g_last_kind = kind;
+            g_last_index = g_tape_cursor;
             free(live);
             http_response_set_status(res, 599);
             http_response_set_body(res, msg);
@@ -905,6 +960,8 @@ void vcr_dispatch(void* req, void* res, void* ud) {
                 strlen(e->req_body),
                 strlen(live_body));
             last_err_set(msg);
+            g_last_kind = VCR_KIND_BODY_DIFF;
+            g_last_index = g_tape_cursor;
             http_response_set_status(res, 599);
             http_response_set_body(res, msg);
             return;
@@ -998,6 +1055,14 @@ void vcr_dispatch(void* req, void* res, void* ud) {
     }
     http_response_set_body(res, e->body);
 
+    /* Successful dispatch — clear any prior diagnostic and stamp
+     * the per-dispatch outcome slots. The next request the test
+     * makes overwrites; tests are responsible for reading after
+     * each request before the next one fires. */
+    last_err_set("");
+    g_last_kind = VCR_KIND_OK;
+    g_last_index = g_tape_cursor;
+
     g_tape_cursor++;
 }
 
@@ -1014,6 +1079,35 @@ const char* vcr_last_error(void) {
 void vcr_clear_last_error(void) {
     free(g_last_error);
     g_last_error = NULL;
+    g_last_kind = VCR_KIND_OK;
+    g_last_index = -1;
+}
+
+/* Per-dispatch outcome read accessors. Tests check these after each
+ * request to confirm the dispatcher accepted (or rejected, with
+ * which kind) the SUT's request. See VCR_KIND_* defines above. */
+int vcr_last_kind(void) { return g_last_kind; }
+int vcr_last_index(void) { return g_last_index; }
+
+/* Opt-in strict-headers matching. When set to 1, the dispatcher
+ * compares the SUT's request headers against the recorded block
+ * unconditionally — even if the recorded block is blank. Used by
+ * tests that want to deliberately exercise the diagnostic paths
+ * (negative-path coverage). Default is 0 (the implicit gate from
+ * Step 10 still works either way). */
+void vcr_set_strict_headers(int on) { g_strict_headers = on ? 1 : 0; }
+int vcr_get_strict_headers(void) { return g_strict_headers; }
+
+/* Reset the dispatch cursor to interaction 0 without freeing the
+ * tape or stopping the server. Used by tests that drive a series
+ * of independent cases against the same loaded tape — each case
+ * resets the cursor at the top, sends its request, asserts. */
+void vcr_reset_cursor(void) {
+    g_tape_cursor = 0;
+    free(g_last_error);
+    g_last_error = NULL;
+    g_last_kind = VCR_KIND_OK;
+    g_last_index = -1;
 }
 
 /* ---- Tape-iteration accessors (Aether-side emitter consumes these) ----
