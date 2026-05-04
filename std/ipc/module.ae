@@ -1,0 +1,95 @@
+// std.ipc — child-to-parent back-channel IPC.
+//
+// Companion to std.os.run_pipe (parent side). When a parent
+// spawns a child via os.run_pipe / os.run_pipe_drain_and_wait,
+// the child can use std.ipc.parent_channel() to find the fd of
+// the inherited pipe write end, then write a structured payload
+// the parent will read.
+//
+// Models the brief in
+// `~/scm/aetherBuild/asks/lightweight-ipc-dx.md` (DX shape) +
+// `lightweight-ipc-dx-aether-reply.md` (proposed surface) +
+// `lightweight-ipc-dx-aeb-final.md` (agreement).
+//
+// Three primitives:
+//
+//   parent_channel() -> int               find fd or -1
+//   write(fd, bytes) -> string            write; "" or err
+//   write_close(fd, bytes) -> string      write + close; "" or err
+//
+// (Originally named `send`/`send_close` per the design discussion;
+// renamed because `send` is a reserved keyword in Aether for
+// actor message-passing. `write` reads correctly here — the
+// channel IS a writeable file descriptor under the hood.)
+//
+// `write` / `write_close` wrap `std.net.fd_write` /
+// `std.net.fd_close`. Aliased here so a child author who
+// imports `std.ipc` for `parent_channel` finds the matching
+// write/close functions in the same namespace, instead of
+// context-switching to `std.net`.
+//
+// v1 is POSIX-only. On Windows, parent_channel() always returns -1
+// (the parent-side spawn surface returns "unsupported on Windows"
+// too); consumers should fall back to file-marker patterns there.
+//
+// Common shape — child writes one report at exit:
+//
+//   import std.ipc
+//
+//   ch = ipc.parent_channel()
+//   if ch >= 0 {
+//       err = ipc.write_close(ch, "passed=44\nfailed=3\n")
+//   }
+
+import std.net
+
+exports (
+    ipc_parent_channel_raw,
+    parent_channel, write, write_close
+)
+
+// Returns the parent-channel fd if the parent spawned this process
+// via os.run_pipe (i.e. AETHER_IPC_FD is set in env and the named
+// fd is open); -1 otherwise. Children of os.run / os.run_capture
+// see -1 — those don't open a back-channel. On Windows always -1
+// (v1 stub). The fd value is whatever the parent picked; current
+// parent-side default is 3 but consumers MUST NOT hardcode that.
+extern ipc_parent_channel_raw() -> int
+
+// Aether-side wrappers. parent_channel returns the raw int from
+// the extern; -1 sentinel for "no parent channel."
+parent_channel() -> int { return ipc_parent_channel_raw() }
+
+// Write `bytes` to the back-channel `fd`. Returns "" on success,
+// non-empty error string on failure. Wraps std.net.fd_write —
+// the underlying transport is an inherited pipe, so the same
+// byte-stream semantics apply (partial writes are possible on
+// interrupted system calls; the wrapped C extern handles EINTR).
+//
+// For the common case where the child writes one payload and
+// exits, prefer write_close so the parent's read_all loop sees
+// EOF promptly.
+write(fd: int, bytes: string) -> string {
+    rc = net.fd_write(fd, bytes)
+    if rc < 0 {
+        return "ipc.write: fd_write failed"
+    }
+    return ""
+}
+
+// Write `bytes` then close the channel. The common case: child
+// produces one structured report at exit and closes the fd so
+// the parent's drain loop sees EOF and stops.
+//
+// Calling close releases the writer's reference on the pipe; the
+// parent sees EOF only after every writer has closed. If the
+// child is itself going to exit immediately after, the kernel
+// will close the fd anyway during process teardown — explicit
+// close is still preferred because it lets the parent's reader
+// unblock before the child exits, useful when the parent's
+// reader runs in the same thread as the child-wait loop.
+write_close(fd: int, bytes: string) -> string {
+    werr = write(fd, bytes)
+    net.fd_close(fd)
+    return werr
+}

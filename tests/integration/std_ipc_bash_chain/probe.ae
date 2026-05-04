@@ -1,0 +1,96 @@
+// std.ipc bash-c-chain regression test.
+//
+// Pins the contract that fd 3 + AETHER_IPC_FD survive a bash
+// intermediary between the parent and the child. This matches
+// aeb's actual call shape:
+//
+//   aeb (parent: pipe + setenv AETHER_IPC_FD=3 + spawn)
+//     → bash -c '<fixture-pre>; "<driver>"; rc=$?; <fixture-post>; exit $rc'
+//       → driver binary (reads getenv("AETHER_IPC_FD"))
+//
+// Without this test, a future bash version that closed fds > 2
+// at exec, or a bash setting that scrubbed the env, would break
+// aeb's driver_test pattern silently.
+//
+// Note: bash-the-binary inherits open fds across exec by default
+// — this test asserts that default behaviour, not that a
+// specially-configured bash does. If a future fixture-pre step
+// uses `exec 3<somefile` or `unset AETHER_IPC_FD`, that's
+// caller error and the channel breaks predictably.
+
+import std.os
+import std.fs
+import std.string
+import std.list
+
+extern exit(code: int)
+
+const CHILD_SRC = "tests/integration/std_ipc_bash_chain/child.ae"
+const CHILD_BIN = "/tmp/std_ipc_bash_chain_child"
+const EXPECTED_PAYLOAD = "via-bash=ok\n"
+
+build_child() -> string {
+    argv = list.new()
+    list.add(argv, "build")
+    list.add(argv, CHILD_SRC)
+    list.add(argv, "-o")
+    list.add(argv, CHILD_BIN)
+    out, exit_code, err = os.run_capture("build/ae", argv, null)
+    if err != "" { return "spawn error: ${err}" }
+    if exit_code != 0 { return "ae build exit ${exit_code}: ${out}" }
+    return ""
+}
+
+main() {
+    println("std.ipc bash-c-chain regression test")
+    println("")
+
+    berr = build_child()
+    if berr != "" {
+        println("FAIL: cannot build child: ${berr}")
+        exit(1)
+    }
+    println("  ✓ child compiled to ${CHILD_BIN}")
+
+    passed = 0
+    failed = 0
+
+    // Drive the child via `bash -c 'echo pre; <child>; echo post'`.
+    // The pre/post echoes are stdout-only; they don't touch fd 3.
+    // os.run_pipe_drain_and_wait reads only fd 3, ignoring stdout,
+    // so the assertion is on the structured payload.
+    {
+        argv = list.new()
+        list.add(argv, "-c")
+        list.add(argv, "echo PRE; ${CHILD_BIN}; rc=$?; echo POST; exit $rc")
+        payload, exit_code, err = os.run_pipe_drain_and_wait("/bin/bash", argv, null)
+        if err != "" {
+            println("  [1] FAIL: err=${err}")
+            failed = failed + 1
+        } else {
+            if exit_code != 0 {
+                println("  [1] FAIL: exit_code=${exit_code}, payload=${payload}")
+                failed = failed + 1
+            } else {
+                if string_equals(payload, EXPECTED_PAYLOAD) == 0 {
+                    println("  [1] FAIL: payload mismatch")
+                    println("    expected: ${EXPECTED_PAYLOAD}")
+                    println("    actual:   ${payload}")
+                    failed = failed + 1
+                } else {
+                    println("  [1] PASS bash -c chain (fd 3 + AETHER_IPC_FD survived bash intermediary)")
+                    passed = passed + 1
+                }
+            }
+        }
+    }
+
+    fs.delete(CHILD_BIN)
+
+    println("")
+    println("std_ipc_bash_chain: ${passed} passing, ${failed} failing (of 1)")
+    if failed > 0 {
+        exit(1)
+    }
+    exit(0)
+}

@@ -1,0 +1,28 @@
+// Child binary for std.ipc round-trip test. The parent compiles
+// this program, spawns it via os.run_pipe_drain_and_wait, and
+// asserts that the structured payload arrives intact.
+//
+// Behaviour:
+//   - If AETHER_IPC_FD is set (parent spawned via run_pipe), write
+//     "passed=44\nfailed=3\nname=demo\n" to the back-channel and exit 0.
+//   - If not (test invoked the child directly without the env var),
+//     print a diagnostic to stdout and exit 1 — should not happen in
+//     the round-trip test.
+
+import std.ipc
+
+extern exit(code: int)
+
+main() {
+    ch = ipc.parent_channel()
+    if ch < 0 {
+        println("FAIL child: no parent channel (AETHER_IPC_FD not set or fd not open)")
+        exit(1)
+    }
+    err = ipc.write_close(ch, "passed=44\nfailed=3\nname=demo\n")
+    if err != "" {
+        println("FAIL child: ipc.write_close returned: ${err}")
+        exit(1)
+    }
+    exit(0)
+}

@@ -1,0 +1,22 @@
+// Child binary for std.ipc bash-c-chain test. Same shape as the
+// child in std_ipc_roundtrip but writes a different payload so the
+// parent can distinguish a chain-survival pass from a roundtrip
+// pass that didn't actually go through bash.
+
+import std.ipc
+
+extern exit(code: int)
+
+main() {
+    ch = ipc.parent_channel()
+    if ch < 0 {
+        println("FAIL child: AETHER_IPC_FD missing or fd 3 not inherited through bash")
+        exit(1)
+    }
+    err = ipc.write_close(ch, "via-bash=ok\n")
+    if err != "" {
+        println("FAIL child: ipc.write_close returned: ${err}")
+        exit(1)
+    }
+    exit(0)
+}

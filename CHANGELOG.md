@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`std.ipc` — child-to-parent back-channel IPC** (`std/ipc/aether_ipc.c`, `std/ipc/module.ae`, `std/os/aether_os.c`, `std/os/module.ae`, `tests/integration/std_ipc_roundtrip/`, `tests/integration/std_ipc_bash_chain/`). New stdlib module providing the missing primitive aeb's `aether.driver_test` (and similar shapes elsewhere) had been working around with marker files at known FS paths: a child process writes a structured payload to the parent over an inherited pipe at fd 3 (the value goes into the env var `AETHER_IPC_FD` so the contract is the env var, not the literal 3). Three parent-side spawn variants in `std.os`: `os.run_pipe(prog, argv, env) -> (read_fd, child_pid, err)` for streaming/incremental consumers, `os.wait_pid(pid) -> (exit_code, err)` companion for reaping, and `os.run_pipe_drain_and_wait(prog, argv, env) -> (channel_payload, exit_code, err)` convenience that handles spawn + drain + wait + reap in one call without pipe-buffer deadlock risk. Three child-side primitives in `std.ipc`: `parent_channel() -> int` returning the fd or -1, `write(fd, bytes) -> string` and `write_close(fd, bytes) -> string` for the payload-then-close pattern. Common shape ends up at 3 lines per side (child: `ch = ipc.parent_channel(); ipc.write_close(ch, "passed=44\nfailed=3\n")`; parent: `data, exit_code, _ = os.run_pipe_drain_and_wait(child_bin, argv, null)`). POSIX-only in v1 — Windows returns "unsupported on Windows" from the parent-side spawns and -1 from `parent_channel`; Windows consumers fall back to file-marker patterns. Designed for in-process Aether ↔ Aether spawn shapes (cross-language is explicitly out of scope; cross-machine is its own ask). Three rounds of design discussion captured in `~/scm/aetherBuild/asks/lightweight-ipc-dx{,-aether-reply,-aeb-final}.md`. Two regression tests: `std_ipc_roundtrip` exercises all three parent-side spawn variants against a compiled child; `std_ipc_bash_chain` pins the contract that fd 3 + AETHER_IPC_FD survive a `bash -c '<wrapper>; <driver>'` intermediary (aeb's actual call shape — reported as nuance #1 in the design discussion).
+
 ## [0.123.0]
 
 ### Fixed
