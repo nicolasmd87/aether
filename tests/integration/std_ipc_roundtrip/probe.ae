@@ -1,0 +1,173 @@
+// std.ipc round-trip integration test.
+//
+// Compiles tests/integration/std_ipc_roundtrip/child.ae to a binary,
+// then exercises the three parent-side spawn variants:
+//
+//   1. os.run_pipe_drain_and_wait — convenience: spawn + drain +
+//      wait + reap in one call. Asserts the payload arrives intact
+//      and the child exits 0.
+//
+//   2. os.run_pipe + manual read + os.wait_pid — low-level path
+//      that streaming consumers will use. Asserts the same payload
+//      and exit code via the explicit read/wait shape.
+//
+//   3. os.run_capture (the existing surface) on the same binary —
+//      proves that without the run_pipe spawn, the child sees
+//      ipc.parent_channel() == -1 and exits 1 with an error
+//      message. Pins the contract that AETHER_IPC_FD only appears
+//      when the parent uses run_pipe.
+
+import std.os
+import std.fs
+import std.string
+import std.list
+import std.net
+
+extern exit(code: int)
+
+const CHILD_SRC = "tests/integration/std_ipc_roundtrip/child.ae"
+const CHILD_BIN = "/tmp/std_ipc_roundtrip_child"
+const EXPECTED_PAYLOAD = "passed=44\nfailed=3\nname=demo\n"
+
+// Compile the child to disk via `ae build`. Returns "" on success,
+// error string on failure.
+build_child() -> string {
+    argv = list.new()
+    list.add(argv, "build")
+    list.add(argv, CHILD_SRC)
+    list.add(argv, "-o")
+    list.add(argv, CHILD_BIN)
+    out, exit_code, err = os.run_capture("build/ae", argv, null)
+    if err != "" { return "spawn error: ${err}" }
+    if exit_code != 0 {
+        return "ae build exit ${exit_code}: ${out}"
+    }
+    return ""
+}
+
+main() {
+    println("std.ipc round-trip test")
+    println("")
+
+    berr = build_child()
+    if berr != "" {
+        println("FAIL: cannot build child: ${berr}")
+        exit(1)
+    }
+    println("  ✓ child compiled to ${CHILD_BIN}")
+
+    passed = 0
+    failed = 0
+
+    // Case 1 — convenience function (drain-and-wait).
+    {
+        argv = list.new()
+        payload, exit_code, err = os.run_pipe_drain_and_wait(CHILD_BIN, argv, null)
+        if err != "" {
+            println("  [1] FAIL run_pipe_drain_and_wait: err=${err}")
+            failed = failed + 1
+        } else {
+            if exit_code != 0 {
+                println("  [1] FAIL run_pipe_drain_and_wait: exit=${exit_code}, payload=${payload}")
+                failed = failed + 1
+            } else {
+                if string_equals(payload, EXPECTED_PAYLOAD) == 0 {
+                    println("  [1] FAIL run_pipe_drain_and_wait: payload mismatch")
+                    println("    expected: ${EXPECTED_PAYLOAD}")
+                    println("    actual:   ${payload}")
+                    failed = failed + 1
+                } else {
+                    println("  [1] PASS run_pipe_drain_and_wait (payload byte-equal, exit 0)")
+                    passed = passed + 1
+                }
+            }
+        }
+    }
+
+    // Case 2 — low-level run_pipe + wait_pid, payload-fits-in-buffer.
+    //
+    // We don't have std.net.fd_read_all yet (flagged in the design
+    // brief as a v1 companion), so this case can't fully drain the
+    // pipe. Instead it exercises that:
+    //   - run_pipe returns sensible (read_fd, child_pid, "")
+    //   - the child runs to completion (writes payload < pipe
+    //     buffer, closes fd, exits 0) without parent reading
+    //   - wait_pid reaps cleanly and reports exit 0
+    // Because our payload is ~30 bytes (well under any OS pipe
+    // buffer), the child's write succeeds, the child exits, and
+    // the parent's wait_pid finds it ready. Then we close the
+    // unread read_fd. This is the correct usage pattern when the
+    // parent only cares about the exit code and not the data —
+    // a real consumer would read first, but that requires
+    // std.net.fd_read_all.
+    {
+        argv2 = list.new()
+        read_fd, child_pid, err2 = os.run_pipe(CHILD_BIN, argv2, null)
+        if err2 != "" {
+            println("  [2] FAIL run_pipe: err=${err2}")
+            failed = failed + 1
+        } else {
+            if read_fd < 0 {
+                println("  [2] FAIL run_pipe: read_fd=${read_fd}")
+                failed = failed + 1
+            } else {
+                if child_pid <= 0 {
+                    println("  [2] FAIL run_pipe: child_pid=${child_pid}")
+                    failed = failed + 1
+                } else {
+                    // Wait for child first (small payload fits in
+                    // pipe buffer; child writes + closes + exits
+                    // without parent needing to read).
+                    exit_code, werr = os.wait_pid(child_pid)
+                    net.fd_close(read_fd)
+                    if werr != "" {
+                        println("  [2] FAIL wait_pid: err=${werr}")
+                        failed = failed + 1
+                    } else {
+                        if exit_code != 0 {
+                            println("  [2] FAIL wait_pid: exit_code=${exit_code}")
+                            failed = failed + 1
+                        } else {
+                            println("  [2] PASS run_pipe + wait_pid (read_fd=${read_fd}, child_pid=${child_pid}, exit 0)")
+                            passed = passed + 1
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Case 3 — old run_capture: child sees no parent channel,
+    // returns 1 with diagnostic.
+    {
+        argv3 = list.new()
+        out3, exit3, err3 = os.run_capture(CHILD_BIN, argv3, null)
+        if err3 != "" {
+            println("  [3] FAIL run_capture (no-channel): err=${err3}")
+            failed = failed + 1
+        } else {
+            if exit3 != 1 {
+                println("  [3] FAIL run_capture: expected exit=1 (no AETHER_IPC_FD), got ${exit3}")
+                println("    stdout: ${out3}")
+                failed = failed + 1
+            } else {
+                if string_contains(out3, "no parent channel") == 0 {
+                    println("  [3] FAIL run_capture: stdout doesn't contain expected error: ${out3}")
+                    failed = failed + 1
+                } else {
+                    println("  [3] PASS run_capture (no-channel correctly detected, exit 1)")
+                    passed = passed + 1
+                }
+            }
+        }
+    }
+
+    fs.delete(CHILD_BIN)
+
+    println("")
+    println("std_ipc_roundtrip: ${passed} passing, ${failed} failing (of 3)")
+    if failed > 0 {
+        exit(1)
+    }
+    exit(0)
+}

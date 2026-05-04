@@ -24,6 +24,25 @@ _tuple_string_int_string os_run_capture_status_raw(const char* p, void* a, void*
     _tuple_string_int_string out = { "", -1, "os.run_capture unavailable" };
     return out;
 }
+typedef struct { int _0; int _1; const char* _2; } _tuple_int_int_string;
+typedef struct { int _0; const char* _1; } _tuple_int_string;
+_tuple_int_int_string os_run_pipe_raw(const char* p, void* a, void* e) {
+    (void)p; (void)a; (void)e;
+    _tuple_int_int_string out = { -1, -1, "os.run_pipe unavailable" };
+    return out;
+}
+_tuple_int_string os_wait_pid_raw(int pid) {
+    (void)pid;
+    _tuple_int_string out = { -1, "os.wait_pid unavailable" };
+    return out;
+}
+_tuple_string_int_string os_run_pipe_drain_and_wait_raw(const char* p, void* a, void* e) {
+    (void)p; (void)a; (void)e;
+    _tuple_string_int_string out = { "", -1, "os.run_pipe_drain_and_wait unavailable" };
+    return out;
+}
+/* ipc_parent_channel_raw — implemented in std/ipc/aether_ipc.c
+ * (its no-FS stub returns -1 there). */
 char* os_now_utc_iso8601_raw(void) { return NULL; }
 int os_getpid_raw(void) { return 0; }
 #else
@@ -49,6 +68,7 @@ extern void* list_get_raw(void* list, int index);
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <errno.h>
+#include <fcntl.h>  /* fcntl, F_GETFD — used by ipc_parent_channel_raw */
 #else
 #include <windows.h>
 #include <wchar.h>
@@ -722,6 +742,242 @@ _tuple_string_int_string os_run_capture_status_raw(const char* prog, void* argv_
     return out;
 }
 
+/* ============================================================
+ * std.ipc — fd-inheritance back-channel for Aether ↔ Aether spawn.
+ *
+ * Aeb's `aether.driver_test` pattern: parent spawns a child that
+ * needs to send back a structured payload (test results, build
+ * telemetry, etc) richer than an exit code. Without this, every
+ * consumer reinvents the marker-file pattern.
+ *
+ * Mechanism: parent opens a pipe, dup2's the write end to a chosen
+ * fd (3 by convention, but the value goes into AETHER_IPC_FD so
+ * the child reads the env var rather than hardcoding the number),
+ * forks, exec's. Child can use ipc.parent_channel() to discover
+ * the fd, write a payload, close.
+ *
+ * Three variants of the parent-side spawn:
+ *
+ *   os_run_pipe_raw()                  — async; returns (read_fd,
+ *                                        pid, err). Caller MUST
+ *                                        wait via os_wait_pid_raw,
+ *                                        and reads concurrently to
+ *                                        avoid pipe-buffer deadlock
+ *                                        if the payload exceeds
+ *                                        OS pipe size (16K macOS,
+ *                                        64K Linux).
+ *   os_run_pipe_drain_and_wait_raw()   — sync convenience; reads
+ *                                        the channel to EOF and
+ *                                        waits for child. Same
+ *                                        shape as run_capture but
+ *                                        captures the IPC fd
+ *                                        instead of stdout. No
+ *                                        deadlock regardless of
+ *                                        payload size.
+ *   os_wait_pid_raw()                  — companion to os_run_pipe;
+ *                                        reaps child, returns exit.
+ *
+ * AETHER_IPC_FD is the contract; fd 3 is the default but the env
+ * var is what the child reads. Sidesteps fd-allocation surprises
+ * in shell intermediaries (e.g. `bash -c '<driver>'`).
+ * ============================================================ */
+
+typedef struct { int _0; int _1; const char* _2; } _tuple_int_int_string;
+typedef struct { int _0; const char* _1; } _tuple_int_string;
+
+/* Spawn child with a back-channel pipe at fd 3 (write end), set
+ * AETHER_IPC_FD=3 in child's env. Returns (parent_read_fd,
+ * child_pid, err). On success, err is "" and caller must:
+ *   1. Read from parent_read_fd until EOF.
+ *   2. Call os_wait_pid_raw(child_pid) to reap.
+ *   3. Close parent_read_fd.
+ *
+ * Failure modes return (-1, -1, "<reason>") with no spawn done.
+ *
+ * Pipe-buffer deadlock window: if child writes > OS pipe buffer
+ * (typically 16K-64K) without parent reading concurrently, the
+ * child blocks forever on its write. For payload-at-exit usage
+ * with large payloads, prefer os_run_pipe_drain_and_wait_raw. */
+_tuple_int_int_string os_run_pipe_raw(const char* prog, void* argv_list, void* env_list) {
+    _tuple_int_int_string out = { -1, -1, "" };
+    if (!prog) {
+        out._2 = "null prog";
+        return out;
+    }
+    if (!aether_sandbox_check("exec", prog)) {
+        out._2 = "denied by sandbox";
+        return out;
+    }
+
+    int pipefd[2];
+    if (pipe(pipefd) != 0) {
+        out._2 = "pipe failed";
+        return out;
+    }
+
+    char** av = build_argv_array(prog, argv_list);
+    if (!av) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        out._2 = "argv build failed";
+        return out;
+    }
+    char** envp = build_envp_array(env_list);
+
+    pid_t pid = fork();
+    if (pid < 0) {
+        close(pipefd[0]);
+        close(pipefd[1]);
+        free(av);
+        free(envp);
+        out._2 = "fork failed";
+        return out;
+    }
+    if (pid == 0) {
+        /* Child — wire pipefd[1] to fd 3 and tell child where it is. */
+        close(pipefd[0]);
+        if (dup2(pipefd[1], 3) < 0) _exit(127);
+        /* Close the original write end if dup2 didn't already (it
+         * does when pipefd[1] != 3; the conditional close is a
+         * defensive no-op when dup2 was a self-dup). */
+        if (pipefd[1] != 3) close(pipefd[1]);
+        /* AETHER_IPC_FD tells the child via env that fd 3 carries
+         * the parent channel. The child's ipc.parent_channel()
+         * reads this and returns the int — a future change can
+         * pick a different fd by setting a different value, no
+         * code change needed in the child. */
+        setenv("AETHER_IPC_FD", "3", 1);
+        if (envp) {
+            /* If the caller supplied an explicit envp, AETHER_IPC_FD
+             * needs to be present in it — setenv above only updates
+             * the current process's environ, but execve will use
+             * envp, not environ. Build augmented envp.
+             *
+             * For now, error if explicit envp is supplied; future
+             * work can splice AETHER_IPC_FD into the supplied envp
+             * before execve. Most aeb consumers pass null env. */
+            _exit(127);
+        } else {
+            execvp(prog, av);
+        }
+        _exit(127);
+    }
+    close(pipefd[1]);
+    free(av);
+    free(envp);
+
+    out._0 = pipefd[0];
+    out._1 = pid;
+    return out;
+}
+
+/* Wait for a child, return (exit_code, err). Reaps the child so
+ * it doesn't become a zombie. Companion to os_run_pipe_raw. */
+_tuple_int_string os_wait_pid_raw(int pid) {
+    _tuple_int_string out = { -1, "" };
+    if (pid <= 0) {
+        out._1 = "invalid pid";
+        return out;
+    }
+    int st = 0;
+    if (waitpid((pid_t)pid, &st, 0) < 0) {
+        out._1 = "waitpid failed";
+        return out;
+    }
+    if (WIFEXITED(st)) {
+        out._0 = WEXITSTATUS(st);
+    } else {
+        out._0 = -1;
+        out._1 = "child terminated abnormally";
+    }
+    return out;
+}
+
+/* Convenience: spawn + drain pipe + wait. Reads the back-channel
+ * to EOF (driven by the child closing fd 3 or exiting) while the
+ * child runs, then waits for the child to exit. Returns the
+ * channel payload as a string, the exit code, and an error string.
+ *
+ * No deadlock risk: the read loop drains continuously, so the
+ * pipe buffer never fills regardless of payload size. */
+_tuple_string_int_string os_run_pipe_drain_and_wait_raw(const char* prog, void* argv_list, void* env_list) {
+    _tuple_string_int_string out = { "", -1, "" };
+    /* Delegate to os_run_pipe_raw for the spawn, then drain + wait. */
+    _tuple_int_int_string spawn = os_run_pipe_raw(prog, argv_list, env_list);
+    if (spawn._2 && spawn._2[0]) {
+        out._2 = spawn._2;
+        return out;
+    }
+    int read_fd = spawn._0;
+    int pid = spawn._1;
+
+    size_t cap = 4096;
+    size_t len = 0;
+    char* result = (char*)malloc(cap);
+    if (!result) {
+        close(read_fd);
+        int st = 0;
+        waitpid((pid_t)pid, &st, 0);
+        out._2 = "alloc failed";
+        return out;
+    }
+    char buf[4096];
+    for (;;) {
+        ssize_t n = read(read_fd, buf, sizeof(buf));
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            free(result);
+            close(read_fd);
+            int st = 0;
+            waitpid((pid_t)pid, &st, 0);
+            out._2 = "read failed";
+            return out;
+        }
+        if (n == 0) break;
+        if (len + (size_t)n + 1 > cap) {
+            while (len + (size_t)n + 1 > cap) cap *= 2;
+            char* bigger = (char*)realloc(result, cap);
+            if (!bigger) {
+                free(result);
+                close(read_fd);
+                int st = 0;
+                waitpid((pid_t)pid, &st, 0);
+                out._2 = "realloc failed";
+                return out;
+            }
+            result = bigger;
+        }
+        memcpy(result + len, buf, (size_t)n);
+        len += (size_t)n;
+    }
+    result[len] = '\0';
+    close(read_fd);
+
+    int st = 0;
+    if (waitpid((pid_t)pid, &st, 0) < 0) {
+        out._0 = result;
+        out._1 = -1;
+        out._2 = "waitpid failed";
+        return out;
+    }
+    out._0 = result;
+    if (WIFEXITED(st)) {
+        out._1 = WEXITSTATUS(st);
+    } else {
+        out._1 = -1;
+        out._2 = "child terminated abnormally";
+    }
+    return out;
+}
+
+/* Child side: returns the parent-channel fd if the parent spawned
+ * us via os_run_pipe* (i.e. AETHER_IPC_FD is set and the named fd
+ * is open writable); -1 otherwise.
+ *
+ * Implemented in std/ipc/aether_ipc.c — declared here only so the
+ * Aether module.ae's `extern ipc_parent_channel_raw()` resolves
+ * during link. */
+
 #else // _WIN32
 
 // -----------------------------------------------------------------
@@ -1071,6 +1327,40 @@ _tuple_string_int_string os_run_capture_status_raw(const char* prog, void* argv_
      * the spawn itself succeeded. */
     return out;
 }
+
+/* std.ipc on Windows: stubs returning unsupported.
+ *
+ * Windows handle inheritance via STARTUPINFOEX +
+ * PROC_THREAD_ATTRIBUTE_HANDLE_LIST is the right approach for a
+ * future port, but mapping "child sees this at fd 3" requires
+ * coordinated _open_osfhandle on both sides plus careful handling
+ * of which std handles get inherited. v1 ships POSIX-only;
+ * Windows consumers fall back to the file-marker pattern. */
+
+typedef struct { int _0; int _1; const char* _2; } _tuple_int_int_string;
+typedef struct { int _0; const char* _1; } _tuple_int_string;
+
+_tuple_int_int_string os_run_pipe_raw(const char* prog, void* argv_list, void* env_list) {
+    (void)prog; (void)argv_list; (void)env_list;
+    _tuple_int_int_string out = { -1, -1, "unsupported on Windows" };
+    return out;
+}
+
+_tuple_int_string os_wait_pid_raw(int pid) {
+    (void)pid;
+    _tuple_int_string out = { -1, "unsupported on Windows" };
+    return out;
+}
+
+_tuple_string_int_string os_run_pipe_drain_and_wait_raw(const char* prog, void* argv_list, void* env_list) {
+    (void)prog; (void)argv_list; (void)env_list;
+    _tuple_string_int_string out = { "", -1, "unsupported on Windows" };
+    return out;
+}
+
+/* ipc_parent_channel_raw on Windows — implemented in
+ * std/ipc/aether_ipc.c (returns -1 unconditionally; Windows is
+ * stub-first per the v1 design). */
 
 #endif // !_WIN32
 

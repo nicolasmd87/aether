@@ -3,12 +3,14 @@
 
 exports (
     os_system, os_exec_raw, os_run, os_run_capture_raw, os_run_capture_status_raw,
+    os_run_pipe_raw, os_wait_pid_raw, os_run_pipe_drain_and_wait_raw,
     os_getenv, os_which,
     aether_args_count, aether_args_get, aether_argv0,
     os_execv, os_now_utc_iso8601_raw, os_getpid_raw,
     io_setenv_raw, io_unsetenv_raw,
     exec, run_capture, argv0, now_utc_iso8601, getpid,
-    setenv, unsetenv
+    setenv, unsetenv,
+    run_pipe, wait_pid, run_pipe_drain_and_wait
 )
 
 // Run a shell command, returns exit code (0 = success)
@@ -40,6 +42,46 @@ extern os_run_capture_raw(prog: string, argv: ptr, env: ptr) -> string
 // (stdout, status, err) — see the Aether-side `run_capture` wrapper
 // for the per-slot semantics. Issue #289.
 extern os_run_capture_status_raw(prog: string, argv: ptr, env: ptr) -> (string, int, string)
+
+// std.ipc back-channel spawn. Spawns a child with an inherited
+// pipe at fd 3 (write end, child side). Sets AETHER_IPC_FD=3 in
+// the child's environment so the child can locate the fd via
+// std.ipc.parent_channel(). Returns (parent_read_fd, child_pid,
+// err). Caller MUST call os.wait_pid(child_pid) to reap, or use
+// the os.run_pipe_drain_and_wait convenience.
+//
+// Pipe-buffer deadlock window: if the child writes more than
+// the OS pipe buffer (~16K macOS, ~64K Linux) without the parent
+// reading concurrently, the child blocks on its write call and
+// never exits. For payload-at-exit usage with small reports
+// (e.g. Aeocha test summaries), this is fine; for larger or
+// streaming payloads, prefer run_pipe_drain_and_wait.
+//
+// On Windows, returns (-1, -1, "unsupported on Windows") — fall
+// back to the file-marker pattern there.
+extern os_run_pipe_raw(prog: string, argv: ptr, env: ptr) -> (int, int, string)
+
+// Wait for a child to exit and reap it. Companion to
+// os_run_pipe_raw. Returns (exit_code, err). Calling this
+// once per spawn is required to avoid zombies; the
+// run_pipe_drain_and_wait convenience does it internally for
+// callers who don't need the read-fd loop. On Windows, returns
+// (-1, "unsupported on Windows").
+extern os_wait_pid_raw(pid: int) -> (int, string)
+
+// Convenience: spawn child with back-channel pipe, drain pipe to
+// EOF concurrently with the child running, wait for child, reap.
+// Returns (channel_payload, exit_code, err). No deadlock
+// regardless of payload size — the read loop drains continuously
+// so the pipe buffer never fills.
+//
+// This is the recommended entry point for the common case
+// "child writes a structured report at exit, parent reads it
+// after." Streaming consumers (parent reading mid-run) should use
+// the lower-level os_run_pipe_raw + os_wait_pid_raw pair instead.
+//
+// On Windows, returns ("", -1, "unsupported on Windows").
+extern os_run_pipe_drain_and_wait_raw(prog: string, argv: ptr, env: ptr) -> (string, int, string)
 
 // Get environment variable, returns string or NULL if not set
 extern os_getenv(name: string) -> string
@@ -105,6 +147,38 @@ exec(cmd: string) -> {
 // compile errors). Issue #289.
 run_capture(prog: string, argv: ptr, env: ptr) -> {
     return os_run_capture_status_raw(prog, argv, env)
+}
+
+// Spawn child with std.ipc back-channel pipe. Returns
+// (parent_read_fd, child_pid, err). Child sees AETHER_IPC_FD=3 in
+// its env; std.ipc.parent_channel() inside the child resolves to
+// fd 3. Caller MUST call os.wait_pid(child_pid) to reap the child;
+// reading from parent_read_fd is the caller's responsibility.
+//
+// For the common "spawn + read report + wait" case, use
+// os.run_pipe_drain_and_wait — same parent surface but no
+// pipe-buffer deadlock risk and no manual wait_pid call needed.
+//
+// On Windows, returns (-1, -1, "unsupported on Windows").
+run_pipe(prog: string, argv: ptr, env: ptr) -> {
+    return os_run_pipe_raw(prog, argv, env)
+}
+
+// Wait for and reap a child spawned via os.run_pipe. Returns
+// (exit_code, err). Calling this is required after os.run_pipe to
+// avoid leaving the child as a zombie process.
+wait_pid(pid: int) -> {
+    return os_wait_pid_raw(pid)
+}
+
+// Convenience: spawn + drain back-channel pipe + wait + reap, all
+// in one call. Returns (channel_payload, exit_code, err).
+// Recommended entry point for "child writes structured report at
+// exit; parent reads it after." No pipe-buffer deadlock risk
+// regardless of payload size. On Windows, returns ("", -1,
+// "unsupported on Windows").
+run_pipe_drain_and_wait(prog: string, argv: ptr, env: ptr) -> {
+    return os_run_pipe_drain_and_wait_raw(prog, argv, env)
 }
 
 // argv[0] — path the OS launched the current process with. Returns "" if
