@@ -174,6 +174,46 @@ My feature
   1 failing
 ```
 
+## Structured per-`it()` report (for parent harnesses)
+
+When `run_summary()` runs under a parent that opened a back-channel
+via `os.run_pipe` / `os.run_pipe_drain_and_wait` (e.g. aeb's
+`driver_test`), it additionally emits a structured report through
+that channel. From a plain terminal (`ae run foo.ae`), the channel
+is absent and behavior is unchanged — same human-readable green/red
+output, same exit code.
+
+The report is `version=1`: a header KV block, a `---` separator,
+then one tab-packed row per `it()`:
+
+```
+version=1
+total=3
+passed=1
+failed=2
+errored=0
+duration_ms=12
+---
+PASS	1	"works"	3
+FAIL	2	"broken"	5	math — expected 2, got 3
+FAIL	3	"flaky"	7	timeout
+```
+
+Per-row format: `<STATUS>\t<index>\t"<name>"\t<duration_ms>` and an
+optional fifth `<failure_message>` field for FAIL rows. Statuses
+are `PASS` or `FAIL`; `errored` in the header is reserved (always
+`0` in v1).
+
+Failure messages are capped at 256 characters per `it()`. If the
+full report would exceed ~60 KB (Linux default pipe buffer is 64 KB
+— larger writes can deadlock if the parent drains lazily), the
+emitter progressively truncates: drops messages first, then
+durations, then falls back to header-only. The parent always sees
+a valid `version=1` report.
+
+Gating is on `std.ipc.parent_channel() >= 0`. POSIX-only in v1 —
+on Windows the channel never opens and the report path is a no-op.
+
 ## Reserved-keyword note
 
 `after` is a reserved keyword in Aether (collides with the actor
