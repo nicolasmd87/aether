@@ -915,7 +915,53 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                     var_type = get_c_type(var->node_type);
                 }
                 print_indent(gen);
+                // Promoted-capture aware destructure: same routing as the
+                // AST_VARIABLE_DECLARATION single-name path. At first use
+                // declare the heap cell + defer free; on reassignment write
+                // through the cell. Without this, a closure-body destructure
+                // of a captured name miscompiled as `name = _tup._N` against
+                // a `T**` slot — produced a -Wincompatible-pointer-types
+                // warning and a runtime segfault on the next deref of the
+                // captured slot (closure-shadow-tuple-destructure, svn-aether
+                // porter Round 238/239). The matching is_assigned_to fix in
+                // codegen_expr.c teaches the promotion analysis to see
+                // tuple-destructure targets as writes.
+                if (is_promoted_capture(gen, var->value)) {
+                    if (!is_var_declared(gen, var->value)) {
+                        const char* c_type = var_type && var_type[0] ? var_type : "int";
+                        fprintf(gen->output,
+                                "%s* %s = malloc(sizeof(%s)); *%s = _tup%d._%d;\n",
+                                c_type, var->value, c_type, var->value, tmp_id, j);
+                        mark_var_declared(gen, var->value);
+                        ASTNode* free_call = create_ast_node(AST_FUNCTION_CALL, "free",
+                            stmt->line, stmt->column);
+                        ASTNode* arg = create_ast_node(AST_IDENTIFIER, var->value,
+                            stmt->line, stmt->column);
+                        if (arg->annotation) free(arg->annotation);
+                        arg->annotation = strdup("raw_promoted");
+                        add_child(free_call, arg);
+                        ASTNode* expr_stmt = create_ast_node(AST_EXPRESSION_STATEMENT, NULL,
+                            stmt->line, stmt->column);
+                        add_child(expr_stmt, free_call);
+                        push_defer(gen, expr_stmt);
+                    } else {
+                        fprintf(gen->output, "*%s = _tup%d._%d;\n", var->value, tmp_id, j);
+                    }
+                    continue;
+                }
                 if (is_var_declared(gen, var->value)) {
+                    int destruct_is_env_cap = 0;
+                    for (int ec = 0; ec < gen->current_env_capture_count; ec++) {
+                        if (gen->current_env_captures[ec] &&
+                            strcmp(gen->current_env_captures[ec], var->value) == 0) {
+                            destruct_is_env_cap = 1;
+                            break;
+                        }
+                    }
+                    if (destruct_is_env_cap) {
+                        fprintf(gen->output, "_env->%s = _tup%d._%d;\n", var->value, tmp_id, j);
+                        continue;
+                    }
                     fprintf(gen->output, "%s = _tup%d._%d;\n", var->value, tmp_id, j);
                 } else {
                     mark_var_declared(gen, var->value);

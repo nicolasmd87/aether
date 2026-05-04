@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Fixed
+
+- **aetherc codegen: closure-local tuple destructure of a captured outer-scope name** (`compiler/codegen/codegen_expr.c`, `compiler/codegen/codegen_stmt.c`, `tests/regression/test_closure_shadow_tuple_destructure.ae`). When a closure body destructured a tuple into names that shadowed outer-scope variables also captured by the closure (e.g. `out, status, _ = sh(cmd)` inside an `it()` callback whose outer `main()` had its own `out, status, err = sh(...)`), codegen emitted `name = _tup._N` against the captured-by-reference slot — a `T**` from the closure env. Result: a `[-Wincompatible-pointer-types]` C warning and a startup segfault before any user output as soon as the closure body next dereferenced the captured slot. Two fix sites: `is_assigned_to` (in `codegen_expr.c`) now treats `AST_TUPLE_DESTRUCTURE` targets as writes for promotion analysis, so the outer name gets heap-promoted; the `AST_TUPLE_DESTRUCTURE` emit (in `codegen_stmt.c`) now mirrors the `AST_VARIABLE_DECLARATION` Route-1 path — declares `T* x = malloc(...); *x = _tup._N` at the outer first-use and `*x = _tup._N` at the closure-body reassignment, with a defer-free queued at scope exit. Reported by the svn-aether porter as closure-shadow-tuple-destructure (Round 238/239) — the diagnostic was non-obvious (silent segfault, no "shadowing" hint) and the natural test-driver pattern (top-of-main shell prep + per-`it()` shell assertions, all using the same `out, status, err` triple) hit it immediately. Workaround that's no longer needed: rename the outer destructure's targets to `prep_out_`/`prep_st_`/`prep_err_`.
+
 ## [0.125.0]
 
 ### Added
