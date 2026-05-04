@@ -34,7 +34,7 @@ AETHER_HOME="$ROOT" ACCESS_LOG_PATH="$LOG" \
     "$AE" run "$SCRIPT_DIR/server.ae" >"$TMPDIR/srv.log" 2>&1 &
 SRV_PID=$!
 
-deadline=$(($(date +%s) + 5))
+deadline=$(($(date +%s) + 15))
 while [ "$(date +%s)" -lt "$deadline" ]; do
     if grep -q READY "$TMPDIR/srv.log" 2>/dev/null; then break; fi
     if ! kill -0 "$SRV_PID" 2>/dev/null; then
