@@ -119,6 +119,7 @@ plays that role), no interfaces.
   `[a, b, c]` literal builds a cons chain when target is
   `*StringSeq` (message field) or a static C array when target is
   `string[]`. `string.split_to_seq` is the runtime entry point.
+- **Unqualified imports are spelt `import mod (*)`, not `import mod unqualified`.** Aether ships glob imports — `import std.math (*)` brings every public symbol into the bare namespace, no `math.` prefix. Selective form `import std.math (sqrt, pow)` is the same shape with an enumeration. There is no `unqualified` keyword and no `use mod::*` (Rust) or `from mod import *` (Python) spelling — just the parenthesised `(*)`. Applies equally to stdlib, contrib, and local modules. When a porter or doc asks for "Java-style import static" or "Rust use", point at this. (Language reference: "Glob Import" section.)
 - **Trailing closure brace must be on the call's line.** `f(x) { … }`
   attaches as a trailing closure; `f(x)\n{ … }` is parsed as a
   separate bare-brace block. The compiler warns on the next-line

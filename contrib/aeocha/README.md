@@ -34,6 +34,38 @@ Run with `ae run my_test.ae` or `aeb test`. Exit code is `0` if all
 tests pass, `1` if anything failed (compatible with the `aeb`
 program-test contract).
 
+### Unqualified form — `import contrib.aeocha (*)`
+
+If the `aeocha.` prefix on every line is noisy, use the glob form
+to bring every public symbol into the bare namespace (see the
+[Glob Import](../../docs/language-reference.md) section in the
+language reference). Same code, no prefixes:
+
+```aether
+import contrib.aeocha (*)
+
+main() {
+    fw = init()
+    describe(fw, "My feature") {
+        before_each(fw) callback { /* setup */ }
+        it(fw, "works") callback {
+            assert_eq(fw, 1 + 1, 2, "math")
+        }
+    }
+    run_summary(fw)
+}
+```
+
+Selective form is also supported if you only want a few names bare:
+
+```aether
+import contrib.aeocha (init, describe, it, run_summary)
+```
+
+`fw` is still passed explicitly to every matcher in either form;
+that's an aeocha-side framework choice (see [TODO.md](TODO.md)
+item 3a), not a language limitation.
+
 ## Call shape
 
 Aeocha follows Aether's `_ctx` auto-injection convention (see
@@ -82,7 +114,8 @@ Sit on top of the `assert_*` primitives above to absorb the bash-shaped "spawn /
 | `aeocha.expect_exit(fw, exit_code, want, msg)` | Child exited with the expected status |
 | `aeocha.expect_no_spawn_error(fw, err, msg)` | Fork/exec itself succeeded (binary found, not denied by sandbox) |
 | `aeocha.expect_stdout_contains(fw, out, needle, msg)` | Substring of captured stdout |
-| `aeocha.expect_stdout_line_field(fw, out, prefix, n, want, msg)` | Find first line starting with `prefix`, split on space, compare field index `n` to `want`. Replaces `awk '/^Revision:/{print $2}'`-style assertions |
+| `aeocha.expect_stdout_line_field(fw, out, prefix, n, want, msg)` | Find first line starting with `prefix`, tokenise on runs of whitespace (spaces and tabs, awk-style), compare field index `n` (0-based) to `want`. Replaces `awk '/^Revision:/{print $2}'`-style assertions |
+| `aeocha.expect_stdout_line_after(fw, out, prefix, want, msg)` | Find first line starting with `prefix`, take everything after the prefix (trimmed), compare to `want`. Replaces `sed -n 's/^Log: *//p'`-style captures of multi-token values |
 | `aeocha.expect_stdout_line_count(fw, out, want, msg)` | Stdout has exactly `want` newline-separated lines (trailing-newline aware) |
 | `aeocha.expect_stdout_matches(fw, out, pattern, msg)` | At least one stdout line matches a glob pattern (`*`, `?`, `[abc]` per `std.string.glob_match`) |
 
@@ -125,7 +158,7 @@ main() {
 
 - **Don't name a local variable `stdout` or `stderr` when calling these matchers on Windows MinGW.** `<stdio.h>` `#define`s `stdout` and `stderr` as preprocessor macros pointing at runtime stdio handles, so when Aether codegen lowers a local named `stdout` to C, MinGW rewrites it mid-declaration and the build fails. The matchers themselves use `out` for the param to dodge the clash; conventional call-site naming follows suit (`out, exit_code, err = os.run_capture(...)`). Linux GCC and Apple Clang allow the literal name through, but the consistent `out` convention is portable. This is a Windows quirk only — the underlying `os.run_capture` works fine on every platform.
 - **`expect_stderr_contains` / `expect_stderr_empty` are not yet shipped.** `os.run_capture`'s third return slot is the spawn-error string, not the child's captured stderr — fd 2 from the child currently passes through to the parent's stderr unchanged. Adding child-stderr capture is a stdlib-side change tracked separately. Until it lands, callers that need to assert on stderr can wrap the child in `/bin/sh -c 'cmd 2>&1'` and use `expect_stdout_contains` on the merged stream.
-- **`expect_stdout_line_field` splits on a single space character only** — multi-delimiter awk patterns aren't handled. Fall back to `assert_str_eq` with a hand-derived value for unusual splits.
+- **`expect_stdout_line_field` tokenises on runs of ASCII space + tab (awk's default).** Other separators (commas, pipes, fixed-width column boundaries that aren't whitespace) aren't handled — fall back to `assert_str_eq` with a hand-derived value for those, or use `expect_stdout_line_after` if the value of interest is "everything after the prefix."
 - **`expect_stdout_matches` uses glob patterns, not regex.** `std.string.glob_match` (POSIX fnmatch: `*`, `?`, `[abc]`) is what's available in stdlib today; PCRE-style regex is a separate ask.
 - **`expect_http_body_json_field` does compact-JSON substring matching**, not real JSON parsing. Doesn't tolerate pretty-printed whitespace between `:` and the value. For nested keys or non-string values, use `std.json` directly and call `assert_*` on the parsed result.
 

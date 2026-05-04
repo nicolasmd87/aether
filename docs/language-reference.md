@@ -1242,11 +1242,14 @@ a one-shot deprecation warning per module. Migrate by collecting every
 removing the `export` keywords from each declaration. Mixing both forms
 in one module is a hard error.
 
-### Glob Import — `import mod (*)`
+### Glob Import — `import mod (*)` (a.k.a. unqualified import)
 
 Expose **every public name** in a module as an unqualified short alias,
 without enumerating each symbol individually. Names with a leading
 underscore (`_helper`, `_internal`) stay private and are not aliased.
+This is Aether's spelling for what other languages call "unqualified
+import" (Rust's `use mod::*;`, Java's `import static mod.*`, Python's
+`from mod import *`).
 
 ```aether
 import std.math (*)
@@ -1258,10 +1261,32 @@ main() {
 }
 ```
 
-Use this when you'd otherwise list 20+ symbols just to use the module
-without the namespace prefix. Bare `import std.math` (no parens) loads
-the module but does **not** register short aliases — you have to write
-`math.sqrt(...)` for everything.
+It also applies to contrib modules — useful for test frameworks where
+unqualified `describe(...)` / `it(...)` / `assert_eq(...)` is the
+idiomatic call shape:
+
+```aether
+import contrib.aeocha (*)
+
+main() {
+    fw = init()
+    describe(fw, "Counter") {
+        it(fw, "starts at zero") callback {
+            assert_eq(fw, 0, 0, "initial count")
+        }
+    }
+    run_summary(fw)
+}
+```
+
+Use the glob form when you'd otherwise list 20+ symbols just to use
+the module without the namespace prefix. Bare `import std.math` (no
+parens) loads the module but does **not** register short aliases —
+you have to write `math.sqrt(...)` for everything. The selective form
+`import std.math (sqrt, pow)` aliases only the named symbols and
+keeps everything else qualified — the same shape as `import static`
+in Java, useful when you want exactly two or three symbols bare and
+the rest namespaced.
 
 ### Import with Alias (Planned)
 
