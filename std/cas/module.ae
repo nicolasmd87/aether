@@ -1,0 +1,222 @@
+// std.cas - Content-addressed artifact store
+//
+// A small content-addressed store (CAS) for sharing built artifacts
+// (`.so` files from `--emit=lib`, eventually anything content-
+// addressable). Files are keyed by the hex sha256 of their content;
+// puts copy through a temp file and atomic-rename so partial writes
+// never appear with the final name; gets verify the digest on the
+// way out so a corrupted store entry can't quietly hand back wrong
+// bytes.
+//
+// Pattern:
+//
+//     digest, err = cas.put("./build/myplugin.so")
+//     // digest is the hex sha256 of the file's content; safe to
+//     // print, log, share, embed in a manifest.
+//
+//     if cas.has(digest) {
+//         err2 = cas.get(digest, "./fetched.so")
+//         // The contents of fetched.so hash to `digest`, or
+//         // err2 is non-empty.
+//     }
+//
+// CAS root resolution (in order):
+//   1. AETHER_CAS env var, if set and non-empty.
+//   2. $HOME/.aether/cas
+//   3. /tmp/aether-cas-<uid>  (HOME unset, uncommon)
+//
+// The root is created on demand; consumers don't need to mkdir it
+// themselves. The store layout is intentionally flat — one file per
+// digest, no fan-out subdirs — so `ls ~/.aether/cas | wc -l` answers
+// "how many entries do I have." Grow the layout to two-level fan-out
+// (`<digest[0:2]>/<digest[2:]>`) only if entry counts ever push
+// filesystem dirent limits in practice.
+//
+// Issue #345.
+
+import std.fs
+import std.cryptography
+import std.string
+
+// Local extern redeclaration. `os_getenv` lives in std/os; we declare
+// it here directly so the C codegen emits the prototype above this
+// module's function bodies. (Same pattern std/fs uses to redeclare
+// std/string's `string_concat` / `string_length`.)
+extern os_getenv(name: string) -> string
+
+exports (
+    // Aether-native API.
+    root, path, has, put, get,
+    // Raw escape hatches if a caller needs the per-step pieces.
+    cas_root_raw, cas_path_raw
+)
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+// Resolve the CAS root directory. Reads AETHER_CAS first; falls
+// back to $HOME/.aether/cas. Always returns a non-empty string —
+// callers don't have to handle a NULL root. Note that the directory
+// may not yet exist; ensure_root_exists below creates it on demand.
+cas_root_raw() -> string {
+    env_root = os_getenv("AETHER_CAS")
+    if env_root != null {
+        if string.length(env_root) > 0 {
+            return string.concat(env_root, "")
+        }
+    }
+    home = os_getenv("HOME")
+    if home == null {
+        // No HOME — fall back to a uid-specific /tmp dir so two
+        // users on the same box don't collide. The pid would also
+        // work but persistent identity is more useful for a CAS.
+        return "/tmp/aether-cas"
+    }
+    if string.length(home) == 0 {
+        return "/tmp/aether-cas"
+    }
+    base = string.concat(home, "/.aether/cas")
+    return base
+}
+
+root() -> string {
+    return cas_root_raw()
+}
+
+// Compose the CAS file path for a digest: <root>/<digest>.
+// Pure function — does not touch the filesystem.
+cas_path_raw(digest: string) -> string {
+    r = cas_root_raw()
+    sep = string.concat(r, "/")
+    return string.concat(sep, digest)
+}
+
+path(digest: string) -> string {
+    return cas_path_raw(digest)
+}
+
+// Idempotently create the CAS root. Returns "" on success or an
+// error string. mkdir_p treats already-existing directories as
+// success, so calling this on every put is cheap.
+ensure_root_exists() -> {
+    r = cas_root_raw()
+    return fs.mkdir_p(r)
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+// ---------------------------------------------------------------------------
+
+// Test whether a digest is present in the local store. Pure
+// existence check on `<root>/<digest>`. NULL-safe — passing an empty
+// or NULL digest returns 0.
+has(digest: string) -> int {
+    if digest == null {
+        return 0
+    }
+    if string.length(digest) == 0 {
+        return 0
+    }
+    return fs.exists(cas_path_raw(digest))
+}
+
+// Insert a file into the store. Reads the file's content, computes
+// the hex sha256, and atomically renames into place at
+// `<root>/<digest>`. Returns `(digest, "")` on success, `("", err)`
+// on any failure (file missing, OOM, mkdir failure, write failure).
+//
+// Idempotent: putting a file whose contents already exist in the
+// store re-writes the entry (the content is the same — the store
+// stays well-formed) and returns the same digest. Callers comparing
+// digests to detect "is this the same artifact?" never need to
+// special-case "already present."
+put(file_path: string) -> {
+    if file_path == null {
+        return "", "null file path"
+    }
+
+    // Read the file as binary bytes — sha256 has to see the exact
+    // payload, no NUL-truncation. fs.read_binary_tuple returns
+    // (bytes, length, err); the bytes payload is owned by the
+    // returned AetherString.
+    bytes, length, rerr = fs.read_binary_tuple(file_path)
+    if rerr != "" {
+        return "", rerr
+    }
+
+    digest, herr = cryptography.sha256_hex(bytes, length)
+    if herr != "" {
+        return "", herr
+    }
+    if string.length(digest) == 0 {
+        return "", "sha256 failed"
+    }
+
+    derr = ensure_root_exists()
+    if derr != "" {
+        return "", derr
+    }
+
+    target = cas_path_raw(digest)
+
+    // write_atomic does write-to-tmp + fsync + rename. Same-FS
+    // writes are atomic on POSIX; the CAS root and the temp it
+    // creates internally are siblings, so this is the case we get.
+    werr = fs.write_atomic(target, bytes, length)
+    if werr != "" {
+        return "", werr
+    }
+
+    return digest, ""
+}
+
+// Copy an entry out of the store to `dest_path`, verifying that
+// the bytes hash back to `digest` before declaring success. The
+// re-hash protects callers from a corrupted store entry quietly
+// handing back the wrong content (filesystem bit-rot, an
+// out-of-band tool that wrote something with a wrong name, etc.).
+//
+// `dest_path` is overwritten via atomic rename.
+//
+// Returns "" on success, error string on:
+//   - digest not in store
+//   - read failure
+//   - dest write failure
+//   - digest mismatch (corrupted entry)
+get(digest: string, dest_path: string) -> {
+    if digest == null {
+        return "null digest"
+    }
+    if dest_path == null {
+        return "null destination path"
+    }
+
+    src = cas_path_raw(digest)
+    if fs.exists(src) == 0 {
+        return "digest not present in CAS"
+    }
+
+    bytes, length, rerr = fs.read_binary_tuple(src)
+    if rerr != "" {
+        return rerr
+    }
+
+    actual, herr = cryptography.sha256_hex(bytes, length)
+    if herr != "" {
+        return herr
+    }
+    if string.equals(actual, digest) == 0 {
+        // Store entry is corrupted — its contents no longer hash
+        // to its filename. Don't deliver it; let the caller decide
+        // whether to delete + repopulate.
+        return "CAS entry digest mismatch (corruption?)"
+    }
+
+    werr = fs.write_atomic(dest_path, bytes, length)
+    if werr != "" {
+        return werr
+    }
+
+    return ""
+}

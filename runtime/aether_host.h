@@ -23,6 +23,7 @@
 #ifndef AETHER_HOST_H
 #define AETHER_HOST_H
 
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -194,6 +195,71 @@ typedef struct AetherNamespaceManifest {
  * header and call it via dlsym. Returns a borrowed pointer to a
  * static — DO NOT free. */
 const AetherNamespaceManifest* aether_describe(void);
+
+/* ---------------------------------------------------------------------
+ * Caller-info channel (issue #344) — host stamps per-call context
+ * before invoking an aether_<name> export; the loaded module reads
+ * it via host.caller_identity() / .caller_attribute(key) /
+ * .caller_deadline_ms() in std/host/module.ae.
+ *
+ * Trust model: the host always has more authority than the loaded
+ * .so, so this is NOT a security boundary — it's plumbing for
+ * per-call advisory context (identity, role flags, soft deadlines).
+ * Aether code should treat the values as advisory, not as
+ * authenticated facts.
+ *
+ * Lifetime: the populated state lives in TLS until the next
+ * aether_set_caller call replaces it OR aether_clear_caller wipes
+ * it. Hosts that load multiple plugins per thread should clear
+ * between calls if they don't want the previous caller's info to
+ * leak through.
+ *
+ * Storage: keys + values are deep-copied into a TLS buffer at
+ * aether_set_caller time, so the caller's pointers are NOT
+ * retained — feel free to free them after the call returns.
+ * Bounded by AETHER_CALLER_INFO_MAX_BYTES (default 4096).
+ * --------------------------------------------------------------------- */
+
+#ifndef AETHER_CALLER_INFO_MAX_ATTRS
+#define AETHER_CALLER_INFO_MAX_ATTRS 32
+#endif
+#ifndef AETHER_CALLER_INFO_MAX_BYTES
+#define AETHER_CALLER_INFO_MAX_BYTES 4096
+#endif
+
+/* Populate the per-call caller-info TLS slot. Returns 0 on success;
+ * -1 if the (keys + values + identity) byte total or attribute count
+ * would exceed AETHER_CALLER_INFO_MAX_BYTES / _MAX_ATTRS. On overflow
+ * the slot is left in its previous state (no partial population).
+ *
+ * Pass NULL identity to mean "no identity"; the loaded module's
+ * host.caller_identity() returns "" in that case.
+ *
+ * `n` is the count of (attr_keys[i], attr_vals[i]) pairs. attr_keys
+ * and attr_vals may be NULL when n == 0.
+ *
+ * deadline_ms is whatever convention the host wants — typically
+ * milliseconds since epoch, or absolute clock_gettime(CLOCK_MONOTONIC)
+ * milliseconds. The runtime treats it as an opaque int64_t pass-
+ * through; pair with #343's deadline tripwire to enforce. */
+int aether_set_caller(const char* identity,
+                      const char** attr_keys,
+                      const char** attr_vals,
+                      size_t n,
+                      int64_t deadline_ms);
+
+/* Wipe the caller-info TLS slot. Useful between back-to-back calls
+ * so a forgotten set_caller from a previous invocation can't leak
+ * into a fresh export call. Idempotent; safe to call when no caller
+ * info was previously set. */
+void aether_clear_caller(void);
+
+/* Aether-side accessors — wired into std/host/module.ae and called
+ * from .ae code via host.caller_identity() / .caller_attribute(key)
+ * / .caller_deadline_ms(). All NULL-safe. */
+const char* aether_caller_identity(void);
+const char* aether_caller_attribute(const char* key);
+int64_t     aether_caller_deadline_ms(void);
 
 #ifdef __cplusplus
 }  /* extern "C" */

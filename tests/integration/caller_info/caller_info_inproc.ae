@@ -1,0 +1,91 @@
+// Issue #344 regression — Aether-side caller-info accessors.
+//
+// Identity + deadline path is testable end-to-end from one Aether
+// program: main() acts as the "host" by calling aether_set_caller,
+// then reads the values back through host.caller_identity() /
+// host.caller_deadline_ms() / host.caller_attribute().
+//
+// The attribute-key path needs `const char**`-shaped argv, which
+// Aether's list<ptr> doesn't directly produce — that path is
+// covered by the C-driven test in caller_info_attrs.c instead.
+
+import std.host
+import std.string
+
+extern aether_set_caller(identity: string, keys: ptr, vals: ptr, n: int, deadline: long) -> int
+extern aether_clear_caller()
+
+main() {
+    // Empty defaults before any host call.
+    if string.length(host.caller_identity()) != 0 {
+        println("FAIL: identity should be empty before set")
+        return
+    }
+    if host.caller_deadline_ms() != 0 {
+        println("FAIL: deadline should be 0 before set")
+        return
+    }
+    if string.length(host.caller_attribute("anything")) != 0 {
+        println("FAIL: attribute should be empty before set")
+        return
+    }
+
+    // Set identity + deadline (no attributes from Aether — the
+    // const char** pair shape needs C; covered separately).
+    rc = aether_set_caller("alice", null, null, 0, 12345)
+    if rc != 0 {
+        println("FAIL: set_caller returned ${rc}")
+        return
+    }
+    if string.equals(host.caller_identity(), "alice") == 0 {
+        println("FAIL: identity wrong after set: '${host.caller_identity()}'")
+        return
+    }
+    if host.caller_deadline_ms() != 12345 {
+        println("FAIL: deadline wrong after set")
+        return
+    }
+
+    // Sequential set replaces; no leak from previous call.
+    rc2 = aether_set_caller("bob", null, null, 0, 999)
+    if rc2 != 0 {
+        println("FAIL: second set_caller returned ${rc2}")
+        return
+    }
+    if string.equals(host.caller_identity(), "bob") == 0 {
+        println("FAIL: identity didn't update on second set")
+        return
+    }
+    if host.caller_deadline_ms() != 999 {
+        println("FAIL: deadline didn't update on second set")
+        return
+    }
+
+    // Clear resets to empty defaults.
+    aether_clear_caller()
+    if string.length(host.caller_identity()) != 0 {
+        println("FAIL: clear didn't reset identity")
+        return
+    }
+    if host.caller_deadline_ms() != 0 {
+        println("FAIL: clear didn't reset deadline")
+        return
+    }
+
+    // NULL identity is allowed (means "no identity"); returns "".
+    rc3 = aether_set_caller(null, null, null, 0, 42)
+    if rc3 != 0 {
+        println("FAIL: set_caller with null identity returned ${rc3}")
+        return
+    }
+    if string.length(host.caller_identity()) != 0 {
+        println("FAIL: null identity should produce empty string")
+        return
+    }
+    if host.caller_deadline_ms() != 42 {
+        println("FAIL: deadline with null identity wrong")
+        return
+    }
+
+    println("PASS")
+}

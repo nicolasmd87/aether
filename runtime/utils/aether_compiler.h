@@ -99,6 +99,26 @@
 #  define AETHER_TLS  // Not thread-local — may cause issues in MT builds
 #endif
 
+// Variant for TLS variables in translation units that get linked
+// into shared objects (`--emit=lib` .so output) AS WELL AS into the
+// main `ae` executable. The default x86_64 ELF TLS model for
+// `__thread` is Initial-Exec, which emits R_X86_64_TPOFF32
+// relocations that the linker rejects when building a .so without
+// -fPIC. Forcing Global-Dynamic produces relocations the dynamic
+// linker can handle in any context (executable or shared object)
+// at the cost of one GOT indirection per access — sub-nanosecond
+// for variables read on the order of once per call.
+//
+// On Windows / MSVC __declspec(thread) doesn't take a model
+// attribute; on bare-metal / pre-C11 fallbacks the TLS keyword is
+// already empty, so the model is moot. Only the GCC/Clang ELF
+// path needs the annotation.
+#if AETHER_GCC_COMPAT && !defined(_WIN32) && !defined(__APPLE__)
+#  define AETHER_TLS_SHARED __thread __attribute__((tls_model("global-dynamic")))
+#else
+#  define AETHER_TLS_SHARED AETHER_TLS
+#endif
+
 // ============================================================================
 // AUTO-INIT / AUTO-FINI (constructor / destructor)
 // On MSVC these are no-ops: caller must invoke the functions manually.
