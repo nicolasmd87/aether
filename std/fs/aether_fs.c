@@ -283,6 +283,13 @@ int dir_delete_raw(const char* path) {
 // intermediate directory if it doesn't already exist. Treats EEXIST as
 // success at every step. Returns 1 on success, 0 on failure (e.g. path
 // too long, or one of the components exists but isn't a directory).
+//
+// Windows note: a Windows-shaped path like `C:/msys64/tmp/foo` is
+// passed in by cygpath-m'd MSYS scripts and by anything that builds
+// paths from getenv-returned Windows roots. We skip the `C:` drive
+// prefix before walking '/' separators so the loop never attempts
+// `mkdir("C:")` (which fails — the trailing-backslash form `C:\`
+// is the only valid shape, and that's already an existing root).
 int fs_mkdir_p_raw(const char* path) {
     if (!path || !*path) return 0;
     if (!aether_sandbox_check("fs_write", path)) return 0;
@@ -292,10 +299,26 @@ int fs_mkdir_p_raw(const char* path) {
     if (len >= sizeof(buf)) return 0;
     memcpy(buf, path, len + 1);
 
-    // Step through each '/' in the interior of the path, creating each
-    // prefix as we go. Skip a leading slash so we don't try to mkdir("").
-    for (size_t i = 1; i < len; i++) {
-        if (buf[i] == '/') {
+    // Skip a Windows drive prefix (`X:`). Anything shaped
+    // `<letter><colon>` at the start is a drive root that's already
+    // present; we begin walking '/' from after it.
+    size_t start = 1;
+    if (len >= 2 &&
+        ((buf[0] >= 'A' && buf[0] <= 'Z') || (buf[0] >= 'a' && buf[0] <= 'z')) &&
+        buf[1] == ':') {
+        // If a separator follows the colon (`C:/foo` or `C:\foo`),
+        // skip past it too — the drive root itself doesn't need
+        // creating, only the components beneath.
+        start = (len >= 3 && (buf[2] == '/' || buf[2] == '\\')) ? 3 : 2;
+    }
+
+    // Step through each separator in the interior of the path,
+    // creating each prefix as we go. Both '/' and '\' are honoured
+    // as separators so paths from cygpath / Windows callers and
+    // POSIX paths walk uniformly.
+    for (size_t i = start; i < len; i++) {
+        if (buf[i] == '/' || buf[i] == '\\') {
+            char saved = buf[i];
             buf[i] = '\0';
             if (mkdir(buf, 0755) != 0) {
                 // Tolerate already-exists. Anything else is a real failure.
@@ -303,7 +326,7 @@ int fs_mkdir_p_raw(const char* path) {
                 struct stat st;
                 if (stat(buf, &st) != 0 || !S_ISDIR(st.st_mode)) return 0;
             }
-            buf[i] = '/';
+            buf[i] = saved;
         }
     }
     // Final component (if not already covered by a trailing slash)
