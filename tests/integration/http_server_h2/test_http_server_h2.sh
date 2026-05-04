@@ -242,7 +242,64 @@ grep -q '^do-not-send$' "$GETBODY" || {
 }
 
 # ----------------------------------------------------------------
-# Test 8 — h2c upgrade handshake. Send a raw HTTP/1.1 GET with
+# Test 8 — sustained-load: 50 sequential streams on one connection.
+# Verifies the wrapper's per-stream alloc/free path (header block,
+# body buffer, response_headers nv array) doesn't leak or desync
+# over a sustained burst. curl reuses one TCP connection across
+# multi-URL invocations and multiplexes them as separate h2
+# streams. (We use 50 sequential rather than 100 in parallel
+# because the latter overwhelms the single-thread accept queue
+# in the test harness — that's a CI-runner concurrency bound,
+# not an h2 wrapper bound. The 10-parallel test above already
+# proves multiplexing works.)
+# ----------------------------------------------------------------
+STRESS_DIR="$TMPDIR/stress"
+mkdir -p "$STRESS_DIR"
+STRESS_CFG="$TMPDIR/stress.cfg"
+: >"$STRESS_CFG"
+i=0
+while [ $i -lt 50 ]; do
+    printf 'url = "%s/n?stress=%d"\noutput = "%s/n%d"\n' \
+        "$URL_BASE" "$i" "$STRESS_DIR" "$i" >>"$STRESS_CFG"
+    i=$((i + 1))
+done
+curl --silent --show-error --max-time 30 \
+     --http2-prior-knowledge \
+     --config "$STRESS_CFG" \
+     2>"$TMPDIR/stress.err" || {
+    echo "  [FAIL] 50-stream stress curl failed:"; cat "$TMPDIR/stress.err"; exit 1
+}
+mismatches=0
+i=0
+while [ $i -lt 50 ]; do
+    if ! grep -q "^q=stress=$i\$" "$STRESS_DIR/n$i" 2>/dev/null; then
+        mismatches=$((mismatches + 1))
+    fi
+    i=$((i + 1))
+done
+if [ "$mismatches" -gt 0 ]; then
+    echo "  [FAIL] $mismatches stress streams returned wrong body"
+    head -c 200 "$STRESS_DIR/n0" 2>/dev/null
+    exit 1
+fi
+
+# A follow-up request via a fresh connection must still succeed
+# (catches any global state corruption in the wrapper that would
+# poison subsequent h2 sessions).
+POST_STRESS="$TMPDIR/post_stress.body"
+HTTPVER_PS=$(curl --silent --show-error --max-time 5 \
+                 --http2-prior-knowledge \
+                 -o "$POST_STRESS" \
+                 -w '%{http_version}' \
+                 "$URL_BASE/" 2>"$TMPDIR/ps.err") || {
+    echo "  [FAIL] post-stress GET failed (server state corrupted?):"; cat "$TMPDIR/ps.err"; exit 1
+}
+[ "$HTTPVER_PS" = "2" ] || {
+    echo "  [FAIL] post-stress GET dropped from h2 to '$HTTPVER_PS'"; exit 1
+}
+
+# ----------------------------------------------------------------
+# Test 9 — h2c upgrade handshake. Send a raw HTTP/1.1 GET with
 # Upgrade: h2c + HTTP2-Settings headers (RFC 7540 §3.2) and verify
 # the server responds with `101 Switching Protocols` before any
 # h2 frames flow. We use python3 if available (portable raw-socket
