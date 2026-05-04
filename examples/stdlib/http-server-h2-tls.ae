@@ -1,0 +1,103 @@
+// HTTP/2 over TLS (ALPN-negotiated) demo — issue #260 Tier 2.
+//
+// Spins up an HTTPS server that advertises both h2 and http/1.1
+// via ALPN. Modern clients pick HTTP/2; older / curl --http1.1
+// clients keep working transparently. Demonstrates the canonical
+// production-shape: TLS + h2 + keep-alive + middleware all
+// composing on the same server.
+//
+// Setup (one-time, generates a self-signed cert into /tmp):
+//
+//   openssl req -x509 -newkey rsa:2048 \
+//       -keyout /tmp/aether-h2.key.pem -out /tmp/aether-h2.cert.pem \
+//       -days 1 -nodes -subj "/CN=localhost"
+//
+// Then build + run:
+//
+//   ./build/ae build examples/stdlib/http-server-h2-tls.ae -o /tmp/h2tls
+//   /tmp/h2tls
+//
+// Test from another terminal:
+//
+//   curl --insecure --http2 -w '\nhttp_version=%{http_version}\n' \
+//        https://localhost:18271/
+//   # Expected:  http_version=2
+//
+//   curl --insecure --http1.1 -w '\nhttp_version=%{http_version}\n' \
+//        https://localhost:18271/
+//   # Expected:  http_version=1.1   (ALPN fell back to http/1.1)
+//
+// Build a release with libnghttp2 + OpenSSL linked:
+//   make stdlib && ./build/ae build ...
+
+import std.http
+import std.http.middleware
+import std.os
+
+extern http_server_start_raw(server: ptr) -> int
+extern os_getenv(name: string) -> string
+
+const PORT = 18271
+const DEFAULT_CERT = "/tmp/aether-h2.cert.pem"
+const DEFAULT_KEY  = "/tmp/aether-h2.key.pem"
+
+handle_root(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_body(res, "hello over h2 (or 1.1)\n")
+}
+
+handle_echo(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "application/octet-stream")
+    body = http.request_body(req)
+    blen = http.request_body_length(req)
+    if body == null {
+        http.response_set_body(res, "")
+    } else {
+        http.response_set_body_n(res, body, blen)
+    }
+}
+
+main() {
+    cert = os_getenv("CERT_PATH")
+    if cert == 0 { cert = DEFAULT_CERT }
+    key = os_getenv("KEY_PATH")
+    if key == 0  { key = DEFAULT_KEY }
+
+    server = http.server_create(PORT)
+    if server == 0 {
+        println("server_create failed")
+        return
+    }
+
+    tls_err = http.server_set_tls(server, cert, key)
+    if tls_err != "" {
+        println("TLS setup failed: ${tls_err}")
+        println("(generate /tmp/aether-h2.{cert,key}.pem first; see file header)")
+        return
+    }
+
+    h2_err = http.server_set_h2(server, 0)
+    if h2_err != "" {
+        println("h2 unavailable: ${h2_err} — TLS server stays HTTP/1.1-only")
+    } else {
+        println("h2 advertised via ALPN (h2 first, http/1.1 fallback)")
+    }
+
+    ka_err = http.server_set_keepalive(server, 1, 0, 30000)
+    if ka_err != "" {
+        println("keepalive: ${ka_err}")
+        return
+    }
+
+    // CORS so the demo is reachable from a browser dev-console too.
+    middleware.use_cors(server, "*", "GET, POST", "Content-Type", 0, 600)
+
+    http.server_get(server,  "/",     handle_root, 0)
+    http.server_post(server, "/echo", handle_echo, 0)
+
+    println("listening on https://localhost:${PORT}/")
+    println("try: curl --insecure --http2 https://localhost:${PORT}/")
+    http_server_start_raw(server)
+}

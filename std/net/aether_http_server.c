@@ -1,6 +1,20 @@
 #include "aether_http_server.h"
 #include "../../runtime/config/aether_optimization_config.h"
 
+/* HTTP/2 (#260 Tier 2). Pull in the wrapper header up front so
+ * handle_one_request's h2c-upgrade dispatch (RFC 7540 §3.2) can
+ * reach AetherH2Session + the h2c factory. The actual driver
+ * (handle_h2_connection) is defined further down in this file under
+ * the same #ifdef gate; forward-declare it here so the upgrade
+ * path can hand the preloaded session over without ordering pain. */
+#ifdef AETHER_HAS_NGHTTP2
+#include "../http/server/h2/aether_h2.h"
+typedef struct HttpConn HttpConn;
+static void handle_h2_connection(struct HttpServer* server, HttpConn* conn,
+                                 AetherH2Session* preloaded);
+static int conn_buffered_is_h2_preface(HttpConn* conn);
+#endif
+
 #if !AETHER_HAS_NETWORKING
 // Stubs when networking is unavailable
 HttpServer* http_server_create(int p) { (void)p; return NULL; }
@@ -10,6 +24,9 @@ void http_server_stop(HttpServer* s) { (void)s; }
 void http_server_free(HttpServer* s) { (void)s; }
 const char* http_server_set_tls_raw(HttpServer* s, const char* c, const char* k) {
     (void)s; (void)c; (void)k; return "TLS unavailable: networking not built in";
+}
+const char* http_server_set_h2_raw(HttpServer* s, int m) {
+    (void)s; (void)m; return "HTTP/2 unavailable: networking not built in";
 }
 const char* http_server_set_keepalive_raw(HttpServer* s, int e, int m, int i) {
     (void)s; (void)e; (void)m; (void)i; return "keep-alive unavailable: networking not built in";
@@ -140,13 +157,19 @@ const char* http_request_query(HttpRequest* r) { (void)r; return ""; }
  * pattern silently drops anything past the first request's body
  * boundary in the same recv. */
 #define HTTP_CONN_BUF_CAP (16 * 1024)
-typedef struct {
+typedef struct HttpConn {
     int fd;
 #ifdef AETHER_HAS_OPENSSL
     SSL* ssl;     /* non-NULL when this connection is TLS-wrapped */
 #else
     void* ssl;    /* layout-stable placeholder for the no-TLS build */
 #endif
+    /* HTTP/2 (#260 Tier 2). Set to 1 either via ALPN selecting "h2"
+     * during the TLS handshake or via an HTTP/1.1 → h2c upgrade
+     * negotiated on a plain socket. When set, the request loop
+     * routes every byte on this connection through the nghttp2
+     * session wrapper rather than the HTTP/1.1 parser. */
+    int   is_h2;
     /* Read-side ring: [read_pos, write_pos) holds bytes already
      * received but not yet consumed by a request parse. Bytes
      * before read_pos are spent and may be discarded by compaction;
@@ -229,8 +252,62 @@ static int conn_buf_ensure(HttpConn* c, int needed) {
 }
 
 #ifdef AETHER_HAS_OPENSSL
+/* ALPN selection callback (#260 Tier 2 — HTTP/2). The peer sends a
+ * length-prefixed list of protocols it supports; we walk it and pick
+ * the first one we recognise from our preference order
+ * (h2 → http/1.1).
+ *
+ * Wire format per RFC 7301: a sequence of <len:u8><proto-name:bytes>
+ * tuples. SSL_select_next_proto handles the parse for us; we just
+ * supply our preference list in the same wire shape.
+ *
+ * `arg` is the HttpServer* registered when the SSL_CTX was created;
+ * we honour its h2_enabled flag so a server that hasn't opted into
+ * h2 always selects http/1.1 even when the peer offers h2. */
+static int aether_alpn_select_cb(SSL* ssl,
+                                 const unsigned char** out,
+                                 unsigned char* outlen,
+                                 const unsigned char* in,
+                                 unsigned int inlen,
+                                 void* arg) {
+    (void)ssl;
+    HttpServer* server = (HttpServer*)arg;
+
+    /* Wire-format ALPN advertisement, h2 first when the server
+     * enabled it. Each entry is <length:u8><name:bytes>. */
+    static const unsigned char alpn_h2_first[] = {
+        2, 'h', '2',
+        8, 'h', 't', 't', 'p', '/', '1', '.', '1'
+    };
+    static const unsigned char alpn_http11_only[] = {
+        8, 'h', 't', 't', 'p', '/', '1', '.', '1'
+    };
+    const unsigned char* prefs;
+    unsigned int prefs_len;
+    if (server && server->h2_enabled) {
+        prefs = alpn_h2_first;
+        prefs_len = sizeof(alpn_h2_first);
+    } else {
+        prefs = alpn_http11_only;
+        prefs_len = sizeof(alpn_http11_only);
+    }
+
+    /* SSL_select_next_proto returns OPENSSL_NPN_NEGOTIATED on a hit
+     * and OPENSSL_NPN_NO_OVERLAP otherwise. The function still writes
+     * a fallback proto into *out / *outlen when there's no overlap;
+     * we treat that case as a hard failure so the handshake aborts —
+     * better to fail loudly than to silently downgrade the
+     * negotiation against the client's preferences. */
+    int rc = SSL_select_next_proto((unsigned char**)out, outlen,
+                                   prefs, prefs_len, in, inlen);
+    if (rc == OPENSSL_NPN_NEGOTIATED) return SSL_TLSEXT_ERR_OK;
+    return SSL_TLSEXT_ERR_ALERT_FATAL;
+}
+
 /* TLS-wrap an accepted fd. Returns 0 on success (conn->ssl set), -1 on
- * handshake failure (caller should close conn->fd and discard). */
+ * handshake failure (caller should close conn->fd and discard).
+ * After the handshake, queries the negotiated ALPN protocol so the
+ * connection knows whether to drive HTTP/1.1 or HTTP/2 on the wire. */
 static int conn_tls_accept(HttpConn* conn, SSL_CTX* ctx) {
     SSL* ssl = SSL_new(ctx);
     if (!ssl) return -1;
@@ -248,6 +325,17 @@ static int conn_tls_accept(HttpConn* conn, SSL_CTX* ctx) {
         return -1;
     }
     conn->ssl = ssl;
+
+    /* Detect h2 negotiation. SSL_get0_alpn_selected returns the proto
+     * name + length via out-pointers; len==0 means no ALPN was used
+     * (peer didn't offer the extension), in which case we stay on
+     * HTTP/1.1 by default. */
+    const unsigned char* alpn = NULL;
+    unsigned int alpn_len = 0;
+    SSL_get0_alpn_selected(ssl, &alpn, &alpn_len);
+    if (alpn_len == 2 && alpn && alpn[0] == 'h' && alpn[1] == '2') {
+        conn->is_h2 = 1;
+    }
     return 0;
 }
 
@@ -319,6 +407,8 @@ HttpServer* http_server_create(int port) {
     server->accept_pollers = NULL;
     server->tls_enabled = 0;
     server->tls_ctx = NULL;
+    server->h2_enabled = 0;
+    server->h2_max_concurrent_streams = 0;  /* nghttp2 default 100 when 0 */
     server->keep_alive_enabled = 0;
     server->keep_alive_max = 0;
     server->keep_alive_idle_ms = 0;
@@ -759,6 +849,13 @@ const char* http_server_set_tls_raw(HttpServer* server,
         return "TLS cert and private key do not match";
     }
 
+    /* ALPN selection callback (#260 Tier 2). The callback inspects
+     * server->h2_enabled at handshake time, so toggling
+     * http_server_set_h2 between calls actually changes the
+     * advertised list — the SSL_CTX itself doesn't have to be
+     * rebuilt. */
+    SSL_CTX_set_alpn_select_cb(ctx, aether_alpn_select_cb, server);
+
     /* Replace any prior context (idempotent re-load). */
     if (server->tls_ctx) {
         SSL_CTX_free((SSL_CTX*)server->tls_ctx);
@@ -769,6 +866,35 @@ const char* http_server_set_tls_raw(HttpServer* server,
 #else
     (void)cert_path; (void)key_path;
     return "TLS unavailable: built without OpenSSL";
+#endif
+}
+
+/* Enable HTTP/2 on this server (#260 Tier 2). Once enabled:
+ *   - If TLS is also enabled, the ALPN callback advertises "h2" first
+ *     and falls back to "http/1.1" — clients that don't speak h2
+ *     keep working unchanged.
+ *   - Plain (non-TLS) connections honour h2c upgrade requests
+ *     (RFC 7540 §3.2): an HTTP/1.1 client sending Upgrade: h2c +
+ *     HTTP2-Settings: <base64> gets a 101 Switching Protocols and
+ *     transitions to HTTP/2 framed mode.
+ *   - Streams demux into the existing route table, so middleware,
+ *     metrics, access logs, and health probes all apply uniformly.
+ *
+ * Returns "" on success, an error string when nghttp2 isn't linked.
+ * max_concurrent_streams = 0 → use libnghttp2's default (100). */
+const char* http_server_set_h2_raw(HttpServer* server,
+                                   int max_concurrent_streams) {
+    if (!server) return "server is null";
+    if (max_concurrent_streams < 0) {
+        return "max_concurrent_streams must be >= 0";
+    }
+#ifdef AETHER_HAS_NGHTTP2
+    server->h2_enabled = 1;
+    server->h2_max_concurrent_streams = max_concurrent_streams;
+    return "";
+#else
+    (void)max_concurrent_streams;
+    return "HTTP/2 unavailable: built without libnghttp2";
 #endif
 }
 
@@ -1815,6 +1941,40 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
     /* Reclaim space at the head if the previous request consumed it. */
     conn_buf_compact(conn);
 
+#ifdef AETHER_HAS_NGHTTP2
+    /* Prior-knowledge h2 detection (RFC 7540 §3.5). When the server
+     * has h2 enabled, the very first request on a fresh connection
+     * may be the h2 connection preface ("PRI * HTTP/2.0\r\n\r\nSM…")
+     * rather than an HTTP/1.1 request line. Probe before attempting
+     * the HTTP/1.1 parse; on match, hand the connection to the h2
+     * driver and return 0 so the outer keep-alive loop stops. */
+    if (server->h2_enabled && requests_served == 0 && !conn->is_h2) {
+        /* Buffer at least the 24-byte preface before deciding. The
+         * existing read loop only reads when looking for \r\n\r\n;
+         * pre-fetch a little here so the probe has bytes to inspect. */
+        while ((conn->write_pos - conn->read_pos) < 24) {
+            if (conn->write_pos + 1 >= conn->buf_cap) break;
+            int n = conn_recv(conn, conn->buf + conn->write_pos,
+                              conn->buf_cap - conn->write_pos - 1);
+            if (n <= 0) return 0;  /* EOF / timeout / error */
+            conn->write_pos += n;
+        }
+        int probe = conn_buffered_is_h2_preface(conn);
+        if (probe == 1) {
+            /* Bytes already consumed by the preface stay in the
+             * conn buffer; handle_h2_connection feeds them to
+             * nghttp2 before reading more from the wire. */
+            conn->is_h2 = 1;
+            handle_h2_connection(server, conn, NULL);
+            return 0;
+        }
+        /* probe == 0 → continue as HTTP/1.1; probe == -1 was an
+         * insufficient-data state that we already retried via the
+         * loop above, so it can't recur. */
+    }
+#endif
+
+
     /* Read until \r\n\r\n appears in the unconsumed portion. The
      * scan starts from read_pos so already-buffered pipelined bytes
      * count toward the header boundary. */
@@ -1904,6 +2064,87 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
         http_server_response_free(res);
         return 0;
     }
+
+    /* h2c (cleartext HTTP/2) upgrade dispatch (#260 Tier 2 — RFC 7540 §3.2).
+     * If the client offered `Upgrade: h2c` AND included a valid
+     * HTTP2-Settings header AND we have h2 enabled, send 101
+     * Switching Protocols, drop into the h2 driver pre-loaded with
+     * stream 1 (this very request), and return 0 so the outer
+     * keep-alive loop closes the HTTP/1.1 path. The h2 driver owns
+     * the connection from here. */
+#ifdef AETHER_HAS_NGHTTP2
+    if (server->h2_enabled && !conn->is_h2) {
+        const char* up = http_get_header(req, "Upgrade");
+        const char* h2settings = http_get_header(req, "HTTP2-Settings");
+        /* HTTP2-Settings can be empty (zero settings entries) per
+         * RFC 7540 §3.2.1; we just need the header to be present.
+         * NULL means the client didn't send it at all → not a
+         * valid h2c upgrade → fall through to HTTP/1.1. */
+        if (up && strcasecmp(up, "h2c") == 0 && h2settings) {
+            /* 101 reply must precede any h2 frames on the wire. */
+            const char* reply =
+                "HTTP/1.1 101 Switching Protocols\r\n"
+                "Connection: Upgrade\r\n"
+                "Upgrade: h2c\r\n"
+                "\r\n";
+            if (conn_send(conn, reply, (int)strlen(reply)) <= 0) {
+                http_request_free(req);
+                http_server_response_free(res);
+                return 0;
+            }
+            /* Reconstruct the original request's header block in
+             * `Name: value\r\n` form so the wrapper synthesises a
+             * stream 1 that mirrors the HTTP/1.1 request. */
+            size_t hbuf_cap = 1024;
+            char* hbuf = malloc(hbuf_cap);
+            size_t hbuf_len = 0;
+            if (hbuf) {
+                for (int i = 0; i < req->header_count; i++) {
+                    const char* k = req->header_keys[i];
+                    const char* v = req->header_values[i];
+                    if (!k || !v) continue;
+                    /* Skip the upgrade-only headers — they don't
+                     * belong on an h2 stream. */
+                    if (strcasecmp(k, "Connection") == 0 ||
+                        strcasecmp(k, "Upgrade") == 0 ||
+                        strcasecmp(k, "HTTP2-Settings") == 0) continue;
+                    size_t klen = strlen(k);
+                    size_t vlen = strlen(v);
+                    size_t need = klen + vlen + 4;
+                    if (hbuf_len + need + 1 > hbuf_cap) {
+                        size_t nc = hbuf_cap;
+                        while (nc < hbuf_len + need + 1) nc *= 2;
+                        char* nb = realloc(hbuf, nc);
+                        if (!nb) break;
+                        hbuf = nb; hbuf_cap = nc;
+                    }
+                    memcpy(hbuf + hbuf_len, k, klen);  hbuf_len += klen;
+                    memcpy(hbuf + hbuf_len, ": ", 2);  hbuf_len += 2;
+                    memcpy(hbuf + hbuf_len, v, vlen);  hbuf_len += vlen;
+                    memcpy(hbuf + hbuf_len, "\r\n", 2); hbuf_len += 2;
+                }
+                if (hbuf) hbuf[hbuf_len] = '\0';
+            }
+
+            AetherH2Session* preloaded = aether_h2_session_from_h2c_upgrade(
+                server, conn,
+                req->method ? req->method : "GET",
+                req->path   ? req->path   : "/",
+                hbuf ? hbuf : "",
+                h2settings);
+            free(hbuf);
+
+            http_request_free(req);
+            http_server_response_free(res);
+
+            if (preloaded) {
+                conn->is_h2 = 1;
+                handle_h2_connection(server, conn, preloaded);
+            }
+            return 0;
+        }
+    }
+#endif
 
     /* WebSocket dispatch (#260 Tier 2 / E2). Match before SSE +
      * normal routes; require the Upgrade: websocket header to
@@ -2095,6 +2336,178 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
  * The inflight_connections counter (#260 Tier 3 graceful shutdown)
  * tracks active drains so http_server_shutdown_graceful can wait
  * for them to complete naturally before forcing close. */
+/* Dispatch one fully-built request through the standard pipeline:
+ * middleware → route lookup → handler → response transformers →
+ * request hooks. Mutates `res` in place. Used both by the HTTP/1.1
+ * loop in handle_one_request (which inlines this) and by the
+ * HTTP/2 wrapper, which calls this function via extern from
+ * std/http/server/h2/aether_h2.c so both protocols exercise the
+ * same chain. (#260 Tier 2.) */
+void http_server_dispatch_for_h2(HttpServer* server,
+                                 HttpRequest* req,
+                                 HttpServerResponse* res) {
+    if (!server || !req || !res) return;
+    long t_start = http_now_us();
+
+    /* Middleware chain — same shape as the HTTP/1.1 path. */
+    HttpMiddlewareNode* middleware = server->middleware_chain;
+    int should_continue = 1;
+    while (middleware && should_continue) {
+        should_continue = middleware->middleware(req, res, middleware->user_data);
+        middleware = middleware->next;
+    }
+    if (!should_continue) {
+        return;  /* middleware blocked; res already populated */
+    }
+
+    /* Route lookup. HEAD is semantically GET-without-body per
+     * RFC 7231 §4.3.2 — if the application registered a GET route
+     * but no HEAD route at the same path, run the GET handler so
+     * the response shape (status, headers, Content-Length) matches
+     * what GET would have produced. The wire-side body suppression
+     * for HEAD is the wrapper's job (h2: NULL data_provider on
+     * nghttp2_submit_response; HTTP/1.1: skip body in serializer). */
+    HttpRoute* route = server->routes;
+    HttpRoute* matched_route = NULL;
+    HttpRoute* head_to_get = NULL;
+    while (route) {
+        if (http_route_matches(route->path_pattern, req->path, req)) {
+            if (strcmp(route->method, req->method) == 0) {
+                matched_route = route;
+                break;
+            }
+            if (!head_to_get &&
+                strcmp(req->method, "HEAD") == 0 &&
+                strcmp(route->method, "GET") == 0) {
+                head_to_get = route;
+                /* keep scanning — an exact HEAD route, if registered,
+                 * still wins. */
+            }
+        }
+        route = route->next;
+    }
+    if (!matched_route) matched_route = head_to_get;
+    if (matched_route) {
+        matched_route->handler(req, res, matched_route->user_data);
+    } else {
+        http_response_set_status(res, 404);
+        http_response_set_body(res, "404 Not Found");
+    }
+
+    /* Response transformer chain (gzip / error_pages / etc.). */
+    {
+        struct HttpResponseTransformerNode* xform = server->response_transformer_chain;
+        while (xform) {
+            xform->xform(req, res, xform->user_data);
+            xform = xform->next;
+        }
+    }
+
+    /* Per-request observation hooks (#260 Tier 3). */
+    if (server->request_hook_chain) {
+        long duration_us = http_now_us() - t_start;
+        struct HttpRequestHookNode* h = server->request_hook_chain;
+        while (h) {
+            h->hook(req, res, duration_us, h->user_data);
+            h = h->next;
+        }
+    }
+}
+
+#ifdef AETHER_HAS_NGHTTP2
+#include "../http/server/h2/aether_h2.h"
+
+/* Wire-write callback for the h2 wrapper. The opaque user_data is
+ * the HttpConn so we route through the same TLS-or-plain conn_send
+ * path the rest of the server uses. */
+static int h2_wire_write_cb(void* userdata,
+                            const uint8_t* buf, size_t len) {
+    HttpConn* conn = (HttpConn*)userdata;
+    int n = conn_send(conn, (const char*)buf, (int)len);
+    return (n < 0) ? -1 : n;
+}
+
+/* Handle an h2 connection from start to finish. The connection has
+ * already been TLS-handshaken, h2c-upgraded, OR shown the h2
+ * connection preface ("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", RFC 7540
+ * §3.5) on a plain socket — caller is responsible for choosing the
+ * right entry path. Returns when the session reports want_close or
+ * the wire goes dead. */
+static void handle_h2_connection(HttpServer* server, HttpConn* conn,
+                                 AetherH2Session* preloaded) {
+    AetherH2Session* sess = preloaded
+        ? preloaded
+        : aether_h2_session_new(server, conn);
+    if (!sess) return;
+    if (!preloaded) {
+        aether_h2_session_send_initial_settings(sess);
+    }
+
+    /* If the HTTP/1.1 path already buffered bytes (e.g. the h2
+     * connection preface that triggered us, or pipelined frames
+     * after an h2c upgrade), feed them to nghttp2 first before
+     * reading from the wire. */
+    if (conn->buf && conn->write_pos > conn->read_pos) {
+        size_t buffered = (size_t)(conn->write_pos - conn->read_pos);
+        if (aether_h2_session_feed(sess,
+                                   (const uint8_t*)(conn->buf + conn->read_pos),
+                                   buffered) < 0) {
+            aether_h2_session_free(sess);
+            return;
+        }
+        conn->read_pos = conn->write_pos;  /* consumed */
+    }
+
+    /* Drain anything queued before reading (initial SETTINGS frame,
+     * pre-loaded h2c stream-1 response). */
+    if (aether_h2_session_drain(sess, h2_wire_write_cb) < 0) {
+        aether_h2_session_free(sess);
+        return;
+    }
+
+    uint8_t inbuf[16 * 1024];
+    while (1) {
+        int rc = aether_h2_session_drain(sess, h2_wire_write_cb);
+        if (rc < 0) break;
+        if (rc == 1) break;  /* clean close */
+
+        if (aether_h2_session_want_close(sess)) break;
+
+        int n = conn_recv(conn, inbuf, (int)sizeof(inbuf));
+        if (n <= 0) break;  /* EOF / timeout / error */
+        if (aether_h2_session_feed(sess, inbuf, (size_t)n) < 0) break;
+    }
+
+    /* Final drain so any GOAWAY / pending frames make it to the
+     * peer before we tear down the session. */
+    aether_h2_session_drain(sess, h2_wire_write_cb);
+    aether_h2_session_free(sess);
+}
+
+/* Detect the HTTP/2 connection preface on a plain (non-TLS) socket
+ * — RFC 7540 §3.5 says clients using prior-knowledge h2 send the
+ * 24-byte magic "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n" before any
+ * frames. We peek at the leading bytes already in the conn buffer;
+ * if they match, the caller switches the connection to the h2
+ * driver. Returns 1 on match, 0 on no match (could still be h2c
+ * via Upgrade — see the HTTP/1.1 path), -1 on insufficient data. */
+static int conn_buffered_is_h2_preface(HttpConn* conn) {
+    static const char preface[] = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n";
+    static const int  preface_len = 24;
+    int avail = conn->write_pos - conn->read_pos;
+    if (!conn->buf) return -1;
+    if (avail < preface_len) {
+        /* If the available prefix already mismatches, no point
+         * waiting for more — bail to HTTP/1.1 immediately. */
+        for (int i = 0; i < avail; i++) {
+            if (conn->buf[conn->read_pos + i] != preface[i]) return 0;
+        }
+        return -1;
+    }
+    return memcmp(conn->buf + conn->read_pos, preface, (size_t)preface_len) == 0;
+}
+#endif  /* AETHER_HAS_NGHTTP2 */
+
 void http_server_drain_connection(HttpServer* server, int client_fd) {
     if (!server || client_fd < 0) return;
     atomic_fetch_add(&server->inflight_connections, 1);
@@ -2106,6 +2519,7 @@ void http_server_drain_connection(HttpServer* server, int client_fd) {
     HttpConn conn = {
         .fd = client_fd,
         .ssl = NULL,
+        .is_h2 = 0,
         .buf = NULL,
         .buf_cap = 0,
         .read_pos = 0,
@@ -2136,6 +2550,20 @@ void http_server_drain_connection(HttpServer* server, int client_fd) {
         .tv_usec = (idle_ms % 1000) * 1000
     };
     setsockopt(client_fd, SOL_SOCKET, SO_RCVTIMEO, &rcv_tv, sizeof(rcv_tv));
+#endif
+
+    /* HTTP/2 path (#260 Tier 2). When ALPN selected "h2" during the
+     * TLS handshake, switch to the framed-protocol driver instead of
+     * the HTTP/1.1 keep-alive loop. The driver owns the connection
+     * lifetime — it returns when both peers have GOAWAY'd or the
+     * wire dies. */
+#ifdef AETHER_HAS_NGHTTP2
+    if (conn.is_h2) {
+        handle_h2_connection(server, &conn, NULL);
+        conn_close(&conn);
+        atomic_fetch_sub(&server->inflight_connections, 1);
+        return;
+    }
 #endif
 
     /* Drain loop. handle_one_request returns 1 to keep the connection

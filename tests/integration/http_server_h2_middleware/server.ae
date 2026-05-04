@@ -1,0 +1,88 @@
+// #260 Tier 2: HTTP/2 + middleware integration test driver.
+//
+// Exercises that the middleware chain + response-transformer chain
+// fire identically on h2 streams as they do on HTTP/1.1 requests.
+// Stacks gzip + cors and checks both headers + body shape on
+// h2 responses.
+
+import std.http
+import std.http.middleware
+import std.os
+
+extern exit(code: int)
+extern http_server_start_raw(server: ptr) -> int
+
+const PORT = 18262
+
+handle_text(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    // Big enough that gzip will compress (the middleware skips
+    // tiny payloads where compression is a net loss).
+    body = "abcdefghijklmnopqrstuvwxyz0123456789"
+    big = body
+    i = 0
+    while i < 200 {
+        big = "${big}${body}"
+        i = i + 1
+    }
+    http.response_set_body(res, big)
+}
+
+message StartSrv { raw: ptr }
+message Noop {}
+
+actor SrvActor {
+    state s = 0
+    receive { StartSrv(raw) -> { s = raw; http_server_start_raw(raw) } }
+}
+actor SchedHelper {
+    state x = 0
+    receive { Noop() -> { x = 1 } }
+}
+
+main() {
+    raw = http.server_create(PORT)
+    if raw == 0 {
+        println("FAIL: server_create returned null")
+        exit(1)
+    }
+
+    // Cors with a wildcard origin so the test is hermetic.
+    use_err = middleware.use_cors(raw, "*", "GET, POST", "Content-Type",
+                                  0, 600)
+    if use_err != "" {
+        println("FAIL: cors install: ${use_err}")
+        exit(1)
+    }
+
+    // gzip with a low min_size so even moderate test bodies
+    // get compressed (the default cutoff would suppress).
+    gz_err = middleware.use_gzip(raw, 64, 6)
+    if gz_err != "" {
+        println("FAIL: gzip install: ${gz_err}")
+        exit(1)
+    }
+
+    ka_err = http.server_set_keepalive(raw, 1, 0, 5000)
+    if ka_err != "" {
+        println("FAIL: keepalive: ${ka_err}")
+        exit(1)
+    }
+
+    h2_err = http.server_set_h2(raw, 0)
+    if h2_err != "" {
+        println("READY-NOH2: ${h2_err}")
+    } else {
+        println("READY")
+    }
+
+    http.server_get(raw, "/text", handle_text, 0)
+
+    spawn(SchedHelper())
+    a = spawn(SrvActor())
+    a ! StartSrv { raw: raw }
+
+    sleep(60000)
+    exit(0)
+}

@@ -1,0 +1,132 @@
+// #260 Tier 2: HTTP/2 server end-to-end integration test driver.
+//
+// Spins up an HTTP server on port 18260 with HTTP/2 enabled. The
+// shell runner exercises:
+//   - h2c prior-knowledge (curl --http2-prior-knowledge)
+//   - h2c upgrade (Upgrade: h2c + HTTP2-Settings — curl --http2)
+//   - GET, POST with body, HEAD methods
+//   - Multiplexed parallel streams
+//   - Large body round-trip
+//
+// (h2 over TLS is in tests/integration/http_server_h2_tls/.)
+//
+// Skips cleanly when libnghttp2 isn't linked into the build.
+
+import std.http
+import std.os
+
+extern exit(code: int)
+extern http_server_start_raw(server: ptr) -> int
+
+const PORT = 18260
+
+handle_root(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_header(res, "X-Aether-Proto", "h2")
+    http.response_set_body(res, "h2-ok")
+}
+
+handle_echo(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "application/octet-stream")
+    body = http.request_body(req)
+    body_len = http.request_body_length(req)
+    if body == null {
+        http.response_set_body(res, "")
+    } else {
+        // Use length-aware setter so binary / NUL-bearing payloads
+        // survive the round trip — the h2 wrapper preserves byte
+        // counts, but response_set_body's strlen path would
+        // truncate at the first NUL. Issue #260 Tier 2.
+        http.response_set_body_n(res, body, body_len)
+    }
+}
+
+handle_head(req: ptr, res: ptr, ud: ptr) {
+    // Per HTTP semantics, HEAD must NOT carry a response body even
+    // if the handler emits one. The wrapper is responsible for
+    // suppressing DATA frames on stream-1 when :method=HEAD; the
+    // handler emits the body so we can verify the wrapper did the
+    // right thing (Content-Length stays accurate, body is empty).
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_body(res, "do-not-send")
+}
+
+handle_big(req: ptr, res: ptr, ud: ptr) {
+    // ~100 KiB body so the response goes through multiple DATA
+    // frames given the default 16KB SETTINGS_MAX_FRAME_SIZE. This
+    // exercises the data-provider chunking path inside the h2
+    // wrapper.
+    chunk = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+    big = chunk
+    i = 0
+    while i < 1599 {  // 1600 * 64 = 102400
+        big = "${big}${chunk}"
+        i = i + 1
+    }
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_body(res, big)
+}
+
+handle_n(req: ptr, res: ptr, ud: ptr) {
+    // Returns a path-derived counter so multiplexed clients can
+    // tell which stream got which response. The path is /n/<id>
+    // — we use the query string as a stand-in since path params
+    // are middleware-extracted and we want zero indirection here.
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    q = http.request_query(req)
+    if q == null { q = "" }
+    http.response_set_body(res, "q=${q}")
+}
+
+message StartSrv { raw: ptr }
+message Noop {}
+
+actor SrvActor {
+    state s = 0
+    receive { StartSrv(raw) -> { s = raw; http_server_start_raw(raw) } }
+}
+actor SchedHelper {
+    state x = 0
+    receive { Noop() -> { x = 1 } }
+}
+
+main() {
+    raw = http.server_create(PORT)
+    if raw == 0 {
+        println("FAIL: server_create returned null")
+        exit(1)
+    }
+
+    // Keep-alive must be on so that the same TCP connection can
+    // carry an h2c upgrade and the resulting h2 frames.
+    ka_err = http.server_set_keepalive(raw, 1, 0, 5000)
+    if ka_err != "" {
+        println("FAIL: server_set_keepalive: ${ka_err}")
+        exit(1)
+    }
+
+    h2_err = http.server_set_h2(raw, 0)
+    if h2_err != "" {
+        println("READY-NOH2: ${h2_err}")
+    } else {
+        println("READY")
+    }
+
+    http.server_get(raw, "/",     handle_root, 0)
+    http.server_post(raw, "/echo", handle_echo, 0)
+    http.server_get(raw, "/head", handle_head, 0)
+    http.server_get(raw, "/big",  handle_big,  0)
+    http.server_get(raw, "/n",    handle_n,    0)
+
+    spawn(SchedHelper())
+    a = spawn(SrvActor())
+    a ! StartSrv { raw: raw }
+
+    sleep(60000)
+    exit(0)
+}
