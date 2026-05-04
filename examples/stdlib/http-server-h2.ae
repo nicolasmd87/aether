@@ -1,0 +1,89 @@
+// HTTP/2 server demo — issue #260 Tier 2.
+//
+// Spins up a tiny server speaking both HTTP/1.1 and HTTP/2 on the
+// same plain TCP port. HTTP/2 is delivered three ways:
+//
+//   1. Prior-knowledge h2 — `curl --http2-prior-knowledge` sends
+//      the HTTP/2 connection preface on the first byte; the server
+//      detects it and switches to framed mode.
+//   2. h2c upgrade — `Upgrade: h2c` + `HTTP2-Settings` on a plain
+//      HTTP/1.1 GET; the server replies 101 Switching Protocols
+//      and continues over h2 framing.
+//   3. h2 over TLS via ALPN — uncomment the TLS lines below to
+//      serve at https://… with `curl --http2`.
+//
+// Test commands:
+//   curl --http2-prior-knowledge http://localhost:18261/
+//   curl --http2 -X POST -d 'hello' http://localhost:18261/echo
+//   curl -w '\nhttp_version=%{http_version}\n' --http2-prior-knowledge http://localhost:18261/
+//
+// Build a release with libnghttp2 linked:
+//   make stdlib && ./build/ae build examples/stdlib/http-server-h2.ae -o /tmp/h2srv && /tmp/h2srv
+
+import std.http
+import std.os
+
+extern http_server_start_raw(server: ptr) -> int
+
+const PORT = 18261
+
+handle_root(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_header(res, "X-Demo", "h2-or-1.1")
+    http.response_set_body(res, "hello over h2 (or h1)\n")
+}
+
+handle_echo(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    body = http.request_body(req)
+    if body == null {
+        http.response_set_body(res, "")
+    } else {
+        http.response_set_body(res, body)
+    }
+}
+
+main() {
+    server = http.server_create(PORT)
+    if server == 0 {
+        println("server_create failed")
+        return
+    }
+
+    // Enable keep-alive so the same TCP connection can carry an h2c
+    // upgrade and the resulting h2 frames.
+    ka_err = http.server_set_keepalive(server, 1, 0, 30000)
+    if ka_err != "" {
+        println("keepalive error: ${ka_err}")
+        return
+    }
+
+    // Enable HTTP/2. 0 means "use libnghttp2's default
+    // SETTINGS_MAX_CONCURRENT_STREAMS (100)".
+    h2_err = http.server_set_h2(server, 0)
+    if h2_err != "" {
+        // Build doesn't link libnghttp2 — the HTTP/1.1 path stays
+        // usable. We continue so the demo still runs as an HTTP/1.1
+        // server.
+        println("h2 unavailable: ${h2_err} (continuing as HTTP/1.1 only)")
+    } else {
+        println("h2 enabled")
+    }
+
+    // Uncomment to serve over TLS with ALPN-negotiated h2:
+    //
+    //   tls_err = http.server_set_tls(server, "cert.pem", "key.pem")
+    //   if tls_err != "" {
+    //       println("TLS setup failed: ${tls_err}")
+    //       return
+    //   }
+
+    http.server_get(server, "/",     handle_root, 0)
+    http.server_post(server, "/echo", handle_echo, 0)
+
+    println("listening on :${PORT}")
+    println("try: curl --http2-prior-knowledge http://localhost:${PORT}/")
+    http_server_start_raw(server)
+}

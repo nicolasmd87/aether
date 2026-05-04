@@ -90,6 +90,21 @@ typedef struct HttpServer {
     int tls_enabled;
     void* tls_ctx;
 
+    // HTTP/2 (#260 Tier 2). When h2_enabled == 1:
+    //   - The TLS context advertises "h2" + "http/1.1" via ALPN so
+    //     a TLS client picks h2 when it can; HTTP/1.1 stays the
+    //     fallback for ALPN-unaware clients.
+    //   - A plain (non-TLS) connection that sends `Upgrade: h2c`
+    //     plus an HTTP2-Settings header is upgraded to HTTP/2 over
+    //     cleartext (h2c) following RFC 7540 §3.2.
+    //   - Per-connection h2 sessions wrap libnghttp2; each h2 stream
+    //     dispatches into the same route table as HTTP/1.1, so
+    //     middleware / metrics / access logs / health probes all
+    //     apply uniformly.
+    // Off by default; enable via http_server_set_h2_raw().
+    int h2_enabled;
+    int h2_max_concurrent_streams;  /* nghttp2 SETTINGS; 0 → 100 default */
+
     // Routing
     HttpRoute* routes;
 
@@ -231,6 +246,24 @@ const char* http_server_set_keepalive_raw(HttpServer* server,
 const char* http_server_set_tls_raw(HttpServer* server,
                                     const char* cert_path,
                                     const char* key_path);
+
+// Enable HTTP/2 (#260 Tier 2). When enabled:
+//   - the TLS context advertises "h2" via ALPN (with "http/1.1" as
+//     fallback) so clients pick HTTP/2 when both peers can speak it;
+//   - plain (non-TLS) connections honour h2c upgrade requests
+//     (RFC 7540 §3.2);
+//   - per-stream dispatch reuses the existing route table, so all
+//     middleware / metrics / access logs / health probes apply.
+//
+// `max_concurrent_streams` is the SETTINGS_MAX_CONCURRENT_STREAMS
+// value advertised to peers. Pass 0 for libnghttp2's built-in
+// default (100). Negative values return an error.
+//
+// When the build does not include libnghttp2
+// (AETHER_HAS_NGHTTP2 undef), returns
+// "HTTP/2 unavailable: built without libnghttp2".
+const char* http_server_set_h2_raw(HttpServer* server,
+                                   int max_concurrent_streams);
 
 // Routing
 void http_server_add_route(HttpServer* server, const char* method, const char* path, HttpHandler handler, void* user_data);

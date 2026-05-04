@@ -20,6 +20,7 @@ exports (
     http_server_stop, http_server_free,
     http_server_set_tls_raw, server_set_tls,
     http_server_set_keepalive_raw, server_set_keepalive,
+    http_server_set_h2_raw, server_set_h2,
     http_server_drain_connection,
     http_server_shutdown_graceful_raw, server_shutdown_graceful,
     http_server_set_on_start, http_server_set_on_stop,
@@ -262,6 +263,39 @@ extern http_server_set_tls_raw(server: ptr, cert_path: string, key_path: string)
 //     http.server_start(server)
 server_set_tls(server: ptr, cert_path: string, key_path: string) -> {
     return http_server_set_tls_raw(server, cert_path, key_path)
+}
+
+// HTTP/2 (#260 Tier 2). When enabled:
+//   - the TLS context advertises "h2" via ALPN with "http/1.1" as
+//     the fallback, so HTTP/2-capable clients (curl --http2,
+//     browsers, fan-out gateways) negotiate the framed protocol
+//     while older clients stay on HTTP/1.1 transparently;
+//   - plain (non-TLS) connections honour h2c upgrade requests
+//     per RFC 7540 §3.2 (Upgrade: h2c + HTTP2-Settings header);
+//   - per-stream dispatch reuses the existing route table, so all
+//     middleware / metrics / access logs / health probes / response
+//     transformers (gzip, error_pages) apply uniformly across
+//     HTTP/1.1 and HTTP/2 traffic.
+//
+// max_concurrent_streams advertises SETTINGS_MAX_CONCURRENT_STREAMS
+// to the peer. Pass 0 for libnghttp2's default (100). Negative
+// values return an error.
+//
+// Returns "" on success or an error string when the build doesn't
+// link libnghttp2 (the rest of the server keeps working in
+// HTTP/1.1-only mode).
+//
+// Example (h2 over TLS):
+//     server = http.server_create(443)
+//     err1 = http.server_set_tls(server, "cert.pem", "key.pem")
+//     err2 = http.server_set_h2(server, 0)          // 0 = nghttp2 default
+//     if err1 != "" { println("TLS: ${err1}"); exit(1) }
+//     if err2 != "" { println("h2:  ${err2}"); exit(1) }
+//     http.server_start(server)
+extern http_server_set_h2_raw(server: ptr, max_concurrent_streams: int) -> string
+
+server_set_h2(server: ptr, max_concurrent_streams: int) -> {
+    return http_server_set_h2_raw(server, max_concurrent_streams)
 }
 
 // HTTP/1.1 keep-alive (#260 Tier 0). When enabled, the server reads

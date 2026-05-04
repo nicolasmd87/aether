@@ -1487,6 +1487,15 @@ static void build_gcc_cmd(char* cmd, size_t size,
 #else
     const char* zlib_libs = "";
 #endif
+#ifdef AETHER_NGHTTP2_LIBS
+    /* libnghttp2 powers the HTTP/2 server-side path (#260 Tier 2).
+     * Empty when the build didn't detect nghttp2 — the server
+     * surface stays valid (http_server_set_h2 returns the
+     * "unavailable" sentinel) but the link doesn't pull the lib. */
+    const char* nghttp2_libs = AETHER_NGHTTP2_LIBS;
+#else
+    const char* nghttp2_libs = "";
+#endif
     char opt[600];
     if (user_cflags[0])
         snprintf(opt, sizeof(opt), "-static %s %s", opt_flags(optimize), user_cflags);
@@ -1505,8 +1514,8 @@ static void build_gcc_cmd(char* cmd, size_t size,
         char* slash = (!bs) ? fs : (!fs) ? bs : (bs > fs ? bs : fs);
         if (slash) *slash = '\0';
         int w = snprintf(cmd, size,
-            "\"%s\" %s %s \"%s\" %s -L\"%s\" -laether -o \"%s\" %s %s %s %s",
-            s_gcc_bin, opt, tc.include_flags, c_file, extra, lib_dir, out_file, openssl_libs, zlib_libs, win_link_libs, link_flags);
+            "\"%s\" %s %s \"%s\" %s -L\"%s\" -laether -o \"%s\" %s %s %s %s %s",
+            s_gcc_bin, opt, tc.include_flags, c_file, extra, lib_dir, out_file, openssl_libs, zlib_libs, nghttp2_libs, win_link_libs, link_flags);
         if (w >= (int)size) {
             fprintf(stderr,
                 "Warning: gcc link command truncated at %d bytes (buffer %zu).\n",
@@ -1514,8 +1523,8 @@ static void build_gcc_cmd(char* cmd, size_t size,
         }
     } else {
         int w = snprintf(cmd, size,
-            "\"%s\" %s %s \"%s\" %s %s -o \"%s\" %s %s %s %s",
-            s_gcc_bin, opt, tc.include_flags, c_file, extra, tc.runtime_srcs, out_file, openssl_libs, zlib_libs, win_link_libs, link_flags);
+            "\"%s\" %s %s \"%s\" %s %s -o \"%s\" %s %s %s %s %s",
+            s_gcc_bin, opt, tc.include_flags, c_file, extra, tc.runtime_srcs, out_file, openssl_libs, zlib_libs, nghttp2_libs, win_link_libs, link_flags);
         if (w >= (int)size) {
             fprintf(stderr,
                 "Warning: gcc link command truncated at %d bytes (buffer %zu).\n",
@@ -1584,6 +1593,15 @@ static void build_gcc_cmd(char* cmd, size_t size,
     const char* zlib_libs = "";
 #endif
 
+    // libnghttp2 — HTTP/2 server-side path (#260 Tier 2). Empty
+    // when nghttp2 wasn't detected; http_server_set_h2 then
+    // returns "HTTP/2 unavailable: built without libnghttp2".
+#ifdef AETHER_NGHTTP2_LIBS
+    const char* nghttp2_libs = AETHER_NGHTTP2_LIBS;
+#else
+    const char* nghttp2_libs = "";
+#endif
+
     if (tc.has_lib) {
         char lib_dir[1024];
         strncpy(lib_dir, tc.lib, sizeof(lib_dir) - 1);
@@ -1592,8 +1610,8 @@ static void build_gcc_cmd(char* cmd, size_t size,
         if (slash) *slash = '\0';
 
         int w = snprintf(cmd, size,
-            "gcc %s %s \"%s\"%s %s -L%s -laether -o \"%s\" -pthread -lm %s %s %s",
-            opt, tc.include_flags, c_file, config_c, extra, lib_dir, out_file, openssl_libs, zlib_libs, link_flags);
+            "gcc %s %s \"%s\"%s %s -L%s -laether -o \"%s\" -pthread -lm %s %s %s %s",
+            opt, tc.include_flags, c_file, config_c, extra, lib_dir, out_file, openssl_libs, zlib_libs, nghttp2_libs, link_flags);
         if (w >= (int)size) {
             fprintf(stderr,
                 "Warning: gcc link command truncated at %d bytes (buffer %zu) — "
@@ -1603,8 +1621,8 @@ static void build_gcc_cmd(char* cmd, size_t size,
         }
     } else {
         int w = snprintf(cmd, size,
-            "gcc %s %s \"%s\"%s %s %s -o \"%s\" -pthread -lm %s %s %s",
-            opt, tc.include_flags, c_file, config_c, extra, tc.runtime_srcs, out_file, openssl_libs, zlib_libs, link_flags);
+            "gcc %s %s \"%s\"%s %s %s -o \"%s\" -pthread -lm %s %s %s %s",
+            opt, tc.include_flags, c_file, config_c, extra, tc.runtime_srcs, out_file, openssl_libs, zlib_libs, nghttp2_libs, link_flags);
         if (w >= (int)size) {
             fprintf(stderr,
                 "Warning: gcc link command truncated at %d bytes (buffer %zu) — "

@@ -70,6 +70,84 @@ OpenSSL"`.
 
 ---
 
+## HTTP/2 (h2 + h2c)
+
+`std.http` speaks HTTP/2 server-side via libnghttp2 (issue #260
+Tier 2). Enable with one call alongside the existing TLS / keep-
+alive setup:
+
+```aether
+import std.http
+
+main() {
+    server = http.server_create(443)
+    http.server_set_tls(server, "/etc/ssl/cert.pem", "/etc/ssl/key.pem")
+    http.server_set_h2(server, 0)        // 0 = nghttp2 default 100
+    http.server_set_keepalive(server, 1, 0, 30000)
+
+    http.server_get(server, "/", home, 0)
+    http.server_start(server)
+}
+```
+
+What the toggle changes:
+
+- **ALPN** — the TLS handshake now advertises `h2` first and
+  `http/1.1` as the fallback. Modern clients (curl `--http2`,
+  Chrome, Firefox, Envoy, fan-out gateways) negotiate HTTP/2;
+  older clients keep working on HTTP/1.1 transparently.
+- **h2c upgrade** — plain (non-TLS) connections now honour
+  `Upgrade: h2c` + `HTTP2-Settings` headers per RFC 7540 §3.2.
+- **Prior-knowledge h2** — clients that send the HTTP/2
+  connection preface immediately (e.g. `curl
+  --http2-prior-knowledge`) on a plain socket are auto-detected
+  and switched to HTTP/2 without an HTTP/1.1 round trip.
+- **Stream demux** — every h2 stream dispatches into the same
+  route table as HTTP/1.1, so all middleware (gzip / cors / auth
+  / ratelimit / vhost / rewrite / static), all metrics + access
+  logs, and all health probes apply uniformly.
+
+`max_concurrent_streams` is the SETTINGS_MAX_CONCURRENT_STREAMS
+value advertised to peers. Pass `0` for libnghttp2's default
+(100).
+
+**Smoke test:**
+
+```bash
+curl --http2-prior-knowledge http://localhost:8080/
+curl --http2 https://localhost:443/        # ALPN-negotiated
+```
+
+`curl -w '%{http_version}'` prints `2` when HTTP/2 was
+negotiated.
+
+**When libnghttp2 isn't linked**, `http.server_set_h2` returns
+`"HTTP/2 unavailable: built without libnghttp2"`. The HTTP/1.1
+path keeps working unchanged. Build-time detection is automatic
+via `pkg-config libnghttp2`; install the package to opt in:
+
+| OS | Package |
+|---|---|
+| Debian/Ubuntu | `apt install libnghttp2-dev` |
+| Fedora/RHEL | `dnf install libnghttp2-devel` |
+| macOS (Homebrew) | `brew install nghttp2` |
+| MSYS2/MinGW64 | `pacman -S mingw-w64-x86_64-nghttp2` |
+
+**Trade-offs:**
+
+- HTTP/2 streams within one connection currently dispatch
+  *sequentially* — server-push and per-stream concurrency are not
+  yet implemented. Multiplexed-fan-out workloads still benefit from
+  HPACK + single-connection framing; per-stream actor concurrency
+  is tracked as a follow-up optimisation.
+- Connection-specific headers (`Connection`, `Transfer-Encoding`,
+  `Upgrade`, `Keep-Alive`, `Proxy-Connection`) are stripped from
+  responses on h2 streams (RFC 7540 §8.1.2.2 forbids them).
+  Handlers that emit these on HTTP/1.1 don't need to be h2-aware
+  — the wrapper filters at the boundary.
+
+---
+
 ## HTTP/1.1 keep-alive
 
 ```aether
