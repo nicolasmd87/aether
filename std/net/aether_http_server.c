@@ -2076,7 +2076,11 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
     if (server->h2_enabled && !conn->is_h2) {
         const char* up = http_get_header(req, "Upgrade");
         const char* h2settings = http_get_header(req, "HTTP2-Settings");
-        if (up && strcasecmp(up, "h2c") == 0 && h2settings && *h2settings) {
+        /* HTTP2-Settings can be empty (zero settings entries) per
+         * RFC 7540 §3.2.1; we just need the header to be present.
+         * NULL means the client didn't send it at all → not a
+         * valid h2c upgrade → fall through to HTTP/1.1. */
+        if (up && strcasecmp(up, "h2c") == 0 && h2settings) {
             /* 101 reply must precede any h2 frames on the wire. */
             const char* reply =
                 "HTTP/1.1 101 Switching Protocols\r\n"
@@ -2356,17 +2360,33 @@ void http_server_dispatch_for_h2(HttpServer* server,
         return;  /* middleware blocked; res already populated */
     }
 
-    /* Route lookup. */
+    /* Route lookup. HEAD is semantically GET-without-body per
+     * RFC 7231 §4.3.2 — if the application registered a GET route
+     * but no HEAD route at the same path, run the GET handler so
+     * the response shape (status, headers, Content-Length) matches
+     * what GET would have produced. The wire-side body suppression
+     * for HEAD is the wrapper's job (h2: NULL data_provider on
+     * nghttp2_submit_response; HTTP/1.1: skip body in serializer). */
     HttpRoute* route = server->routes;
     HttpRoute* matched_route = NULL;
+    HttpRoute* head_to_get = NULL;
     while (route) {
-        if (strcmp(route->method, req->method) == 0 &&
-            http_route_matches(route->path_pattern, req->path, req)) {
-            matched_route = route;
-            break;
+        if (http_route_matches(route->path_pattern, req->path, req)) {
+            if (strcmp(route->method, req->method) == 0) {
+                matched_route = route;
+                break;
+            }
+            if (!head_to_get &&
+                strcmp(req->method, "HEAD") == 0 &&
+                strcmp(route->method, "GET") == 0) {
+                head_to_get = route;
+                /* keep scanning — an exact HEAD route, if registered,
+                 * still wins. */
+            }
         }
         route = route->next;
     }
+    if (!matched_route) matched_route = head_to_get;
     if (matched_route) {
         matched_route->handler(req, res, matched_route->user_data);
     } else {

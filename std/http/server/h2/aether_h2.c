@@ -188,6 +188,31 @@ static ssize_t ng_send_callback(nghttp2_session* ng,
     return (ssize_t)len;
 }
 
+/* RFC 7540 §8.1.2.2 — connection-specific header fields are
+ * forbidden in HTTP/2 requests AND responses. Receiving any of
+ * these on a request is a protocol violation; we send RST_STREAM
+ * with PROTOCOL_ERROR. (Response-side filtering happens during
+ * dispatch_stream — we already strip these.) */
+static int header_is_forbidden_in_h2(const uint8_t* name, size_t namelen) {
+    static const struct { const char* n; size_t l; } banned[] = {
+        { "connection",         10 },
+        { "transfer-encoding",  17 },
+        { "upgrade",             7 },
+        { "keep-alive",         10 },
+        { "proxy-connection",   16 },
+        { NULL, 0 }
+    };
+    for (int i = 0; banned[i].n; i++) {
+        if (namelen == banned[i].l &&
+            memcmp(name, banned[i].n, namelen) == 0) {
+            return 1;
+        }
+    }
+    /* `te` is allowed but only with the value "trailers" per
+     * §8.1.2.2. Caller checks the value separately when name=="te". */
+    return 0;
+}
+
 /* Called for every header name/value pair on a request stream.
  * We collect the four pseudo-headers separately (since they have
  * special meaning) and append everything else into a header block
@@ -207,6 +232,21 @@ static int ng_on_header_callback(nghttp2_session* ng,
     AetherH2Session* s = (AetherH2Session*)user_data;
     AetherH2Stream* str = stream_get_or_create(s, frame->hd.stream_id);
     if (!str) return NGHTTP2_ERR_CALLBACK_FAILURE;
+
+    /* Reject connection-specific request headers before they reach
+     * the request shape — a peer that sent these is malformed and
+     * the stream MUST be rejected (RFC 7540 §8.1.2.2). The TE
+     * header is conditional: the only allowed value is "trailers". */
+    if (namelen > 0 && name[0] != ':') {
+        if (header_is_forbidden_in_h2(name, namelen)) {
+            return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
+        }
+        if (namelen == 2 && memcmp(name, "te", 2) == 0) {
+            if (!(valuelen == 8 && memcmp(value, "trailers", 8) == 0)) {
+                return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
+            }
+        }
+    }
 
     /* Pseudo-headers begin with ':'. Normal headers are lowercase
      * per RFC 7540 §8.1.2. */
@@ -375,8 +415,29 @@ static HttpRequest* request_from_stream(AetherH2Stream* str) {
     HttpRequest* req = calloc(1, sizeof(HttpRequest));
     if (!req) return NULL;
     req->method        = dup_str(str->method ? str->method : "GET");
-    req->path          = dup_str(str->path   ? str->path   : "/");
-    req->query_string  = dup_str("");
+    /* Per RFC 7540, the :path pseudo-header is the request-target
+     * which embeds the query string. The HTTP/1.1 parser splits at
+     * '?' to populate path + query_string separately, and downstream
+     * code (route matching, http_get_query_param, observability
+     * hooks) depends on that split. Mirror it here so h2 streams
+     * present the same shape. */
+    {
+        const char* full_path = str->path ? str->path : "/";
+        const char* qmark = strchr(full_path, '?');
+        if (qmark) {
+            size_t plen = (size_t)(qmark - full_path);
+            req->path = malloc(plen + 1);
+            if (req->path) {
+                memcpy(req->path, full_path, plen);
+                req->path[plen] = '\0';
+            }
+            req->query_string = dup_str(qmark + 1);
+        } else {
+            req->path = dup_str(full_path);
+            req->query_string = dup_str("");
+        }
+        if (!req->path) req->path = dup_str("/");
+    }
     req->http_version  = dup_str("HTTP/2");
 
     /* Count headers in the block to size the parallel arrays. */
@@ -443,6 +504,31 @@ extern void http_request_free(HttpRequest* req);
 
 static void dispatch_stream(AetherH2Session* s, AetherH2Stream* str) {
     if (str->response_submitted) return;
+
+    /* RFC 7540 §8.1.2.3 — request pseudo-headers :method and :path
+     * are mandatory; :scheme is mandatory for non-CONNECT requests
+     * (we don't accept CONNECT). A stream missing any of these is
+     * malformed and must be rejected with PROTOCOL_ERROR rather
+     * than handed to the route table.
+     *
+     * :authority is recommended but optional (the Host header
+     * carries it for HTTP/1.1 compat); we allow it absent because
+     * curl --http2-prior-knowledge over plain TCP sometimes omits
+     * :authority in favour of the Host header. */
+    if (!str->method || !str->path || !str->scheme) {
+        nghttp2_submit_rst_stream(s->ng, NGHTTP2_FLAG_NONE,
+                                  str->stream_id, NGHTTP2_PROTOCOL_ERROR);
+        str->response_submitted = 1;
+        return;
+    }
+    /* :path must not be empty (except for OPTIONS *, which we
+     * don't support). */
+    if (str->path[0] == '\0') {
+        nghttp2_submit_rst_stream(s->ng, NGHTTP2_FLAG_NONE,
+                                  str->stream_id, NGHTTP2_PROTOCOL_ERROR);
+        str->response_submitted = 1;
+        return;
+    }
 
     HttpRequest* req = request_from_stream(str);
     if (!req) {
@@ -527,14 +613,25 @@ static void dispatch_stream(AetherH2Session* s, AetherH2Stream* str) {
     }
     str->response_header_count = (size_t)real_count;
 
-    nghttp2_data_provider data_prd;
-    data_prd.source.ptr = NULL;
-    data_prd.read_callback = ng_response_data_read_callback;
+    /* HEAD responses MUST NOT carry a body (RFC 7230 §4.3.2 for
+     * HTTP/1.1, RFC 7540 §8.1 for HTTP/2 — the request method
+     * applies the same constraint to either protocol). nghttp2
+     * interprets a NULL data_provider as "headers only" and
+     * automatically sets END_STREAM on the HEADERS frame, which is
+     * the correct wire shape: peers (and curl) reject DATA frames
+     * after a HEAD's HEADERS+END_STREAM with PROTOCOL_ERROR. */
+    nghttp2_data_provider  data_prd_storage;
+    nghttp2_data_provider* data_prd = NULL;
+    if (!str->method || strcmp(str->method, "HEAD") != 0) {
+        data_prd_storage.source.ptr = NULL;
+        data_prd_storage.read_callback = ng_response_data_read_callback;
+        data_prd = &data_prd_storage;
+    }
 
     int rv = nghttp2_submit_response(s->ng, str->stream_id,
                                      str->response_headers,
                                      str->response_header_count,
-                                     &data_prd);
+                                     data_prd);
     str->response_submitted = 1;
 
     http_request_free(req);
@@ -780,6 +877,11 @@ AetherH2Session* aether_h2_session_from_h2c_upgrade(
     }
     str->method = dup_str(request_method);
     str->path   = dup_str(request_path);
+    /* h2c upgrades come in over a plain (cleartext) socket, so the
+     * synthesised stream-1 carries `:scheme: http`. The h2-over-TLS
+     * path doesn't go through this entry point — peers send their
+     * own :scheme via HEADERS. */
+    str->scheme = dup_str("http");
     if (request_headers) {
         size_t hlen = strlen(request_headers);
         buf_append(&str->header_block, &str->header_block_len,

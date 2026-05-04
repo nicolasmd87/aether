@@ -133,18 +133,89 @@ via `pkg-config libnghttp2`; install the package to opt in:
 | macOS (Homebrew) | `brew install nghttp2` |
 | MSYS2/MinGW64 | `pacman -S mingw-w64-x86_64-nghttp2` |
 
+**Middleware + transformer compatibility.** Every middleware /
+response-transformer / hook / probe in `std.http` works
+identically on h2 streams as on HTTP/1.1 requests because all
+three protocols (`http_server_dispatch_for_h2` plus the original
+HTTP/1.1 path) feed the same chain:
+
+| Surface | h2 streams |
+|--------|------------|
+| `middleware.use_cors`         | ✓ |
+| `middleware.use_basic_auth`   | ✓ |
+| `middleware.use_rate_limit`   | ✓ |
+| `middleware.use_vhost`        | ✓ |
+| `middleware.use_static`       | ✓ |
+| `middleware.use_rewrite`      | ✓ |
+| `middleware.use_gzip` (response transformer) | ✓ — `Content-Encoding: gzip` rides on the h2 HEADERS frame |
+| `middleware.use_error_pages`  | ✓ |
+| `http_server_set_health_probes` | ✓ |
+| `http_server_set_metrics`     | ✓ |
+| `http_server_set_access_log`  | ✓ — every h2 stream is one log entry |
+
+WebSocket and SSE remain HTTP/1.1-only — they use protocol-
+specific upgrade paths that don't apply to h2. Clients that need
+real-time pushes over h2 should use h2 server-streamed responses
+(periodic DATA frames) instead, or open an h1 connection
+specifically for WS/SSE alongside the h2 traffic.
+
+**Per-protocol response semantics:**
+
+- `HEAD` requests on an h2 stream auto-fall through to the
+  matching `GET` handler so `Content-Length` and headers
+  describe what `GET` would return; the wrapper suppresses the
+  DATA frames per RFC 7231 §4.3.2.
+- Connection-specific request headers (`Connection`,
+  `Transfer-Encoding`, `Upgrade`, `Keep-Alive`,
+  `Proxy-Connection`) are rejected with PROTOCOL_ERROR on h2
+  streams (RFC 7540 §8.1.2.2). The same names are stripped from
+  responses on h2 streams, so handlers that emit them for
+  HTTP/1.1 don't need to be h2-aware.
+- Pseudo-header presence (`:method`, `:scheme`, `:path`) is
+  validated; missing or empty `:path` reaches RST_STREAM with
+  PROTOCOL_ERROR rather than the route table.
+- The `:path` pseudo-header is split on `?` to populate
+  `req->path` + `req->query_string` separately, matching the
+  HTTP/1.1 parser shape.
+
 **Trade-offs:**
 
 - HTTP/2 streams within one connection currently dispatch
-  *sequentially* — server-push and per-stream concurrency are not
-  yet implemented. Multiplexed-fan-out workloads still benefit from
-  HPACK + single-connection framing; per-stream actor concurrency
-  is tracked as a follow-up optimisation.
-- Connection-specific headers (`Connection`, `Transfer-Encoding`,
-  `Upgrade`, `Keep-Alive`, `Proxy-Connection`) are stripped from
-  responses on h2 streams (RFC 7540 §8.1.2.2 forbids them).
-  Handlers that emit these on HTTP/1.1 don't need to be h2-aware
-  — the wrapper filters at the boundary.
+  *sequentially* — server-push and per-stream concurrent
+  dispatch are not yet implemented. Multiplexed-fan-out
+  workloads still benefit from HPACK header compression +
+  single-connection framing; per-stream actor concurrency is
+  tracked as a follow-up optimisation.
+- HPACK Huffman *encoding* is optional per RFC 7541; libnghttp2
+  decodes Huffman-encoded headers from clients but the server
+  emits plain (un-Huffman'd) header bytes. Client-side
+  compression is unaffected.
+- The h2 wrapper holds one nghttp2 session per connection. Memory
+  cost is bounded by `SETTINGS_HEADER_TABLE_SIZE` (default 4 KiB)
+  + per-stream state. With 100 concurrent streams the upper
+  bound is ~64 KiB per connection.
+
+**Troubleshooting.**
+
+- *"HTTP/2 unavailable: built without libnghttp2"* — install
+  `libnghttp2-dev` (or distro equivalent) and rebuild. Auto-
+  detected via `pkg-config libnghttp2`.
+- *Curl reports `http_version=1.1` even though h2 is enabled*
+  — the client either isn't asking for h2 (`curl --http2` or
+  `--http2-prior-knowledge`) or is using TLS without ALPN
+  support. Check `curl --version` mentions `nghttp2` in the
+  feature list.
+- *Curl `--http2` over plain HTTP shows `1.1`* — this is
+  curl's "passive upgrade" — it falls back if the upgrade
+  isn't probed. `--http2-prior-knowledge` forces h2 from the
+  first byte.
+- *PROTOCOL_ERROR on the wire* — the server rejected a
+  malformed request (most likely a forbidden connection-
+  specific header per RFC 7540 §8.1.2.2). Check the access
+  log for the offending stream.
+- *h2c upgrade succeeds but no h2 data follows* — keep-alive
+  must be enabled (`http.server_set_keepalive(server, 1, …)`)
+  for the connection to survive past the upgrade response.
 
 ---
 
