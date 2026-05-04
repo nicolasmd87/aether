@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`contrib.aeocha` emits a structured per-`it()` report through the parent IPC channel** (`contrib/aeocha/module.ae`, `contrib/aeocha/README.md`, `tests/integration/aeocha_aeb_ipc_reporting/`). When `run_summary()` runs under a parent that opened a back-channel via `os.run_pipe` / `os.run_pipe_drain_and_wait` (the shape aeb's `driver_test` uses), it additionally writes a `version=1` structured report through `std.ipc.parent_channel()` before exiting — header KV block (`version`, `total`, `passed`, `failed`, `errored`, `duration_ms`) + `---` separator + tab-packed per-`it()` rows (`STATUS\tindex\t"name"\tduration_ms[\tfailure_message]`). Gated on `parent_channel() >= 0`, so `ae run foo.ae` from a terminal sees no behavior change. Failure messages capped at 256 chars per row; if the full report would exceed ~60 KB (Linux's default 64 KB pipe buffer), the emitter progressively drops messages, then durations, then falls back to header-only — the parent always sees a valid v1 report. Per-`it()` telemetry is threaded through the existing framework map (`its` list, `current_it` slot, `t_start_ns_str` start time) so no module-level state is needed; pointer- and 64-bit-valued slots bypass `ref()` cells because the codegen `ref_get` casts to `(int)` and would truncate. POSIX-only in v1 — Windows returns `-1` from `parent_channel` and the report path is silently a no-op. New integration test `aeocha_aeb_ipc_reporting` compiles a child driver with one PASS + two FAIL `it()`s, spawns it via `run_pipe_drain_and_wait`, parses the report, and asserts the header KV, separator, and three rows. Drives the chokepoint aeb needs to surface failing-test diagnostics from a subordinate `ae`-spawned test program without scraping ANSI-coloured stdout.
+
 ## [0.124.0]
 
 ### Added
