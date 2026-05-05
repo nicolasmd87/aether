@@ -1,47 +1,137 @@
-// HTTP Server - Working HTTP server example
-// Run with: ae run examples/stdlib/http-server.ae
+// HTTP/1.1 server — canonical std.http demo.
 //
-// Creates a real HTTP server that binds to port 8080.
-// Test with: curl http://localhost:8080/
+// Spins up a working HTTP server with the production-shape stack:
+// keep-alive, structured access logs, health probes, gzip
+// transformer, CORS, and proxy-aware client-IP detection. Routes
+// echo a few representative request shapes (GET, GET with query,
+// POST with body).
+//
+// Build + run:
+//   make stdlib && ./build/ae build examples/stdlib/http-server.ae -o /tmp/srv
+//   /tmp/srv
+//
+// Try it:
+//   curl http://localhost:8080/                           # hello
+//   curl 'http://localhost:8080/greet?name=Aether'        # query param
+//   curl -X POST -d 'ping' http://localhost:8080/echo     # body echo
+//   curl http://localhost:8080/healthz                    # 200 ok
+//   curl -H 'X-Forwarded-For: 1.2.3.4' http://localhost:8080/whoami
+//                                                        # X-Real-IP=1.2.3.4
+//
+// HTTP/2 + TLS variants live in http-server-h2.ae and
+// http-server-h2-tls.ae respectively.
 
 import std.http
+import std.http.middleware
+
+const PORT = 8080
+
+handle_root(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_body(res, "hello from std.http\n")
+}
+
+handle_greet(req: ptr, res: ptr, ud: ptr) {
+    name = http.get_query_param(req, "name")
+    if name == null {
+        name = "stranger"
+    }
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_body(res, "hello, ${name}\n")
+}
+
+handle_echo(req: ptr, res: ptr, ud: ptr) {
+    body = http.request_body(req)
+    if body == null {
+        body = ""
+    }
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_body(res, body)
+}
+
+handle_whoami(req: ptr, res: ptr, ud: ptr) {
+    // X-Real-IP is added by the use_real_ip middleware below when
+    // the request arrives with X-Forwarded-For. When the server is
+    // hit directly (no proxy in front), the header is absent and
+    // we report "(direct)" — matches what the middleware contract
+    // promises.
+    ip = http.get_header(req, "X-Real-IP")
+    if ip == null {
+        ip = "(direct)"
+    }
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_body(res, "client=${ip}\n")
+}
 
 main() {
-    print("=== Aether HTTP Server ===\n\n")
-
-    // Create server
-    print("Creating HTTP server...\n")
-    server = http.server_create(8080)
-
-    if (server != 0) {
-        print("Server created.\n")
-
-        // Bind to address
-        print("Binding to 127.0.0.1:8080...\n")
-        result = http.server_bind(server, "127.0.0.1", 8080)
-
-        if (result == 0) {
-            print("SUCCESS: Server bound to port 8080!\n")
-            print("The server is ready to accept connections.\n\n")
-
-            // In a real application, you would:
-            // 1. Register route handlers
-            // 2. Start the server (blocking)
-            //
-            // For this demo, we just show it binds successfully.
-
-            print("Stopping server...\n")
-            http.server_stop(server)
-        } else {
-            print("ERROR: Failed to bind (port may be in use)\n")
-        }
-
-        // Cleanup
-        http.server_free(server)
-        print("Server freed.\n")
-    } else {
-        print("ERROR: Failed to create server\n")
+    server = http.server_create(PORT)
+    if server == 0 {
+        println("server_create failed")
+        return
     }
 
-    print("\nHTTP server example complete!\n")
+    // Keep-alive — multiple requests per TCP connection. Standard
+    // production setting; without it every request opens a fresh
+    // socket which murders latency under load.
+    ka_err = http.server_set_keepalive(server, 1, 0, 30000)
+    if ka_err != "" {
+        println("keepalive: ${ka_err}")
+        return
+    }
+
+    // ---- Middleware stack ----------------------------------------
+    // Order matters: real_ip first so downstream middleware (rate
+    // limiting / access logs / handlers) see the client IP, not
+    // the proxy IP. CORS next so preflight OPTIONS short-circuits
+    // before route dispatch.
+
+    // Empty header_name -> default "X-Forwarded-For". Trust model:
+    // only safe behind a proxy that strips client-supplied XFF.
+    middleware.use_real_ip(server, "")
+
+    middleware.use_cors(server,
+        "*",                       // allow any origin (demo-only)
+        "GET, POST, OPTIONS",
+        "Content-Type, X-Requested-With",
+        0,                          // allow_credentials = false
+        600)                        // Access-Control-Max-Age (10 min)
+
+    // Response transformer — gzips bodies >= 256 bytes when the
+    // client advertises Accept-Encoding: gzip. Skipped for tiny
+    // payloads where compression overhead exceeds savings.
+    middleware.use_gzip(server, 256, 6)
+
+    // ---- Operational endpoints -----------------------------------
+    // Built-in health probes (#260 Tier 3). /healthz always 200,
+    // /readyz returns 200 only when the readiness check returns 1.
+    // Pass null + 0 for the readiness check to make /readyz also
+    // unconditionally 200 — fine for a demo.
+    http.server_set_health_probes(server, "/healthz", "/readyz", 0, 0)
+
+    // Structured access log to stderr ("-"). "combined" emits
+    // Apache combined log format. Use "json" for machine-parseable
+    // logs that ingest cleanly into Loki / ELK / Datadog.
+    http.server_set_access_log(server, "combined", "-")
+
+    // Prometheus metrics endpoint at /metrics — the runtime tracks
+    // request counts, error rates, and latency histograms
+    // automatically.
+    http.server_set_metrics(server, "/metrics")
+
+    // ---- Routes --------------------------------------------------
+    http.server_get(server,  "/",        handle_root,   0)
+    http.server_get(server,  "/greet",   handle_greet,  0)
+    http.server_post(server, "/echo",    handle_echo,   0)
+    http.server_get(server,  "/whoami",  handle_whoami, 0)
+
+    println("listening on http://localhost:${PORT}/")
+    println("try: curl http://localhost:${PORT}/")
+    err = http.server_start(server)
+    if err != "" {
+        println("server_start: ${err}")
+    }
 }
