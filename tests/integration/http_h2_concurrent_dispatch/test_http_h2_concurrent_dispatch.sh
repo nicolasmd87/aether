@@ -41,7 +41,10 @@ trap cleanup EXIT
 AETHER_HOME="$ROOT" "$AE" run "$SCRIPT_DIR/server.ae" >"$TMPDIR/srv.log" 2>&1 &
 SRV_PID=$!
 
-deadline=$(($(date +%s) + 15))
+# 30s matches http_server_h2_tls's deadline. `ae run server.ae`
+# compiles-then-runs; on slow Windows-MinGW64 CI runners the compile
+# step alone can take 10s+, so 15s was too tight.
+deadline=$(($(date +%s) + 30))
 ready=""
 while [ "$(date +%s)" -lt "$deadline" ]; do
     if grep -q '^READY' "$TMPDIR/srv.log" 2>/dev/null; then
