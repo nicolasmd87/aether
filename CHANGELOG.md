@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`std.http.server.vcr` — base64 body encoding support and filesystem equivalence test** (`std/http/server/vcr/aether_vcr.c`, `tests/integration/svn_checkout_fs_equivalence/`, `tests/integration/svn_checkout_via_vcr/`). VCR tape playback now decodes base64-encoded response bodies marked with "base64 below" content-type hints, enabling byte-for-byte transmission of binary WebDAV responses from Servirtium markdown tapes. New `http_response_set_body_n()` C extern (length-aware body setter) supports binary-safe response bodies. Three helper functions in the C runtime: `ascii_ci_contains()` for case-insensitive header scanning, `b64_value()` and `b64_is_space()` for base64 alphabet and whitespace handling, and `decode_base64_body()` for the decoding pipeline. Public function `vcr_decode_base64_body_raw()` is exported for tests that need standalone decode. Integration test `svn_checkout_via_vcr` validates all 17 tape interactions (SVN WebDAV requests/responses with headers + binary-encoded bodies) byte-for-byte against the canonical Servirtium-Java tape from 2019. Integration test `svn_checkout_fs_equivalence` compares real-`svn` working trees from live svn.apache.org checkout against VCR-replay checkout, verifying that the tape playback produces identical files (excluding `.svn` metadata). Live test is gated behind `AETHER_RUN_LIVE_SVN_CHECKOUT_EQUIV=1` to avoid runtime dependency on network + SVN availability; both tests are POSIX-only (Windows gets a SKIP).
+
 ## [0.126.0]
 
 ### Fixed
