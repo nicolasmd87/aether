@@ -1416,4 +1416,24 @@ AetherH2Session* aether_h2_session_from_h2c_upgrade(
     return NULL;
 }
 
+/* No-op stub for builds without libnghttp2 — http_server_free
+ * calls this unconditionally to free any dispatch pool, but
+ * without nghttp2 there's no h2 path and no pool to free. */
+void aether_h2_dispatch_pool_free(void* opaque) {
+    (void)opaque;
+}
+
 #endif  /* AETHER_HAS_NGHTTP2 */
+
+/* Belt-and-suspenders stub for the libnghttp2-but-no-pool case
+ * (Windows: nghttp2 may be linked, but the POSIX pipe + pthread
+ * pool path is `#ifdef AETHER_H2_HAS_POOL` which is `!_WIN32`).
+ * Without this, http_server_free's unconditional call to
+ * aether_h2_dispatch_pool_free fails to link on Windows even
+ * when nghttp2 is present. The stub is safe because session_new
+ * never assigns h2_dispatch_pool_opaque on that platform. */
+#if defined(AETHER_HAS_NGHTTP2) && !defined(AETHER_H2_HAS_POOL)
+void aether_h2_dispatch_pool_free(void* opaque) {
+    (void)opaque;
+}
+#endif
