@@ -32,11 +32,22 @@ mywrap(cmd: string) -> {
     argv = list_new()
     list_add_raw(argv, "-c")
     list_add_raw(argv, cmd)
-    out, status, err = os.run_capture("/bin/bash", argv, null)
+    out, status, err = os.run_capture("/bin/sh", argv, null)
     return out, status, err
 }
 
 main() {
+    // Skip on Windows — the codegen miscompile being regressed is
+    // platform-independent, but the repro relies on /bin/sh -c to
+    // produce captured stdout. MSYS2 doesn't ship /bin/sh in a shape
+    // compatible with os.run_capture's argv contract, and the same
+    // fix sites are exercised by the POSIX runners. Same skip pattern
+    // as test_run_capture_status.ae.
+    if os_getenv("OS") == "Windows_NT" {
+        println("SKIP: test_closure_shadow_tuple_destructure — /bin/sh -c not POSIX-shaped on Windows")
+        return
+    }
+
     fw = aeocha.init()
     // Outer destructure declares out/status/err. The closure below
     // captures `out` and re-destructures with the same name —
