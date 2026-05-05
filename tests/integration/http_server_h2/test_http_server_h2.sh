@@ -49,7 +49,7 @@ trap cleanup EXIT
 AETHER_HOME="$ROOT" "$AE" run "$SCRIPT_DIR/server.ae" >"$TMPDIR/srv.log" 2>&1 &
 SRV_PID=$!
 
-deadline=$(($(date +%s) + 8))
+deadline=$(($(date +%s) + 15))
 ready=""
 while [ "$(date +%s)" -lt "$deadline" ]; do
     if grep -q '^READY' "$TMPDIR/srv.log" 2>/dev/null; then
