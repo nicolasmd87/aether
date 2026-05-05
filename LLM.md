@@ -43,10 +43,15 @@ Erlang's actor syntax, compiling via C.**
   + LD_PRELOAD gates the hosted interpreter's libc calls too. Guest
   direction: `--emit=lib` → Python ctypes / Java Panama / Ruby
   Fiddle SDKs auto-generated from `aether_describe()`.
-- **NOT quite Ruby/Smalltalk/Groovy's builder-style closures** 
-  — those interpret the trailing block at runtime with full reflection 
-  access. Aether compiles closures to C; `hide`/`seal except` are  
-  compile-time, and the grant list is the closure's only handle to 
+- **NOT quite Ruby/Smalltalk/Groovy's builder-style closures**
+  — those all run on a VM (MRI, the Smalltalk image, the JVM)
+  where the block has runtime reflection access to its surrounding
+  scope, regardless of whether it was reached by interpretation
+  (Ruby, classic Smalltalk) or bytecode compilation (Groovy since
+  ~2012, modern Ruby JIT). Aether is native: closures lower to plain
+  C functions with no VM behind them, so there's no run-time hook
+  for the block to reach back through. `hide` / `seal except` are
+  compile-time, and the grant list is the closure's only handle to
   privileged operations.
 
 Sandbox more info: Full comparison (who brings what — Pony's per-reference
@@ -119,6 +124,7 @@ plays that role), no interfaces.
   `[a, b, c]` literal builds a cons chain when target is
   `*StringSeq` (message field) or a static C array when target is
   `string[]`. `string.split_to_seq` is the runtime entry point.
+- **Unqualified imports are spelt `import mod (*)`, not `import mod unqualified`.** Aether ships glob imports — `import std.math (*)` brings every public symbol into the bare namespace, no `math.` prefix. Selective form `import std.math (sqrt, pow)` is the same shape with an enumeration. There is no `unqualified` keyword and no `use mod::*` (Rust) or `from mod import *` (Python) spelling — just the parenthesised `(*)`. Applies equally to stdlib, contrib, and local modules. When a porter or doc asks for "Java-style import static" or "Rust use", point at this. (Language reference: "Glob Import" section.)
 - **Trailing closure brace must be on the call's line.** `f(x) { … }`
   attaches as a trailing closure; `f(x)\n{ … }` is parsed as a
   separate bare-brace block. The compiler warns on the next-line

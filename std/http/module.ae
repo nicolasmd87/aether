@@ -44,7 +44,9 @@ exports (
     http_get_header, http_get_query_param, http_get_path_param,
     http_request_free,
     http_response_create, http_response_set_status,
-    http_response_set_header, http_response_set_body, http_response_set_body_n,
+    http_response_set_header, http_response_add_header,
+    http_response_clear_headers,
+    http_response_set_body, http_response_set_body_n,
     http_response_json, http_server_response_free,
     http_server_set_actor_handler,
     http_request_method, http_request_path, http_request_body,
@@ -529,6 +531,19 @@ extern http_request_free(req: ptr)
 extern http_response_create() -> ptr
 extern http_response_set_status(res: ptr, code: int)
 extern http_response_set_header(res: ptr, name: string, value: string)
+// Append a header verbatim, even if a header with the same name already
+// exists. Use for protocols that allow/require repeated headers — e.g.
+// SVN's WebDAV uses 13+ `DAV:` headers per response. The replace-on-
+// duplicate behaviour of `set_header` collapses these into the last
+// value, breaking SVN clients. `add_header` preserves order and
+// multiplicity through to the wire serializer.
+extern http_response_add_header(res: ptr, name: string, value: string)
+// Drop every header on the response, including the `Content-Type` and
+// `Server` defaults injected by http_response_create. Used by VCR's
+// dispatcher to reset to a blank slate before emitting the tape's
+// recorded headers verbatim — record/replay must not have Aether's
+// defaults overlaid on the captured response.
+extern http_response_clear_headers(res: ptr)
 extern http_response_set_body(res: ptr, body: string)
 // Length-aware sibling — binary-safe set_body. Use when the body
 // may contain embedded NULs (binary content, gzip output, packed

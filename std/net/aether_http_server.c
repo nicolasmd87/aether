@@ -85,6 +85,8 @@ void http_request_free(HttpRequest* r) { (void)r; }
 HttpServerResponse* http_response_create() { return NULL; }
 void http_response_set_status(HttpServerResponse* r, int c) { (void)r; (void)c; }
 void http_response_set_header(HttpServerResponse* r, const char* k, const char* v) { (void)r; (void)k; (void)v; }
+void http_response_add_header(HttpServerResponse* r, const char* k, const char* v) { (void)r; (void)k; (void)v; }
+void http_response_clear_headers(HttpServerResponse* r) { (void)r; }
 void http_response_set_body(HttpServerResponse* r, const char* b) { (void)r; (void)b; }
 void http_response_set_body_n(HttpServerResponse* r, const char* b, int n) { (void)r; (void)b; (void)n; }
 void http_response_json(HttpServerResponse* r, const char* j) { (void)r; (void)j; }
@@ -1207,6 +1209,51 @@ void http_response_set_header(HttpServerResponse* res, const char* key, const ch
     }
 
     // Add new header (max 50)
+    if (res->header_count >= 50) return;
+    res->header_keys[res->header_count] = strdup(key);
+    res->header_values[res->header_count] = strdup(value);
+    res->header_count++;
+}
+
+// Drop every header currently set on the response, including the
+// defaults (`Content-Type: text/html; charset=utf-8` and `Server:
+// Aether/1.0`) that http_response_create injects. Used by the VCR
+// dispatcher to reset the response to a blank slate before emitting
+// the tape's recorded headers verbatim — record/replay must serve
+// exactly what was captured, not Aether's defaults overlaid on top.
+//
+// Leaves the header_keys/header_values arrays allocated so subsequent
+// set_header / add_header calls don't have to re-malloc.
+void http_response_clear_headers(HttpServerResponse* res) {
+    if (!res) return;
+    if (!res->header_keys || !res->header_values) return;
+    for (int i = 0; i < res->header_count; i++) {
+        free(res->header_keys[i]);
+        free(res->header_values[i]);
+        res->header_keys[i] = NULL;
+        res->header_values[i] = NULL;
+    }
+    res->header_count = 0;
+}
+
+// Append a header value verbatim, even if a header with the same name
+// already exists. Use this for protocols that allow (or require)
+// repeated headers — e.g. SVN's WebDAV uses 13+ `DAV:` response
+// headers, each with a distinct value. The replace-on-duplicate
+// behaviour of `set_header` collapses these to the last value, which
+// breaks SVN clients. `add_header` preserves the wire order and
+// multiplicity that the serializer at line 1149 emits as separate
+// `Name: Value\r\n` lines.
+//
+// 50-header cap is shared with `set_header`; over-cap silently drops.
+void http_response_add_header(HttpServerResponse* res, const char* key, const char* value) {
+    if (!res || !key || !value) return;
+    if (!res->header_keys || !res->header_values) {
+        res->header_keys = (char**)calloc(50, sizeof(char*));
+        res->header_values = (char**)calloc(50, sizeof(char*));
+        res->header_count = 0;
+        if (!res->header_keys || !res->header_values) return;
+    }
     if (res->header_count >= 50) return;
     res->header_keys[res->header_count] = strdup(key);
     res->header_values[res->header_count] = strdup(value);

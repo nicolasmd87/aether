@@ -1824,6 +1824,41 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     }
     print_line(gen, "");
 
+    // Hoist extern declarations BEFORE closure emission so that closure
+    // bodies which call imported externs (e.g. a `callback { argv =
+    // list_new() }` block where list_new is `extern`'d in
+    // contrib.aeocha) see a real prototype, not the C90 implicit-int
+    // fallback. Without this hoist, closures emitted at line ~1830 would
+    // appear in the C file before `void* list_new();` from the import
+    // walk at line ~1881, and gcc/clang would reject the file with
+    // "conflicting types" once the late prototype lands.
+    //
+    // Two sources walked: (1) locally declared `extern` (sibling of
+    // function definitions in program->children), (2) externs reachable
+    // through `import M` — for each import statement, walk the imported
+    // module's AST and emit every extern. Same registry-lookup shape as
+    // the (now removed) late emission inside the AST_IMPORT_STATEMENT
+    // handler.
+    for (int i = 0; i < program->child_count; i++) {
+        ASTNode* child = program->children[i];
+        if (!child) continue;
+        if (child->type == AST_EXTERN_FUNCTION && child->value) {
+            generate_extern_declaration(gen, child);
+        } else if (child->type == AST_IMPORT_STATEMENT && child->value) {
+            AetherModule* mod_entry = module_find(child->value);
+            ASTNode* mod_ast = mod_entry ? mod_entry->ast : NULL;
+            if (mod_ast) {
+                for (int j = 0; j < mod_ast->child_count; j++) {
+                    ASTNode* decl = mod_ast->children[j];
+                    if (decl && decl->type == AST_EXTERN_FUNCTION && decl->value) {
+                        generate_extern_declaration(gen, decl);
+                    }
+                }
+            }
+        }
+    }
+    print_line(gen, "");
+
     // Discover and emit closures AFTER forward declarations so hoisted
     // closure functions can call user-defined functions without
     // implicit function declaration errors (C99+).
@@ -1888,11 +1923,11 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                 print_line(gen, "");
                 break;
             case AST_IMPORT_STATEMENT:
-                // Import statement: generate extern declarations for stdlib imports
+                // Import statement: extern declarations were already
+                // hoisted to the forward-decl section above so closures
+                // can see them. Here we only emit a marker comment for
+                // C-output readability.
                 if (child->value) {
-                    const char* module_path = child->value;
-
-                    // Check for alias
                     const char* alias = NULL;
                     if (child->child_count > 0) {
                         ASTNode* last = child->children[child->child_count - 1];
@@ -1900,51 +1935,12 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                             alias = last->value;
                         }
                     }
-
                     if (alias) {
-                        print_line(gen, "// Import: %s as %s", module_path, alias);
+                        print_line(gen, "// Import: %s as %s", child->value, alias);
                     } else {
-                        print_line(gen, "// Import: %s", module_path);
-                    }
-
-                    // Handle stdlib imports: import std.X
-                    if (strncmp(module_path, "std.", 4) == 0) {
-                        // Look up cached module from orchestrator
-                        AetherModule* mod_entry = module_find(module_path);
-                        ASTNode* mod_ast = mod_entry ? mod_entry->ast : NULL;
-                        if (mod_ast) {
-                            // Generate extern declarations for every extern
-                            // in the module, regardless of any selective-
-                            // import list. Merged Aether-native stdlib
-                            // wrappers may depend on externs not directly
-                            // named by the user, and the emitted C needs
-                            // all of them declared or the call sites
-                            // reference undeclared functions.
-                            for (int j = 0; j < mod_ast->child_count; j++) {
-                                ASTNode* decl = mod_ast->children[j];
-                                if (decl->type == AST_EXTERN_FUNCTION && decl->value) {
-                                    generate_extern_declaration(gen, decl);
-                                }
-                            }
-                            // NOTE: do NOT free mod_ast — registry owns it
-                        }
-                    } else {
-                        // Handle local package imports: import mypackage.utils
-                        AetherModule* mod_entry = module_find(module_path);
-                        ASTNode* mod_ast = mod_entry ? mod_entry->ast : NULL;
-                        if (mod_ast) {
-                            for (int j = 0; j < mod_ast->child_count; j++) {
-                                ASTNode* decl = mod_ast->children[j];
-                                if (decl->type == AST_EXTERN_FUNCTION && decl->value) {
-                                    generate_extern_declaration(gen, decl);
-                                }
-                                // AST_FUNCTION_DEFINITION handled by module_merge_into_program()
-                            }
-                            // NOTE: do NOT free mod_ast — registry owns it
-                        }
+                        print_line(gen, "// Import: %s", child->value);
                     }
                 }
-                print_line(gen, "");
                 break;
             case AST_EXPORT_STATEMENT:
                 // Export: just generate the item (exports are implicit in C)
@@ -2151,7 +2147,9 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
                 generate_main_function(gen, child);
                 break;
             case AST_EXTERN_FUNCTION:
-                generate_extern_declaration(gen, child);
+                // Already emitted in the forward-decl hoist pass above —
+                // closures need extern prototypes visible before their
+                // bodies, so all extern decls are hoisted there.
                 break;
             case AST_CONST_DECLARATION:
                 // Emit top-level constant as #define

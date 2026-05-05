@@ -85,6 +85,29 @@ extern http_response_body(response: ptr) -> string
 extern http_response_error(response: ptr) -> string
 extern http_response_header_raw(response: ptr, name: string) -> string
 
+// std.ipc + std.net externs — used by run_summary to emit a
+// structured per-it report when invoked under a parent that opened
+// the channel (e.g. aeb's driver_test). `ipc_parent_channel_raw`
+// returns -1 when no channel is present; the report-emission path
+// is gated on the non-negative case so `ae run foo.ae` from a
+// terminal sees no behavior change. ae_fd_write / ae_fd_close are
+// the C symbols backing std.ipc.write_close — extern'd here per the
+// inline-extern pattern documented near the top of this file.
+extern ipc_parent_channel_raw() -> int
+extern ae_fd_write(fd: int, data: string) -> int
+extern ae_fd_close(fd: int)
+
+// string_substring used to cap long failure messages in the
+// structured aeb-report (per the brief's 256-char cap recommendation).
+extern string_substring(str: string, start: int, end: int) -> string
+
+// string_get_long parses a decimal string back to long for the
+// run-duration calculation. We can't store nanosecond timestamps in
+// `ref()` cells because the codegen ref_get truncates with `(int)`,
+// mangling values that don't fit in 32 bits. Storing as a stringified
+// long via map_put_raw and parsing back here sidesteps that.
+extern string_get_long(str: string) -> long
+
 exports (
     init,
     describe, it,
@@ -98,6 +121,7 @@ exports (
     expect_exit, expect_no_spawn_error,
     expect_stdout_contains,
     expect_stdout_line_field,
+    expect_stdout_line_after,
     expect_stdout_line_count,
     expect_stdout_matches,
     // Integration-shape matchers — HTTP surface
@@ -115,11 +139,28 @@ exports (
 // (passed / failed) and the indentation depth (depth) as refs. The
 // caller threads the returned ptr through every aeocha.* call; the
 // suite contexts created by describe() carry it as an inner field.
+//
+// Also stamps the run-start timestamp + a per-it() record list +
+// a "current_it" pointer-cell. These exist whether or not a parent
+// IPC channel is present — the cost is bounded (a list of small
+// maps, one per it()) and they're used by run_summary's structured
+// report when invoked under a parent (e.g. aeb's driver_test). When
+// invoked without a parent (`ae run foo.ae` from a terminal),
+// run_summary doesn't read them and they get freed at exit.
 init() -> ptr {
     fw = map_new()
     map_put_raw(fw, "passed", ref(0))
     map_put_raw(fw, "failed", ref(0))
     map_put_raw(fw, "depth",  ref(0))
+    // Per-it() telemetry (for the structured aeb-report path).
+    // "current_it" stores the in-flight it-record map directly (or null
+    // when no it() is running) — bypasses ref cells because ref_get
+    // truncates pointers to 32 bits in codegen. "t_start_ns_str" is a
+    // decimal-string of the wall-clock start so we keep all 64 bits;
+    // parsed back via string_get_long in run_summary.
+    map_put_raw(fw, "its", list_new())
+    map_put_raw(fw, "current_it", null)
+    map_put_raw(fw, "t_start_ns_str", "${clock_ns()}")
     return fw
 }
 
@@ -206,18 +247,48 @@ it(_ctx: ptr, description: string, test_fn: fn) {
         call(unbox_closure(bh))
     }
 
+    // Build a per-it record map and stash it as the "current" so
+    // fail() can capture the first failure message into it. The
+    // record gets appended to fw.its at the end of this call,
+    // regardless of pass/fail, with status + duration filled in.
+    // Pointer-valued slots (current_it, the it-record map, the it
+    // record's "duration_ms_str") are stored via map_put_raw rather
+    // than through ref() cells because ref_get truncates to 32 bits.
+    it_rec = map_new()
+    map_put_raw(it_rec, "name", description)
+    its_list = map_get_raw(fw, "its")
+    map_put_raw(fw, "current_it", it_rec)
+
+    t_start_ns = clock_ns()
     old_failed = ref_get(failed_ref)
     call(test_fn)
+    t_end_ns = clock_ns()
+
+    // Tear down "current" pointer before any after-hooks so a hook
+    // failure doesn't get mis-attributed to this it's record.
+    map_put_raw(fw, "current_it", null)
 
     // Indent + result line
     d = ref_get(depth_ref)
     for (i = 0; i < d; i++) { print("  ") }
+    is_fail = 0
     if ref_get(failed_ref) == old_failed {
         print("\x1b[32m  ✓\x1b[0m ${description}\n")
         ref_set(passed_ref, ref_get(passed_ref) + 1)
     } else {
         print("\x1b[31m  ✗\x1b[0m ${description}\n")
+        is_fail = 1
     }
+
+    // Stamp status + duration on the record.
+    if is_fail == 1 {
+        map_put_raw(it_rec, "status", "FAIL")
+    } else {
+        map_put_raw(it_rec, "status", "PASS")
+    }
+    duration_ms = (t_end_ns - t_start_ns) / 1000000
+    map_put_raw(it_rec, "duration_ms_str", "${duration_ms}")
+    list_add_raw(its_list, it_rec)
 
     // Run after hooks
     afters = map_get_raw(_ctx, "afters")
@@ -239,6 +310,20 @@ fail(fw: ptr, msg: string) {
     failed_ref = map_get_raw(fw, "failed")
     print("\x1b[31m      FAIL: ${msg}\x1b[0m\n")
     ref_set(failed_ref, ref_get(failed_ref) + 1)
+
+    // Capture first failure message into the current it() record
+    // (if any). The structured aeb-report writes one message per
+    // failed it; subsequent fails within the same it are visible
+    // in the human output but only the first is recorded — keeps
+    // the report bounded and matches "what made this it red"
+    // semantics. current_it is stored directly (not via ref()) to
+    // preserve the full pointer width.
+    cur = map_get_raw(fw, "current_it")
+    if cur != null {
+        if map_has(cur, "failure_message") == 0 {
+            map_put_raw(cur, "failure_message", msg)
+        }
+    }
 }
 
 assert_true(fw: ptr, condition: int, msg: string) {
@@ -388,20 +473,30 @@ expect_stdout_line_count(fw: ptr, out: string, want: int, msg: string) {
 }
 
 // expect_stdout_line_field(fw, out, prefix, n, want, msg) —
-// finds the first line starting with `prefix`, splits it on a
-// single space, and compares field index `n` to `want`. This is
-// the matcher that absorbs the most bash: `out=$(...)
-// rev=$(echo "$out" | awk '/^Revision:/{print $2}')` collapses to
+// finds the first line starting with `prefix`, tokenises on runs
+// of whitespace (spaces and tabs), and compares field index `n` to
+// `want`. This is the matcher that absorbs the most bash:
+// `rev=$(echo "$out" | awk '/^Revision:/{print $2}')` collapses to
 // `expect_stdout_line_field(fw, out, "Revision:", 1, "3", ...)`.
-// (Param `out`, not `stdout` — Windows MinGW reason.)
+//
+// Whitespace handling matches awk's default: any run of spaces or
+// tabs separates tokens, leading whitespace is skipped, and empty
+// tokens never appear in the field array. So a column-aligned
+// `Revision:    3` line tokenises to `["Revision:", "3"]` and
+// field 1 is `"3"` regardless of how many spaces actually separate
+// them.
+//
+// Indexing is 0-based on tokens — n=0 names the prefix token,
+// n=1 the next non-blank token. (awk's `$1`/`$2` are 1-based;
+// Aeocha is 0-based to match the rest of the matcher fleet.)
 //
 // Limitations (deliberate — porter scope):
-//   - Single-character whitespace splits only (space). Tab-separated
-//     output and multi-delimiter awk patterns aren't handled here;
-//     fall back to assert_str_eq with a hand-derived value for
-//     those cases.
 //   - First match wins. Use a more specific prefix if multiple
 //     lines share a prefix and you want the second one.
+//   - Whitespace = ASCII space + tab. Newlines have already been
+//     consumed by the per-line split.
+//
+// (Param `out`, not `stdout` — Windows MinGW reason.)
 expect_stdout_line_field(fw: ptr, out: string, prefix: string,
                           n: int, want: string, msg: string) {
     lines = string_split(out, "\n")
@@ -412,15 +507,111 @@ expect_stdout_line_field(fw: ptr, out: string, prefix: string,
     while i < line_count {
         line_ptr = string_array_get(lines, i)
         if string_starts_with(line_ptr, prefix) == 1 {
-            // Split on single space, take field n.
-            fields = string_split(line_ptr, " ")
-            field_count = string_array_size(fields)
-            if n < field_count {
-                actual_ptr = string_array_get(fields, n)
-                actual = string_concat(actual_ptr, "")
-                found = 1
+            // Tokenise on runs of whitespace (space=32, tab=9). Walk
+            // the line collecting non-whitespace spans into an
+            // imaginary array indexed by `tok_idx`; when tok_idx
+            // reaches `n` capture the span.
+            line_len = string_length(line_ptr)
+            tok_idx = 0
+            p = 0
+            while p < line_len {
+                c = string_char_at(line_ptr, p)
+                if c == 32 || c == 9 {
+                    p = p + 1
+                } else {
+                    start = p
+                    scanning = 1
+                    while scanning == 1 {
+                        if p >= line_len {
+                            scanning = 0
+                        } else {
+                            c2 = string_char_at(line_ptr, p)
+                            if c2 == 32 || c2 == 9 {
+                                scanning = 0
+                            } else {
+                                p = p + 1
+                            }
+                        }
+                    }
+                    if tok_idx == n {
+                        actual = string_substring(line_ptr, start, p)
+                        found = 1
+                        p = line_len
+                    }
+                    tok_idx = tok_idx + 1
+                }
             }
-            string_array_free(fields)
+            i = line_count
+        } else {
+            i = i + 1
+        }
+    }
+    string_array_free(lines)
+    if found == 0 {
+        fail(fw, "${msg} — no line starts with '${prefix}' or field ${n} missing")
+    } else {
+        if string_equals(actual, want) == 0 {
+            fail(fw, "${msg} — expected '${want}', got '${actual}'")
+        }
+    }
+}
+
+// expect_stdout_line_after(fw, out, prefix, want, msg) — finds
+// the first line starting with `prefix`, takes everything after
+// the prefix, trims leading and trailing whitespace, and compares
+// against `want`. Absorbs the bash idiom
+//   log=$(echo "$out" | sed -n 's/^Log: *//p')
+// which is common in svn/git-style key-value output where the
+// value can contain embedded whitespace and a single-token field
+// match wouldn't capture it correctly.
+//
+// `expect_stdout_line_field(out, "Log:", 1, ...)` would only see
+// the first whitespace-separated token after the prefix; this
+// matcher captures the entire post-prefix remainder.
+expect_stdout_line_after(fw: ptr, out: string, prefix: string,
+                          want: string, msg: string) {
+    lines = string_split(out, "\n")
+    line_count = string_array_size(lines)
+    found = 0
+    actual = ""
+    i = 0
+    while i < line_count {
+        line_ptr = string_array_get(lines, i)
+        if string_starts_with(line_ptr, prefix) == 1 {
+            plen = string_length(prefix)
+            llen = string_length(line_ptr)
+            // Skip leading whitespace immediately after the prefix.
+            start = plen
+            scanning_lead = 1
+            while scanning_lead == 1 {
+                if start >= llen {
+                    scanning_lead = 0
+                } else {
+                    c = string_char_at(line_ptr, start)
+                    if c == 32 || c == 9 {
+                        start = start + 1
+                    } else {
+                        scanning_lead = 0
+                    }
+                }
+            }
+            // Trim trailing whitespace.
+            end = llen
+            scanning_trail = 1
+            while scanning_trail == 1 {
+                if end <= start {
+                    scanning_trail = 0
+                } else {
+                    c2 = string_char_at(line_ptr, end - 1)
+                    if c2 == 32 || c2 == 9 {
+                        end = end - 1
+                    } else {
+                        scanning_trail = 0
+                    }
+                }
+            }
+            actual = string_substring(line_ptr, start, end)
+            found = 1
             i = line_count
         } else {
             i = i + 1
@@ -565,6 +756,24 @@ run_summary(fw: ptr) {
     }
     println("")
 
+    // Structured per-it report — only emitted when invoked under
+    // a parent that opened a back-channel (e.g. aeb's
+    // driver_test). When `ae run foo.ae` from a terminal, the
+    // channel is -1 and this block is skipped — no behavior
+    // change for existing consumers.
+    //
+    // Format pinned at version=1: header KV block + "---\n"
+    // separator + tab-packed per-it rows. See
+    // aeocha-aeb-ipc-reporting.md for the full spec.
+    ch = ipc_parent_channel_raw()
+    if ch >= 0 {
+        report = _format_aeb_report(fw, passed, failed)
+        // ae_fd_write + ae_fd_close mirror std.ipc.write_close
+        // semantics. Inline-extern'd at the top of this file.
+        ae_fd_write(ch, report)
+        ae_fd_close(ch)
+    }
+
     ref_free(passed_ref)
     ref_free(failed_ref)
     ref_free(depth_ref)
@@ -572,4 +781,106 @@ run_summary(fw: ptr) {
     if failed > 0 {
         exit(1)
     }
+}
+
+// Build the structured report payload for the aeb back-channel.
+// Format (version=1):
+//
+//   version=1
+//   total=N
+//   passed=N
+//   failed=N
+//   errored=N
+//   duration_ms=N
+//   ---
+//   PASS\t<index>\t"<name>"\t<duration_ms>\n
+//   FAIL\t<index>\t"<name>"\t<duration_ms>\t<failure_message>\n
+//   ...
+//
+// Self-truncates if the formatted report exceeds ~60K to avoid
+// pipe-buffer deadlock on Linux's 64K default. Drops
+// failure_messages first; if still over budget, drops per-row
+// durations; in the worst case the parent gets just the header.
+//
+// errored is always 0 in v1 — Aeocha categorises everything as
+// PASS or FAIL today. Reserved in the schema for future
+// enrichment (assertion threw, before_each crashed, etc.).
+_format_aeb_report(fw: ptr, passed: int, failed: int) -> string {
+    its = map_get_raw(fw, "its")
+    n = list_size(its)
+    t_start_str = map_get_raw(fw, "t_start_ns_str")
+    t_start_ns = string_get_long(t_start_str)
+    total_duration_ms = (clock_ns() - t_start_ns) / 1000000
+
+    // Header KV block. Numbers fold via string interpolation —
+    // ${x} is the same path the existing aeocha print() calls
+    // already use, so no extra extern needed.
+    total = passed + failed
+    header = "version=1\ntotal=${total}\npassed=${passed}\nfailed=${failed}\nerrored=0\nduration_ms=${total_duration_ms}\n---\n"
+
+    // Per-it rows. Try with full detail first; if oversized,
+    // drop failure_messages; if still oversized, drop durations.
+    // Budget: 60K leaves ~4K headroom under Linux's 64K pipe.
+    rows_full = _build_rows(its, n, 1, 1)
+    rep_full = string_concat(header, rows_full)
+    if string_length(rep_full) <= 60000 {
+        return rep_full
+    }
+    rows_no_msg = _build_rows(its, n, 0, 1)
+    rep_no_msg = string_concat(header, rows_no_msg)
+    if string_length(rep_no_msg) <= 60000 {
+        return rep_no_msg
+    }
+    rows_minimal = _build_rows(its, n, 0, 0)
+    rep_minimal = string_concat(header, rows_minimal)
+    if string_length(rep_minimal) <= 60000 {
+        return rep_minimal
+    }
+    // Worst case: header only. Parent still sees a valid v1 report,
+    // just with zero per-it detail.
+    return header
+}
+
+// Build the per-it rows, optionally including the
+// failure_message (if any) and duration_ms columns. Used by
+// _format_aeb_report's progressive truncation.
+_build_rows(its: ptr, n: int, with_msg: int, with_dur: int) -> string {
+    out = ""
+    i = 0
+    while i < n {
+        it_rec = list_get_raw(its, i)
+        status = map_get_raw(it_rec, "status")
+        name = map_get_raw(it_rec, "name")
+        idx = i + 1
+
+        // Base row: STATUS\tindex\t"name"
+        row = "${status}\t${idx}\t\"${name}\""
+
+        if with_dur != 0 {
+            dur_str = map_get_raw(it_rec, "duration_ms_str")
+            row = string_concat(row, "\t")
+            row = string_concat(row, dur_str)
+        }
+
+        if with_msg != 0 {
+            if map_has(it_rec, "failure_message") == 1 {
+                msg = map_get_raw(it_rec, "failure_message")
+                row = string_concat(row, "\t")
+                // Cap individual messages at 256 chars to keep any
+                // single row bounded. Branching the concat avoids
+                // a `string_substring` const-qualifier warning when
+                // the variable is also assigned the unsliced ptr.
+                if string_length(msg) > 256 {
+                    row = string_concat(row, string_substring(msg, 0, 256))
+                } else {
+                    row = string_concat(row, msg)
+                }
+            }
+        }
+
+        row = string_concat(row, "\n")
+        out = string_concat(out, row)
+        i = i + 1
+    }
+    return out
 }

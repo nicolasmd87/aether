@@ -286,6 +286,114 @@ issue when scheduled):
   emits plain (un-Huffman'd) header bytes — clients accept this
   fine; small wire-size win to add later.
 
+## VCR recorder — transparent MITM forwarder
+
+`std.http.server.vcr` ships replay (load tape → server replays
+recorded responses) and the storage primitives (`vcr.record`,
+`vcr.record_full`, `vcr.flush`). What's missing is the **recording
+proxy** — an in-process forwarder that:
+
+1. Accepts inbound HTTP from a client (svn, curl, http test
+   harness, or any application configured to point at it).
+2. Forwards each request upstream to the real service, rewriting
+   the Host header `127.0.0.1:PORT` → upstream hostname before
+   sending so the upstream sees a normal request.
+3. Captures the request + response as they pass through, calling
+   `vcr.record_full(...)` to append the interaction.
+4. Returns the upstream's response back to the original client.
+5. On stop, flushes the captured interactions to a tape file via
+   `vcr.flush(path)`.
+
+**Shape (transparent MITM, not a proxy or CORS trick):** from the
+client's POV the recorder *is* the upstream — same URL, same hostname
+in the URL bar / config, same response shapes. The client doesn't
+know it's being intercepted. Not an HTTP proxy in the
+`HTTP_PROXY=...` / `CONNECT`-method sense; not a browser-side CORS
+workaround. Just a normal HTTP server that happens to forward and
+capture everything that flies through it.
+
+**Why a separate piece, not a flag on `vcr.load()`:** the recorder
+pulls in `std.http.client` (for outbound) on top of the existing
+`std.http` server side that VCR already uses for replay. Different
+config (upstream URL + scheme), different lifecycle (records on
+incoming, vs replay's load-once-then-serve), and conceptually
+client-of-its-own-server. Belongs alongside but distinct from the
+replay dispatcher.
+
+**Placement:** likely `contrib/vcrrecord/` rather than
+`std/http/server/vcr/` — recorder is a developer testing tool with
+opinionated shape (which headers to redact at record time, how to
+canonicalize User-Agent / Date / UUID for re-recording stability),
+which is contrib-shaped per `docs/stdlib-vs-contrib.md`. Storage
+stays in std (the tape format is the stable interop format).
+
+**Open design questions** (resolved when a real recording use case
+shows up):
+
+- Header-redaction surface: is `vcr.redact()` (already in std)
+  enough, or does the recorder want a record-time hook surface
+  like Java Servirtium's `InteractionManipulations`? The Java
+  interface is broad (URL rewrite, single-header rewrite, body
+  rewrite, allowlist/denylist) but most svn-flavoured uses boil
+  down to "pin User-Agent, replace UUID and Date in stored
+  response headers." Defer the broader hook surface until a second
+  recording use case demands it.
+- HTTPS upstream: the recorder needs `client.send_request` against
+  HTTPS upstreams (svn.apache.org, GitHub APIs, etc). `std.http.client`
+  has TLS support; recorder just needs to default to upstream
+  scheme detection.
+- Dual mode: should one VCR instance switch between record and
+  replay (Java Servirtium model) or are they separate constructs
+  (closer to the existing `vcr.load` shape)? Java's mode-flip is
+  convenient; the cost is config complexity. Two constructs is
+  simpler.
+
+Driven by a real recording use case rather than anticipation —
+right now the only consumer of recorded tapes is the svn-checkout
+test, and the tape it uses was recorded by Java Servirtium and
+checked into the Aether tree. When a project needs to record a
+fresh tape directly via Aether (e.g. an Aether-hosted upstream
+that needs canonical replay tapes generated from its current
+behaviour), this is the unblocker.
+
+## VCR — keep the C-API independently consumable
+
+The current driver for VCR in Aether is concrete: exercising it
+drives the design and hardening of `std.http.server` and
+`std.http.client` simultaneously. Every VCR feature has been a
+forcing function on the HTTP stack — response-headers verbatim
+emission, repeated-key headers, default-header clearing, keep-alive
+across many requests, custom verbs / WebDAV. That's the load-bearing
+reason VCR lives inside the Aether tree right now.
+
+**Possible future direction (no commitments):** the C externs in
+`aether_vcr.c` (`vcr_load_tape`, `vcr_get_*`, `vcr_dispatch`,
+`vcr_record_interaction_full`, `vcr_flush_to_tape`, plus the
+diagnostic surface — `vcr_last_kind`, `vcr_last_index`,
+`vcr_set_strict_headers`, `vcr_reset_cursor`,
+`vcr_get_resp_headers`) form a coherent C-API. If a non-Aether
+consumer ever wants to drive VCR — Java/Python/Ruby tests via a
+thin FFI wrapper, the [Servirtium](https://servirtium.dev) standard's
+shape — the C-API is what they'd link against. Aether would not
+host the bindings; those would be ecosystem-owned.
+
+If that future ever materialises, what's missing today:
+- A clean `aether_vcr.h` as the canonical C-API contract (the
+  Aether `module.ae` is that contract today).
+- A versioned C ABI (right now we change it freely under "no
+  backwards compat" for in-tree work).
+- A non-Aether build target that produces `libvcr.so` standalone
+  (separable from the rest of `libaether.a`).
+- VCR may move out to its own repo at that point.
+
+None of this is blocking. Flagged here so the rule "keep the C-API
+independently consumable" guides choices we make now —
+`vcr_last_kind` returns int (numeric enum, no Aether string
+smuggling), the dispatcher takes plain `void* req` / `void* res`
+(not Aether-typed handles), error reporting is via passive read
+slots (no actor messaging). Costs nothing to keep that property,
+and lowers the cost of any future split.
+
 ## Type system
 
 ### Type inference propagation through `select()`

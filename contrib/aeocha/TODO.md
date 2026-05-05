@@ -47,42 +47,58 @@ example.
    has to go.~~ **Fixed.** Bare `after` deleted; `after_each` is the
    survivor.
 
-3. **Bare-call ergonomics need a language feature.** Still open.
-   The import gives you `aeocha.describe(...)` / `aeocha.it(...)`
-   (mirrors `sqlite.open` / `http.get`), not the Mocha-feel bare
-   `describe(...)` / `it(...)`. To get bare names a test framework
-   genuinely benefits from, Aether needs an unqualified import
-   variant — `import contrib.aeocha unqualified` or
-   `use contrib.aeocha::*`. This is a compiler change (parser +
-   module resolver + symbol table), not an aeocha-side fix;
-   deserves its own design discussion before coding. Scope:
-   probably a day's work end-to-end with tests.
+3. **Bare-call ergonomics — already supported by the language.** The
+   compiler ships `import mod (*)` which exposes every public name
+   from `mod` as a bare alias (see Language Reference: Glob Import).
+   Earlier drafts of this TODO assumed Aether needed a new
+   `unqualified` keyword — it doesn't, the existing parenthesised
+   selection list with `(*)` does the same job. The aeocha-side gap
+   that *isn't* covered by `(*)` is `fw` threading: even with bare
+   names, callers still pass `fw` as the first arg to every matcher.
+   Removing `fw` would need either a module-level "current framework"
+   sentinel inside aeocha or a hidden first-param convention — both
+   are aeocha-side refinements, not language work. Tracked here as
+   item (3a) below if anyone wants to pick it up.
 
-### Target shape (item 3 — `unqualified` import — would unlock this)
+3a. **`fw` threading.** Optional refinement: replace the explicit
+    `fw` parameter with a per-thread "current framework" the
+    matchers read from a module-static cell. `init()` would set it,
+    `run_summary()` would read it, and every `expect_*` / `assert_*`
+    matcher would lose its `fw` parameter. Tradeoff: matcher
+    signatures get cleaner but tests can't run two frameworks in
+    parallel within one process. For aeocha's actual use case
+    (one driver per `aeb test` invocation), the tradeoff is
+    almost certainly worth it.
+
+### Target shape (today, with `(*)` — works as of this writing)
 
 ```aether
-import contrib.aeocha unqualified
+import contrib.aeocha (*)
+import std.list
 
 main() {
-    describe("Counter") {
-        before_each { reset() }
+    fw = init()
+    describe(fw, "Counter") {
+        before_each(fw) callback { reset() }
 
-        it("starts at zero") {
-            assert_eq(count(), 0, "initial count")
+        it(fw, "starts at zero") callback {
+            assert_eq(fw, count(), 0, "initial count")
         }
 
-        it("increments") {
+        it(fw, "increments") callback {
             increment()
-            assert_eq(count(), 1, "after one inc")
+            assert_eq(fw, count(), 1, "after one inc")
         }
     }
+    run_summary(fw)
 }
 ```
 
-No `aeocha.init()`, no `aeocha.run_summary()`, no `aeocha.` prefixes.
-That's the bar item (3) is aiming at.
+`fw` threading is what's left of the verbosity tax once the
+`aeocha.` prefix is gone. Item (3a) above is what would peel
+that layer too.
 
-### Current shape (items 1+2 shipped — what works today)
+### Original shape (qualified import — also still supported)
 
 ```aether
 import contrib.aeocha
@@ -90,11 +106,11 @@ import contrib.aeocha
 main() {
     fw = aeocha.init()
     aeocha.describe(fw, "Counter") {
-        aeocha.before_each() callback { reset() }
-        aeocha.it("starts at zero") callback {
+        aeocha.before_each(fw) callback { reset() }
+        aeocha.it(fw, "starts at zero") callback {
             aeocha.assert_eq(fw, count(), 0, "initial count")
         }
-        aeocha.it("increments") callback {
+        aeocha.it(fw, "increments") callback {
             increment()
             aeocha.assert_eq(fw, count(), 1, "after one inc")
         }
@@ -103,7 +119,8 @@ main() {
 }
 ```
 
-Verbose vs. the ideal but importable, namespaced, and `aeb test`-able.
+Qualified vs. glob is purely a per-file style choice — both are
+importable, both are `aeb test`-able.
 
 ### What this unblocks
 

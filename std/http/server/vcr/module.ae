@@ -115,12 +115,20 @@ exports (
     vcr_set_indent_code_blocks, vcr_set_emphasize_http_verbs,
     vcr_get_tape_count, vcr_get_method, vcr_get_path, vcr_get_status,
     vcr_get_content_type, vcr_get_body, vcr_get_req_headers, vcr_get_req_body,
+    vcr_get_resp_headers,
     vcr_get_note_present, vcr_get_note_title, vcr_get_note_body,
     vcr_get_indent_code_blocks, vcr_get_emphasize_http_verbs,
     vcr_get_redaction_count, vcr_get_redaction_field,
     vcr_get_redaction_pattern, vcr_get_redaction_replacement,
     vcr_aether_clear_tape, vcr_aether_append_interaction,
     vcr_aether_set_load_err, vcr_aether_set_resp_headers,
+    vcr_last_kind, vcr_last_index,
+    vcr_set_strict_headers, vcr_get_strict_headers,
+    vcr_reset_cursor,
+    KIND_OK, KIND_PATH_OR_METHOD_DIFF, KIND_HEADER_MISSING,
+    KIND_HEADER_VALUE_DIFF, KIND_HEADER_UNEXPECTED,
+    KIND_TAPE_EXHAUSTED, KIND_BODY_DIFF,
+    last_kind, last_index, set_strict_headers, reset_cursor,
     FIELD_PATH, FIELD_RESPONSE_BODY,
     load, eject, tape_length,
     record, flush, flush_or_check,
@@ -192,6 +200,7 @@ extern vcr_get_content_type(i: int) -> string
 extern vcr_get_body(i: int) -> string
 extern vcr_get_req_headers(i: int) -> string
 extern vcr_get_req_body(i: int) -> string
+extern vcr_get_resp_headers(i: int) -> string
 extern vcr_get_note_present(i: int) -> int
 extern vcr_get_note_title(i: int) -> string
 extern vcr_get_note_body(i: int) -> string
@@ -217,6 +226,49 @@ extern vcr_aether_set_load_err(msg: string)
 // content-type-only path (preserves backward compat with tapes that
 // have no `### Response headers recorded for playback:` block).
 extern vcr_aether_set_resp_headers(index: int, headers: string)
+
+// Per-dispatch outcome accessors. Tests check these after each
+// request to confirm what the dispatcher decided. See KIND_*
+// constants below for the kind enum. Models the Java Servirtium
+// ServiceMonitor's per-interaction notification but as a passive
+// read surface — no callback, no allocation.
+extern vcr_last_kind() -> int
+extern vcr_last_index() -> int
+
+// Strict-headers opt-in. When set, dispatcher compares the SUT's
+// request headers against the recorded block unconditionally —
+// even if the recorded block is blank (the implicit gate that
+// vcr_get_req_headers populates for non-blank tapes still works
+// either way). Used by tests that want to deliberately exercise
+// the diagnostic paths.
+extern vcr_set_strict_headers(on: int)
+extern vcr_get_strict_headers() -> int
+
+// Reset the dispatch cursor to interaction 0 without freeing the
+// tape or stopping the server. Used by tests that drive a series
+// of independent cases against the same loaded tape (e.g. the
+// strict-match permutation tests in
+// tests/integration/svn_vcr_strict_match/). Also clears the
+// last_kind / last_index / last_error slots.
+extern vcr_reset_cursor()
+
+// Kind-of-outcome enum. Returned by vcr.last_kind() after each
+// dispatch to tell the test which branch the dispatcher took.
+// The numeric values match the VCR_KIND_* defines in aether_vcr.c.
+const KIND_OK                  = 0
+const KIND_PATH_OR_METHOD_DIFF = 1
+const KIND_HEADER_MISSING      = 2
+const KIND_HEADER_VALUE_DIFF   = 3
+const KIND_HEADER_UNEXPECTED   = 4
+const KIND_TAPE_EXHAUSTED      = 5
+const KIND_BODY_DIFF           = 6
+
+// Aether-side wrappers around the runtime accessors. Call shape
+// matches the rest of the vcr.* surface (e.g. vcr.tape_length()).
+last_kind() -> int { return vcr_last_kind() }
+last_index() -> int { return vcr_last_index() }
+set_strict_headers(on: int) { vcr_set_strict_headers(on) }
+reset_cursor() { vcr_reset_cursor() }
 
 // Direct concat extern — interpolation recycles a backing buffer
 // and corrupts when the same `out` variable is rebuilt many times
