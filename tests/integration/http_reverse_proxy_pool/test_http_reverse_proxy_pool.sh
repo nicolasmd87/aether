@@ -304,12 +304,14 @@ echo "$HDRS" | grep -qi '^X-Cache: HIT' || fail "cache hit: missing X-Cache: HIT
 stop_all
 
 # ---- Test 11: cache TTL expiry ------------------------------
+# Uses the dedicated short-TTL route /echo_cacheable_ttl (max-age=1).
+# Keeping it on its own path lets the HIT test above (T10) use a
+# generous TTL on /echo_cacheable without coupling the two.
 setup proxy_cache
-# Server sets Cache-Control: max-age=2; sleep past, expect refetch.
-curl -s -o /dev/null --max-time 3 "$PROXY/echo_cacheable"
+curl -s -o /dev/null --max-time 3 "$PROXY/echo_cacheable_ttl"
 COUNT_BEFORE=$(count_total)
 sleep 2.5
-curl -s -o /dev/null --max-time 3 "$PROXY/echo_cacheable"
+curl -s -o /dev/null --max-time 3 "$PROXY/echo_cacheable_ttl"
 COUNT_AFTER=$(count_total)
 DELTA=$((COUNT_AFTER - COUNT_BEFORE))
 [ "$DELTA" -ge 1 ] || fail "cache TTL: counter delta=$DELTA expected ≥1"

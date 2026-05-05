@@ -127,12 +127,26 @@ handle_echo_vary(req: ptr, res: ptr, ud: ptr) {
     http.response_set_body(res, "vary-${enc}-${n}")
 }
 
+// Long-TTL cacheable route — used by the cache-HIT test which fires
+// many curls back-to-back. max-age=60 ensures the entry doesn't
+// expire mid-test on a slow CI runner.
 handle_echo_cacheable(req: ptr, res: ptr, ud: ptr) {
     n = proxy_test_counter_inc()
     http.response_set_status(res, 200)
     http.response_set_header(res, "Content-Type", "text/plain")
-    http.response_set_header(res, "Cache-Control", "max-age=2")
+    http.response_set_header(res, "Cache-Control", "max-age=60")
     http.response_set_body(res, "cached:${n}")
+}
+
+// Short-TTL cacheable route — used by the cache-TTL-expiry test
+// which sleeps past max-age and expects a refetch. max-age=1 with a
+// 2.5s sleep gives a comfortable margin even under load.
+handle_echo_cacheable_ttl(req: ptr, res: ptr, ud: ptr) {
+    n = proxy_test_counter_inc()
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_header(res, "Cache-Control", "max-age=1")
+    http.response_set_body(res, "cached-ttl:${n}")
 }
 
 // ---- Actors -----------------------------------------------
@@ -166,6 +180,7 @@ build_upstream_a() {
     http.server_get(s, "/echo",            handle_echo_a,         0)
     http.server_get(s, "/echo_vary",       handle_echo_vary,      0)
     http.server_get(s, "/echo_cacheable",  handle_echo_cacheable, 0)
+    http.server_get(s, "/echo_cacheable_ttl",  handle_echo_cacheable_ttl, 0)
     http.server_get(s, "/count",           handle_count,          0)
     http.server_get(s, "/health",          handle_health_ok,      0)
     println("READY")
@@ -183,6 +198,7 @@ build_upstream_b() {
     // upstream under round-robin.
     http.server_get(s,  "/echo_vary",       handle_echo_vary,      0)
     http.server_get(s,  "/echo_cacheable",  handle_echo_cacheable, 0)
+    http.server_get(s, "/echo_cacheable_ttl",  handle_echo_cacheable_ttl, 0)
     http.server_get(s,  "/count",           handle_count,          0)
     http.server_get(s,  "/health",          handle_health_b,       0)
     http.server_post(s, "/admin/503",       handle_admin_503,      0)
@@ -199,6 +215,7 @@ build_upstream_c() {
     http.server_get(s, "/echo",           handle_echo_c,         0)
     http.server_get(s, "/echo_vary",      handle_echo_vary,      0)
     http.server_get(s, "/echo_cacheable", handle_echo_cacheable, 0)
+    http.server_get(s, "/echo_cacheable_ttl", handle_echo_cacheable_ttl, 0)
     http.server_get(s, "/count",          handle_count,          0)
     http.server_get(s, "/health",         handle_health_ok,      0)
     println("READY")
