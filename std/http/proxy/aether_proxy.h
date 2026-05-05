@@ -47,6 +47,7 @@ typedef enum {
     AETHER_PROXY_LB_LEAST_CONN   = 1,
     AETHER_PROXY_LB_IP_HASH      = 2,
     AETHER_PROXY_LB_WEIGHTED_RR  = 3,
+    AETHER_PROXY_LB_COOKIE_HASH  = 4,
 } AetherProxyLbAlgo;
 
 /* Parse "round_robin" | "least_conn" | "ip_hash" | "weighted_rr".
@@ -81,6 +82,39 @@ const char* aether_proxy_upstream_add(AetherProxyPool* pool,
  * absent). */
 const char* aether_proxy_upstream_remove(AetherProxyPool* pool,
                                          const char* base_url);
+
+/* Active drain mode. After `drain` is called, the LB picker
+ * skips the upstream for new requests; in-flight requests
+ * complete naturally. `undrain` reverses the flag.
+ *
+ * Returns "" on success, error string when the upstream isn't in
+ * the pool. Idempotent — drain on an already-draining upstream
+ * is a no-op. Useful for rolling deploys: drain → wait for
+ * inflight → 0 → physically remove. */
+const char* aether_proxy_upstream_drain(AetherProxyPool* pool,
+                                        const char* base_url);
+const char* aether_proxy_upstream_undrain(AetherProxyPool* pool,
+                                          const char* base_url);
+
+/* Per-upstream rate limit (token bucket). max_rps is steady-state
+ * requests per second per upstream; burst is the maximum tokens
+ * the bucket can hold. Setting max_rps=0 disables (default).
+ * Distinct from the per-client middleware rate limit — this one
+ * protects upstreams from overload regardless of client identity.
+ *
+ * Applies to ALL upstreams currently in the pool plus any added
+ * later. */
+const char* aether_proxy_rate_limit_set(AetherProxyPool* pool,
+                                        int max_rps,
+                                        int burst);
+
+/* Cookie-name configuration for the COOKIE_HASH algorithm. The
+ * pool reads this cookie's value from the inbound request and
+ * hashes it (FNV-1a) to pick an upstream. Must be set before the
+ * first request hits the LB picker; otherwise COOKIE_HASH falls
+ * back to RR. */
+const char* aether_proxy_pool_set_cookie_name(AetherProxyPool* pool,
+                                              const char* cookie_name);
 
 /* ----- Health checks (background pthread per pool) ----- */
 
@@ -159,6 +193,34 @@ const char* aether_proxy_opts_bind_cache(AetherProxyOpts* opts,
 const char* aether_proxy_opts_set_body_cap(AetherProxyOpts* opts,
                                            int max_body_bytes);
 
+/* Idempotent retry policy. When max_retries > 0, the middleware
+ * retries failed upstream calls (5xx + transport errors) for
+ * idempotent methods (GET, HEAD, PUT, DELETE, OPTIONS) using
+ * exponential backoff with full jitter, starting at backoff_base_ms.
+ * Non-idempotent methods (POST, PATCH) are NEVER retried —
+ * at-most-once delivery is preserved by HTTP semantics.
+ *
+ *   max_retries:      additional attempts after the first failure
+ *                     (so total upstream calls = 1 + max_retries).
+ *                     0 (default) disables retry.
+ *   backoff_base_ms:  starting delay; doubles each retry up to a
+ *                     cap; full-jitter random in [0, current_backoff].
+ *                     Default 100 ms when max_retries > 0. */
+const char* aether_proxy_opts_set_retry_policy(AetherProxyOpts* opts,
+                                               int max_retries,
+                                               int backoff_base_ms);
+
+/* W3C Trace-Context propagation. When `inject = 1`, the proxy
+ * generates a fresh `traceparent` (00 + new trace-id + new
+ * span-id + sampled=01) when the inbound request carries none —
+ * unblocking distributed tracing for clients that aren't
+ * trace-aware. When inject = 0 (default), the proxy passes
+ * inbound `traceparent` and `tracestate` through verbatim
+ * without generating new ones (preserves existing client-side
+ * trace continuity). */
+const char* aether_proxy_opts_set_trace_inject(AetherProxyOpts* opts,
+                                               int inject);
+
 /* ----- Install on server ----- */
 
 /* Mount the proxy under `path_prefix` ("/" forwards everything;
@@ -185,6 +247,28 @@ const char* aether_proxy_use_simple_proxy(HttpServer* server,
 int aether_middleware_reverse_proxy(HttpRequest* req,
                                     HttpServerResponse* res,
                                     void* user_data);
+
+/* Render the proxy's metric snapshot to a Prometheus-compatible
+ * text body (caller frees). Output mirrors the existing
+ * http_server_set_metrics scheme:
+ *
+ *   aether_proxy_upstream_requests_total{upstream="...",class="2xx"} N
+ *   aether_proxy_upstream_transport_errors_total{upstream="..."} N
+ *   aether_proxy_upstream_timeouts_total{upstream="..."} N
+ *   aether_proxy_upstream_retries_total{upstream="..."} N
+ *   aether_proxy_upstream_latency_ms_sum{upstream="..."} N
+ *   aether_proxy_upstream_latency_ms_count{upstream="..."} N
+ *   aether_proxy_upstream_inflight{upstream="..."} N
+ *   aether_proxy_upstream_healthy{upstream="..."} 0|1
+ *   aether_proxy_upstream_breaker_state{upstream="..."} 0|1|2
+ *   aether_proxy_upstream_draining{upstream="..."} 0|1
+ *   aether_proxy_cache_hits_total N
+ *   aether_proxy_cache_misses_total N
+ *   aether_proxy_cache_revalidations_total N
+ *   aether_proxy_503_no_upstream_total N
+ *
+ * NULL on OOM. */
+char* aether_proxy_pool_metrics_text(AetherProxyPool* pool);
 
 #ifdef __cplusplus
 }

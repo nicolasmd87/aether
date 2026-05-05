@@ -73,3 +73,21 @@ const char* aether_proxy_opts_set_body_cap(AetherProxyOpts* opts,
     opts->max_body_bytes = max_body_bytes;
     return "";
 }
+
+const char* aether_proxy_opts_set_retry_policy(AetherProxyOpts* opts,
+                                               int max_retries,
+                                               int backoff_base_ms) {
+    if (!opts) return "opts is null";
+    if (max_retries < 0)      return "max_retries must be >= 0";
+    if (backoff_base_ms < 0)  return "backoff_base_ms must be >= 0";
+    opts->retry_max_retries     = max_retries;
+    opts->retry_backoff_base_ms = backoff_base_ms > 0 ? backoff_base_ms
+                                                      : (max_retries > 0 ? 100 : 0);
+    return "";
+}
+
+const char* aether_proxy_opts_set_trace_inject(AetherProxyOpts* opts, int inject) {
+    if (!opts) return "opts is null";
+    opts->trace_context_inject = inject ? 1 : 0;
+    return "";
+}

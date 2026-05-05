@@ -56,7 +56,7 @@ import std.string
 exports (
     request, set_header, set_body, set_timeout, set_follow_redirects, request_free,
     send_request,
-    response_status, response_body, response_error, response_redirect_error,
+    response_status, response_body, response_body_length, response_error, response_redirect_error,
     response_header, response_headers, response_url, response_free,
     get_with_headers, post_with_status,
     post_json, response_body_json,
@@ -78,6 +78,7 @@ extern http_send_raw(req: ptr) -> ptr
 
 extern http_response_status(response: ptr) -> int
 extern http_response_body(response: ptr) -> string
+extern http_response_body_length(response: ptr) -> int
 extern http_response_headers(response: ptr) -> string
 extern http_response_error(response: ptr) -> string
 extern http_response_redirect_error_raw(response: ptr) -> string
@@ -185,6 +186,16 @@ send_request(req: ptr) -> {
 // underlying functions the v1 wrappers use.
 response_status(resp: ptr) -> int { return http_response_status(resp) }
 response_body  (resp: ptr) -> string { return http_response_body(resp) }
+
+// Byte length of the response body. Binary-safe partner to
+// `response_body` for callers that may receive payloads with
+// embedded NUL bytes (gzip, protobuf, image formats). The body
+// pointer + this length is the canonical "binary-safe read"
+// pattern; using string.length() on the body would truncate at
+// the first NUL.
+response_body_length(resp: ptr) -> int {
+    return http_response_body_length(resp)
+}
 response_error (resp: ptr) -> string { return http_response_error(resp) }
 
 // Redirect-class error string. Set when a request opted into automatic

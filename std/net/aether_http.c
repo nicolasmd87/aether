@@ -9,6 +9,7 @@ HttpResponse* http_delete_raw(const char* u) { (void)u; return NULL; }
 void http_response_free(HttpResponse* r) { (void)r; }
 int http_response_status(HttpResponse* r) { (void)r; return 0; }
 const char* http_response_body(HttpResponse* r) { (void)r; return ""; }
+int http_response_body_length(HttpResponse* r) { (void)r; return 0; }
 const char* http_response_headers(HttpResponse* r) { (void)r; return ""; }
 const char* http_response_error(HttpResponse* r) { (void)r; return "networking disabled at build time"; }
 int http_response_ok(HttpResponse* r) { (void)r; return 0; }
@@ -1128,6 +1129,11 @@ const char* http_response_body(HttpResponse* response) {
     if (!response || !response->body) return "";
     const char* s = string_to_cstr(response->body);
     return s ? s : "";
+}
+
+int http_response_body_length(HttpResponse* response) {
+    if (!response || !response->body) return 0;
+    return (int)aether_string_length(response->body);
 }
 
 const char* http_response_headers(HttpResponse* response) {

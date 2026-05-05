@@ -12,7 +12,7 @@
 //
 //     main() {
 //         server = http.server_create(8080)
-//         err = proxy.use_simple_proxy(server, "/", "http://localhost:9000", 30)
+//         err = proxy.mount_simple(server, "/", "http://localhost:9000", 30)
 //         if err != "" { println("proxy: ${err}"); return }
 //         http.server_start(server)
 //     }
@@ -31,18 +31,23 @@
 //     proxy.opts_bind_cache(opts, cache)
 //     proxy.opts_set_strip_prefix(opts, "/api")
 //
-//     err = proxy.use_reverse_proxy(server, "/api", pool, opts)
+//     err = proxy.mount(server, "/api", pool, opts)
 
 exports (
     upstream_pool_new, upstream_pool_free,
     upstream_add, upstream_remove,
+    upstream_drain, upstream_undrain,
+    rate_limit_set,
+    pool_set_cookie_name,
     health_checks_enable,
     breaker_configure,
     cache_new, cache_free,
     opts_new, opts_free,
     opts_set_strip_prefix, opts_set_preserve_host, opts_set_xforwarded,
     opts_bind_cache, opts_set_body_cap,
-    use_reverse_proxy, use_simple_proxy,
+    opts_set_retry_policy, opts_set_trace_inject,
+    mount, mount_simple,
+    pool_metrics_text,
 )
 
 // ---- Raw externs ----
@@ -55,6 +60,11 @@ extern aether_proxy_pool_new(algo: int,
 extern aether_proxy_pool_free(pool: ptr)
 extern aether_proxy_upstream_add(pool: ptr, base_url: string, weight: int) -> string
 extern aether_proxy_upstream_remove(pool: ptr, base_url: string) -> string
+extern aether_proxy_upstream_drain(pool: ptr, base_url: string) -> string
+extern aether_proxy_upstream_undrain(pool: ptr, base_url: string) -> string
+extern aether_proxy_rate_limit_set(pool: ptr, max_rps: int, burst: int) -> string
+extern aether_proxy_pool_set_cookie_name(pool: ptr, cookie_name: string) -> string
+extern aether_proxy_pool_metrics_text(pool: ptr) -> string
 
 extern aether_proxy_health_checks_enable(pool: ptr,
                                          probe_path: string,
@@ -83,6 +93,8 @@ extern aether_proxy_opts_set_preserve_host(opts: ptr, on: int) -> string
 extern aether_proxy_opts_set_xforwarded(opts: ptr, xff: int, xfp: int, xfh: int) -> string
 extern aether_proxy_opts_bind_cache(opts: ptr, cache: ptr) -> string
 extern aether_proxy_opts_set_body_cap(opts: ptr, max_body_bytes: int) -> string
+extern aether_proxy_opts_set_retry_policy(opts: ptr, max_retries: int, backoff_base_ms: int) -> string
+extern aether_proxy_opts_set_trace_inject(opts: ptr, inject: int) -> string
 
 extern aether_proxy_use_reverse_proxy(server: ptr,
                                       path_prefix: string,
@@ -130,6 +142,56 @@ upstream_add(pool: ptr, base_url: string, weight: int) -> string {
 
 upstream_remove(pool: ptr, base_url: string) -> string {
     return aether_proxy_upstream_remove(pool, base_url)
+}
+
+// Mark an upstream as draining: the LB picker stops sending NEW
+// requests to it, but in-flight requests complete naturally.
+// Idempotent. Reverse with `upstream_undrain`. Useful for rolling
+// deploys: drain → wait until inflight reaches 0 → physically
+// remove the upstream from the pool.
+upstream_drain(pool: ptr, base_url: string) -> string {
+    return aether_proxy_upstream_drain(pool, base_url)
+}
+
+upstream_undrain(pool: ptr, base_url: string) -> string {
+    return aether_proxy_upstream_undrain(pool, base_url)
+}
+
+// Per-upstream token-bucket rate limit. Caps requests-per-second
+// against EACH upstream in the pool (separate from the per-client
+// `middleware.use_rate_limit`, which caps requests-per-IP across
+// all routes). max_rps=0 disables the cap. burst is the maximum
+// tokens the bucket can hold; pass 0 to default to max_rps.
+//
+// Applied to every upstream currently in the pool plus any added
+// via `upstream_add` later — newly-added upstreams inherit the
+// pool's current rate-limit setting.
+rate_limit_set(pool: ptr, max_rps: int, burst: int) -> string {
+    return aether_proxy_rate_limit_set(pool, max_rps, burst)
+}
+
+// Cookie-name configuration for the COOKIE_HASH algorithm.
+// Required when `lb_algo == "cookie_hash"`; otherwise ignored.
+// The pool reads this cookie's value from the inbound request
+// and FNV-1a hashes it to pick an upstream. When the cookie is
+// absent on a request the picker falls back to round-robin.
+pool_set_cookie_name(pool: ptr, cookie_name: string) -> string {
+    return aether_proxy_pool_set_cookie_name(pool, cookie_name)
+}
+
+// Render the pool's metrics in Prometheus exposition format.
+// Returns the body string ready for response_set_body. Use this
+// from a /proxy-metrics route handler to expose proxy state to
+// scrapers without conflicting with the server's `/metrics`
+// (which exposes inbound HTTP server stats — distinct surface).
+//
+//     handle_proxy_metrics(req: ptr, res: ptr, ud: ptr) {
+//         http.response_set_status(res, 200)
+//         http.response_set_header(res, "Content-Type", "text/plain; version=0.0.4")
+//         http.response_set_body(res, proxy.pool_metrics_text(my_pool))
+//     }
+pool_metrics_text(pool: ptr) -> string {
+    return aether_proxy_pool_metrics_text(pool)
 }
 
 // Enable + start the health-check thread for the pool.
@@ -194,7 +256,7 @@ cache_free(cache: ptr) {
 }
 
 // Allocate a per-mount options handle. Use the opts_set_* functions
-// to override defaults before calling use_reverse_proxy.
+// to override defaults before calling proxy.mount.
 opts_new() -> ptr {
     return aether_proxy_opts_new()
 }
@@ -234,23 +296,49 @@ opts_set_body_cap(opts: ptr, max_body_bytes: int) -> string {
     return aether_proxy_opts_set_body_cap(opts, max_body_bytes)
 }
 
+// Idempotent retry policy. When max_retries > 0, the middleware
+// retries failed upstream calls (5xx + transport errors) for
+// idempotent methods (GET, HEAD, PUT, DELETE, OPTIONS) using
+// exponential backoff with full jitter, starting at
+// backoff_base_ms (defaults to 100ms when max_retries > 0).
+// Non-idempotent methods (POST, PATCH) are NEVER retried —
+// preserves at-most-once HTTP semantics.
+//
+// Total upstream calls per request = 1 + max_retries. Cap your
+// max_retries against the request_timeout to avoid retry storms
+// outliving sensible client timeouts.
+opts_set_retry_policy(opts: ptr, max_retries: int, backoff_base_ms: int) -> string {
+    return aether_proxy_opts_set_retry_policy(opts, max_retries, backoff_base_ms)
+}
+
+// W3C Trace-Context propagation. When inject=1 and the inbound
+// request has no `traceparent` header, the proxy generates a
+// fresh trace-id + span-id and stamps `traceparent: 00-<32hex>-<16hex>-01`
+// outbound — letting non-trace-aware clients pick up distributed
+// tracing automatically. When inject=0 (default), the proxy
+// passes inbound `traceparent` and `tracestate` through verbatim
+// without generating new ones.
+opts_set_trace_inject(opts: ptr, inject: int) -> string {
+    return aether_proxy_opts_set_trace_inject(opts, inject)
+}
+
 // Mount the proxy under path_prefix. "/" forwards everything;
 // "/api" forwards just the /api subtree. Pool refcount is bumped
 // (and decremented on opts_free).
-use_reverse_proxy(server: ptr,
-                  path_prefix: string,
-                  pool: ptr,
-                  opts: ptr) -> string {
+mount(server: ptr,
+      path_prefix: string,
+      pool: ptr,
+      opts: ptr) -> string {
     return aether_proxy_use_reverse_proxy(server, path_prefix, pool, opts)
 }
 
 // One-upstream convenience: builds a pool with one upstream + RR +
 // default opts, mounts the middleware, and returns "". The pool is
 // owned by the middleware and freed alongside the server.
-use_simple_proxy(server: ptr,
-                 path_prefix: string,
-                 upstream_url: string,
-                 request_timeout_sec: int) -> string {
+mount_simple(server: ptr,
+             path_prefix: string,
+             upstream_url: string,
+             request_timeout_sec: int) -> string {
     return aether_proxy_use_simple_proxy(server, path_prefix, upstream_url,
                                           request_timeout_sec)
 }

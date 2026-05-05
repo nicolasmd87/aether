@@ -30,6 +30,10 @@
 #include <string.h>
 #include <stdio.h>
 #include <ctype.h>
+#include <time.h>
+#if defined(_WIN32)
+#  include <windows.h>
+#endif
 
 /* std.http.client primitives, forward-declared with opaque types
  * to avoid the HttpRequest typedef collision between
@@ -46,6 +50,7 @@ extern void http_request_free_raw(HttpClientRequest* req);
 extern HttpClientResponse* http_send_raw(HttpClientRequest* req);
 extern int  http_response_status(HttpClientResponse* response);
 extern const char* http_response_body(HttpClientResponse* response);
+extern int  http_response_body_length(HttpClientResponse* response);
 extern const char* http_response_headers(HttpClientResponse* response);
 extern const char* http_response_error(HttpClientResponse* response);
 extern void http_response_free(HttpClientResponse* response);
@@ -168,6 +173,86 @@ static void serve_from_cache(HttpServerResponse* res,
     }
 }
 
+/* ----- HTTP method classification + retry helpers ----- */
+
+/* Idempotent per HTTP semantics (RFC 7231 §4.2.2). POST/PATCH
+ * are NOT idempotent — silent retry could create duplicate
+ * resources or apply patches twice, so we never retry them. */
+static int method_is_idempotent(const char* method) {
+    if (!method) return 0;
+    return (strcmp(method, "GET")     == 0 ||
+            strcmp(method, "HEAD")    == 0 ||
+            strcmp(method, "PUT")     == 0 ||
+            strcmp(method, "DELETE")  == 0 ||
+            strcmp(method, "OPTIONS") == 0);
+}
+
+/* Sleep `ms` milliseconds. Used for retry backoff. */
+static void retry_sleep_ms(int ms) {
+    if (ms <= 0) return;
+#if defined(_WIN32)
+    Sleep((DWORD)ms);
+#else
+    struct timespec ts;
+    ts.tv_sec  = ms / 1000;
+    ts.tv_nsec = (long)(ms % 1000) * 1000000L;
+    nanosleep(&ts, NULL);
+#endif
+}
+
+/* Compute next retry delay with exponential backoff + full jitter.
+ * `attempt` is 1-indexed (first retry attempt = 1). Cap at 10s
+ * so we don't pause for minutes on a deep backoff sequence. */
+static int retry_backoff_ms(int base_ms, int attempt) {
+    if (base_ms <= 0) return 0;
+    /* Exponential: base * 2^(attempt-1), capped at 10000ms. */
+    long max_ms = (long)base_ms;
+    for (int i = 1; i < attempt && max_ms < 10000; i++) max_ms *= 2;
+    if (max_ms > 10000) max_ms = 10000;
+    /* Full jitter: random in [0, max_ms]. rand() is fine here —
+     * jitter just spreads the thundering herd. */
+    int jitter = (int)((long)rand() * max_ms / RAND_MAX);
+    if (jitter < 0) jitter = 0;
+    return jitter;
+}
+
+/* W3C Trace-Context: generate a 32-hex-digit trace-id and
+ * 16-hex-digit span-id. rand() is sufficient for trace IDs —
+ * they're not security-sensitive. */
+static void trace_gen_id(char* out, size_t hex_chars) {
+    static const char* hex = "0123456789abcdef";
+    for (size_t i = 0; i < hex_chars; i++) {
+        out[i] = hex[rand() & 0xf];
+    }
+    out[hex_chars] = '\0';
+}
+
+/* Inject `traceparent` if absent. The W3C format (version 00):
+ *   00-<32hex trace-id>-<16hex span-id>-<flags>
+ * flags=01 indicates "sampled". */
+static void inject_traceparent_if_absent(HttpRequest* inbound,
+                                         HttpClientRequest* outbound) {
+    const char* existing = http_get_header(inbound, "traceparent");
+    if (existing && *existing) {
+        /* Pass through verbatim — operators may also `set_trace_inject(0)`
+         * to skip auto-injection entirely; this branch fires regardless,
+         * preserving end-to-end client-driven tracing. */
+        http_request_set_header_raw(outbound, "traceparent", existing);
+        const char* state = http_get_header(inbound, "tracestate");
+        if (state && *state) {
+            http_request_set_header_raw(outbound, "tracestate", state);
+        }
+        return;
+    }
+    /* Fresh trace. */
+    char trace_id[33], span_id[17];
+    trace_gen_id(trace_id, 32);
+    trace_gen_id(span_id,  16);
+    char header[80];
+    snprintf(header, sizeof(header), "00-%s-%s-01", trace_id, span_id);
+    http_request_set_header_raw(outbound, "traceparent", header);
+}
+
 /* ----- the middleware function itself ----- */
 
 int aether_middleware_reverse_proxy(HttpRequest* req,
@@ -225,20 +310,20 @@ int aether_middleware_reverse_proxy(HttpRequest* req,
     if (opts->cache &&
         req->method &&
         (strcmp(req->method, "GET") == 0 || strcmp(req->method, "HEAD") == 0)) {
-        /* Build the lookup URL (base-less — just method+path so the
-         * key is independent of which upstream serves it; caching is
-         * pool-scoped, not upstream-scoped). */
         AetherProxyCacheEntry* hit = aether_proxy_cache_lookup(
             opts->cache, req->method, forward_path, req);
         if (hit) {
+            atomic_fetch_add(&opts->pool->metric_cache_hits, 1);
             serve_from_cache(res, hit);
             return 0;
         }
+        atomic_fetch_add(&opts->pool->metric_cache_misses, 1);
     }
 
     /* ---- Pick upstream ---- */
     AetherUpstream* u = aether_proxy_lb_pick(opts->pool, req);
     if (!u) {
+        atomic_fetch_add(&opts->pool->metric_503_no_upstream, 1);
         http_response_set_status(res, 503);
         http_response_set_header(res, "X-Aether-Proxy-Error", "no_upstream");
         http_response_set_header(res, "Retry-After", "1");
@@ -249,128 +334,250 @@ int aether_middleware_reverse_proxy(HttpRequest* req,
         return 0;
     }
 
-    /* ---- Build the outbound request ---- */
-    char* upstream_url = build_upstream_url(u->base_url, forward_path,
-                                            req->query_string);
-    HttpClientRequest* outbound = upstream_url ?
-        http_request_raw(req->method ? req->method : "GET", upstream_url) : NULL;
+    /* ---- Send (retry-aware) ----
+     *
+     * Build a fresh outbound request per attempt because the http
+     * client consumes its request on send. Idempotent methods
+     * (GET/HEAD/PUT/DELETE/OPTIONS) get retried on transport
+     * failure or 5xx upstream when opts->retry_max_retries > 0.
+     * Non-idempotent methods (POST/PATCH) are sent once.
+     *
+     * Re-pick semantics (matches nginx `proxy_next_upstream`):
+     * each retry calls aether_proxy_lb_pick again, so retries
+     * naturally route around a single failing upstream. The
+     * picker's eligibility filters (healthy + breaker + drain +
+     * rate-limit) keep us from re-hitting a known-bad target.
+     * If no other upstream is eligible the picker may return
+     * the same one — that's fine, we still get the backoff.
+     *
+     * Per-attempt metrics:
+     *   - latency_sum_ms / latency_count: every completed attempt
+     *   - transport_errors / timeouts: failed-without-status attempts
+     *   - retries: every attempt past the first
+     *   - requests_{2xx,3xx,4xx,5xx}: classified by final status
+     *
+     * Breaker outcome: only the FINAL attempt's outcome is recorded
+     * against the upstream that produced it, because retries that
+     * recover the call shouldn't count as failures against the
+     * breaker (otherwise retry behaviour trips the breaker faster
+     * than it should). The intermediate failed upstreams DO get
+     * their own breaker_record(0) when we re-pick away from them. */
+    int max_attempts = method_is_idempotent(req->method) ? (1 + opts->retry_max_retries) : 1;
+    HttpClientResponse* upstream = NULL;
+    int upstream_status = 0;
+    const char* upstream_err = NULL;
 
-    if (!outbound) {
+    for (int attempt = 0; attempt < max_attempts; attempt++) {
+        if (attempt > 0) {
+            /* Backoff between attempts. */
+            int sleep_ms = retry_backoff_ms(opts->retry_backoff_base_ms, attempt);
+            retry_sleep_ms(sleep_ms);
+            atomic_fetch_add(&u->metric_retries, 1);
+        }
+
+        /* ---- Build a fresh outbound request. ---- */
+        char* upstream_url = build_upstream_url(u->base_url, forward_path,
+                                                req->query_string);
+        HttpClientRequest* outbound = upstream_url ?
+            http_request_raw(req->method ? req->method : "GET", upstream_url) : NULL;
+        if (!outbound) {
+            free(upstream_url);
+            aether_proxy_breaker_record(opts->pool, u, 0);
+            aether_proxy_inflight_dec(u);
+            http_response_set_status(res, 502);
+            http_response_set_header(res, "X-Aether-Proxy-Error", "request_alloc_failed");
+            http_response_set_header(res, "Content-Type", "text/plain");
+            http_response_set_body(res, "proxy request allocation failed\n");
+            return 0;
+        }
+        if (opts->pool->request_timeout_sec > 0) {
+            http_request_set_timeout_raw(outbound, opts->pool->request_timeout_sec);
+        }
+
+        /* Forward inbound headers minus hop-by-hop. */
+        for (int i = 0; i < req->header_count; i++) {
+            const char* k = req->header_keys[i];
+            const char* v = req->header_values[i];
+            if (!k || is_hop_by_hop(k)) continue;
+            if (strcasecmp(k, "Host") == 0) continue;
+            /* Skip traceparent/tracestate here — the Trace-Context
+             * branch below handles them so the inject_traceparent
+             * generation path can run when absent. */
+            if (strcasecmp(k, "traceparent") == 0) continue;
+            if (strcasecmp(k, "tracestate")  == 0) continue;
+            http_request_set_header_raw(outbound, k, v ? v : "");
+        }
+
+        /* Host: rewrite. */
+        if (opts->preserve_host) {
+            const char* h = http_get_header(req, "Host");
+            if (h && *h) http_request_set_header_raw(outbound, "Host", h);
+        } else {
+            char* authority = extract_authority(u->base_url);
+            if (authority) {
+                http_request_set_header_raw(outbound, "Host", authority);
+                free(authority);
+            }
+        }
+
+        /* X-Forwarded-* injection. */
+        if (opts->add_xff) {
+            const char* prior = http_get_header(req, "X-Forwarded-For");
+            const char* client = client_ip_for_xff(req);
+            char* xff = append_csv(prior, client);
+            if (xff) {
+                http_request_set_header_raw(outbound, "X-Forwarded-For", xff);
+                free(xff);
+            }
+        }
+        if (opts->add_xfp) {
+            http_request_set_header_raw(outbound, "X-Forwarded-Proto", "http");
+        }
+        if (opts->add_xfh) {
+            const char* h = http_get_header(req, "Host");
+            if (h && *h) http_request_set_header_raw(outbound, "X-Forwarded-Host", h);
+        }
+        {
+            const char* prior_via = http_get_header(req, "Via");
+            char* via = append_csv(prior_via, "1.1 aether-proxy");
+            if (via) {
+                http_request_set_header_raw(outbound, "Via", via);
+                free(via);
+            }
+        }
+
+        /* W3C Trace-Context: pass inbound through verbatim if present;
+         * otherwise generate a fresh trace when opts->trace_context_inject. */
+        const char* tp = http_get_header(req, "traceparent");
+        if (tp && *tp) {
+            http_request_set_header_raw(outbound, "traceparent", tp);
+            const char* ts = http_get_header(req, "tracestate");
+            if (ts && *ts) http_request_set_header_raw(outbound, "tracestate", ts);
+        } else if (opts->trace_context_inject) {
+            inject_traceparent_if_absent(req, outbound);
+        }
+
+        /* Forward request body. */
+        if (req->body && req->body_length > 0) {
+            const char* ct = http_get_header(req, "Content-Type");
+            http_request_set_body_raw(outbound, req->body,
+                                      (int)req->body_length,
+                                      ct ? ct : "application/octet-stream");
+        }
+
+        /* ---- Send + classify ---- */
+        long t_start = aether_proxy_now_ms();
+        HttpClientResponse* resp = http_send_raw(outbound);
+        long t_end = aether_proxy_now_ms();
+        http_request_free_raw(outbound);
         free(upstream_url);
-        aether_proxy_inflight_dec(u);
-        http_response_set_status(res, 502);
-        http_response_set_header(res, "X-Aether-Proxy-Error", "request_alloc_failed");
-        http_response_set_header(res, "Content-Type", "text/plain");
-        http_response_set_body(res, "proxy request allocation failed\n");
-        return 0;
-    }
 
-    /* Per-request timeout from the pool config. */
-    if (opts->pool->request_timeout_sec > 0) {
-        http_request_set_timeout_raw(outbound, opts->pool->request_timeout_sec);
-    }
-
-    /* Forward inbound headers minus hop-by-hop. */
-    for (int i = 0; i < req->header_count; i++) {
-        const char* k = req->header_keys[i];
-        const char* v = req->header_values[i];
-        if (!k || is_hop_by_hop(k)) continue;
-        /* Skip Host: — we'll set our own afterwards. */
-        if (strcasecmp(k, "Host") == 0) continue;
-        http_request_set_header_raw(outbound, k, v ? v : "");
-    }
-
-    /* Host: rewrite. */
-    if (opts->preserve_host) {
-        const char* h = http_get_header(req, "Host");
-        if (h && *h) http_request_set_header_raw(outbound, "Host", h);
-    } else {
-        char* authority = extract_authority(u->base_url);
-        if (authority) {
-            http_request_set_header_raw(outbound, "Host", authority);
-            free(authority);
+        if (resp) {
+            atomic_fetch_add(&u->metric_latency_sum_ms, t_end - t_start);
+            atomic_fetch_add(&u->metric_latency_count, 1);
         }
-    }
 
-    /* X-Forwarded-* injection. */
-    if (opts->add_xff) {
-        const char* prior = http_get_header(req, "X-Forwarded-For");
-        const char* client = client_ip_for_xff(req);
-        char* xff = append_csv(prior, client);
-        if (xff) {
-            http_request_set_header_raw(outbound, "X-Forwarded-For", xff);
-            free(xff);
+        if (!resp) {
+            /* Allocation-class failure (rare). Record + bail; never
+             * retried because OOM tends not to clear up in 100ms. */
+            atomic_fetch_add(&u->metric_transport_errors, 1);
+            aether_proxy_breaker_record(opts->pool, u, 0);
+            aether_proxy_inflight_dec(u);
+            http_response_set_status(res, 502);
+            http_response_set_header(res, "X-Aether-Proxy-Error", "send_alloc_failed");
+            http_response_set_header(res, "Content-Type", "text/plain");
+            http_response_set_body(res, "proxy upstream call alloc failed\n");
+            return 0;
         }
-    }
-    if (opts->add_xfp) {
-        /* The server doesn't expose tls_enabled to middleware
-         * directly here; the X-Forwarded-Proto we set is best-
-         * effort based on the Host: header convention used
-         * upstream. Plain http server → "http". */
-        http_request_set_header_raw(outbound, "X-Forwarded-Proto", "http");
-    }
-    if (opts->add_xfh) {
-        const char* h = http_get_header(req, "Host");
-        if (h && *h) http_request_set_header_raw(outbound, "X-Forwarded-Host", h);
-    }
-    /* Via: 1.1 aether-proxy (RFC 7230 §5.7.1). */
-    {
-        const char* prior_via = http_get_header(req, "Via");
-        char* via = append_csv(prior_via, "1.1 aether-proxy");
-        if (via) {
-            http_request_set_header_raw(outbound, "Via", via);
-            free(via);
+
+        const char* err = http_response_error(resp);
+        int status = http_response_status(resp);
+
+        if (err && *err) {
+            int is_timeout = strstr(err, "timeout") != NULL ||
+                             strstr(err, "timed out") != NULL;
+            if (is_timeout) atomic_fetch_add(&u->metric_timeouts, 1);
+            else            atomic_fetch_add(&u->metric_transport_errors, 1);
+
+            /* Retry transport failures on idempotent methods. */
+            int can_retry = (attempt + 1 < max_attempts);
+            if (can_retry) {
+                /* This upstream failed: charge it against the breaker
+                 * (it's a real failure that happened, not just a retry-
+                 * absorbed transient), release inflight, and re-pick
+                 * for the next attempt. */
+                aether_proxy_breaker_record(opts->pool, u, 0);
+                aether_proxy_inflight_dec(u);
+                http_response_free(resp);
+                AetherUpstream* next_u = aether_proxy_lb_pick(opts->pool, req);
+                if (!next_u) {
+                    /* Nothing else eligible — return 503. */
+                    atomic_fetch_add(&opts->pool->metric_503_no_upstream, 1);
+                    http_response_set_status(res, 503);
+                    http_response_set_header(res, "X-Aether-Proxy-Error", "no_upstream_after_retry");
+                    http_response_set_header(res, "Retry-After", "1");
+                    http_response_set_header(res, "Content-Type", "text/plain");
+                    http_response_set_body(res, "no upstream available after retries\n");
+                    return 0;
+                }
+                u = next_u;
+                continue;
+            }
+            /* Final attempt — surface the error. */
+            int is_oversize_resp = strstr(err, "exceeds") != NULL;
+            aether_proxy_breaker_record(opts->pool, u, 0);
+            aether_proxy_inflight_dec(u);
+            http_response_set_status(res, is_timeout ? 504 : 502);
+            http_response_set_header(res, "X-Aether-Proxy-Error",
+                is_timeout ? "upstream_timeout" :
+                is_oversize_resp ? "response_too_large" : "upstream_transport");
+            http_response_set_header(res, "Content-Type", "text/plain");
+            http_response_set_body(res, err);
+            http_response_free(resp);
+            return 0;
         }
+
+        /* Status arrived. Tally by class. */
+        if      (status >= 200 && status < 300) atomic_fetch_add(&u->metric_requests_2xx, 1);
+        else if (status >= 300 && status < 400) atomic_fetch_add(&u->metric_requests_3xx, 1);
+        else if (status >= 400 && status < 500) atomic_fetch_add(&u->metric_requests_4xx, 1);
+        else if (status >= 500)                  atomic_fetch_add(&u->metric_requests_5xx, 1);
+
+        /* Retry on 5xx if there's budget (idempotent guarantee
+         * already enforced by max_attempts). */
+        if (status >= 500 && (attempt + 1) < max_attempts) {
+            /* Charge the failure to this upstream's breaker, release
+             * inflight, and re-pick. */
+            aether_proxy_breaker_record(opts->pool, u, 0);
+            aether_proxy_inflight_dec(u);
+            http_response_free(resp);
+            AetherUpstream* next_u = aether_proxy_lb_pick(opts->pool, req);
+            if (!next_u) {
+                atomic_fetch_add(&opts->pool->metric_503_no_upstream, 1);
+                http_response_set_status(res, 503);
+                http_response_set_header(res, "X-Aether-Proxy-Error", "no_upstream_after_retry");
+                http_response_set_header(res, "Retry-After", "1");
+                http_response_set_header(res, "Content-Type", "text/plain");
+                http_response_set_body(res, "no upstream available after retries\n");
+                return 0;
+            }
+            u = next_u;
+            continue;
+        }
+
+        upstream = resp;
+        upstream_status = status;
+        upstream_err = err;
+        break;
     }
 
-    /* Forward the request body verbatim. */
-    if (req->body && req->body_length > 0) {
-        const char* ct = http_get_header(req, "Content-Type");
-        http_request_set_body_raw(outbound,
-                                  req->body,
-                                  (int)req->body_length,
-                                  ct ? ct : "application/octet-stream");
-    }
+    /* Falling out of the loop with upstream != NULL means we have a
+     * response (possibly 5xx) to copy back. NULL means we exhausted
+     * attempts on transport failures (already returned above). */
 
-    /* ---- Send ---- */
-    HttpClientResponse* upstream = http_send_raw(outbound);
-    http_request_free_raw(outbound);
-    free(upstream_url);
-
-    if (!upstream) {
-        aether_proxy_breaker_record(opts->pool, u, 0);
-        aether_proxy_inflight_dec(u);
-        http_response_set_status(res, 502);
-        http_response_set_header(res, "X-Aether-Proxy-Error", "send_alloc_failed");
-        http_response_set_header(res, "Content-Type", "text/plain");
-        http_response_set_body(res, "proxy upstream call alloc failed\n");
-        return 0;
-    }
-
-    const char* err = http_response_error(upstream);
-    int upstream_status = http_response_status(upstream);
-
-    if (err && *err) {
-        /* Transport-class failure. Distinguish timeout from generic
-         * connect/DNS by inspecting the error string the client
-         * produces (it includes "timeout" / "timed out" tokens). */
-        int is_timeout = strstr(err, "timeout") != NULL ||
-                         strstr(err, "timed out") != NULL;
-        int is_oversize_resp = strstr(err, "exceeds") != NULL;
-        aether_proxy_breaker_record(opts->pool, u, 0);
-        aether_proxy_inflight_dec(u);
-        http_response_set_status(res, is_timeout ? 504 : 502);
-        http_response_set_header(res, "X-Aether-Proxy-Error",
-            is_timeout ? "upstream_timeout" :
-            is_oversize_resp ? "response_too_large" : "upstream_transport");
-        http_response_set_header(res, "Content-Type", "text/plain");
-        http_response_set_body(res, err);
-        http_response_free(upstream);
-        return 0;
-    }
-
-    /* Status reached us. Record breaker outcome (ok = 2xx/3xx/4xx,
-     * !ok = 5xx). 4xx is client error, not upstream fault. */
+    /* Status reached us. Record breaker outcome — ok = 2xx/3xx/4xx,
+     * !ok = 5xx. 4xx is client error, not upstream fault. */
+    (void)upstream_err;
     int classified_ok = (upstream_status >= 200 && upstream_status < 500);
     aether_proxy_breaker_record(opts->pool, u, classified_ok);
     aether_proxy_inflight_dec(u);
@@ -418,15 +625,14 @@ int aether_middleware_reverse_proxy(HttpRequest* req,
         http_response_set_header(res, "X-Cache", "MISS");
     }
 
-    /* Body — length-aware (binary-safe). The client wrapper exposes
-     * the body as a NUL-terminated cstr, so we use strlen as a
-     * reasonable upper bound when an explicit length isn't visible
-     * here. The HttpResponse internally holds AetherString length;
-     * the public accessor doesn't expose it, so this is a v1
-     * limitation: bodies with embedded NULs may be truncated.
-     * Caching skips bodies past max_body_bytes anyway. */
+    /* Body — length-aware (binary-safe). `http_response_body_length`
+     * exposes the AetherString's stored byte count, so payloads with
+     * embedded NULs (gzip, protobuf, images, length-prefixed binary
+     * formats) round-trip verbatim. The body pointer remains a
+     * `const char*` for ABI continuity; the partner length is what
+     * makes the read binary-safe. */
     const char* body = http_response_body(upstream);
-    int body_length = body ? (int)strlen(body) : 0;
+    int body_length = http_response_body_length(upstream);
     if (body_length > opts->max_body_bytes) {
         http_response_set_status(res, 502);
         http_response_set_header(res, "X-Aether-Proxy-Error", "response_too_large");
@@ -510,7 +716,7 @@ const char* aether_proxy_use_simple_proxy(HttpServer* server,
     }
 
     err = aether_proxy_use_reverse_proxy(server, path_prefix, pool, opts);
-    /* The opts owns the pool refcount now via use_reverse_proxy.
+    /* The opts owns the pool refcount now via aether_proxy_use_reverse_proxy.
      * We drop our local one. */
     aether_proxy_pool_free(pool);
     return err;

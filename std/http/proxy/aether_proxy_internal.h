@@ -57,6 +57,13 @@ typedef struct AetherUpstream {
     _Atomic int consecutive_ok;       /* updated by health-check thread */
     _Atomic int consecutive_fail;
 
+    /* Active drain. When set, the LB picker treats this upstream as
+     * ineligible for new requests; in-flight requests finish
+     * naturally. Flipped by aether_proxy_upstream_drain /
+     * _undrain. Distinct from `healthy` (which the health-check
+     * thread owns) — drain is operator-driven. */
+    _Atomic int draining;
+
     /* Inflight counter — least-conn picker reads, middleware bumps
      * around the upstream call (incref before, decref after). */
     _Atomic int inflight;
@@ -67,6 +74,31 @@ typedef struct AetherUpstream {
     _Atomic int    cb_consecutive_failures;
     _Atomic long   cb_opened_at_ms;   /* monotonic clock ms */
     _Atomic int    cb_half_open_inflight;
+
+    /* Per-upstream token-bucket rate limit. Disabled when
+     * `rl_max_rps == 0` (default). Otherwise admits up to
+     * `rl_max_rps` requests/second per upstream with `rl_burst`
+     * burst capacity. The picker calls aether_proxy_rate_limit_admit
+     * which atomically refills the bucket and decrements it.
+     * Refill state is guarded by rl_lock (held only briefly, no
+     * upstream call inside). */
+    pthread_mutex_t rl_lock;
+    int             rl_max_rps;       /* 0 = disabled */
+    int             rl_burst;
+    double          rl_tokens;        /* current token count */
+    long            rl_last_refill_ms;
+
+    /* Per-upstream metrics counters. _Atomic so the metrics
+     * scraper reads them without taking any pool lock. */
+    _Atomic long    metric_requests_2xx;
+    _Atomic long    metric_requests_3xx;
+    _Atomic long    metric_requests_4xx;
+    _Atomic long    metric_requests_5xx;
+    _Atomic long    metric_transport_errors;
+    _Atomic long    metric_timeouts;
+    _Atomic long    metric_retries;
+    _Atomic long    metric_latency_sum_ms;
+    _Atomic long    metric_latency_count;
 } AetherUpstream;
 
 struct AetherProxyPool {
@@ -74,6 +106,17 @@ struct AetherProxyPool {
     int   request_timeout_sec;
     int   dial_timeout_ms;
     int   max_inflight_per_up;        /* 0 = uncapped */
+
+    /* For algo=COOKIE_HASH only: which cookie name carries the
+     * stickiness key. NULL when algo != COOKIE_HASH. */
+    char* cookie_name;
+
+    /* Pool-level cache metric counters (cache itself doesn't know
+     * which pool it serves; the middleware records into these). */
+    _Atomic long  metric_cache_hits;
+    _Atomic long  metric_cache_misses;
+    _Atomic long  metric_cache_revalidations;
+    _Atomic long  metric_503_no_upstream;
 
     /* Upstream array. Fixed-grow; modest N (handful of upstreams) so
      * realloc-on-add is fine. */
@@ -129,6 +172,12 @@ typedef struct AetherProxyCacheEntry {
     long   expires_at_ms;
     char*  etag;                      /* ETag value (without quotes) for IMS revalidation */
     char*  last_modified;             /* Last-Modified header value */
+
+    /* Recorded Vary header from the upstream response. NULL when
+     * the upstream emitted no Vary (or when the cache key strategy
+     * isn't METHOD_URL_VARY). Used at lookup time to recompute the
+     * request's vary-key suffix before comparing against key_repr. */
+    char*  vary_header;
 } AetherProxyCacheEntry;
 
 struct AetherProxyCache {
@@ -147,7 +196,7 @@ struct AetherProxyCache {
 /* ----- Per-mount options ----- */
 
 struct AetherProxyOpts {
-    char* path_prefix;                /* set by use_reverse_proxy */
+    char* path_prefix;                /* set by proxy.mount */
     char* strip_path_prefix;
     int   preserve_host;
     int   add_xff;
@@ -156,6 +205,23 @@ struct AetherProxyOpts {
     int   max_body_bytes;
     AetherProxyPool*  pool;           /* refcount-incremented on bind */
     AetherProxyCache* cache;          /* may be NULL */
+
+    /* Idempotent retry policy. When max_retries > 0 the middleware
+     * retries failed upstream calls (5xx + transport errors) for
+     * idempotent methods (GET, HEAD, PUT, DELETE, OPTIONS) using
+     * exponential backoff starting at backoff_base_ms with full
+     * jitter (uniform random in [0, current_backoff]). Non-idempotent
+     * methods (POST, PATCH) are NEVER retried — at-most-once
+     * delivery is preserved. Zero disables retry. */
+    int   retry_max_retries;
+    int   retry_backoff_base_ms;
+
+    /* Per-mount Trace-Context propagation.
+     * 0 = pass through whatever the client sent (default — preserves
+     *     end-to-end tracing when the client is trace-aware).
+     * 1 = if no inbound traceparent, generate a new trace-id and
+     *     stamp `traceparent: 00-<trace_id>-<span_id>-01` outbound. */
+    int   trace_context_inject;
 };
 
 /* ----- Cross-file helpers ----- */

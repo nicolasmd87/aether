@@ -64,6 +64,11 @@ void http_response_free(HttpResponse* response);
 // valid until http_response_free() is called.
 int http_response_status(HttpResponse* response);
 const char* http_response_body(HttpResponse* response);
+/* Byte length of the response body — binary-safe accessor that
+ * partners with `http_response_body` for callers that may receive
+ * payloads with embedded NULs (gzip, protobuf, image formats).
+ * Returns 0 when response or body is NULL. */
+int  http_response_body_length(HttpResponse* response);
 const char* http_response_headers(HttpResponse* response);
 const char* http_response_error(HttpResponse* response);
 
