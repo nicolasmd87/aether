@@ -913,6 +913,16 @@ Raw externs: `http_server_bind_raw`, `http_server_start_raw`.
 - `http.server_delete(server, path, handler, user_data)` - Register DELETE route
 - `http.server_use_middleware(server, middleware, user_data)` - Add middleware
 
+**Server Configuration:**
+- `http.server_set_tls(server, cert_path, key_path)` → `string` - Enable HTTPS with PEM cert + key.
+- `http.server_set_keepalive(server, enable, max_requests, idle_timeout_ms)` → `string` - HTTP/1.1 keep-alive (`max_requests=0` is unlimited per connection).
+- `http.server_set_h2(server, max_concurrent_streams)` → `string` - Enable HTTP/2 (h2 + h2c + ALPN). `max_concurrent_streams=0` uses libnghttp2's default (100). Returns error string when the build is missing libnghttp2.
+- `http.server_set_h2_concurrent_dispatch(server, worker_count)` → `string` - Server-level pthread pool for h2 stream handlers. `worker_count > 0` lets streams across all h2 connections execute their handlers in parallel; `worker_count == 0` (default) keeps dispatch sequential on each connection thread. POSIX-only; on Windows the call is a silent no-op. See `docs/http-server.md` for the architecture rationale (pthreads vs actors, server-level vs per-connection).
+- `http.server_shutdown_graceful(server, timeout_ms)` → `string` - Stop accepting new connections, drain in-flight requests, exit. h2 sessions emit a `GOAWAY` frame so peers know not to start new streams while existing ones complete.
+- `http.server_set_health_probes(server, live_path, ready_path, ready_check, ud)` → `string` - Built-in `/healthz` (always 200) + `/readyz` (200 only when the readiness check returns 1).
+- `http.server_set_access_log(server, format, output_path)` → `string` - Built-in access logger. `format` is `"combined"` or `"json"`; `output_path` is a file path, `"-"` for stderr, or `""` to disable.
+- `http.server_set_metrics(server, endpoint)` → `string` - Prometheus-compatible counters/histograms at the configured endpoint (default `"/metrics"`).
+
 **Request Accessors:**
 - `http.request_method(req)` → `string` - HTTP method (`GET`, `POST`, `PUT`, …); empty if `req` is null.
 - `http.request_path(req)` → `string` - URL path (no query string); empty if `req` is null.
@@ -932,6 +942,52 @@ Raw externs: `http_server_bind_raw`, `http_server_start_raw`.
 - `http.response_set_body_n(res, body, length)` - Length-aware sibling of `response_set_body`. Treats `body` as `length` bytes verbatim, no NUL searching. Reach for this when the body is binary content (gzip / image / packed binary) or may contain NUL bytes mid-payload. `length == 0` clears the body; negative length is a no-op.
 - `http.response_json(res, json)` - Set JSON response
 - `http.server_response_free(res)` - Free response
+
+### HTTP Middleware (`std.http.middleware`)
+
+Composable pre-handler middleware + response transformers. Each
+middleware is a C function pointer registered on the server's
+function-pointer chain — no Aether-side dispatch overhead in the
+hot path. Aether-side factory wrappers allocate the per-middleware
+config struct and register it.
+
+```aether
+import std.http
+import std.http.middleware
+
+main() {
+    server = http.server_create(8080)
+
+    // Order matters: real_ip first so downstream sees the client IP
+    middleware.use_real_ip(server, "")                // default X-Forwarded-For
+
+    middleware.use_cors(server, "*", "GET, POST", "Content-Type", 0, 600)
+
+    middleware.use_rate_limit(server, 100, 60000)     // 100 req / 60s per IP
+
+    middleware.use_bearer_auth(server, "api", verify_token, null)
+
+    middleware.use_gzip(server, 256, 6)               // response transformer
+
+    http.server_get(server, "/", handle_root, 0)
+    http.server_start(server)
+}
+```
+
+**Pre-handler middleware (run before route dispatch; can short-circuit):**
+- `middleware.use_cors(server, allow_origin, allow_methods, allow_headers, allow_credentials, max_age_seconds)` → `string` - CORS headers + preflight OPTIONS short-circuit.
+- `middleware.use_basic_auth(server, realm, verify_cb, ud)` → `string` - HTTP Basic auth (RFC 7617). Verifier receives decoded `(username, password)`.
+- `middleware.use_bearer_auth(server, realm, verify_cb, ud)` → `string` - Bearer token auth (RFC 6750). Verifier receives the raw token; on failure emits `WWW-Authenticate: Bearer realm="…"` with `error="invalid_token"` for malformed credentials.
+- `middleware.use_session_auth(server, cookie_name, redirect_url, verify_cb, ud)` → `string` - Session-cookie auth. Reads a named cookie, hands the value to the verifier; on failure either 401s (when `redirect_url` is empty) or 302s to the configured login URL.
+- `middleware.use_rate_limit(server, max_requests, window_ms)` → `string` - Token-bucket per-client-IP rate limit. Client IP comes from `X-Forwarded-For` → `X-Real-IP` → `"anonymous"` resolution chain.
+- `middleware.use_vhost(server, hosts_csv)` → `string` - Host-header gate. Comma-separated allowed hosts; unknown hosts get 404.
+- `middleware.use_real_ip(server, header_name)` → `string` - Proxy-aware client IP detection. Reads the configured header (default `X-Forwarded-For`), takes the leftmost non-empty IP, adds `X-Real-IP` to the request. Idempotent. **Trust model: only safe behind a proxy that strips client-supplied X-Forwarded-For.**
+- `middleware.use_static_files(server, url_prefix, root)` → `string` - Mount a directory under a URL prefix; `..` traversal blocked.
+- `middleware.use_rewrite(server, opts)` → `string` - Prefix-rewrite rules; build via `middleware.rewrite_add_rule(opts, from, to)`.
+
+**Response transformers (run after the route handler emits the response):**
+- `middleware.use_gzip(server, min_size, level)` → `string` - Gzip the response body when the client sends `Accept-Encoding: gzip` and the body is at least `min_size` bytes; level 1 (fastest) – 9 (best), 0 = default 6.
+- `middleware.use_error_pages(server, opts)` → `string` - Replace error-status response bodies with operator-supplied content; build via `middleware.error_pages_register(opts, status_code, body, content_type)`.
 
 ### HTTP Client Builder (`std.http.client`)
 

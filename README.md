@@ -19,6 +19,7 @@ Aether is a compiled language that brings actor-based concurrency to systems pro
 - Three-layer capability model for sandboxing untrusted code and hosting other languages in-process — `--emit=lib` gates stdlib at compile time, `hide`/`seal except` gates scopes, LD_PRELOAD gates libc
 - Go-style result types: `a, err = func()` with `_` discard
 - Package management: `ae add host/user/repo[@version]` (GitHub, GitLab, Bitbucket, any git host)
+- Production-grade HTTP server in stdlib — TLS, HTTP/1.1 keep-alive, **HTTP/2** (h2 + h2c via libnghttp2 with ALPN, GOAWAY graceful shutdown, server-level pthread pool for concurrent stream dispatch), WebSocket (RFC 6455), Server-Sent Events, plus a stack of composable middleware (CORS, basic/bearer/session-cookie auth, rate limiting, real-IP, vhost, gzip, static files, rewrite, error pages), `/healthz` + `/readyz` health probes, structured access logs, and Prometheus metrics. See [HTTP Server](docs/http-server.md).
 
 ## Runtime Features
 
@@ -246,9 +247,11 @@ aether/
 │   ├── map/            # Hash map
 │   ├── intarr/         # Fixed-size packed int buffer
 │   ├── json/           # JSON parser and builder
-│   ├── http/           # v1 HTTP client + server
-│   │   ├── client/     # v2 client (request builder, full response, JSON sugar)
-│   │   └── server/vcr/ # Servirtium-format record/replay for HTTP tests
+│   ├── http/           # HTTP client + server (TLS, keep-alive, h2, WS, SSE, metrics)
+│   │   ├── client/         # Builder client (request builder, full response, JSON sugar)
+│   │   ├── middleware/     # CORS, basic/bearer/session auth, rate-limit, real-IP, vhost, gzip, static, rewrite, error pages
+│   │   ├── server/h2/      # HTTP/2 framing via libnghttp2 (h2 + h2c + ALPN + GOAWAY + concurrent dispatch)
+│   │   └── server/vcr/     # Servirtium-format record/replay for HTTP tests
 │   ├── tcp/            # TCP client and server
 │   ├── net/            # Combined TCP/HTTP networking module
 │   ├── cryptography/   # SHA-1, SHA-256
@@ -413,6 +416,9 @@ The runtime employs a tiered optimization strategy:
 - [Getting Started Guide](docs/getting-started.md) - Installation and first steps
 - [Language Tutorial](docs/tutorial.md) - Learn Aether syntax and concepts
 - [Language Reference](docs/language-reference.md) - Complete language specification
+- [Standard Library Reference](docs/stdlib-reference.md) - Full stdlib surface
+- [HTTP Server](docs/http-server.md) - TLS, HTTP/2, middleware, health probes, metrics, graceful shutdown
+- [Install Layout](docs/install-layout.md) - What ships in `~/.aether`, MANIFEST format, downstream-link contract
 - [C Interoperability](docs/c-interop.md) - Using C libraries and the `extern` keyword
 - [Architecture Overview](docs/architecture.md) - Runtime and compiler design
 - [Memory Management](docs/memory-management.md) - defer-first manual model, arena allocators

@@ -647,6 +647,36 @@ main() {
 
 Raw externs: `http_server_bind_raw`, `http_server_start_raw`.
 
+### Server Configuration
+
+- `http.server_set_tls(server, cert_path, key_path)` → `string` - HTTPS with PEM cert + key
+- `http.server_set_keepalive(server, enable, max_requests, idle_timeout_ms)` → `string` - HTTP/1.1 keep-alive
+- `http.server_set_h2(server, max_concurrent_streams)` → `string` - HTTP/2 (h2 + h2c + ALPN). `0` uses libnghttp2's default (100). Returns error string when libnghttp2 isn't linked.
+- `http.server_set_h2_concurrent_dispatch(server, worker_count)` → `string` - Server-level pthread pool for h2 stream handlers. `worker_count > 0` lets streams across all h2 connections execute their handlers in parallel; `0` (default) keeps dispatch sequential. POSIX-only; on Windows the call is a silent no-op.
+- `http.server_shutdown_graceful(server, timeout_ms)` → `string` - Stop accepting, drain in-flight, exit. h2 sessions emit GOAWAY so peers don't start new streams.
+- `http.server_set_health_probes(server, live_path, ready_path, ready_check, ud)` → `string` - Built-in `/healthz` (always 200) + `/readyz` (200 only when readiness check returns 1)
+- `http.server_set_access_log(server, format, output_path)` → `string` - `"combined"` or `"json"` to a file path / `"-"` (stderr) / `""` (disable)
+- `http.server_set_metrics(server, endpoint)` → `string` - Prometheus-compatible counters/histograms (default `/metrics`)
+
+### HTTP Middleware (`std.http.middleware`)
+
+Pre-handler middleware (run before route dispatch; can short-circuit with a populated response):
+
+- `middleware.use_cors(server, allow_origin, allow_methods, allow_headers, allow_credentials, max_age_seconds)` → `string`
+- `middleware.use_basic_auth(server, realm, verify_cb, ud)` → `string` - HTTP Basic (RFC 7617). Verifier receives decoded `(username, password)`.
+- `middleware.use_bearer_auth(server, realm, verify_cb, ud)` → `string` - Bearer token (RFC 6750). Verifier receives raw token; bad credentials get `WWW-Authenticate: Bearer ... error="invalid_token"`.
+- `middleware.use_session_auth(server, cookie_name, redirect_url, verify_cb, ud)` → `string` - Reads a named cookie; on failure 401 (when `redirect_url` is empty) or 302.
+- `middleware.use_rate_limit(server, max_requests, window_ms)` → `string` - Token bucket per client IP.
+- `middleware.use_vhost(server, hosts_csv)` → `string` - Host-header gate; unknown hosts get 404.
+- `middleware.use_real_ip(server, header_name)` → `string` - Reads `X-Forwarded-For` (or configured header), takes leftmost IP, adds `X-Real-IP`. **Only safe behind a trusted proxy that strips client-supplied XFF.**
+- `middleware.use_static_files(server, url_prefix, root)` → `string` - Mount a directory; `..` traversal blocked.
+- `middleware.use_rewrite(server, opts)` → `string` - Prefix rewrite rules; build via `middleware.rewrite_add_rule(opts, from, to)`.
+
+Response transformers (run after the route handler emits the response):
+
+- `middleware.use_gzip(server, min_size, level)` → `string` - Gzip body when client sends `Accept-Encoding: gzip` and body is at least `min_size` bytes.
+- `middleware.use_error_pages(server, opts)` → `string` - Custom error-status bodies; build via `middleware.error_pages_register(opts, status, body, content_type)`.
+
 ### HTTP Client Builder (`std.http.client`)
 
 Builder-shaped requests with full response access. The `http.get` / `http.post` / `http.put` / `http.delete` one-liners above are good for "no auth, JSON in, 200 means good" calls; reach for `std.http.client` when you need custom request headers, response-header capture, status discrimination, per-request timeouts, or methods other than the four common verbs (PROPFIND, PATCH, custom RPC verbs all work). Method is an arbitrary string. Non-2xx is not an error — the caller checks `response_status`.

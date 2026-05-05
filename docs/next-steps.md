@@ -260,31 +260,32 @@ adversarial kernel-level bypasses.
 ## ~~HTTP server — Apache-class umbrella~~ — **SHIPPED**
 
 > **Status: shipped (issue #260 closed).** Tier 0 (TLS, keep-alive,
-> per-connection actor dispatch), Tier 1 (8 middleware: cors,
-> basic_auth, rate_limit, vhost, gzip, static_files, rewrite,
-> error_pages), Tier 2 protocols (SSE, WebSocket per RFC 6455, and
-> **HTTP/2 via libnghttp2** — h2 over TLS via ALPN, h2c upgrade
-> per RFC 7540 §3.2, and h2 prior-knowledge over plain TCP), and
-> Tier 3 operational (graceful shutdown, lifecycle hooks, health
-> probes, structured access logs, Prometheus metrics) all
-> delivered. See [http-server.md](http-server.md) for the full
-> surface, the middleware compatibility table, and the troubleshooting
-> section.
+> per-connection actor dispatch), Tier 1 middleware (cors,
+> basic_auth, **bearer_auth**, **session_auth**, rate_limit,
+> vhost, gzip, static_files, rewrite, error_pages, **real_ip**),
+> Tier 2 protocols (SSE, WebSocket per RFC 6455, and **HTTP/2 via
+> libnghttp2** — h2 over TLS via ALPN, h2c upgrade per RFC 7540
+> §3.2, h2 prior-knowledge over plain TCP, **GOAWAY** on graceful
+> shutdown, **per-stream concurrent dispatch via a server-level
+> pthread pool**), and Tier 3 operational (graceful shutdown,
+> lifecycle hooks, health probes, structured access logs,
+> Prometheus metrics) all delivered. See
+> [http-server.md](http-server.md) for the full surface, the
+> middleware compatibility table, the architecture rationale
+> (pthreads vs actors, server-level vs per-connection), and the
+> troubleshooting section.
 
 Follow-up optimisations tracked separately (each its own future
 issue when scheduled):
 
-- **Per-stream actor concurrency for HTTP/2.** Streams within one
-  h2 connection currently dispatch sequentially. Multiplexed-fan-out
-  workloads still benefit from HPACK header compression + single-
-  connection framing; per-stream actor children for concurrent
-  dispatch is a perf optimisation not a correctness gap.
 - **HTTP/2 server push (PUSH_PROMISE).** Optional per RFC 7540 §6.6,
   rarely used in practice. Add when there's a concrete consumer.
-- **HPACK Huffman emit.** Decode is mandatory and shipped via
-  libnghttp2; encode is optional per RFC 7541. Server currently
-  emits plain (un-Huffman'd) header bytes — clients accept this
-  fine; small wire-size win to add later.
+- **HPACK Huffman emit on Windows.** libnghttp2 already applies
+  Huffman to response headers by default on POSIX (the wrapper
+  uses `NGHTTP2_NV_FLAG_NONE`, leaving the choice to nghttp2 per
+  RFC 7541 §5.2). Confirm the same path on the Windows-MinGW
+  build; revisit if the wire-size profile differs.
+- **HTTP/3 / QUIC.** Out of scope for #260; would be its own issue.
 
 ## VCR recorder — transparent MITM forwarder
 
