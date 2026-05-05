@@ -79,8 +79,44 @@ int aether_h2_session_drain(AetherH2Session* sess,
 
 /* True when both peers have sent their final frames and no streams
  * remain open. Caller polls after each feed/drain to decide when to
- * close the connection. */
+ * close the connection.
+ *
+ * When concurrent dispatch is enabled, want_close also returns
+ * false while tasks are queued or in flight on workers — closing
+ * early would discard responses about to land. */
 int aether_h2_session_want_close(AetherH2Session* sess);
+
+/* Concurrent dispatch (#260 follow-up).
+ *
+ * When http_server_set_h2_concurrent_dispatch_raw set the worker
+ * count > 0, each session spawns a small pthread pool. Stream
+ * handlers run on those workers in parallel; the connection thread
+ * keeps reading frames + serialising responses. nghttp2_session is
+ * NOT thread-safe — only the connection thread calls into it; the
+ * pool wakes the connection thread via a self-pipe whose read end
+ * `aether_h2_session_wake_fd` exposes for the caller to poll
+ * alongside its socket fd.
+ *
+ * After poll() reports the wake fd is readable (or
+ * unconditionally between iterations), call
+ * `aether_h2_session_drain_ready` so completed tasks get their
+ * responses submitted to nghttp2. Returns the number of responses
+ * submitted (0 when no tasks are ready, or when the session has
+ * no pool). */
+int aether_h2_session_wake_fd(AetherH2Session* sess);
+int aether_h2_session_drain_ready(AetherH2Session* sess);
+
+/* Initiate graceful session termination — submits a GOAWAY frame
+ * (RFC 7540 §6.8) so the peer knows we won't accept new streams,
+ * but lets in-flight streams complete naturally. The next
+ * aether_h2_session_drain() call serialises the GOAWAY onto the
+ * wire; once all open streams finish, want_close flips to true and
+ * the connection driver exits cleanly.
+ *
+ * Idempotent — calling more than once is a no-op. Used by
+ * http_server_shutdown_graceful_raw to drain h2 connections when
+ * the process is winding down for a rolling deploy. */
+void aether_h2_session_initiate_goaway(AetherH2Session* sess);
 
 /* h2c (cleartext) upgrade entry point.
  *

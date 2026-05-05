@@ -65,6 +65,66 @@ void aether_basic_auth_opts_free(AetherBasicAuthOpts* opts);
 int aether_middleware_basic_auth(HttpRequest* req, HttpServerResponse* res, void* user_data);
 
 // -----------------------------------------------------------------
+// Bearer Token Authentication (RFC 6750)
+// -----------------------------------------------------------------
+//
+// Reads `Authorization: Bearer <token>` and hands the raw token
+// string to a verifier callback. Used for OAuth 2.0 access tokens,
+// JWTs, opaque API keys, or any other bearer-credential scheme —
+// the middleware does not interpret the token; the verifier owns
+// validation (signature check / DB lookup / introspection / etc).
+//
+// On failure the response is 401 with a `WWW-Authenticate: Bearer
+// realm="<realm>"[, error="invalid_token"]` header per RFC 6750
+// §3.1, so a conforming client can distinguish "no credential" from
+// "bad credential."
+typedef struct AetherBearerAuthOpts AetherBearerAuthOpts;
+
+// Verifier signature: receives the token (the substring after
+// `Bearer `) and returns 1 if valid, 0 otherwise.
+typedef int (*AetherBearerAuthVerifier)(const char* token,
+                                        void* verifier_user_data);
+
+AetherBearerAuthOpts* aether_bearer_auth_opts_new(const char* realm,
+                                                  AetherBearerAuthVerifier verify,
+                                                  void* verifier_user_data);
+void aether_bearer_auth_opts_free(AetherBearerAuthOpts* opts);
+
+int aether_middleware_bearer_auth(HttpRequest* req, HttpServerResponse* res, void* user_data);
+
+// -----------------------------------------------------------------
+// Session-Cookie Authentication
+// -----------------------------------------------------------------
+//
+// Reads a named cookie from the `Cookie:` header and hands the
+// cookie value to a verifier callback that resolves it to a
+// session (DB lookup / signed-token verify / Redis hit / etc).
+//
+// On failure the response is 401 with a configurable redirect
+// (typical login-page redirect: pass a non-empty `redirect_url`
+// to emit a 302 to it instead of the 401, so browsers send the
+// user to the login page).
+typedef struct AetherSessionAuthOpts AetherSessionAuthOpts;
+
+// Verifier signature: receives the cookie value and returns 1 if
+// valid, 0 otherwise.
+typedef int (*AetherSessionAuthVerifier)(const char* cookie_value,
+                                         void* verifier_user_data);
+
+// `cookie_name`  — name of the session cookie (e.g. "SESSIONID").
+// `redirect_url` — when non-NULL/non-empty, unauthenticated
+//                  requests get a 302 to this URL instead of 401.
+//                  Useful for browser-facing apps that prefer a
+//                  login-page redirect over a JSON 401.
+AetherSessionAuthOpts* aether_session_auth_opts_new(const char* cookie_name,
+                                                    const char* redirect_url,
+                                                    AetherSessionAuthVerifier verify,
+                                                    void* verifier_user_data);
+void aether_session_auth_opts_free(AetherSessionAuthOpts* opts);
+
+int aether_middleware_session_auth(HttpRequest* req, HttpServerResponse* res, void* user_data);
+
+// -----------------------------------------------------------------
 // Token-bucket rate limiter (per-client-IP)
 // -----------------------------------------------------------------
 typedef struct AetherRateLimitOpts AetherRateLimitOpts;
@@ -172,5 +232,36 @@ int aether_error_pages_register(AetherErrorPagesOpts* opts,
 
 // Registered as a RESPONSE TRANSFORMER.
 void aether_xform_error_pages(HttpRequest* req, HttpServerResponse* res, void* user_data);
+
+// -----------------------------------------------------------------
+// Real-IP / X-Forwarded-For (proxy-aware client IP detection)
+// -----------------------------------------------------------------
+//
+// When the Aether server sits behind a load balancer / reverse
+// proxy / CDN, the connection-level peer IP is the proxy, not the
+// original client. The proxy chain conventionally records the
+// real client in an `X-Forwarded-For: client, proxy1, proxy2`
+// header (left-to-right oldest → newest).
+//
+// This middleware reads the configured header (default
+// X-Forwarded-For), takes the leftmost non-empty IP as the
+// original client, and adds an `X-Real-IP: <ip>` header to the
+// request so downstream handlers, rate-limit middleware, access
+// logs, and metrics see the original client identity.
+//
+// Trust model: the middleware does NOT validate that the request
+// came through a trusted proxy. Operators are responsible for
+// only running this middleware behind a trusted edge — typical
+// setups are firewall-restricted ports plus an LB rule, or a CDN
+// that strips client-supplied X-Forwarded-For. Without that
+// upstream guarantee, callers can spoof their apparent client IP.
+typedef struct AetherRealIpOpts AetherRealIpOpts;
+
+// `header_name` is the header to read from (canonical default:
+// "X-Forwarded-For"). NULL or empty falls back to the default.
+AetherRealIpOpts* aether_real_ip_opts_new(const char* header_name);
+void aether_real_ip_opts_free(AetherRealIpOpts* opts);
+
+int aether_middleware_real_ip(HttpRequest* req, HttpServerResponse* res, void* user_data);
 
 #endif

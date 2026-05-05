@@ -445,7 +445,7 @@ test-ae: compiler ae stdlib
 	printf 'fi\n'                                                                                   >> "$$script"; \
 	chmod +x "$$script"; \
 	root=$$(pwd); \
-	find tests/syntax tests/compiler tests/integration tests/regression -path '*/lib/*' -prune -o -path '*/custom_lib_dir/*' -prune -o -path 'tests/integration/namespace_*' -prune -o -path 'tests/integration/closure_actor_state_reject/*' -prune -o -path 'tests/integration/reserved_keyword_error/*' -prune -o -path 'tests/integration/ae_run_cflags/*' -prune -o -path 'tests/integration/bin_path_match/*' -prune -o -path 'tests/integration/bin_name_lookup_and_walkup/*' -prune -o -path 'tests/integration/string_plus_reject/*' -prune -o -path 'tests/integration/aether_string_to_c_extern/*' -prune -o -path 'tests/integration/module_extern_auto_unwrap/*' -prune -o -path 'tests/integration/http_external_ptr/*' -prune -o -path 'tests/integration/fs_read_binary_nul/*' -prune -o -path 'tests/integration/fs_write_binary_nul/*' -prune -o -path 'tests/integration/cryptography_sha/*' -prune -o -path 'tests/integration/cryptography_v2/*' -prune -o -path 'tests/integration/extern_annotation/*' -prune -o -path 'tests/integration/c_callback/*' -prune -o -path 'tests/integration/extern_tuple_return/*' -prune -o -path 'tests/integration/sqlite_roundtrip/*' -prune -o -path 'tests/integration/sqlite_prepared/*' -prune -o -path 'tests/integration/zlib_roundtrip/*' -prune -o -path 'tests/integration/aether_string_ffi_unwrap/*' -prune -o -path 'tests/integration/ptr_return_int_zero_inference/*' -prune -o -path 'tests/integration/string_interp_loop_alias/*' -prune -o -path 'tests/integration/transitive_module_import/*' -prune -o -path 'tests/integration/http_client_redirects/*' -prune -o -path 'tests/integration/source_location/*' -prune -o -path 'tests/integration/std_dl/*' -prune -o -path 'tests/integration/host_tinygo/*' -prune -o -path 'tests/integration/sealed_namespaces/*' -prune -o -path 'tests/integration/default_arguments/*' -prune -o -path 'tests/integration/source_location_default_capture/*' -prune -o -path 'tests/integration/fn_typed_local_call/*' -prune -o -path 'tests/integration/http_server_tls/*' -prune -o -path 'tests/integration/http_server_keepalive/*' -prune -o -path 'tests/integration/http_server_actor_dispatch/*' -prune -o -path 'tests/integration/http_middleware_d1/*' -prune -o -path 'tests/integration/http_middleware_d2/*' -prune -o -path 'tests/integration/http_server_ops/*' -prune -o -path 'tests/integration/http_server_observability/*' -prune -o -path 'tests/integration/http_server_sse/*' -prune -o -path 'tests/integration/http_server_websocket/*' -prune -o -path 'tests/integration/http_server_h2_tls/*' -prune -o -path 'tests/integration/http_server_h2_middleware/*' -prune -o -path 'tests/integration/panic_stack_trace/*' -prune -o -path 'tests/integration/cas_roundtrip/*' -prune -o -path 'tests/integration/caller_info/*' -prune -o -path 'tests/integration/svn_checkout_via_vcr/*' -prune -o -path 'tests/integration/svn_vcr_strict_match/*' -prune -o -path 'tests/integration/std_ipc_roundtrip/*' -prune -o -path 'tests/integration/std_ipc_bash_chain/*' -prune -o -path 'tests/integration/aeocha_aeb_ipc_reporting/*' -prune -o -name '*.ae' -print 2>/dev/null | sort | \
+	find tests/syntax tests/compiler tests/integration tests/regression -path '*/lib/*' -prune -o -path '*/custom_lib_dir/*' -prune -o -path 'tests/integration/namespace_*' -prune -o -path 'tests/integration/closure_actor_state_reject/*' -prune -o -path 'tests/integration/reserved_keyword_error/*' -prune -o -path 'tests/integration/ae_run_cflags/*' -prune -o -path 'tests/integration/bin_path_match/*' -prune -o -path 'tests/integration/bin_name_lookup_and_walkup/*' -prune -o -path 'tests/integration/string_plus_reject/*' -prune -o -path 'tests/integration/aether_string_to_c_extern/*' -prune -o -path 'tests/integration/module_extern_auto_unwrap/*' -prune -o -path 'tests/integration/http_external_ptr/*' -prune -o -path 'tests/integration/fs_read_binary_nul/*' -prune -o -path 'tests/integration/fs_write_binary_nul/*' -prune -o -path 'tests/integration/cryptography_sha/*' -prune -o -path 'tests/integration/cryptography_v2/*' -prune -o -path 'tests/integration/extern_annotation/*' -prune -o -path 'tests/integration/c_callback/*' -prune -o -path 'tests/integration/extern_tuple_return/*' -prune -o -path 'tests/integration/sqlite_roundtrip/*' -prune -o -path 'tests/integration/sqlite_prepared/*' -prune -o -path 'tests/integration/zlib_roundtrip/*' -prune -o -path 'tests/integration/aether_string_ffi_unwrap/*' -prune -o -path 'tests/integration/ptr_return_int_zero_inference/*' -prune -o -path 'tests/integration/string_interp_loop_alias/*' -prune -o -path 'tests/integration/transitive_module_import/*' -prune -o -path 'tests/integration/http_client_redirects/*' -prune -o -path 'tests/integration/source_location/*' -prune -o -path 'tests/integration/std_dl/*' -prune -o -path 'tests/integration/host_tinygo/*' -prune -o -path 'tests/integration/sealed_namespaces/*' -prune -o -path 'tests/integration/default_arguments/*' -prune -o -path 'tests/integration/source_location_default_capture/*' -prune -o -path 'tests/integration/fn_typed_local_call/*' -prune -o -path 'tests/integration/http_server_tls/*' -prune -o -path 'tests/integration/http_server_keepalive/*' -prune -o -path 'tests/integration/http_server_actor_dispatch/*' -prune -o -path 'tests/integration/http_middleware_d1/*' -prune -o -path 'tests/integration/http_middleware_d2/*' -prune -o -path 'tests/integration/http_server_ops/*' -prune -o -path 'tests/integration/http_server_observability/*' -prune -o -path 'tests/integration/http_server_sse/*' -prune -o -path 'tests/integration/http_server_websocket/*' -prune -o -path 'tests/integration/http_server_h2_tls/*' -prune -o -path 'tests/integration/http_server_h2_middleware/*' -prune -o -path 'tests/integration/http_real_ip/*' -prune -o -path 'tests/integration/http_auth/*' -prune -o -path 'tests/integration/http_h2_concurrent_dispatch/*' -prune -o -path 'tests/integration/panic_stack_trace/*' -prune -o -path 'tests/integration/cas_roundtrip/*' -prune -o -path 'tests/integration/caller_info/*' -prune -o -path 'tests/integration/svn_checkout_via_vcr/*' -prune -o -path 'tests/integration/svn_vcr_strict_match/*' -prune -o -path 'tests/integration/std_ipc_roundtrip/*' -prune -o -path 'tests/integration/std_ipc_bash_chain/*' -prune -o -path 'tests/integration/aeocha_aeb_ipc_reporting/*' -prune -o -name '*.ae' -print 2>/dev/null | sort | \
 	xargs -P $(NPROC) -I{} "$$script" "{}" "$$tmpdir" "$$root"; \
 	for sh_test in $$(find tests/integration -name 'test_*.sh' 2>/dev/null | sort); do \
 		name=$$(echo "$$sh_test" | sed 's|tests/||;s|/|_|g;s|\.sh$$||'); \
@@ -881,10 +881,46 @@ docs-serve: docs docs-server
 	./build/docs-server$(EXE_EXT)
 
 # Precompiled stdlib archive — runtime + std for user programs.
-stdlib: $(STD_OBJS) $(STD_REACTOR_OBJS) $(COLLECTIONS_OBJS) $(RUNTIME_OBJS) build/libaether_compiler.a
+stdlib: $(STD_OBJS) $(STD_REACTOR_OBJS) $(COLLECTIONS_OBJS) $(RUNTIME_OBJS) build/libaether_compiler.a build/MANIFEST
 	@echo "Creating precompiled stdlib archive..."
 	@ar rcs build/libaether.a $(STD_OBJS) $(STD_REACTOR_OBJS) $(COLLECTIONS_OBJS) $(RUNTIME_OBJS)
 	@echo "✓ Stdlib archive created: build/libaether.a"
+
+# Authoritative MANIFEST — list of link-suitable runtime + stdlib
+# .c files for downstream consumers (aetherBuild and similar tools)
+# that compile against the share/aether/ source tree. Generated
+# from RUNTIME_SRC + STD_SRC so it stays in sync with what we
+# actually link into libaether.a. Issue #329.
+#
+# Format: one path per non-comment, non-empty line. Paths are
+# relative to share/aether/ in the install layout (and to the repo
+# root in the source tree). Lines starting with `#` are comments.
+build/MANIFEST: Makefile | $(BUILD_DIR)
+	@echo "Generating MANIFEST..."
+	@( \
+	  echo "# Aether MANIFEST — link-suitable C source files for"; \
+	  echo "# downstream consumers compiling against the runtime/std"; \
+	  echo "# source tree (e.g. aetherBuild's aeb-link). Generated by"; \
+	  echo "# the Makefile; do not edit by hand. Regenerated on every"; \
+	  echo "# \`make stdlib\`."; \
+	  echo "#"; \
+	  echo "# Format: one path per non-comment, non-empty line. Paths"; \
+	  echo "# are relative to this install root (share/aether/ on a"; \
+	  echo "# system install; the repo root in the source tree)."; \
+	  echo "# Lines starting with '#' are comments."; \
+	  echo "#"; \
+	  echo "# This file is the authoritative answer to 'which .c files"; \
+	  echo "# do I compile to link against the Aether runtime?' — naive"; \
+	  echo "# \`find runtime -name '*.c'\` walks pull in benchmarks /"; \
+	  echo "# orphan poller hubs / etc. that aren't link-suitable."; \
+	  echo ""; \
+	  echo "# Runtime sources:"; \
+	  for f in $(RUNTIME_SRC); do echo "$$f"; done; \
+	  echo ""; \
+	  echo "# Standard library sources:"; \
+	  for f in $(STD_SRC); do echo "$$f"; done; \
+	) > build/MANIFEST
+	@echo "✓ MANIFEST: $$(grep -c -v -E '^(#|$$)' build/MANIFEST) link-suitable files"
 ifeq ($(shell uname -s),Linux)
 	@echo "Building sandbox preload library..."
 	@$(CC) -shared -fPIC -o build/libaether_sandbox.so runtime/libaether_sandbox_preload.c -ldl -lrt 2>/dev/null || true
@@ -1130,6 +1166,11 @@ install: release ae stdlib
 	@# install" question (Option C in aetherBuild's ask 3).
 	@rm -rf $(PREFIX)/share/aether/runtime/examples
 	@rm -rf $(PREFIX)/share/aether/runtime/io
+	@# Authoritative MANIFEST listing link-suitable .c files (#329).
+	@# Downstream consumers (aetherBuild's aeb-link et al.) read this
+	@# instead of guessing via `find runtime -name '*.c'` — the find
+	@# would naively pull in benchmarks / orphan poller hubs / etc.
+	@install -m 644 build/MANIFEST $(PREFIX)/share/aether/MANIFEST
 	@echo "✓ Installed successfully"
 	@echo ""
 	@echo "Run: ae version"

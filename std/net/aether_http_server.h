@@ -105,6 +105,23 @@ typedef struct HttpServer {
     int h2_enabled;
     int h2_max_concurrent_streams;  /* nghttp2 SETTINGS; 0 → 100 default */
 
+    // Per-stream concurrent dispatch worker count. When > 0, the
+    // server provisions a SHARED pool of this many pthreads — every
+    // h2 connection on this server submits stream-level dispatch
+    // tasks into the same pool (mirroring how the HTTP/1.1
+    // connection pool is shared across accepted connections). When
+    // 0 (default), streams dispatch sequentially on the connection
+    // thread (legacy behaviour). Set via
+    // http_server_set_h2_concurrent_dispatch_raw.
+    //
+    // The pool itself lives in `h2_dispatch_pool_opaque` (forward-
+    // declared as void* so this header doesn't pull in libnghttp2
+    // / pthread types). It's created lazily by the h2 wrapper on
+    // first session that needs it, and torn down by
+    // http_server_free.
+    int   h2_dispatch_workers;
+    void* h2_dispatch_pool_opaque;
+
     // Routing
     HttpRoute* routes;
 
@@ -264,6 +281,23 @@ const char* http_server_set_tls_raw(HttpServer* server,
 // "HTTP/2 unavailable: built without libnghttp2".
 const char* http_server_set_h2_raw(HttpServer* server,
                                    int max_concurrent_streams);
+
+// Per-stream concurrent dispatch for HTTP/2. When `worker_count` > 0,
+// each h2 connection spawns this many worker threads. Stream
+// handlers run on those workers in parallel; the connection thread
+// keeps reading frames + serialising responses. When 0 (default),
+// streams dispatch sequentially on the connection thread.
+//
+// nghttp2_session is not thread-safe — only the connection thread
+// calls into it. Workers receive the (request, response) pair, run
+// the route handler, and post the result back; the connection
+// thread submits the response on its own thread.
+//
+// Typical setting: 4–8 workers per connection. Excessively high
+// values waste memory (each worker is a pthread); too low caps
+// stream-level parallelism. Returns "" on success.
+const char* http_server_set_h2_concurrent_dispatch_raw(HttpServer* server,
+                                                       int worker_count);
 
 // Routing
 void http_server_add_route(HttpServer* server, const char* method, const char* path, HttpHandler handler, void* user_data);

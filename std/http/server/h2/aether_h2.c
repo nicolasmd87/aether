@@ -31,6 +31,21 @@
 #include <nghttp2/nghttp2.h>
 #include "../../../net/aether_http_server.h"
 
+/* Per-stream concurrent dispatch (#260 follow-up) is POSIX-only.
+ * The worker pool relies on pipe(2) + poll(2) for cross-thread
+ * wake-ups; Windows lacks a clean equivalent for sockets+pipes in
+ * one poll set, so on Windows the pool path compiles out and h2
+ * streams dispatch sequentially on the connection thread (which
+ * matches the original v1 behaviour). */
+#if !defined(_WIN32)
+#define AETHER_H2_HAS_POOL 1
+#include <pthread.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <errno.h>
+#include <time.h>
+#endif
+
 /* Per-stream state — what we've collected on the request side and
  * what we owe back on the response side. Streams live in a
  * singly-linked list off the session; lookup is O(N) which is fine
@@ -74,6 +89,60 @@ typedef struct AetherH2Stream {
     struct AetherH2Stream* next;
 } AetherH2Stream;
 
+/* Concurrent dispatch architecture (#260 follow-up).
+ *
+ * The thread pool is **server-level**, not per-connection: one set
+ * of N worker pthreads serves every h2 connection bound to the
+ * server. This mirrors the existing HTTP/1.1 connection pool
+ * (HttpConnectionPool with HTTP_POOL_WORKERS=8) — a fixed,
+ * shutdown-time-allocated thread budget that doesn't scale with
+ * concurrent client count. Per-connection pools would mean each
+ * incoming h2 connection spawns N pthreads, so 1000 keep-alive
+ * clients = 4000 threads. The server-level pool keeps the OS
+ * thread count constant.
+ *
+ * pthreads, not actors: HTTP route handlers in Aether call into
+ * arbitrary blocking C/Aether code (sleep, fs read, db query,
+ * upstream http call). Aether actors are cooperative — a blocking
+ * actor monopolises its scheduler thread until it returns. With
+ * the actor scheduler having only a few worker threads, blocking
+ * handlers would starve every other actor on the host. Dedicated
+ * pthreads sidestep that: each blocked handler ties up one OS
+ * thread but the kernel keeps the rest of the system responsive.
+ *
+ * Per-session state (ready queue + wake pipe) stays local because
+ * the connection thread serialising responses is per-connection;
+ * targeted wake-up is essential so a worker finishing a task on
+ * connection A doesn't wake up connection B's poll loop. */
+typedef struct H2DispatchTask {
+    /* The session this task belongs to. Workers call back through
+     * this pointer to push the result onto the session's ready
+     * queue and wake its connection thread. */
+    struct AetherH2Session* session;
+    AetherH2Stream*         stream;
+    HttpRequest*            req;
+    HttpServerResponse*     res;
+    struct H2DispatchTask*  next;
+} H2DispatchTask;
+
+#ifdef AETHER_H2_HAS_POOL
+/* Server-level dispatch pool. Created lazily on first session that
+ * needs it (pool_get_or_create); freed by http_server_free. All
+ * h2 sessions on the same server share these worker threads. */
+typedef struct H2DispatchPool {
+    pthread_t*       threads;
+    int              thread_count;
+
+    /* Global pending queue — every session enqueues here, every
+     * worker pops from here. */
+    pthread_mutex_t  pending_mu;
+    pthread_cond_t   pending_cv;
+    H2DispatchTask*  pending_head;
+    H2DispatchTask*  pending_tail;
+    int              shutdown;
+} H2DispatchPool;
+#endif
+
 struct AetherH2Session {
     nghttp2_session* ng;
     HttpServer*      server;
@@ -89,6 +158,24 @@ struct AetherH2Session {
 
     AetherH2Stream*  streams;
     int              fatal;   /* set when a callback flagged a hard error */
+
+#ifdef AETHER_H2_HAS_POOL
+    /* Per-session async-dispatch state. The pool itself lives on
+     * HttpServer; only the wake-up + ready-queue plumbing is per
+     * connection (so a worker finishing task X on connection A
+     * doesn't wake up connection B's poll loop). */
+    int              dispatch_enabled;     /* mirrors server->h2_dispatch_workers > 0 */
+    pthread_mutex_t  ready_mu;
+    pthread_cond_t   ready_cv;             /* signaled when in_flight drops to 0 */
+    H2DispatchTask*  ready_head;
+    H2DispatchTask*  ready_tail;
+    int              wake_fd_read;
+    int              wake_fd_write;
+    int              in_flight;            /* tasks enqueued but not yet
+                                            * submitted to nghttp2; the
+                                            * connection thread can't tear
+                                            * down the session while > 0 */
+#endif
 };
 
 /* ------------------------------------------------------------------
@@ -502,6 +589,209 @@ static HttpRequest* request_from_stream(AetherH2Stream* str) {
 /* Forward decl — defined in aether_http_server.c. */
 extern void http_request_free(HttpRequest* req);
 
+#ifdef AETHER_H2_HAS_POOL
+/* Server-level pool worker. Pops one task at a time from the global
+ * pending queue; the task carries the session it belongs to so we
+ * know which session's ready queue + wake pipe to push to.
+ *
+ * nghttp2_session is NEVER touched here — only the connection
+ * thread calls into the library. The handler reads from `req`
+ * (immutable after this point) and writes to `res`. */
+static void* h2_worker_fn(void* arg) {
+    H2DispatchPool* p = (H2DispatchPool*)arg;
+
+    while (1) {
+        pthread_mutex_lock(&p->pending_mu);
+        while (!p->pending_head && !p->shutdown) {
+            pthread_cond_wait(&p->pending_cv, &p->pending_mu);
+        }
+        if (p->shutdown && !p->pending_head) {
+            pthread_mutex_unlock(&p->pending_mu);
+            return NULL;
+        }
+        H2DispatchTask* task = p->pending_head;
+        p->pending_head = task->next;
+        if (!p->pending_head) p->pending_tail = NULL;
+        pthread_mutex_unlock(&p->pending_mu);
+
+        task->next = NULL;
+        AetherH2Session* sess = task->session;
+
+        /* Run the route handler off the connection thread. The
+         * route table + middleware chain are read-only after server
+         * startup, so concurrent reads from multiple workers across
+         * any number of sessions are safe. Each task owns its own
+         * (req, res) — no sharing across workers. */
+        http_server_dispatch_for_h2(sess->server, task->req, task->res);
+
+        /* Push to the session's ready queue + wake its connection
+         * thread. Session lifetime is guaranteed by the in_flight
+         * counter: aether_h2_session_free spins until in_flight ==
+         * 0, so `sess` is still valid here. */
+        pthread_mutex_lock(&sess->ready_mu);
+        if (sess->ready_tail) {
+            sess->ready_tail->next = task;
+            sess->ready_tail = task;
+        } else {
+            sess->ready_head = sess->ready_tail = task;
+        }
+        pthread_mutex_unlock(&sess->ready_mu);
+
+        char wake_byte = 1;
+        ssize_t w;
+        do {
+            w = write(sess->wake_fd_write, &wake_byte, 1);
+        } while (w < 0 && errno == EINTR);
+        /* EAGAIN is fine — pipe is full, connection thread already
+         * has a wake-up pending and will drain on its next poll. */
+    }
+}
+
+/* Lazy initialisation. Called from session_new on the FIRST h2
+ * connection that wants concurrent dispatch; the pool then lives
+ * for the remainder of the server's lifetime. The double-check
+ * locking pattern would be ideal but introduces memory-order
+ * subtleties; instead, we accept that two concurrent first-time
+ * sessions might race to create the pool — the loser's pool is
+ * cleaned up immediately. The race window is microseconds long
+ * and only fires once per server. */
+static pthread_mutex_t g_pool_init_mu = PTHREAD_MUTEX_INITIALIZER;
+
+static H2DispatchPool* h2_pool_create(int worker_count) {
+    if (worker_count <= 0) return NULL;
+
+    H2DispatchPool* p = calloc(1, sizeof(*p));
+    if (!p) return NULL;
+
+    pthread_mutex_init(&p->pending_mu, NULL);
+    pthread_cond_init (&p->pending_cv, NULL);
+
+    p->thread_count = worker_count;
+    p->threads = calloc((size_t)worker_count, sizeof(pthread_t));
+    if (!p->threads) goto fail;
+
+    for (int i = 0; i < worker_count; i++) {
+        if (pthread_create(&p->threads[i], NULL, h2_worker_fn, p) != 0) {
+            pthread_mutex_lock(&p->pending_mu);
+            p->shutdown = 1;
+            pthread_cond_broadcast(&p->pending_cv);
+            pthread_mutex_unlock(&p->pending_mu);
+            for (int j = 0; j < i; j++) pthread_join(p->threads[j], NULL);
+            goto fail;
+        }
+    }
+    return p;
+
+fail:
+    if (p->threads) free(p->threads);
+    pthread_mutex_destroy(&p->pending_mu);
+    pthread_cond_destroy (&p->pending_cv);
+    free(p);
+    return NULL;
+}
+
+static void task_free(H2DispatchTask* t) {
+    if (!t) return;
+    if (t->req) http_request_free(t->req);
+    if (t->res) http_server_response_free(t->res);
+    free(t);
+}
+
+/* Public so http_server_free can invoke it without including the
+ * h2 wrapper's private header. Declared as void* in
+ * aether_http_server.h. */
+void aether_h2_dispatch_pool_free(void* opaque);
+void aether_h2_dispatch_pool_free(void* opaque) {
+    if (!opaque) return;
+    H2DispatchPool* p = (H2DispatchPool*)opaque;
+
+    pthread_mutex_lock(&p->pending_mu);
+    p->shutdown = 1;
+    pthread_cond_broadcast(&p->pending_cv);
+    pthread_mutex_unlock(&p->pending_mu);
+
+    for (int i = 0; i < p->thread_count; i++) {
+        pthread_join(p->threads[i], NULL);
+    }
+
+    /* Drain stragglers — tasks workers hadn't picked up at shutdown.
+     * Sessions still holding ready-queue tasks have already been
+     * freed (server tears down sessions before pool). */
+    H2DispatchTask* t = p->pending_head;
+    while (t) { H2DispatchTask* n = t->next; task_free(t); t = n; }
+
+    free(p->threads);
+    pthread_mutex_destroy(&p->pending_mu);
+    pthread_cond_destroy (&p->pending_cv);
+    free(p);
+}
+
+/* Get-or-create the server-level pool. Caller must hold no locks. */
+static H2DispatchPool* pool_get_or_create(HttpServer* server) {
+    if (server->h2_dispatch_pool_opaque) {
+        return (H2DispatchPool*)server->h2_dispatch_pool_opaque;
+    }
+    pthread_mutex_lock(&g_pool_init_mu);
+    if (!server->h2_dispatch_pool_opaque) {
+        server->h2_dispatch_pool_opaque =
+            h2_pool_create(server->h2_dispatch_workers);
+    }
+    pthread_mutex_unlock(&g_pool_init_mu);
+    return (H2DispatchPool*)server->h2_dispatch_pool_opaque;
+}
+
+/* Per-session async-dispatch state init. Sets up the wake pipe +
+ * mutex/condvar. Returns 0 on success, -1 on failure. */
+static int session_dispatch_init(AetherH2Session* sess) {
+    int pipefd[2];
+    if (pipe(pipefd) < 0) return -1;
+
+    int fl = fcntl(pipefd[1], F_GETFL, 0);
+    if (fl >= 0) fcntl(pipefd[1], F_SETFL, fl | O_NONBLOCK);
+    fl = fcntl(pipefd[0], F_GETFL, 0);
+    if (fl >= 0) fcntl(pipefd[0], F_SETFL, fl | O_NONBLOCK);
+
+    sess->wake_fd_read  = pipefd[0];
+    sess->wake_fd_write = pipefd[1];
+    pthread_mutex_init(&sess->ready_mu, NULL);
+    pthread_cond_init (&sess->ready_cv, NULL);
+    sess->dispatch_enabled = 1;
+    return 0;
+}
+
+static void session_dispatch_destroy(AetherH2Session* sess) {
+    if (!sess->dispatch_enabled) return;
+    /* Drain anything still in our ready queue (e.g. workers
+     * completed mid-tear-down). The owning request/response are
+     * freed via task_free. */
+    H2DispatchTask* t = sess->ready_head;
+    while (t) { H2DispatchTask* n = t->next; task_free(t); t = n; }
+    sess->ready_head = sess->ready_tail = NULL;
+
+    if (sess->wake_fd_read  >= 0) close(sess->wake_fd_read);
+    if (sess->wake_fd_write >= 0) close(sess->wake_fd_write);
+    pthread_mutex_destroy(&sess->ready_mu);
+    pthread_cond_destroy (&sess->ready_cv);
+    sess->dispatch_enabled = 0;
+}
+#endif  /* AETHER_H2_HAS_POOL */
+
+/* dispatch_stream — connection-thread entry point invoked when
+ * nghttp2 reports END_STREAM on the request side. We validate
+ * pseudo-headers (must RST on the connection thread because nghttp2
+ * is single-threaded), allocate the (req, res) pair, then either:
+ *
+ *   - run the handler synchronously on the connection thread, OR
+ *   - hand the task off to a worker pool when concurrent dispatch
+ *     is enabled.
+ *
+ * Either way, submit_response_for_stream runs on the connection
+ * thread once the handler has populated `res`. */
+static void submit_response_for_stream(AetherH2Session* s,
+                                       AetherH2Stream* str,
+                                       HttpRequest* req,
+                                       HttpServerResponse* res);
+
 static void dispatch_stream(AetherH2Session* s, AetherH2Stream* str) {
     if (str->response_submitted) return;
 
@@ -515,15 +805,7 @@ static void dispatch_stream(AetherH2Session* s, AetherH2Stream* str) {
      * carries it for HTTP/1.1 compat); we allow it absent because
      * curl --http2-prior-knowledge over plain TCP sometimes omits
      * :authority in favour of the Host header. */
-    if (!str->method || !str->path || !str->scheme) {
-        nghttp2_submit_rst_stream(s->ng, NGHTTP2_FLAG_NONE,
-                                  str->stream_id, NGHTTP2_PROTOCOL_ERROR);
-        str->response_submitted = 1;
-        return;
-    }
-    /* :path must not be empty (except for OPTIONS *, which we
-     * don't support). */
-    if (str->path[0] == '\0') {
+    if (!str->method || !str->path || !str->scheme || str->path[0] == '\0') {
         nghttp2_submit_rst_stream(s->ng, NGHTTP2_FLAG_NONE,
                                   str->stream_id, NGHTTP2_PROTOCOL_ERROR);
         str->response_submitted = 1;
@@ -534,6 +816,7 @@ static void dispatch_stream(AetherH2Session* s, AetherH2Stream* str) {
     if (!req) {
         nghttp2_submit_rst_stream(s->ng, NGHTTP2_FLAG_NONE,
                                   str->stream_id, NGHTTP2_INTERNAL_ERROR);
+        str->response_submitted = 1;
         return;
     }
 
@@ -542,10 +825,77 @@ static void dispatch_stream(AetherH2Session* s, AetherH2Stream* str) {
         http_request_free(req);
         nghttp2_submit_rst_stream(s->ng, NGHTTP2_FLAG_NONE,
                                   str->stream_id, NGHTTP2_INTERNAL_ERROR);
+        str->response_submitted = 1;
         return;
     }
 
+#ifdef AETHER_H2_HAS_POOL
+    /* Concurrent dispatch: enqueue the task onto the server-level
+     * pool's pending queue. The handler runs on a worker thread; the
+     * connection thread submits the response when the worker
+     * finishes (drain_ready, called between feed/drain iterations).
+     *
+     * We bump in_flight BEFORE enqueueing so session_free can spin
+     * on it without racing the enqueue side. The matching
+     * decrement happens in submit_response_for_stream. */
+    if (s->dispatch_enabled) {
+        H2DispatchPool* pool = (H2DispatchPool*)s->server->h2_dispatch_pool_opaque;
+        if (pool) {
+            H2DispatchTask* task = calloc(1, sizeof(*task));
+            if (!task) {
+                http_request_free(req);
+                http_server_response_free(res);
+                nghttp2_submit_rst_stream(s->ng, NGHTTP2_FLAG_NONE,
+                                          str->stream_id, NGHTTP2_INTERNAL_ERROR);
+                str->response_submitted = 1;
+                return;
+            }
+            task->session = s;
+            task->stream  = str;
+            task->req     = req;
+            task->res     = res;
+
+            pthread_mutex_lock(&s->ready_mu);
+            s->in_flight++;
+            pthread_mutex_unlock(&s->ready_mu);
+
+            pthread_mutex_lock(&pool->pending_mu);
+            if (pool->pending_tail) {
+                pool->pending_tail->next = task;
+                pool->pending_tail = task;
+            } else {
+                pool->pending_head = pool->pending_tail = task;
+            }
+            pthread_cond_signal(&pool->pending_cv);
+            pthread_mutex_unlock(&pool->pending_mu);
+            return;
+        }
+        /* Pool creation failed earlier — fall through to sequential. */
+    }
+#endif
+
+    /* Sequential path — run handler on the connection thread, then
+     * submit the response immediately. Matches the original v1
+     * behaviour for builds that don't enable concurrent dispatch
+     * (and on Windows where the pool path compiles out). */
     http_server_dispatch_for_h2(s->server, req, res);
+    submit_response_for_stream(s, str, req, res);
+}
+
+/* submit_response_for_stream — connection-thread side of dispatch.
+ * Snapshots `res` into the stream's response buffers, builds the
+ * nghttp2_nv array, and calls nghttp2_submit_response. Frees req
+ * and res before returning. Must run on the connection thread (the
+ * only thread that calls into nghttp2_session). */
+static void submit_response_for_stream(AetherH2Session* s,
+                                       AetherH2Stream* str,
+                                       HttpRequest* req,
+                                       HttpServerResponse* res) {
+    if (str->response_submitted) {
+        if (req) http_request_free(req);
+        if (res) http_server_response_free(res);
+        return;
+    }
 
     /* Snapshot response into the stream so the data-read callback
      * can stream it out independently of `res`'s lifetime. */
@@ -580,7 +930,14 @@ static void dispatch_stream(AetherH2Session* s, AetherH2Stream* str) {
     }
 
     /* :status pseudo-header. nghttp2 takes name/value as malloc'd
-     * buffers we own; sizes are byte-count, NOT including a NUL. */
+     * buffers we own; sizes are byte-count, NOT including a NUL.
+     *
+     * NGHTTP2_NV_FLAG_NONE leaves HPACK encoding fully to nghttp2: it
+     * automatically applies Huffman encoding to each name/value
+     * whenever it produces a shorter representation than the literal
+     * (RFC 7541 §5.2). Setting NGHTTP2_NV_FLAG_NO_HUFFMAN here would
+     * disable that compression — we don't, so response headers are
+     * Huffman-encoded by default. */
     str->response_headers[0].name      = (uint8_t*)dup_str(":status");
     str->response_headers[0].namelen   = 7;
     str->response_headers[0].value     = (uint8_t*)dup_str(status_str);
@@ -673,11 +1030,56 @@ AetherH2Session* aether_h2_session_new(HttpServer* server,
         free(s);
         return NULL;
     }
+
+#ifdef AETHER_H2_HAS_POOL
+    /* If the server is configured for concurrent dispatch, ensure
+     * the server-level pool is up and initialise this session's
+     * per-connection wake-up + ready-queue plumbing. We never tear
+     * the pool down here — it's shared, owned by the server. If
+     * pipe/pthread setup for THIS session fails, we silently fall
+     * back to sequential dispatch on this connection only. */
+    s->wake_fd_read = -1;
+    s->wake_fd_write = -1;
+    if (server->h2_dispatch_workers > 0) {
+        H2DispatchPool* pool = pool_get_or_create(server);
+        if (pool && session_dispatch_init(s) != 0) {
+            /* dispatch_enabled stays 0 — sequential fallback. */
+        }
+    }
+#endif
+
     return s;
 }
 
 void aether_h2_session_free(AetherH2Session* sess) {
     if (!sess) return;
+
+#ifdef AETHER_H2_HAS_POOL
+    /* Wait for any in-flight worker tasks to finish before tearing
+     * the session down — workers may still be running handlers
+     * that touch this session's state. The connection driver loop
+     * is also responsible for calling drain_ready before we get
+     * here, so most ready tasks should already be submitted; this
+     * is the safety net for tasks whose workers were still running
+     * when the connection closed. */
+    if (sess->dispatch_enabled) {
+        pthread_mutex_lock(&sess->ready_mu);
+        while (sess->in_flight > 0 || sess->ready_head != NULL) {
+            /* Pull any ready tasks the connection driver missed,
+             * then keep waiting on workers still mid-handler. */
+            if (sess->ready_head) {
+                pthread_mutex_unlock(&sess->ready_mu);
+                aether_h2_session_drain_ready(sess);
+                pthread_mutex_lock(&sess->ready_mu);
+                continue;
+            }
+            pthread_cond_wait(&sess->ready_cv, &sess->ready_mu);
+        }
+        pthread_mutex_unlock(&sess->ready_mu);
+        session_dispatch_destroy(sess);
+    }
+#endif
+
     if (sess->ng) nghttp2_session_del(sess->ng);
     AetherH2Stream* str = sess->streams;
     while (str) {
@@ -750,12 +1152,89 @@ int aether_h2_session_drain(AetherH2Session* sess,
     return 0;
 }
 
+int aether_h2_session_wake_fd(AetherH2Session* sess) {
+#ifdef AETHER_H2_HAS_POOL
+    if (sess && sess->dispatch_enabled) return sess->wake_fd_read;
+#else
+    (void)sess;
+#endif
+    return -1;
+}
+
+int aether_h2_session_drain_ready(AetherH2Session* sess) {
+#ifdef AETHER_H2_HAS_POOL
+    if (!sess || !sess->dispatch_enabled) return 0;
+
+    /* Drain whatever wake bytes are sitting in the pipe. We read
+     * eagerly into a small buffer because each completed task wrote
+     * exactly one byte; the pipe was set non-blocking so a quiet
+     * pipe returns EAGAIN immediately. The actual queue is the
+     * authoritative source — the wake byte just unblocks poll(). */
+    char drain[64];
+    while (1) {
+        ssize_t n = read(sess->wake_fd_read, drain, sizeof(drain));
+        if (n <= 0) break;
+    }
+
+    int submitted = 0;
+    while (1) {
+        pthread_mutex_lock(&sess->ready_mu);
+        H2DispatchTask* task = sess->ready_head;
+        if (task) {
+            sess->ready_head = task->next;
+            if (!sess->ready_head) sess->ready_tail = NULL;
+        }
+        pthread_mutex_unlock(&sess->ready_mu);
+        if (!task) break;
+
+        submit_response_for_stream(sess, task->stream, task->req, task->res);
+        /* req + res were consumed by submit_response_for_stream. */
+        free(task);
+
+        /* Decrement in_flight + signal anyone waiting (session_free
+         * blocks on in_flight reaching 0 during teardown). */
+        pthread_mutex_lock(&sess->ready_mu);
+        sess->in_flight--;
+        if (sess->in_flight == 0) pthread_cond_broadcast(&sess->ready_cv);
+        pthread_mutex_unlock(&sess->ready_mu);
+
+        submitted++;
+    }
+    return submitted;
+#else
+    (void)sess;
+    return 0;
+#endif
+}
+
 int aether_h2_session_want_close(AetherH2Session* sess) {
     if (!sess || !sess->ng) return 1;
     if (sess->fatal) return 1;
+    /* When concurrent dispatch is on, we must NOT report want_close
+     * while tasks are still in flight. Workers may have responses
+     * about to land; closing the session early would discard them. */
+#ifdef AETHER_H2_HAS_POOL
+    if (sess->dispatch_enabled) {
+        pthread_mutex_lock(&sess->ready_mu);
+        int still_busy = (sess->in_flight > 0) || (sess->ready_head != NULL);
+        pthread_mutex_unlock(&sess->ready_mu);
+        if (still_busy) return 0;
+    }
+#endif
     int want_read  = nghttp2_session_want_read(sess->ng);
     int want_write = nghttp2_session_want_write(sess->ng);
     return (!want_read && !want_write) ? 1 : 0;
+}
+
+void aether_h2_session_initiate_goaway(AetherH2Session* sess) {
+    if (!sess || !sess->ng) return;
+    /* nghttp2_session_terminate_session submits GOAWAY with the
+     * given error code (NGHTTP2_NO_ERROR signals "we're done; no
+     * new streams" — the peer's existing streams complete normally).
+     * Subsequent want_read/want_write transitions to false once
+     * everything's drained, which our existing want_close logic
+     * already keys on. */
+    nghttp2_session_terminate_session(sess->ng, NGHTTP2_NO_ERROR);
 }
 
 /* ------------------------------------------------------------------
@@ -913,8 +1392,17 @@ int aether_h2_session_drain(AetherH2Session* sess,
                             AetherH2WriteFn write_fn) {
     (void)sess; (void)write_fn; return -1;
 }
+int aether_h2_session_wake_fd(AetherH2Session* sess) {
+    (void)sess; return -1;
+}
+int aether_h2_session_drain_ready(AetherH2Session* sess) {
+    (void)sess; return 0;
+}
 int aether_h2_session_want_close(AetherH2Session* sess) {
     (void)sess; return 1;
+}
+void aether_h2_session_initiate_goaway(AetherH2Session* sess) {
+    (void)sess;
 }
 AetherH2Session* aether_h2_session_from_h2c_upgrade(
     struct HttpServer* server,
@@ -928,4 +1416,24 @@ AetherH2Session* aether_h2_session_from_h2c_upgrade(
     return NULL;
 }
 
+/* No-op stub for builds without libnghttp2 — http_server_free
+ * calls this unconditionally to free any dispatch pool, but
+ * without nghttp2 there's no h2 path and no pool to free. */
+void aether_h2_dispatch_pool_free(void* opaque) {
+    (void)opaque;
+}
+
 #endif  /* AETHER_HAS_NGHTTP2 */
+
+/* Belt-and-suspenders stub for the libnghttp2-but-no-pool case
+ * (Windows: nghttp2 may be linked, but the POSIX pipe + pthread
+ * pool path is `#ifdef AETHER_H2_HAS_POOL` which is `!_WIN32`).
+ * Without this, http_server_free's unconditional call to
+ * aether_h2_dispatch_pool_free fails to link on Windows even
+ * when nghttp2 is present. The stub is safe because session_new
+ * never assigns h2_dispatch_pool_opaque on that platform. */
+#if defined(AETHER_HAS_NGHTTP2) && !defined(AETHER_H2_HAS_POOL)
+void aether_h2_dispatch_pool_free(void* opaque) {
+    (void)opaque;
+}
+#endif
