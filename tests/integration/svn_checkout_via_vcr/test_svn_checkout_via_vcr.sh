@@ -24,12 +24,12 @@ if [ ! -x "$AE" ]; then
     exit 0
 fi
 
-cd "$ROOT" || exit 1
+cd "$SCRIPT_DIR" || exit 1
 
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"; rm -f /tmp/svn_vcr_scrubbed.*.md' EXIT
 
-if ! AETHER_HOME="$ROOT" "$AE" run "$SCRIPT_DIR/probe.ae" >"$TMPDIR/out.log" 2>&1; then
+if ! AETHER_HOME="$ROOT" "$AE" run probe.ae >"$TMPDIR/out.log" 2>&1; then
     echo "  [FAIL] svn_checkout_via_vcr"
     tail -60 "$TMPDIR/out.log" | sed 's/^/    /'
     exit 1
