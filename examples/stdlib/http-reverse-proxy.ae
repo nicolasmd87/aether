@@ -46,9 +46,9 @@ main() {
     // Single upstream, RR (no other to balance against), 30s
     // request timeout, default opts (XFF + XFP + XFH on; Host
     // rewritten to upstream; 8 MiB body cap).
-    proxy_err = proxy.use_simple_proxy(server, "/", "http://localhost:9000", 30)
+    proxy_err = proxy.mount_simple(server, "/", "http://localhost:9000", 30)
     if proxy_err != "" {
-        println("use_simple_proxy: ${proxy_err}")
+        println("mount_simple: ${proxy_err}")
         return
     }
 

@@ -1,0 +1,354 @@
+// std.http.proxy pool integration test driver — exercises the
+// production stack across multiple upstreams.
+//
+// Roles selected by argv[1]:
+//   upstream_a      :19101  /echo, /count, /health (always-OK)
+//   upstream_b      :19102  /echo + admin/* + /health (toggleable)
+//   upstream_c      :19103  /echo, /count, /health
+//   proxy_<mode>    :19100  proxy with the named configuration
+//
+// Modes (bind :19100):
+//   proxy_rr            three upstreams, round-robin
+//   proxy_wrr           weights 3:1:1
+//   proxy_ip_hash       sticky by client IP
+//   proxy_cookie_hash   sticky by SESSIONID cookie
+//   proxy_drain         drains A on startup
+//   proxy_health        health checks every 200ms, threshold 2
+//   proxy_breaker       breaker: 3 fails → open 1.5s
+//   proxy_cache         attaches an LRU cache (60s TTL)
+//   proxy_retry         3 retries, 50ms base backoff
+//   proxy_rate_limit    1 rps per upstream (burst 1)
+//   proxy_trace         injects W3C traceparent when absent
+//   proxy_metrics       same as proxy_rr but exposes /proxy-metrics
+
+import std.http
+import std.http.proxy
+import std.os
+
+// Use raw form: actor receive handlers can't cleanly discard the
+// wrapper's string return without an unused-result warning.
+extern http_server_start_raw(server: ptr) -> int
+extern exit(code: int)
+
+// shim.c — per-process counters + admin state.
+extern proxy_test_counter_get() -> int
+extern proxy_test_counter_inc() -> int
+extern proxy_test_counter_reset()
+extern proxy_test_force_503_get() -> int
+extern proxy_test_force_503_set(v: int)
+extern proxy_test_eta_ms_get() -> int
+extern proxy_test_eta_ms_set(v: int)
+extern proxy_test_str_eq(a: ptr, b: string) -> int
+extern proxy_test_atoi(s: ptr) -> int
+
+const PROXY_PORT = 19100
+const UP_A_PORT  = 19101
+const UP_B_PORT  = 19102
+const UP_C_PORT  = 19103
+
+// ---- Upstream handlers (one set per role; they read the shim
+// counter so we don't need a tag arg).
+
+handle_echo_a(req: ptr, res: ptr, ud: ptr) {
+    n = proxy_test_counter_inc()
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_header(res, "X-Up", "A")
+    http.response_set_body(res, "tag=A:${n}")
+}
+
+handle_echo_b(req: ptr, res: ptr, ud: ptr) {
+    n = proxy_test_counter_inc()
+    if proxy_test_force_503_get() != 0 {
+        http.response_set_status(res, 503)
+        http.response_set_header(res, "Content-Type", "text/plain")
+        http.response_set_header(res, "X-Up", "B")
+        http.response_set_body(res, "B-down:${n}")
+        return
+    }
+    eta = proxy_test_eta_ms_get()
+    if eta > 0 {
+        sleep(eta)
+    }
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_header(res, "X-Up", "B")
+    http.response_set_body(res, "tag=B:${n}")
+}
+
+handle_echo_c(req: ptr, res: ptr, ud: ptr) {
+    n = proxy_test_counter_inc()
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_header(res, "X-Up", "C")
+    http.response_set_body(res, "tag=C:${n}")
+}
+
+handle_count(req: ptr, res: ptr, ud: ptr) {
+    n = proxy_test_counter_get()
+    http.response_set_status(res, 200)
+    http.response_set_body(res, "${n}")
+}
+
+handle_admin_503(req: ptr, res: ptr, ud: ptr) {
+    proxy_test_force_503_set(1)
+    http.response_set_status(res, 200)
+    http.response_set_body(res, "ok")
+}
+handle_admin_200(req: ptr, res: ptr, ud: ptr) {
+    proxy_test_force_503_set(0)
+    http.response_set_status(res, 200)
+    http.response_set_body(res, "ok")
+}
+
+handle_health_b(req: ptr, res: ptr, ud: ptr) {
+    if proxy_test_force_503_get() != 0 {
+        http.response_set_status(res, 503)
+        http.response_set_body(res, "down")
+    } else {
+        http.response_set_status(res, 200)
+        http.response_set_body(res, "ok")
+    }
+}
+
+handle_health_ok(req: ptr, res: ptr, ud: ptr) {
+    http.response_set_status(res, 200)
+    http.response_set_body(res, "ok")
+}
+
+handle_echo_vary(req: ptr, res: ptr, ud: ptr) {
+    n = proxy_test_counter_inc()
+    enc = http.get_header(req, "Accept-Encoding")
+    if enc == null { enc = "<none>" }
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_header(res, "Vary", "Accept-Encoding")
+    http.response_set_header(res, "Cache-Control", "max-age=60")
+    http.response_set_body(res, "vary-${enc}-${n}")
+}
+
+handle_echo_cacheable(req: ptr, res: ptr, ud: ptr) {
+    n = proxy_test_counter_inc()
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain")
+    http.response_set_header(res, "Cache-Control", "max-age=2")
+    http.response_set_body(res, "cached:${n}")
+}
+
+// ---- Actors -----------------------------------------------
+
+message StartSrv { raw: ptr }
+message Noop {}
+actor SrvActor {
+    state s = 0
+    receive { StartSrv(raw) -> { s = raw; http_server_start_raw(raw) } }
+}
+actor SchedHelper {
+    state x = 0
+    receive { Noop() -> { x = 1 } }
+}
+
+run_server(srv: ptr) {
+    spawn(SchedHelper())
+    a = spawn(SrvActor())
+    a ! StartSrv { raw: srv }
+    sleep(60000)
+    exit(0)
+}
+
+// ---- Upstream builders ----------------------------------
+
+build_upstream_a() {
+    s = http.server_create(UP_A_PORT)
+    if s == 0 { println("FAIL: A server_create"); exit(1) }
+    http.server_set_host(s, "127.0.0.1")
+    http.server_set_keepalive(s, 1, 0, 5000)
+    http.server_get(s, "/echo",            handle_echo_a,         0)
+    http.server_get(s, "/echo_vary",       handle_echo_vary,      0)
+    http.server_get(s, "/echo_cacheable",  handle_echo_cacheable, 0)
+    http.server_get(s, "/count",           handle_count,          0)
+    http.server_get(s, "/health",          handle_health_ok,      0)
+    println("READY")
+    run_server(s)
+}
+
+build_upstream_b() {
+    s = http.server_create(UP_B_PORT)
+    if s == 0 { println("FAIL: B server_create"); exit(1) }
+    http.server_set_host(s, "127.0.0.1")
+    http.server_set_keepalive(s, 1, 0, 5000)
+    http.server_get(s,  "/echo",            handle_echo_b,         0)
+    // The cache + vary routes live on every upstream so cache
+    // tests don't 404 when a TTL-expired refetch hits a different
+    // upstream under round-robin.
+    http.server_get(s,  "/echo_vary",       handle_echo_vary,      0)
+    http.server_get(s,  "/echo_cacheable",  handle_echo_cacheable, 0)
+    http.server_get(s,  "/count",           handle_count,          0)
+    http.server_get(s,  "/health",          handle_health_b,       0)
+    http.server_post(s, "/admin/503",       handle_admin_503,      0)
+    http.server_post(s, "/admin/200",       handle_admin_200,      0)
+    println("READY")
+    run_server(s)
+}
+
+build_upstream_c() {
+    s = http.server_create(UP_C_PORT)
+    if s == 0 { println("FAIL: C server_create"); exit(1) }
+    http.server_set_host(s, "127.0.0.1")
+    http.server_set_keepalive(s, 1, 0, 5000)
+    http.server_get(s, "/echo",           handle_echo_c,         0)
+    http.server_get(s, "/echo_vary",      handle_echo_vary,      0)
+    http.server_get(s, "/echo_cacheable", handle_echo_cacheable, 0)
+    http.server_get(s, "/count",          handle_count,          0)
+    http.server_get(s, "/health",         handle_health_ok,      0)
+    println("READY")
+    run_server(s)
+}
+
+// ---- Proxy builders -------------------------------------
+
+build_pool_three(algo: string) -> ptr {
+    pool = proxy.upstream_pool_new(algo, 30, 0, 0)
+    proxy.upstream_add(pool, "http://localhost:19101", 1)
+    proxy.upstream_add(pool, "http://localhost:19102", 1)
+    proxy.upstream_add(pool, "http://localhost:19103", 1)
+    return pool
+}
+
+handle_proxy_metrics(req: ptr, res: ptr, ud: ptr) {
+    body = proxy.pool_metrics_text(ud)
+    http.response_set_status(res, 200)
+    http.response_set_header(res, "Content-Type", "text/plain; version=0.0.4")
+    http.response_set_body(res, body)
+}
+
+build_and_start_proxy(pool: ptr, opts: ptr, expose_metrics: int) {
+    s = http.server_create(PROXY_PORT)
+    if s == 0 { println("FAIL: proxy server_create"); exit(1) }
+    http.server_set_host(s, "127.0.0.1")
+    http.server_set_keepalive(s, 1, 0, 5000)
+    if expose_metrics != 0 {
+        // Register BEFORE the proxy mount. The proxy is mounted at
+        // "/echo" so it doesn't shadow this admin endpoint — real-
+        // world setups colocate admin/metrics on the same listener.
+        http.server_get(s, "/proxy-metrics", handle_proxy_metrics, pool)
+    }
+    err = proxy.mount(s, "/echo", pool, opts)
+    if err != "" {
+        println("FAIL: mount: ${err}")
+        exit(1)
+    }
+    println("READY")
+    run_server(s)
+}
+
+build_proxy_rr() {
+    pool = build_pool_three("round_robin")
+    opts = proxy.opts_new()
+    build_and_start_proxy(pool, opts, 1)
+}
+
+build_proxy_wrr() {
+    pool = proxy.upstream_pool_new("weighted_rr", 30, 0, 0)
+    proxy.upstream_add(pool, "http://localhost:19101", 3)
+    proxy.upstream_add(pool, "http://localhost:19102", 1)
+    proxy.upstream_add(pool, "http://localhost:19103", 1)
+    opts = proxy.opts_new()
+    build_and_start_proxy(pool, opts, 0)
+}
+
+build_proxy_ip_hash() {
+    pool = build_pool_three("ip_hash")
+    opts = proxy.opts_new()
+    build_and_start_proxy(pool, opts, 0)
+}
+
+build_proxy_cookie_hash() {
+    pool = build_pool_three("cookie_hash")
+    proxy.pool_set_cookie_name(pool, "SESSIONID")
+    opts = proxy.opts_new()
+    build_and_start_proxy(pool, opts, 0)
+}
+
+build_proxy_health() {
+    pool = build_pool_three("round_robin")
+    err = proxy.health_checks_enable(pool, "/health", 200, 200, 1000, 2, 2)
+    if err != "" { println("FAIL: health: ${err}"); exit(1) }
+    opts = proxy.opts_new()
+    build_and_start_proxy(pool, opts, 1)
+}
+
+build_proxy_breaker() {
+    pool = build_pool_three("round_robin")
+    proxy.breaker_configure(pool, 3, 1500, 1)
+    opts = proxy.opts_new()
+    build_and_start_proxy(pool, opts, 1)
+}
+
+build_proxy_cache() {
+    pool = build_pool_three("round_robin")
+    cache = proxy.cache_new(100, 65536, 60, "method_url_vary")
+    opts = proxy.opts_new()
+    proxy.opts_bind_cache(opts, cache)
+    build_and_start_proxy(pool, opts, 1)
+}
+
+build_proxy_retry() {
+    pool = build_pool_three("round_robin")
+    opts = proxy.opts_new()
+    proxy.opts_set_retry_policy(opts, 3, 50)
+    build_and_start_proxy(pool, opts, 1)
+}
+
+build_proxy_rate_limit() {
+    pool = build_pool_three("round_robin")
+    proxy.rate_limit_set(pool, 1, 1)
+    opts = proxy.opts_new()
+    build_and_start_proxy(pool, opts, 1)
+}
+
+build_proxy_trace() {
+    pool = build_pool_three("round_robin")
+    opts = proxy.opts_new()
+    proxy.opts_set_trace_inject(opts, 1)
+    build_and_start_proxy(pool, opts, 0)
+}
+
+build_proxy_drain() {
+    pool = build_pool_three("round_robin")
+    opts = proxy.opts_new()
+    s = http.server_create(PROXY_PORT)
+    if s == 0 { println("FAIL: drain server_create"); exit(1) }
+    http.server_set_host(s, "127.0.0.1")
+    http.server_set_keepalive(s, 1, 0, 5000)
+    err = proxy.mount(s, "/echo", pool, opts)
+    if err != "" { println("FAIL: drain mount: ${err}"); exit(1) }
+    proxy.upstream_drain(pool, "http://localhost:19101")
+    println("READY")
+    run_server(s)
+}
+
+main() {
+    n = aether_args_count()
+    if n < 2 { println("FAIL: usage: server <role>"); exit(1) }
+    role = aether_args_get(1)
+
+    if role == "upstream_a" { build_upstream_a(); return }
+    if role == "upstream_b" { build_upstream_b(); return }
+    if role == "upstream_c" { build_upstream_c(); return }
+
+    if role == "proxy_rr"          { build_proxy_rr();          return }
+    if role == "proxy_wrr"         { build_proxy_wrr();         return }
+    if role == "proxy_ip_hash"     { build_proxy_ip_hash();     return }
+    if role == "proxy_cookie_hash" { build_proxy_cookie_hash(); return }
+    if role == "proxy_health"      { build_proxy_health();      return }
+    if role == "proxy_breaker"     { build_proxy_breaker();     return }
+    if role == "proxy_cache"       { build_proxy_cache();       return }
+    if role == "proxy_retry"       { build_proxy_retry();       return }
+    if role == "proxy_rate_limit"  { build_proxy_rate_limit();  return }
+    if role == "proxy_trace"       { build_proxy_trace();       return }
+    if role == "proxy_drain"       { build_proxy_drain();       return }
+
+    println("FAIL: unknown role: ${role}")
+    exit(1)
+}

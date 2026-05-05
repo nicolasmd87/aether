@@ -170,9 +170,21 @@ curl --silent --show-error --max-time 5 \
      "$PROXY/echo" 2>"$TMPDIR/c7.err" || {
     echo "  [FAIL] T7 POST curl:"; cat "$TMPDIR/c7.err"; exit 1;
 }
-cmp -s "$BODY_IN" "$BODY_OUT" || {
-    echo "  [FAIL] T7 body round-trip:"
-    echo "    sent $(wc -c <"$BODY_IN") bytes; received $(wc -c <"$BODY_OUT") bytes"
+# Byte-equality check that doesn't depend on diffutils (`cmp` is in
+# diffutils which isn't always installed on MSYS2 / minimal CI
+# images). `wc -c` is POSIX-universal; `od -An -tx1` produces a
+# stable hex dump for byte comparison whether the file contains
+# NULs, high-bit bytes, or arbitrary binary content.
+SENT_BYTES=$(wc -c <"$BODY_IN" | tr -d ' ')
+RECV_BYTES=$(wc -c <"$BODY_OUT" | tr -d ' ')
+[ "$SENT_BYTES" = "$RECV_BYTES" ] || {
+    echo "  [FAIL] T7 body round-trip length: sent $SENT_BYTES, received $RECV_BYTES"
+    exit 1
+}
+SENT_HEX=$(od -An -tx1 -v "$BODY_IN" | tr -d ' \n')
+RECV_HEX=$(od -An -tx1 -v "$BODY_OUT" | tr -d ' \n')
+[ "$SENT_HEX" = "$RECV_HEX" ] || {
+    echo "  [FAIL] T7 body round-trip content mismatch ($SENT_BYTES bytes each, byte-level diff)"
     exit 1
 }
 
