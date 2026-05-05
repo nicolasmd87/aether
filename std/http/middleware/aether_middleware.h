@@ -173,4 +173,35 @@ int aether_error_pages_register(AetherErrorPagesOpts* opts,
 // Registered as a RESPONSE TRANSFORMER.
 void aether_xform_error_pages(HttpRequest* req, HttpServerResponse* res, void* user_data);
 
+// -----------------------------------------------------------------
+// Real-IP / X-Forwarded-For (proxy-aware client IP detection)
+// -----------------------------------------------------------------
+//
+// When the Aether server sits behind a load balancer / reverse
+// proxy / CDN, the connection-level peer IP is the proxy, not the
+// original client. The proxy chain conventionally records the
+// real client in an `X-Forwarded-For: client, proxy1, proxy2`
+// header (left-to-right oldest → newest).
+//
+// This middleware reads the configured header (default
+// X-Forwarded-For), takes the leftmost non-empty IP as the
+// original client, and adds an `X-Real-IP: <ip>` header to the
+// request so downstream handlers, rate-limit middleware, access
+// logs, and metrics see the original client identity.
+//
+// Trust model: the middleware does NOT validate that the request
+// came through a trusted proxy. Operators are responsible for
+// only running this middleware behind a trusted edge — typical
+// setups are firewall-restricted ports plus an LB rule, or a CDN
+// that strips client-supplied X-Forwarded-For. Without that
+// upstream guarantee, callers can spoof their apparent client IP.
+typedef struct AetherRealIpOpts AetherRealIpOpts;
+
+// `header_name` is the header to read from (canonical default:
+// "X-Forwarded-For"). NULL or empty falls back to the default.
+AetherRealIpOpts* aether_real_ip_opts_new(const char* header_name);
+void aether_real_ip_opts_free(AetherRealIpOpts* opts);
+
+int aether_middleware_real_ip(HttpRequest* req, HttpServerResponse* res, void* user_data);
+
 #endif

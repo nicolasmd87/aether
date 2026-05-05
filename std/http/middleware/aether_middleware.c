@@ -732,3 +732,97 @@ void aether_xform_error_pages(HttpRequest* req, HttpServerResponse* res, void* u
     }
 }
 
+// -----------------------------------------------------------------
+// Real-IP / X-Forwarded-For
+// -----------------------------------------------------------------
+struct AetherRealIpOpts {
+    char* header_name;  /* e.g. "X-Forwarded-For" */
+};
+
+AetherRealIpOpts* aether_real_ip_opts_new(const char* header_name) {
+    AetherRealIpOpts* o = (AetherRealIpOpts*)calloc(1, sizeof(AetherRealIpOpts));
+    if (!o) return NULL;
+    if (!header_name || !*header_name) header_name = "X-Forwarded-For";
+    o->header_name = strdup(header_name);
+    if (!o->header_name) { free(o); return NULL; }
+    return o;
+}
+
+void aether_real_ip_opts_free(AetherRealIpOpts* o) {
+    if (!o) return;
+    free(o->header_name);
+    free(o);
+}
+
+/* Append a single header to req->header_keys/values. Mirrors the
+ * memory ownership the HTTP/1.1 parser uses (each entry is a
+ * malloc'd string freed by http_request_free). Returns 0 on
+ * success, -1 on OOM. */
+static int request_append_header(HttpRequest* req,
+                                 const char* name,
+                                 const char* value) {
+    if (!req || !name || !value) return -1;
+    int n = req->header_count;
+    char** nk = (char**)realloc(req->header_keys,   (size_t)(n + 1) * sizeof(char*));
+    if (!nk) return -1;
+    req->header_keys = nk;
+    char** nv = (char**)realloc(req->header_values, (size_t)(n + 1) * sizeof(char*));
+    if (!nv) return -1;
+    req->header_values = nv;
+    req->header_keys[n]   = strdup(name);
+    req->header_values[n] = strdup(value);
+    if (!req->header_keys[n] || !req->header_values[n]) return -1;
+    req->header_count = n + 1;
+    return 0;
+}
+
+int aether_middleware_real_ip(HttpRequest* req, HttpServerResponse* res, void* user_data) {
+    (void)res;
+    AetherRealIpOpts* o = (AetherRealIpOpts*)user_data;
+    if (!o || !req) return 1;
+
+    /* Find the configured forward-list header (case-insensitive). */
+    const char* fwd = NULL;
+    for (int i = 0; i < req->header_count; i++) {
+        if (req->header_keys[i] &&
+            strcasecmp(req->header_keys[i], o->header_name) == 0) {
+            fwd = req->header_values[i];
+            break;
+        }
+    }
+    if (!fwd || !*fwd) {
+        /* No forward chain — nothing to extract. Continue without
+         * mutating the request; downstream handlers fall back to
+         * whatever IP-source they already used. */
+        return 1;
+    }
+
+    /* Take the leftmost token, trimmed of surrounding whitespace.
+     * Per RFC 7239 / X-Forwarded-For convention, the leftmost
+     * IP is the original client; subsequent entries are
+     * intermediate proxies. */
+    const char* p = fwd;
+    while (*p == ' ' || *p == '\t') p++;
+    const char* end = p;
+    while (*end && *end != ',' && *end != ' ' && *end != '\t') end++;
+    if (end == p) return 1;  /* empty token — give up */
+
+    char ip_buf[64];
+    size_t len = (size_t)(end - p);
+    if (len >= sizeof(ip_buf)) len = sizeof(ip_buf) - 1;
+    memcpy(ip_buf, p, len);
+    ip_buf[len] = '\0';
+
+    /* Idempotent: if X-Real-IP already set (we ran twice), don't
+     * append a duplicate that would mask the first. */
+    for (int i = 0; i < req->header_count; i++) {
+        if (req->header_keys[i] &&
+            strcasecmp(req->header_keys[i], "X-Real-IP") == 0) {
+            return 1;
+        }
+    }
+    request_append_header(req, "X-Real-IP", ip_buf);
+    return 1;  /* always continue the chain — middleware is
+                * informational, never short-circuits */
+}
+

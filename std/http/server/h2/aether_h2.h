@@ -82,6 +82,18 @@ int aether_h2_session_drain(AetherH2Session* sess,
  * close the connection. */
 int aether_h2_session_want_close(AetherH2Session* sess);
 
+/* Initiate graceful session termination — submits a GOAWAY frame
+ * (RFC 7540 §6.8) so the peer knows we won't accept new streams,
+ * but lets in-flight streams complete naturally. The next
+ * aether_h2_session_drain() call serialises the GOAWAY onto the
+ * wire; once all open streams finish, want_close flips to true and
+ * the connection driver exits cleanly.
+ *
+ * Idempotent — calling more than once is a no-op. Used by
+ * http_server_shutdown_graceful_raw to drain h2 connections when
+ * the process is winding down for a rolling deploy. */
+void aether_h2_session_initiate_goaway(AetherH2Session* sess);
+
 /* h2c (cleartext) upgrade entry point.
  *
  * Called by the HTTP/1.1 parser when it sees a complete request

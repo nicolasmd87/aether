@@ -44,6 +44,7 @@ exports (
     rewrite_add_rule,
     use_error_pages,
     error_pages_register,
+    use_real_ip,
 )
 
 // ---- Raw externs ----
@@ -283,5 +284,37 @@ use_error_pages(server: ptr, opts: ptr) -> {
         return "error_pages: opts is null (call aether_error_pages_opts_new first)"
     }
     http_server_use_response_transformer(server, aether_xform_error_pages, opts)
+    return ""
+}
+
+// Real-IP / X-Forwarded-For middleware. When the server sits
+// behind a load balancer, reverse proxy, or CDN, the connection-
+// level peer IP is the proxy. Operators conventionally pass the
+// original client through `X-Forwarded-For: client, proxy1, ...`
+// (leftmost = oldest, original client). This middleware reads the
+// configured header and adds an `X-Real-IP: <original>` header to
+// the request so downstream handlers, ratelimit, access logs, and
+// metrics see the client identity rather than the proxy.
+//
+//   header_name    — header to read from. Pass "" for the default
+//                    "X-Forwarded-For"; alternatives include
+//                    "Forwarded" (RFC 7239), "CF-Connecting-IP"
+//                    (Cloudflare), "True-Client-IP" (Akamai), etc.
+//
+// Trust model — this middleware does NOT validate that the
+// request actually came through a trusted proxy. Operators must
+// only run it behind trusted edge infrastructure that strips any
+// client-supplied X-Forwarded-For. Without that guarantee, callers
+// can spoof their apparent client IP. Returns "" on success, error
+// string on allocation failure.
+extern aether_real_ip_opts_new(header_name: string) -> ptr
+extern aether_middleware_real_ip(req: ptr, res: ptr, user_data: ptr) -> int
+
+use_real_ip(server: ptr, header_name: string) -> {
+    opts = aether_real_ip_opts_new(header_name)
+    if opts == null {
+        return "real_ip: allocation failed"
+    }
+    http_server_use_middleware(server, aether_middleware_real_ip, opts)
     return ""
 }

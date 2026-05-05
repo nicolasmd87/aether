@@ -147,6 +147,7 @@ HTTP/1.1 path) feed the same chain:
 | `middleware.use_vhost`        | ✓ |
 | `middleware.use_static`       | ✓ |
 | `middleware.use_rewrite`      | ✓ |
+| `middleware.use_real_ip`      | ✓ — X-Real-IP appended to the request, visible to handlers + downstream middleware on every h2 stream |
 | `middleware.use_gzip` (response transformer) | ✓ — `Content-Encoding: gzip` rides on the h2 HEADERS frame |
 | `middleware.use_error_pages`  | ✓ |
 | `http_server_set_health_probes` | ✓ |
@@ -302,13 +303,32 @@ ep = aether_error_pages_opts_new()
 middleware.error_pages_register(ep, 404, "<h1>Not found</h1>", "text/html")
 middleware.error_pages_register(ep, 500, "<h1>Server error</h1>", "text/html")
 middleware.use_error_pages(server, ep)
+
+// Real-IP / X-Forwarded-For — extracts the original client IP
+// when the server is behind a load balancer / reverse proxy / CDN.
+// Reads the configured header (default "X-Forwarded-For"), takes
+// the leftmost IP, and adds X-Real-IP to the request so downstream
+// handlers / ratelimit / access logs see the real client identity.
+// Pass "" for the default header name; alternatives include
+// "Forwarded", "CF-Connecting-IP", "True-Client-IP".
+middleware.use_real_ip(server, "")
 ```
 
 Middleware shape: each is a function-pointer chain entry. Pre-handler
 middleware (cors / basic_auth / rate_limit / vhost / static_files /
-rewrite) run before route dispatch and can short-circuit; response
-transformers (gzip / error_pages) run after the route handler emits
-the response. Order is registration order.
+rewrite / real_ip) run before route dispatch and can short-circuit;
+response transformers (gzip / error_pages) run after the route
+handler emits the response. Order is registration order.
+
+**Real-IP trust model.** `use_real_ip` does NOT validate that the
+request actually came through a trusted proxy. Operators must only
+run it behind trusted edge infrastructure that strips any
+client-supplied X-Forwarded-For — typical setups are a firewall-
+restricted port plus a load-balancer rule, or a CDN that overwrites
+X-Forwarded-For. Without that guarantee, callers can spoof their
+apparent client IP. The middleware is idempotent — running it
+twice (or running it after the edge already set X-Real-IP) doesn't
+double-tag the request.
 
 ---
 

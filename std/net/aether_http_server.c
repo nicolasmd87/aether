@@ -2466,7 +2466,20 @@ static void handle_h2_connection(HttpServer* server, HttpConn* conn,
     }
 
     uint8_t inbuf[16 * 1024];
+    int goaway_sent = 0;
     while (1) {
+        /* Graceful shutdown bridge (#260 Tier 3 + h2). When
+         * http_server_stop / http_server_shutdown_graceful flips
+         * is_running to 0, we send GOAWAY (RFC 7540 §6.8) once so
+         * the peer knows not to start new streams; in-flight
+         * streams keep running until they finish naturally. After
+         * the GOAWAY drains and all streams close, want_close
+         * flips and we exit. */
+        if (!goaway_sent && !server->is_running) {
+            aether_h2_session_initiate_goaway(sess);
+            goaway_sent = 1;
+        }
+
         int rc = aether_h2_session_drain(sess, h2_wire_write_cb);
         if (rc < 0) break;
         if (rc == 1) break;  /* clean close */

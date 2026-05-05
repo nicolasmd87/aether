@@ -758,6 +758,17 @@ int aether_h2_session_want_close(AetherH2Session* sess) {
     return (!want_read && !want_write) ? 1 : 0;
 }
 
+void aether_h2_session_initiate_goaway(AetherH2Session* sess) {
+    if (!sess || !sess->ng) return;
+    /* nghttp2_session_terminate_session submits GOAWAY with the
+     * given error code (NGHTTP2_NO_ERROR signals "we're done; no
+     * new streams" — the peer's existing streams complete normally).
+     * Subsequent want_read/want_write transitions to false once
+     * everything's drained, which our existing want_close logic
+     * already keys on. */
+    nghttp2_session_terminate_session(sess->ng, NGHTTP2_NO_ERROR);
+}
+
 /* ------------------------------------------------------------------
  * h2c (cleartext) upgrade — RFC 7540 §3.2.
  *
@@ -915,6 +926,9 @@ int aether_h2_session_drain(AetherH2Session* sess,
 }
 int aether_h2_session_want_close(AetherH2Session* sess) {
     (void)sess; return 1;
+}
+void aether_h2_session_initiate_goaway(AetherH2Session* sess) {
+    (void)sess;
 }
 AetherH2Session* aether_h2_session_from_h2c_upgrade(
     struct HttpServer* server,
