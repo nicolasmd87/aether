@@ -19,6 +19,7 @@ static int conn_buffered_is_h2_preface(HttpConn* conn);
 // Stubs when networking is unavailable
 HttpServer* http_server_create(int p) { (void)p; return NULL; }
 int http_server_bind_raw(HttpServer* s, const char* h, int p) { (void)s; (void)h; (void)p; return -1; }
+void http_server_set_host(HttpServer* s, const char* h) { (void)s; (void)h; }
 int http_server_start_raw(HttpServer* s) { (void)s; return -1; }
 void http_server_stop(HttpServer* s) { (void)s; }
 void http_server_free(HttpServer* s) { (void)s; }
@@ -915,6 +916,14 @@ const char* http_server_set_h2_concurrent_dispatch_raw(HttpServer* server,
     (void)worker_count;
     return "HTTP/2 unavailable: built without libnghttp2";
 #endif
+}
+
+void http_server_set_host(HttpServer* server, const char* host) {
+    if (!server || !host || !*host) return;
+    char* copy = strdup(host);
+    if (!copy) return;
+    if (server->host) free(server->host);
+    server->host = copy;
 }
 
 int http_server_bind_raw(HttpServer* server, const char* host, int port) {
