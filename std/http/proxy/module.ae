@@ -1,0 +1,256 @@
+// std.http.proxy — nginx-class reverse proxy.
+//
+// Closes #381. Forwards inbound HTTP requests to a pool of
+// upstream servers via std.http.client, with weighted load
+// balancing, active health checks, in-memory LRU response cache,
+// and per-upstream circuit breaker.
+//
+// Quick start (single upstream):
+//
+//     import std.http
+//     import std.http.proxy
+//
+//     main() {
+//         server = http.server_create(8080)
+//         err = proxy.use_simple_proxy(server, "/", "http://localhost:9000", 30)
+//         if err != "" { println("proxy: ${err}"); return }
+//         http.server_start(server)
+//     }
+//
+// Pool form (load balancing, health checks, cache):
+//
+//     pool = proxy.upstream_pool_new("weighted_rr", 30, 5000, 100)
+//     proxy.upstream_add(pool, "http://10.0.0.1:8080", 3)
+//     proxy.upstream_add(pool, "http://10.0.0.2:8080", 1)
+//     proxy.health_checks_enable(pool, "/health", 200, 5000, 1000, 2, 3)
+//     proxy.breaker_configure(pool, 5, 30000, 1)
+//
+//     cache = proxy.cache_new(1000, 65536, 60, "method_url_vary")
+//
+//     opts = proxy.opts_new()
+//     proxy.opts_bind_cache(opts, cache)
+//     proxy.opts_set_strip_prefix(opts, "/api")
+//
+//     err = proxy.use_reverse_proxy(server, "/api", pool, opts)
+
+exports (
+    upstream_pool_new, upstream_pool_free,
+    upstream_add, upstream_remove,
+    health_checks_enable,
+    breaker_configure,
+    cache_new, cache_free,
+    opts_new, opts_free,
+    opts_set_strip_prefix, opts_set_preserve_host, opts_set_xforwarded,
+    opts_bind_cache, opts_set_body_cap,
+    use_reverse_proxy, use_simple_proxy,
+)
+
+// ---- Raw externs ----
+
+extern aether_proxy_lb_algo_from_string(name: string) -> int
+extern aether_proxy_pool_new(algo: int,
+                             request_timeout_sec: int,
+                             dial_timeout_ms: int,
+                             max_inflight_per_up: int) -> ptr
+extern aether_proxy_pool_free(pool: ptr)
+extern aether_proxy_upstream_add(pool: ptr, base_url: string, weight: int) -> string
+extern aether_proxy_upstream_remove(pool: ptr, base_url: string) -> string
+
+extern aether_proxy_health_checks_enable(pool: ptr,
+                                         probe_path: string,
+                                         expect_status: int,
+                                         interval_ms: int,
+                                         timeout_ms: int,
+                                         healthy_threshold: int,
+                                         unhealthy_threshold: int) -> string
+
+extern aether_proxy_breaker_configure(pool: ptr,
+                                      failure_threshold: int,
+                                      open_duration_ms: int,
+                                      half_open_max: int) -> string
+
+extern aether_proxy_cache_key_strategy_from_string(name: string) -> int
+extern aether_proxy_cache_new(max_entries: int,
+                              max_body_bytes: int,
+                              default_ttl_sec: int,
+                              key_strategy: int) -> ptr
+extern aether_proxy_cache_free(cache: ptr)
+
+extern aether_proxy_opts_new() -> ptr
+extern aether_proxy_opts_free(opts: ptr)
+extern aether_proxy_opts_set_strip_prefix(opts: ptr, prefix: string) -> string
+extern aether_proxy_opts_set_preserve_host(opts: ptr, on: int) -> string
+extern aether_proxy_opts_set_xforwarded(opts: ptr, xff: int, xfp: int, xfh: int) -> string
+extern aether_proxy_opts_bind_cache(opts: ptr, cache: ptr) -> string
+extern aether_proxy_opts_set_body_cap(opts: ptr, max_body_bytes: int) -> string
+
+extern aether_proxy_use_reverse_proxy(server: ptr,
+                                      path_prefix: string,
+                                      pool: ptr,
+                                      opts: ptr) -> string
+extern aether_proxy_use_simple_proxy(server: ptr,
+                                     path_prefix: string,
+                                     upstream_url: string,
+                                     request_timeout_sec: int) -> string
+
+// ---- Aether-facing wrappers ----
+
+// Build a new upstream pool with the chosen LB algorithm.
+//
+//   lb_algo: "round_robin" (default) | "least_conn" | "ip_hash" | "weighted_rr"
+//   request_timeout_sec: per-upstream-call timeout (0 = block forever)
+//   dial_timeout_ms:     reserved for future use; pass 0
+//   max_inflight_per_up: cap on concurrent in-flight requests per
+//                        upstream; 0 disables the cap
+//
+// Returns null on bad inputs (unknown algo, negative timeouts) or OOM.
+upstream_pool_new(lb_algo: string,
+                  request_timeout_sec: int,
+                  dial_timeout_ms: int,
+                  max_inflight_per_up: int) -> ptr {
+    algo = aether_proxy_lb_algo_from_string(lb_algo)
+    if algo < 0 {
+        return 0
+    }
+    return aether_proxy_pool_new(algo, request_timeout_sec, dial_timeout_ms,
+                                  max_inflight_per_up)
+}
+
+// Decrement pool refcount; free + join the health-check thread on
+// zero. NULL-safe.
+upstream_pool_free(pool: ptr) {
+    aether_proxy_pool_free(pool)
+}
+
+// Add an upstream URL. weight is meaningful only under weighted_rr;
+// pass 1 elsewhere. Duplicate URLs return a non-empty error string.
+upstream_add(pool: ptr, base_url: string, weight: int) -> string {
+    return aether_proxy_upstream_add(pool, base_url, weight)
+}
+
+upstream_remove(pool: ptr, base_url: string) -> string {
+    return aether_proxy_upstream_remove(pool, base_url)
+}
+
+// Enable + start the health-check thread for the pool.
+//
+//   probe_path:           HTTP path to probe (e.g. "/health")
+//   expect_status:        0 = any 2xx, otherwise the exact status
+//   interval_ms:          between probes
+//   timeout_ms:           per-probe HTTP timeout
+//   healthy_threshold:    N consecutive OK probes to flip up
+//   unhealthy_threshold:  N consecutive failed probes to flip down
+//
+// Returns "" on success, error string on bad inputs or thread spawn
+// failure. Calling twice on the same pool stops the prior thread
+// and starts a new one with the new config.
+health_checks_enable(pool: ptr,
+                     probe_path: string,
+                     expect_status: int,
+                     interval_ms: int,
+                     timeout_ms: int,
+                     healthy_threshold: int,
+                     unhealthy_threshold: int) -> string {
+    return aether_proxy_health_checks_enable(pool, probe_path, expect_status,
+                                              interval_ms, timeout_ms,
+                                              healthy_threshold, unhealthy_threshold)
+}
+
+// Configure the per-upstream circuit breaker on a pool.
+// failure_threshold = 0 disables the breaker (default).
+//   failure_threshold: consecutive failures before OPEN
+//   open_duration_ms:  time in OPEN before HALF_OPEN
+//   half_open_max:     concurrent test requests admitted in HALF_OPEN
+breaker_configure(pool: ptr,
+                  failure_threshold: int,
+                  open_duration_ms: int,
+                  half_open_max: int) -> string {
+    return aether_proxy_breaker_configure(pool, failure_threshold,
+                                           open_duration_ms, half_open_max)
+}
+
+// Allocate a response cache.
+//
+//   max_entries:     LRU capacity
+//   max_body_bytes:  per-entry body cap; bigger responses skip cache
+//   default_ttl_sec: used when upstream emits no Cache-Control max-age
+//   key_strategy:    "url" | "method_url" | "method_url_vary"
+//
+// Returns null on bad inputs or OOM.
+cache_new(max_entries: int,
+          max_body_bytes: int,
+          default_ttl_sec: int,
+          key_strategy: string) -> ptr {
+    strat = aether_proxy_cache_key_strategy_from_string(key_strategy)
+    if strat < 0 {
+        return 0
+    }
+    return aether_proxy_cache_new(max_entries, max_body_bytes,
+                                   default_ttl_sec, strat)
+}
+
+cache_free(cache: ptr) {
+    aether_proxy_cache_free(cache)
+}
+
+// Allocate a per-mount options handle. Use the opts_set_* functions
+// to override defaults before calling use_reverse_proxy.
+opts_new() -> ptr {
+    return aether_proxy_opts_new()
+}
+
+opts_free(opts: ptr) {
+    aether_proxy_opts_free(opts)
+}
+
+// Strip `prefix` from req.path before forwarding. "/api" + req.path
+// "/api/users" → upstream sees "/users". "" disables the strip.
+opts_set_strip_prefix(opts: ptr, prefix: string) -> string {
+    return aether_proxy_opts_set_strip_prefix(opts, prefix)
+}
+
+// preserve_host=0 (default): rewrite Host: to upstream's host so
+// virtual-hosted upstreams route correctly.
+// preserve_host=1: forward client Host: verbatim (some upstreams
+// need this for correct URL generation in responses).
+opts_set_preserve_host(opts: ptr, on: int) -> string {
+    return aether_proxy_opts_set_preserve_host(opts, on)
+}
+
+// Toggle each X-Forwarded-* header injection. Each non-zero arg
+// enables that header. Defaults are all on (xff=1, xfp=1, xfh=1).
+opts_set_xforwarded(opts: ptr, xff: int, xfp: int, xfh: int) -> string {
+    return aether_proxy_opts_set_xforwarded(opts, xff, xfp, xfh)
+}
+
+// Bind a cache to this opts. Multiple opts (= multiple mounts) can
+// share one cache.
+opts_bind_cache(opts: ptr, cache: ptr) -> string {
+    return aether_proxy_opts_bind_cache(opts, cache)
+}
+
+// Default 8 MiB. Larger requests/responses get 502 Bad Gateway.
+opts_set_body_cap(opts: ptr, max_body_bytes: int) -> string {
+    return aether_proxy_opts_set_body_cap(opts, max_body_bytes)
+}
+
+// Mount the proxy under path_prefix. "/" forwards everything;
+// "/api" forwards just the /api subtree. Pool refcount is bumped
+// (and decremented on opts_free).
+use_reverse_proxy(server: ptr,
+                  path_prefix: string,
+                  pool: ptr,
+                  opts: ptr) -> string {
+    return aether_proxy_use_reverse_proxy(server, path_prefix, pool, opts)
+}
+
+// One-upstream convenience: builds a pool with one upstream + RR +
+// default opts, mounts the middleware, and returns "". The pool is
+// owned by the middleware and freed alongside the server.
+use_simple_proxy(server: ptr,
+                 path_prefix: string,
+                 upstream_url: string,
+                 request_timeout_sec: int) -> string {
+    return aether_proxy_use_simple_proxy(server, path_prefix, upstream_url,
+                                          request_timeout_sec)
+}
