@@ -34,7 +34,15 @@ PORT=18104
 # call http_server_start_raw until the SrvActor receives StartSrv —
 # which on slower runners (Windows GHA) can be ~hundreds of ms after
 # READY hits the log. Probe the port directly until curl succeeds.
-deadline=$(($(date +%s) + 15))
+#
+# 30s window: 5s→15s was Paul's Windows-runner bump in 12c0db4.
+# 15s started failing again on Windows GHA — bind logs "Server
+# running at..." but accept() takes longer than expected for the
+# first connection. Bumped to 30s to match http_server_h2_tls and
+# kept the diagnostic on failure so the underlying Windows
+# accept-loop slowness can be investigated when it surfaces.
+deadline=$(($(date +%s) + 30))
+last_curl_err="$TMPDIR/curl_probe.err"
 while [ "$(date +%s)" -lt "$deadline" ]; do
     if ! kill -0 "$SRV_PID" 2>/dev/null; then
         echo "  [FAIL] server died:"
@@ -42,14 +50,17 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
         exit 1
     fi
     if curl -s -o /dev/null --max-time 1 \
-            "http://127.0.0.1:$PORT/echo" 2>/dev/null; then
+            "http://127.0.0.1:$PORT/echo" 2>"$last_curl_err"; then
         break
     fi
     sleep 0.1
 done
 if [ "$(date +%s)" -ge "$deadline" ]; then
-    echo "  [FAIL] server never accepted connections within 15s"
-    head -20 "$TMPDIR/srv.log"
+    echo "  [FAIL] server never accepted connections within 30s"
+    echo "--- last curl error ---"
+    cat "$last_curl_err" 2>/dev/null
+    echo "--- server log ---"
+    head -30 "$TMPDIR/srv.log"
     exit 1
 fi
 
