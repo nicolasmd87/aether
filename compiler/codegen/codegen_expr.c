@@ -372,6 +372,21 @@ static int is_assigned_to(ASTNode* node, const char* name) {
         strcmp(node->value, name) == 0) {
         return 1;
     }
+    // Tuple destructure assigns to each non-discard target; if `name` is
+    // any of them, treat as assignment for promotion analysis. Without
+    // this, `out, status, _ = sh(...)` inside a closure body would
+    // miscompile against an unpromoted outer-scope `out` (closure-shadow
+    // -tuple-destructure bug, svn-aether porter Round 238/239).
+    if (node->type == AST_TUPLE_DESTRUCTURE && node->child_count >= 2) {
+        int var_count = node->child_count - 1;
+        for (int j = 0; j < var_count; j++) {
+            ASTNode* var = node->children[j];
+            if (var && var->value && strcmp(var->value, name) == 0 &&
+                strcmp(var->value, "_") != 0) {
+                return 1;
+            }
+        }
+    }
     for (int i = 0; i < node->child_count; i++) {
         if (is_assigned_to(node->children[i], name)) return 1;
     }
