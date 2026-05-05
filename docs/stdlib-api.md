@@ -721,6 +721,51 @@ main() {
 
 See [`docs/notes/http-client-improvement-plan.md`](notes/http-client-improvement-plan.md) for design rationale and `tests/integration/test_http_client_v2.ae` for ten worked examples (header round-trip, status discrimination, binary body, timeout, transport failure, JSON sugar, malformed-JSON parse failure).
 
+### HTTP Reverse Proxy (`std.http.proxy`)
+
+nginx-class outbound HTTP forwarding for the Aether server. Five
+load-balancing algorithms, active health checks, in-memory LRU
+response cache (Vary-aware), per-upstream circuit breaker,
+idempotent retry with `proxy_next_upstream` semantics, per-upstream
+token-bucket rate limit, active drain, W3C Trace-Context
+propagation, and Prometheus 0.0.4 metrics.
+
+```aether
+import std.http
+import std.http.proxy
+
+main() {
+    server = http.server_create(8080)
+    pool = proxy.upstream_pool_new("weighted_rr", 30, 0, 0)
+    proxy.upstream_add(pool, "http://10.0.0.1:8080", 3)
+    proxy.upstream_add(pool, "http://10.0.0.2:8080", 1)
+    proxy.health_checks_enable(pool, "/health", 200, 5000, 1000, 2, 3)
+    proxy.breaker_configure(pool, 5, 30000, 1)
+    cache = proxy.cache_new(1000, 65536, 60, "method_url_vary")
+    opts = proxy.opts_new()
+    proxy.opts_bind_cache(opts, cache)
+    proxy.opts_set_retry_policy(opts, 3, 100)
+    proxy.mount(server, "/api", pool, opts)
+    http.server_start(server)
+}
+```
+
+**Pool + LB**: `proxy.upstream_pool_new(lb_algo, request_timeout_sec, dial_timeout_ms, max_inflight_per_up) -> ptr` (algos: `round_robin`, `least_conn`, `ip_hash`, `weighted_rr`, `cookie_hash`), `upstream_pool_free`, `upstream_add(pool, base_url, weight)`, `upstream_remove`, `upstream_drain` / `upstream_undrain`, `pool_set_cookie_name`, `rate_limit_set(pool, max_rps, burst)`.
+
+**Health**: `proxy.health_checks_enable(pool, probe_path, expect_status, interval_ms, timeout_ms, healthy_threshold, unhealthy_threshold)`.
+
+**Breaker**: `proxy.breaker_configure(pool, failure_threshold, open_duration_ms, half_open_max)`.
+
+**Cache**: `proxy.cache_new(max_entries, max_body_bytes, default_ttl_sec, key_strategy) -> ptr` (strategies: `url`, `method_url`, `method_url_vary`).
+
+**Per-mount opts**: `opts_new`, `opts_set_strip_prefix`, `opts_set_preserve_host`, `opts_set_xforwarded(opts, xff, xfp, xfh)`, `opts_bind_cache`, `opts_set_body_cap`, `opts_set_retry_policy(opts, max_retries, backoff_base_ms)`, `opts_set_trace_inject(opts, on)`.
+
+**Install**: `proxy.mount(server, path_prefix, pool, opts)` or single-upstream `proxy.mount_simple(server, path_prefix, upstream_url, request_timeout_sec)`.
+
+**Metrics**: `proxy.pool_metrics_text(pool) -> string` returns Prometheus 0.0.4 exposition (per-upstream counters by status class, transport_errors, timeouts, retries, latency_ms_sum/count + gauges for inflight/healthy/breaker_state/draining; pool-level cache_hits/misses/revalidations/503_no_upstream).
+
+Full reference: [`docs/http-reverse-proxy.md`](http-reverse-proxy.md).
+
 ### HTTP Record/Replay (`std.http.server.vcr`)
 
 Aether's implementation of [Servirtium](https://servirtium.dev) — cross-language record/replay HTTP testing. Tapes are markdown, interoperable with Java/Kotlin/Python/Go implementations of the same framework.

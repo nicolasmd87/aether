@@ -453,7 +453,7 @@ import std.http.proxy
 
 main() {
     server = http.server_create(8080)
-    err = proxy.use_simple_proxy(server, "/", "http://localhost:9000", 30)
+    err = proxy.mount_simple(server, "/", "http://localhost:9000", 30)
     if err != "" { println("proxy: ${err}"); return }
     http.server_start(server)
 }
