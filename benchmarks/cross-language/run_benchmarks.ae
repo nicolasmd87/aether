@@ -414,9 +414,17 @@ main() {
         }
 
         // ---- Go ----
+        // `unset GOROOT` before go build: a stale GOROOT pointing
+        // at a different Go install than the `go` binary on PATH
+        // causes the classic 'compile: version "go1.X" does not
+        // match go tool version "go1.Y"' failure. Multi-version
+        // setups (gvm, asdf, brew + system Go) commonly leave
+        // GOROOT pointing at a stale version. Clearing it forces
+        // `go` to use its compile-time default GOROOT, which
+        // matches the binary on PATH.
         res = run_lang("Go",
-            string_concat("cd go && go build -o ", string_concat(pattern, string_concat(" ", string_concat(pattern, ".go >/dev/null 2>&1")))),
-            string_concat("cd go && BENCHMARK_MESSAGES=", string_concat(ms, string_concat(" ", string_concat(tc, string_concat(" ./", pattern))))),
+            string_concat("cd go && unset GOROOT && go build -o ", string_concat(pattern, string_concat(" ", string_concat(pattern, ".go >/dev/null 2>&1")))),
+            string_concat("cd go && unset GOROOT && BENCHMARK_MESSAGES=", string_concat(ms, string_concat(" ", string_concat(tc, string_concat(" ./", pattern))))),
             runs, 0, is_mac)
         if string_length(res) > 0 {
             if first == 0 {

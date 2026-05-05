@@ -119,12 +119,13 @@ the next stream's handler begins. For workloads where handlers do
 non-trivial work (database queries, large I/O, downstream HTTP
 calls), this caps the throughput a single TCP connection can drive.
 
-`http.server_set_h2_concurrent_dispatch(server, n)` opts each h2
-connection into a per-connection worker pool of `n` pthreads.
-Stream handlers run on those workers in parallel; the connection
-thread keeps reading frames and serialising responses. POSIX-only
-(macOS / Linux); on Windows the call is silently ignored and
-streams stay sequential.
+`http.server_set_h2_concurrent_dispatch(server, n)` opts the server
+into a **server-level** dispatch pool of `n` pthreads, shared
+across every h2 connection bound to the server. Stream handlers
+run on those workers in parallel; the connection thread keeps
+reading frames and serialising responses. POSIX-only (macOS /
+Linux); on Windows the call is silently ignored and streams stay
+sequential.
 
 ```aether
 http.server_set_h2(server, 0)                          // h2 enabled
@@ -140,19 +141,56 @@ Sizing guidance:
 | `8`–`16` | Heavy fan-out — handlers block on slow I/O. |
 | `> 16` | Diminishing returns; bound by physical cores and the connection accept queue. The setter caps at 64. |
 
-Concurrency model:
+#### Why pthreads, not actors?
+
+Aether actors are **virtual** — N actors are M:N-scheduled over a
+small pool of OS threads. They're ideal for non-blocking,
+cooperative work: spawning 10,000 actors costs near-zero memory
+and switches happen in user-space. They're *wrong* for HTTP
+handlers, though: HTTP handlers in this stack call arbitrary
+blocking C/Aether code (`sleep`, `fs.read`, `db.query`,
+`http.client_get`). A blocking actor monopolises its scheduler
+thread until it returns. With the actor scheduler holding only a
+few worker threads, blocking handlers under load would starve the
+host's entire actor system — including unrelated actors that have
+nothing to do with HTTP.
+
+Dedicated pthreads sidestep that: each blocked handler ties up
+*one* OS thread but the kernel keeps the rest of the system
+responsive. The OS scheduler is the right primitive when work
+units may block.
+
+#### Why server-level, not per-connection?
+
+The pool is shared across all h2 connections on the server. With a
+per-connection pool of size 4 and 1,000 keep-alive clients, the
+process would carry 4,000 pthreads — most of them idle. The
+server-level pool keeps the OS thread count bounded by `n`
+regardless of connection fan-out, mirroring how
+`HttpConnectionPool` (the existing HTTP/1.1 worker pool) is sized
+once at server startup.
+
+Per-session state (the wake pipe + ready queue) stays local
+because the connection thread doing nghttp2 serialisation is
+per-connection — targeted wake-up means a worker finishing a task
+on connection A doesn't bother connection B's poll loop.
+
+#### Lifetime + correctness
 
 - nghttp2_session is **not** thread-safe — only the connection
   thread calls into it. Workers receive the (request, response)
-  pair, run the route handler, and post the result back via a
-  ready queue.
-- The connection thread polls the socket fd and an internal
-  wake-pipe so a worker finishing mid-recv gets its response on
-  the wire promptly, not after the next inbound byte.
-- Graceful shutdown waits for in-flight tasks to complete before
-  flipping `want_close` — workers can't be discarded mid-handler.
-- Pool teardown runs on `aether_h2_session_free`, which joins all
-  worker pthreads and drains stragglers.
+  pair, run the route handler, and post the result back via the
+  session's ready queue. The connection thread submits the
+  response to nghttp2 on its own thread.
+- Each session tracks an `in_flight` counter. `aether_h2_session_free`
+  spins on it until all worker tasks belonging to that session
+  have been submitted, so the session never goes away while a
+  worker is mid-handler.
+- The pool itself is freed by `http_server_free`, after all
+  sessions have already been torn down.
+- Graceful shutdown (`http_server_shutdown_graceful`) waits for
+  in-flight tasks to complete before flipping `want_close` —
+  workers can't be discarded mid-handler.
 
 **Smoke test:**
 
