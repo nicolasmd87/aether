@@ -7,7 +7,7 @@ against RFC 8259.
 ## Contents
 
 - `cases/` — 318 test files imported from
-  [Nicolas Seriot's JSONTestSuite](https://github.com/nst/JSONTestSuite).
+  [JSONTestSuite](https://github.com/nst/JSONTestSuite).
   The filename prefix encodes the expected outcome:
   - `y_*.json` — any conforming parser MUST accept.
   - `n_*.json` — any conforming parser MUST reject.

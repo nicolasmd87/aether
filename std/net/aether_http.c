@@ -1054,7 +1054,7 @@ HttpResponse* http_get_raw(const char* url) {
     return resp;
 }
 
-// http_get_raw + per-call timeout. Closes Teuvo's polling-loop pain
+// http_get_raw + per-call timeout. Closes the polling-loop pain
 // where one hung site held the actor's whole AnalyzeNext handler
 // hostage. Default `http_get_raw` blocks forever for backward
 // compatibility; new callers should reach for this variant any time

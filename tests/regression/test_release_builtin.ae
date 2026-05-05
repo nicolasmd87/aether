@@ -3,8 +3,8 @@
 // Issue: `string.release(s)` works today but requires the user to
 // import std.string and remember the namespace. The bare `release(X)`
 // builtin is the ergonomic shortcut for `defer release(body)` after
-// `body, err = http.get(url)` — what would otherwise be Teuvo's
-// per-iteration leak.
+// `body, err = http.get(url)` — what would otherwise be a
+// per-iteration leak in a polling loop.
 //
 // What we exercise:
 //   1) bare `release(s)` on a string-typed local
@@ -27,8 +27,8 @@ main() {
         println(b)
     }
 
-    // 3) Loop pattern — equivalent to Teuvo's site-poller iteration
-    // shape. Without release(), this would leak ~64 bytes per
+    // 3) Loop pattern — equivalent to a polling-loop iteration.
+    // Without release(), this would leak ~64 bytes per
     // iteration; with release() the refcount returns to zero and
     // the underlying buffer is freed.
     i = 0

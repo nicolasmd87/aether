@@ -2,7 +2,7 @@
 
 Aether 0.51.0 adds two scope-level directives that let a block decline to
 see selected names from its enclosing lexical scopes. They are the
-language-level expression of [Paul Hammant's "Principles of Containment"](
+language-level expression of the ["Principles of Containment"](
 https://paulhammant.com/2016/12/14/principles-of-containment/) — capability
 flow becomes explicit not just on the way *in* (via dependency injection)
 but also on the way *out* (via name denial).
