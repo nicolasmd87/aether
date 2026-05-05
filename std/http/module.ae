@@ -21,6 +21,7 @@ exports (
     http_server_set_tls_raw, server_set_tls,
     http_server_set_keepalive_raw, server_set_keepalive,
     http_server_set_h2_raw, server_set_h2,
+    http_server_set_h2_concurrent_dispatch_raw, server_set_h2_concurrent_dispatch,
     http_server_drain_connection,
     http_server_shutdown_graceful_raw, server_shutdown_graceful,
     http_server_set_on_start, http_server_set_on_stop,
@@ -296,6 +297,25 @@ extern http_server_set_h2_raw(server: ptr, max_concurrent_streams: int) -> strin
 
 server_set_h2(server: ptr, max_concurrent_streams: int) -> {
     return http_server_set_h2_raw(server, max_concurrent_streams)
+}
+
+// Per-stream concurrent dispatch for HTTP/2. When `worker_count`
+// is greater than 0, each h2 connection spawns this many worker
+// threads so multiple streams can run their handlers in parallel.
+// Default 0 = sequential dispatch on the connection thread (legacy
+// behaviour). Returns "" on success, error string otherwise.
+//
+//   workers   typical use
+//   -------   --------------------------------------------------
+//   0         keep handlers on the connection thread (default)
+//   4         small fan-out — most servers
+//   8–16      heavy fan-out — handler runs DB queries / large I/O
+//   >16       diminishing returns; bound by the connection accept
+//             queue and the number of physical cores
+extern http_server_set_h2_concurrent_dispatch_raw(server: ptr, worker_count: int) -> string
+
+server_set_h2_concurrent_dispatch(server: ptr, worker_count: int) -> {
+    return http_server_set_h2_concurrent_dispatch_raw(server, worker_count)
 }
 
 // HTTP/1.1 keep-alive (#260 Tier 0). When enabled, the server reads

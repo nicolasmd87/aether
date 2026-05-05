@@ -65,6 +65,66 @@ void aether_basic_auth_opts_free(AetherBasicAuthOpts* opts);
 int aether_middleware_basic_auth(HttpRequest* req, HttpServerResponse* res, void* user_data);
 
 // -----------------------------------------------------------------
+// Bearer Token Authentication (RFC 6750)
+// -----------------------------------------------------------------
+//
+// Reads `Authorization: Bearer <token>` and hands the raw token
+// string to a verifier callback. Used for OAuth 2.0 access tokens,
+// JWTs, opaque API keys, or any other bearer-credential scheme —
+// the middleware does not interpret the token; the verifier owns
+// validation (signature check / DB lookup / introspection / etc).
+//
+// On failure the response is 401 with a `WWW-Authenticate: Bearer
+// realm="<realm>"[, error="invalid_token"]` header per RFC 6750
+// §3.1, so a conforming client can distinguish "no credential" from
+// "bad credential."
+typedef struct AetherBearerAuthOpts AetherBearerAuthOpts;
+
+// Verifier signature: receives the token (the substring after
+// `Bearer `) and returns 1 if valid, 0 otherwise.
+typedef int (*AetherBearerAuthVerifier)(const char* token,
+                                        void* verifier_user_data);
+
+AetherBearerAuthOpts* aether_bearer_auth_opts_new(const char* realm,
+                                                  AetherBearerAuthVerifier verify,
+                                                  void* verifier_user_data);
+void aether_bearer_auth_opts_free(AetherBearerAuthOpts* opts);
+
+int aether_middleware_bearer_auth(HttpRequest* req, HttpServerResponse* res, void* user_data);
+
+// -----------------------------------------------------------------
+// Session-Cookie Authentication
+// -----------------------------------------------------------------
+//
+// Reads a named cookie from the `Cookie:` header and hands the
+// cookie value to a verifier callback that resolves it to a
+// session (DB lookup / signed-token verify / Redis hit / etc).
+//
+// On failure the response is 401 with a configurable redirect
+// (typical login-page redirect: pass a non-empty `redirect_url`
+// to emit a 302 to it instead of the 401, so browsers send the
+// user to the login page).
+typedef struct AetherSessionAuthOpts AetherSessionAuthOpts;
+
+// Verifier signature: receives the cookie value and returns 1 if
+// valid, 0 otherwise.
+typedef int (*AetherSessionAuthVerifier)(const char* cookie_value,
+                                         void* verifier_user_data);
+
+// `cookie_name`  — name of the session cookie (e.g. "SESSIONID").
+// `redirect_url` — when non-NULL/non-empty, unauthenticated
+//                  requests get a 302 to this URL instead of 401.
+//                  Useful for browser-facing apps that prefer a
+//                  login-page redirect over a JSON 401.
+AetherSessionAuthOpts* aether_session_auth_opts_new(const char* cookie_name,
+                                                    const char* redirect_url,
+                                                    AetherSessionAuthVerifier verify,
+                                                    void* verifier_user_data);
+void aether_session_auth_opts_free(AetherSessionAuthOpts* opts);
+
+int aether_middleware_session_auth(HttpRequest* req, HttpServerResponse* res, void* user_data);
+
+// -----------------------------------------------------------------
 // Token-bucket rate limiter (per-client-IP)
 // -----------------------------------------------------------------
 typedef struct AetherRateLimitOpts AetherRateLimitOpts;

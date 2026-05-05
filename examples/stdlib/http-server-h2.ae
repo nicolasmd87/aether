@@ -70,6 +70,18 @@ main() {
         println("h2 unavailable: ${h2_err} (continuing as HTTP/1.1 only)")
     } else {
         println("h2 enabled")
+
+        // Per-stream concurrent dispatch: handlers on each h2
+        // connection run on a 4-thread pool so multiple streams
+        // can execute their handlers in parallel. Default is 0
+        // (sequential dispatch on the connection thread). POSIX-
+        // only; on Windows the call is a silent no-op.
+        cd_err = http.server_set_h2_concurrent_dispatch(server, 4)
+        if cd_err != "" {
+            println("concurrent dispatch unavailable: ${cd_err}")
+        } else {
+            println("h2 concurrent dispatch: 4 workers per connection")
+        }
     }
 
     // Uncomment to serve over TLS with ALPN-negotiated h2:

@@ -111,6 +111,49 @@ What the toggle changes:
 value advertised to peers. Pass `0` for libnghttp2's default
 (100).
 
+### Per-stream concurrent dispatch
+
+By default, h2 streams within one connection dispatch sequentially
+on the connection thread — each handler runs to completion before
+the next stream's handler begins. For workloads where handlers do
+non-trivial work (database queries, large I/O, downstream HTTP
+calls), this caps the throughput a single TCP connection can drive.
+
+`http.server_set_h2_concurrent_dispatch(server, n)` opts each h2
+connection into a per-connection worker pool of `n` pthreads.
+Stream handlers run on those workers in parallel; the connection
+thread keeps reading frames and serialising responses. POSIX-only
+(macOS / Linux); on Windows the call is silently ignored and
+streams stay sequential.
+
+```aether
+http.server_set_h2(server, 0)                          // h2 enabled
+http.server_set_h2_concurrent_dispatch(server, 4)      // 4-way fan-out
+```
+
+Sizing guidance:
+
+| `n` | When to use |
+|----|-------------|
+| `0` (default) | Handlers are CPU-light or already async. Sequential dispatch keeps memory + thread count low. |
+| `4`  | Most servers — handlers do a DB hit / upstream call per request. |
+| `8`–`16` | Heavy fan-out — handlers block on slow I/O. |
+| `> 16` | Diminishing returns; bound by physical cores and the connection accept queue. The setter caps at 64. |
+
+Concurrency model:
+
+- nghttp2_session is **not** thread-safe — only the connection
+  thread calls into it. Workers receive the (request, response)
+  pair, run the route handler, and post the result back via a
+  ready queue.
+- The connection thread polls the socket fd and an internal
+  wake-pipe so a worker finishing mid-recv gets its response on
+  the wire promptly, not after the next inbound byte.
+- Graceful shutdown waits for in-flight tasks to complete before
+  flipping `want_close` — workers can't be discarded mid-handler.
+- Pool teardown runs on `aether_h2_session_free`, which joins all
+  worker pthreads and drains stragglers.
+
 **Smoke test:**
 
 ```bash
@@ -283,8 +326,25 @@ middleware.use_rate_limit(server, 100, 60000)
 // Virtual host gate
 middleware.use_vhost(server, "api.example.com,app.example.com")
 
-// Basic auth (verifier is a @c_callback Aether function)
+// Basic auth (verifier is a @c_callback Aether function — receives
+// decoded username + password, returns 1 if valid, 0 otherwise)
 middleware.use_basic_auth(server, "Restricted", verify_creds_cb, null)
+
+// Bearer token auth — RFC 6750. The verifier receives the raw
+// token (the substring after `Bearer `); validation is up to the
+// caller (JWT signature check / opaque-token DB lookup / OAuth
+// introspection). On failure the response is 401 with
+// `WWW-Authenticate: Bearer realm="api"[, error="invalid_token"]`
+// so RFC 6750-aware clients can distinguish "no credentials"
+// from "bad credentials."
+middleware.use_bearer_auth(server, "api", verify_token_cb, null)
+
+// Session-cookie auth — reads a named cookie and hands the value
+// to a verifier (DB lookup / signed-token verify). On failure,
+// when redirect_url is non-empty, browsers get a 302 to the
+// login page; pass "" to return a JSON-API-style 401 instead.
+middleware.use_session_auth(server, "SESSIONID", "/login",
+                             verify_session_cb, null)
 
 // Response-side gzip (skips bodies < min_size, skips when client
 // did not advertise Accept-Encoding: gzip, etc)

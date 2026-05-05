@@ -211,6 +211,188 @@ int aether_middleware_basic_auth(HttpRequest* req, HttpServerResponse* res, void
 }
 
 // -----------------------------------------------------------------
+// Bearer Token Authentication (RFC 6750)
+// -----------------------------------------------------------------
+struct AetherBearerAuthOpts {
+    char* realm;
+    AetherBearerAuthVerifier verify;
+    void* verifier_user_data;
+};
+
+AetherBearerAuthOpts* aether_bearer_auth_opts_new(const char* realm,
+                                                  AetherBearerAuthVerifier verify,
+                                                  void* verifier_user_data) {
+    if (!verify) return NULL;
+    AetherBearerAuthOpts* o = (AetherBearerAuthOpts*)calloc(1, sizeof(AetherBearerAuthOpts));
+    if (!o) return NULL;
+    o->realm = realm && *realm ? strdup(realm) : strdup("api");
+    o->verify = verify;
+    o->verifier_user_data = verifier_user_data;
+    return o;
+}
+
+void aether_bearer_auth_opts_free(AetherBearerAuthOpts* o) {
+    if (!o) return;
+    free(o->realm);
+    free(o);
+}
+
+/* Per RFC 6750 §3.1: the Bearer challenge can carry an `error`
+ * parameter that distinguishes "no credentials" from "bad
+ * credentials". Conforming clients (curl, OAuth libraries) use
+ * this to decide whether to retry vs. prompt the user. */
+static void bearer_challenge(HttpServerResponse* res,
+                             const char* realm,
+                             const char* error) {
+    char hdr[512];
+    if (error && *error) {
+        snprintf(hdr, sizeof(hdr),
+                 "Bearer realm=\"%s\", error=\"%s\"", realm, error);
+    } else {
+        snprintf(hdr, sizeof(hdr), "Bearer realm=\"%s\"", realm);
+    }
+    http_response_set_header(res, "WWW-Authenticate", hdr);
+    http_response_set_status(res, 401);
+    http_response_set_body(res, "Unauthorized");
+}
+
+int aether_middleware_bearer_auth(HttpRequest* req, HttpServerResponse* res, void* user_data) {
+    AetherBearerAuthOpts* o = (AetherBearerAuthOpts*)user_data;
+    if (!o || !o->verify) return 1;
+
+    const char* auth = http_get_header(req, "Authorization");
+    if (!auth || strncasecmp(auth, "Bearer ", 7) != 0) {
+        /* No credential — base challenge, no `error` param. */
+        bearer_challenge(res, o->realm, NULL);
+        return 0;
+    }
+
+    /* Skip the "Bearer " prefix and any whitespace. The token itself
+     * is RFC-defined as 1*( ALPHA / DIGIT / "-" / "." / "_" / "~" /
+     * "+" / "/" ) [ "=" *"=" ] but we don't enforce — verifiers
+     * commonly accept tighter or looser shapes (JWTs are dotted,
+     * opaque tokens are URL-safe base64, etc.). */
+    const char* token = auth + 7;
+    while (*token == ' ' || *token == '\t') token++;
+
+    if (!*token) {
+        /* "Bearer" with no token. Treat as malformed credential. */
+        bearer_challenge(res, o->realm, "invalid_token");
+        return 0;
+    }
+
+    int ok = o->verify(token, o->verifier_user_data);
+    if (!ok) {
+        bearer_challenge(res, o->realm, "invalid_token");
+        return 0;
+    }
+    return 1;
+}
+
+// -----------------------------------------------------------------
+// Session-Cookie Authentication
+// -----------------------------------------------------------------
+struct AetherSessionAuthOpts {
+    char* cookie_name;
+    char* redirect_url;          /* NULL -> 401, non-NULL -> 302 */
+    AetherSessionAuthVerifier verify;
+    void* verifier_user_data;
+};
+
+AetherSessionAuthOpts* aether_session_auth_opts_new(const char* cookie_name,
+                                                    const char* redirect_url,
+                                                    AetherSessionAuthVerifier verify,
+                                                    void* verifier_user_data) {
+    if (!verify || !cookie_name || !*cookie_name) return NULL;
+    AetherSessionAuthOpts* o = (AetherSessionAuthOpts*)calloc(1, sizeof(AetherSessionAuthOpts));
+    if (!o) return NULL;
+    o->cookie_name = strdup(cookie_name);
+    o->redirect_url = (redirect_url && *redirect_url) ? strdup(redirect_url) : NULL;
+    o->verify = verify;
+    o->verifier_user_data = verifier_user_data;
+    return o;
+}
+
+void aether_session_auth_opts_free(AetherSessionAuthOpts* o) {
+    if (!o) return;
+    free(o->cookie_name);
+    free(o->redirect_url);
+    free(o);
+}
+
+/* Extract the value of cookie `name` from a Cookie: header value.
+ * Cookie syntax (RFC 6265 §4.2.1): `name1=val1; name2=val2; ...`.
+ * Names match case-sensitively per RFC 6265. Cookie values can
+ * contain anything except `;` `,` whitespace or control chars in
+ * the unquoted form, or anything except `"` and control chars in
+ * the quoted form. Quoted values: surrounding `"` is stripped.
+ *
+ * Returns a heap-allocated copy of the matched value, or NULL if
+ * absent. Caller frees. */
+static char* cookie_extract(const char* header_value, const char* name) {
+    if (!header_value || !name) return NULL;
+    size_t name_len = strlen(name);
+    const char* p = header_value;
+    while (*p) {
+        while (*p == ' ' || *p == '\t') p++;
+        if (!*p) break;
+
+        const char* eq = strchr(p, '=');
+        if (!eq) break;
+        size_t key_len = (size_t)(eq - p);
+        /* Trim trailing whitespace from key. */
+        while (key_len > 0 && (p[key_len - 1] == ' ' || p[key_len - 1] == '\t')) key_len--;
+
+        const char* val_start = eq + 1;
+        const char* val_end = strchr(val_start, ';');
+        if (!val_end) val_end = val_start + strlen(val_start);
+
+        if (key_len == name_len && strncmp(p, name, name_len) == 0) {
+            const char* vs = val_start;
+            const char* ve = val_end;
+            /* Strip surrounding quotes if present. */
+            if (ve > vs && *vs == '"' && ve[-1] == '"') {
+                vs++;
+                ve--;
+            }
+            size_t vlen = (size_t)(ve - vs);
+            char* out = (char*)malloc(vlen + 1);
+            if (!out) return NULL;
+            memcpy(out, vs, vlen);
+            out[vlen] = '\0';
+            return out;
+        }
+
+        p = (*val_end == ';') ? val_end + 1 : val_end;
+    }
+    return NULL;
+}
+
+int aether_middleware_session_auth(HttpRequest* req, HttpServerResponse* res, void* user_data) {
+    AetherSessionAuthOpts* o = (AetherSessionAuthOpts*)user_data;
+    if (!o || !o->verify) return 1;
+
+    const char* cookie_hdr = http_get_header(req, "Cookie");
+    char* value = cookie_hdr ? cookie_extract(cookie_hdr, o->cookie_name) : NULL;
+
+    int ok = (value != NULL) && o->verify(value, o->verifier_user_data);
+    free(value);
+
+    if (!ok) {
+        if (o->redirect_url) {
+            http_response_set_header(res, "Location", o->redirect_url);
+            http_response_set_status(res, 302);
+            http_response_set_body(res, "");
+        } else {
+            http_response_set_status(res, 401);
+            http_response_set_body(res, "Unauthorized");
+        }
+        return 0;
+    }
+    return 1;
+}
+
+// -----------------------------------------------------------------
 // Token-bucket rate limiter (per-client-IP)
 // -----------------------------------------------------------------
 typedef struct RateBucket {

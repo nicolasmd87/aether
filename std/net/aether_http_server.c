@@ -28,6 +28,9 @@ const char* http_server_set_tls_raw(HttpServer* s, const char* c, const char* k)
 const char* http_server_set_h2_raw(HttpServer* s, int m) {
     (void)s; (void)m; return "HTTP/2 unavailable: networking not built in";
 }
+const char* http_server_set_h2_concurrent_dispatch_raw(HttpServer* s, int n) {
+    (void)s; (void)n; return "HTTP/2 unavailable: networking not built in";
+}
 const char* http_server_set_keepalive_raw(HttpServer* s, int e, int m, int i) {
     (void)s; (void)e; (void)m; (void)i; return "keep-alive unavailable: networking not built in";
 }
@@ -894,6 +897,20 @@ const char* http_server_set_h2_raw(HttpServer* server,
     return "";
 #else
     (void)max_concurrent_streams;
+    return "HTTP/2 unavailable: built without libnghttp2";
+#endif
+}
+
+const char* http_server_set_h2_concurrent_dispatch_raw(HttpServer* server,
+                                                       int worker_count) {
+    if (!server) return "server is null";
+    if (worker_count < 0) return "worker_count must be >= 0";
+    if (worker_count > 64) return "worker_count must be <= 64";
+#ifdef AETHER_HAS_NGHTTP2
+    server->h2_dispatch_workers = worker_count;
+    return "";
+#else
+    (void)worker_count;
     return "HTTP/2 unavailable: built without libnghttp2";
 #endif
 }
@@ -2467,6 +2484,7 @@ static void handle_h2_connection(HttpServer* server, HttpConn* conn,
 
     uint8_t inbuf[16 * 1024];
     int goaway_sent = 0;
+    int wake_fd = aether_h2_session_wake_fd(sess);  /* -1 when no pool */
     while (1) {
         /* Graceful shutdown bridge (#260 Tier 3 + h2). When
          * http_server_stop / http_server_shutdown_graceful flips
@@ -2480,16 +2498,51 @@ static void handle_h2_connection(HttpServer* server, HttpConn* conn,
             goaway_sent = 1;
         }
 
+        /* Drain any worker-completed responses BEFORE the wire
+         * drain so their frames go out in this same iteration. */
+        aether_h2_session_drain_ready(sess);
+
         int rc = aether_h2_session_drain(sess, h2_wire_write_cb);
         if (rc < 0) break;
         if (rc == 1) break;  /* clean close */
 
         if (aether_h2_session_want_close(sess)) break;
 
+#if !defined(_WIN32)
+        /* When concurrent dispatch is on, poll the socket AND the
+         * wake pipe so a worker finishing mid-recv doesn't have to
+         * wait for the next byte from the peer to get its response
+         * onto the wire. wake_fd == -1 when the pool is off — fall
+         * through to the plain blocking recv path. */
+        if (wake_fd >= 0) {
+            struct pollfd pfds[2];
+            pfds[0].fd = conn->fd;       pfds[0].events = POLLIN; pfds[0].revents = 0;
+            pfds[1].fd = wake_fd;         pfds[1].events = POLLIN; pfds[1].revents = 0;
+            /* 1s timeout so the graceful-shutdown / is_running flag
+             * gets re-checked at least once per second even when the
+             * connection is otherwise idle. */
+            int pr = poll(pfds, 2, 1000);
+            if (pr < 0) { if (errno == EINTR) continue; break; }
+            if (pr == 0) continue;  /* timeout — re-loop */
+            if (pfds[1].revents & POLLIN) {
+                /* drain_ready will run at the top of the next loop
+                 * iteration (it also drains the pipe). */
+                continue;
+            }
+            if (!(pfds[0].revents & POLLIN)) continue;
+            /* fall through to recv */
+        }
+#endif
+
         int n = conn_recv(conn, inbuf, (int)sizeof(inbuf));
         if (n <= 0) break;  /* EOF / timeout / error */
         if (aether_h2_session_feed(sess, inbuf, (size_t)n) < 0) break;
     }
+
+    /* Final drain — any worker tasks still queued must complete or
+     * be cancelled cleanly before the session goes away. drain_ready
+     * is a no-op when no pool. */
+    aether_h2_session_drain_ready(sess);
 
     /* Final drain so any GOAWAY / pending frames make it to the
      * peer before we tear down the session. */
