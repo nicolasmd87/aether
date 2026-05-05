@@ -719,7 +719,7 @@ main() {
 - `client.post_json(url, value)` → `(ptr, string)` - Marshal value via `std.json`, set Content-Type + Accept
 - `client.response_body_json(resp)` → `(ptr, string)` - `response_body` + `json.parse` round-trip
 
-See `std/http/README.md` for design rationale and `tests/integration/test_http_client_v2.ae` for ten worked examples (header round-trip, status discrimination, binary body, timeout, transport failure, JSON sugar, malformed-JSON parse failure).
+See [`docs/notes/http-client-improvement-plan.md`](notes/http-client-improvement-plan.md) for design rationale and `tests/integration/test_http_client_v2.ae` for ten worked examples (header round-trip, status discrimination, binary body, timeout, transport failure, JSON sugar, malformed-JSON parse failure).
 
 ### HTTP Record/Replay (`std.http.server.vcr`)
 
@@ -758,7 +758,7 @@ main() {
 
 **Markdown format options:** `vcr.emphasize_http_verbs()` / `vcr.indent_code_blocks()` / `vcr.clear_format_options()` — alternative emit forms; playback tolerates either.
 
-Full surface, design notes, and the runnable test suite live in `std/http/README.md`.
+Full surface, the Servirtium roadmap status, tape format, and the test coverage map live in [`docs/http-vcr.md`](http-vcr.md).
 
 ### TCP Sockets (Go-style)
 

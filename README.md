@@ -421,6 +421,7 @@ The runtime employs a tiered optimization strategy:
 - [Standard Library Reference](docs/stdlib-reference.md) - Full stdlib surface
 - [HTTP Server](docs/http-server.md) - TLS, HTTP/2, middleware, health probes, metrics, graceful shutdown
 - [Reverse Proxy](docs/http-reverse-proxy.md) - `std.http.proxy` upstream pool, load balancing, health, cache, circuit breaker
+- [HTTP Record/Replay (VCR)](docs/http-vcr.md) - `std.http.server.vcr` Servirtium-format record/replay for HTTP tests
 - [Install Layout](docs/install-layout.md) - What ships in `~/.aether`, MANIFEST format, downstream-link contract
 - [C Interoperability](docs/c-interop.md) - Using C libraries and the `extern` keyword
 - [Architecture Overview](docs/architecture.md) - Runtime and compiler design

@@ -9,7 +9,7 @@
 >
 > Most thoroughly stress-tested by the Servirtium record/replay work
 > in `std/http/server/vcr/` (12 of 16 roadmap steps shipped). See
-> `std/http/README.md` for the full surface summary.
+> [`docs/http-vcr.md`](../http-vcr.md) for the full surface summary.
 
 
 `std.http` v1 client is a great starting shape: `http.get(url) -> (body, err)`

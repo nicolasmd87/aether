@@ -1098,7 +1098,7 @@ main() {
 - `client.post_json(url, value)` → `(ptr, string)` - Marshal a JSON value (`std.json`), set `Content-Type` + `Accept` to `application/json`, send
 - `client.response_body_json(resp)` → `(ptr, string)` - Wrap `response_body` + `json.parse`; returns `(value, "")` on success or `(null, parse_error)` on malformed JSON
 
-Full design notes live in `std/http/README.md` (why `method: string`, why non-2xx-is-not-an-error, why `send_request` not `send`); `tests/integration/test_http_client_v2.ae` is the runnable example file.
+Design notes (why `method: string`, why non-2xx-is-not-an-error, why `send_request` not `send`) live in [`docs/notes/http-client-improvement-plan.md`](notes/http-client-improvement-plan.md); `tests/integration/test_http_client_v2.ae` is the runnable example file.
 
 ### HTTP record/replay (`std.http.server.vcr`)
 
@@ -1162,7 +1162,7 @@ main() {
 - `vcr.indent_code_blocks()` - Emit 4-space-indented blocks instead of triple-backtick fences
 - `vcr.clear_format_options()` - Reset to defaults
 
-The full surface and design notes live in `std/http/README.md`. Hostile-tape compatibility fixtures from servirtium/README's `broken_recordings/` are checked in under `tests/integration/tapes/` and exercised by the strict-match integration tests.
+The full surface (Servirtium roadmap status, tape format, "when not to use VCR" guidance, test coverage map) lives in [`docs/http-vcr.md`](http-vcr.md). Hostile-tape compatibility fixtures from the Servirtium project's `broken_recordings/` are checked in under `tests/integration/tapes/` and exercised by the strict-match integration tests.
 
 ### TCP (`std.tcp`)
 
