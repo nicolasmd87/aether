@@ -52,6 +52,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "../../../string/aether_string.h"
+
 /* --- These come from std.http.server's request/response surface. --- */
 extern const char* http_request_method(void* req);
 extern const char* http_request_path(void* req);
@@ -60,6 +62,7 @@ extern void        http_response_set_header(void* res, const char* name, const c
 extern void        http_response_add_header(void* res, const char* name, const char* value);
 extern void        http_response_clear_headers(void* res);
 extern void        http_response_set_body  (void* res, const char* body);
+extern void        http_response_set_body_n(void* res, const char* body, int length);
 
 /* Step 10: header iteration + body access. We need to walk the
  * full set of request headers (not just look one up by name) to
@@ -211,6 +214,103 @@ static void last_err_set(const char* msg) {
 static void tape_set_err(const char* msg) {
     free(g_tape_err);
     g_tape_err = msg ? strdup(msg) : NULL;
+}
+
+static int ascii_ci_contains(const char* haystack, const char* needle) {
+    if (!haystack || !needle || !*needle) return 0;
+    size_t nlen = strlen(needle);
+    for (const char* h = haystack; *h; h++) {
+        size_t i = 0;
+        while (i < nlen && h[i]) {
+            char a = h[i];
+            char b = needle[i];
+            if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+            if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
+            if (a != b) break;
+            i++;
+        }
+        if (i == nlen) return 1;
+    }
+    return 0;
+}
+
+static int b64_value(unsigned char c) {
+    if (c >= 'A' && c <= 'Z') return (int)(c - 'A');
+    if (c >= 'a' && c <= 'z') return (int)(c - 'a') + 26;
+    if (c >= '0' && c <= '9') return (int)(c - '0') + 52;
+    if (c == '+') return 62;
+    if (c == '/') return 63;
+    if (c == '=') return -2;
+    return -1;
+}
+
+static int b64_is_space(unsigned char c) {
+    return c == ' ' || c == '\t' || c == '\n' || c == '\r';
+}
+
+static int decode_base64_body(const char* src, unsigned char** out, int* out_len) {
+    if (!src || !out || !out_len) return 0;
+    *out = NULL;
+    *out_len = 0;
+
+    size_t src_len = strlen(src);
+    unsigned char* clean = (unsigned char*)malloc(src_len + 4);
+    if (!clean) return 0;
+
+    size_t clen = 0;
+    for (size_t i = 0; i < src_len; i++) {
+        unsigned char c = (unsigned char)src[i];
+        if (b64_is_space(c)) continue;
+        clean[clen++] = c;
+    }
+    while (clen % 4 != 0) clean[clen++] = '=';
+
+    unsigned char* buf = (unsigned char*)malloc((clen / 4) * 3 + 1);
+    if (!buf) {
+        free(clean);
+        return 0;
+    }
+
+    size_t off = 0;
+    for (size_t i = 0; i < clen; i += 4) {
+        int v0 = b64_value(clean[i]);
+        int v1 = b64_value(clean[i + 1]);
+        int v2 = b64_value(clean[i + 2]);
+        int v3 = b64_value(clean[i + 3]);
+        if (v0 < 0 || v1 < 0 || v2 == -1 || v3 == -1) {
+            free(clean);
+            free(buf);
+            return 0;
+        }
+        if (v2 == -2 && v3 != -2) {
+            free(clean);
+            free(buf);
+            return 0;
+        }
+
+        buf[off++] = (unsigned char)((v0 << 2) | (v1 >> 4));
+        if (v2 != -2) {
+            buf[off++] = (unsigned char)(((v1 & 0x0f) << 4) | (v2 >> 2));
+        }
+        if (v3 != -2) {
+            buf[off++] = (unsigned char)(((v2 & 0x03) << 6) | v3);
+        }
+    }
+
+    free(clean);
+    buf[off] = '\0';
+    *out = buf;
+    *out_len = (int)off;
+    return 1;
+}
+
+AetherString* vcr_decode_base64_body_raw(const char* src) {
+    unsigned char* decoded = NULL;
+    int decoded_len = 0;
+    if (!decode_base64_body(src, &decoded, &decoded_len)) return NULL;
+    AetherString* result = string_new_with_length((const char*)decoded, (size_t)decoded_len);
+    free(decoded);
+    return result;
 }
 
 static int tape_append(const char* method, const char* path,
@@ -1053,7 +1153,18 @@ void vcr_dispatch(void* req, void* res, void* ud) {
     if (!emitted_content_type_from_block && e->content_type && e->content_type[0]) {
         http_response_add_header(res, "Content-Type", e->content_type);
     }
-    http_response_set_body(res, e->body);
+    if (ascii_ci_contains(e->content_type, "base64 below")) {
+        unsigned char* decoded = NULL;
+        int decoded_len = 0;
+        if (decode_base64_body(e->body, &decoded, &decoded_len)) {
+            http_response_set_body_n(res, (const char*)decoded, decoded_len);
+            free(decoded);
+        } else {
+            http_response_set_body(res, e->body);
+        }
+    } else {
+        http_response_set_body(res, e->body);
+    }
 
     /* Successful dispatch — clear any prior diagnostic and stamp
      * the per-dispatch outcome slots. The next request the test
