@@ -989,6 +989,63 @@ main() {
 - `middleware.use_gzip(server, min_size, level)` → `string` - Gzip the response body when the client sends `Accept-Encoding: gzip` and the body is at least `min_size` bytes; level 1 (fastest) – 9 (best), 0 = default 6.
 - `middleware.use_error_pages(server, opts)` → `string` - Replace error-status response bodies with operator-supplied content; build via `middleware.error_pages_register(opts, status_code, body, content_type)`.
 
+### HTTP Reverse Proxy (`std.http.proxy`)
+
+nginx-class outbound HTTP forwarding. Forwards inbound requests
+to a pool of upstream HTTP servers with weighted load balancing,
+active health checks, in-memory LRU response cache, per-upstream
+circuit breaker, and Hop-by-Hop header handling per RFC 7230.
+
+```aether
+import std.http
+import std.http.proxy
+
+// Convenience: single upstream, RR, default opts.
+proxy.use_simple_proxy(server, "/", "http://localhost:9000", 30)
+
+// Production: pool + LB + health + cache + breaker.
+pool = proxy.upstream_pool_new("weighted_rr", 30, 0, 100)
+proxy.upstream_add(pool, "http://10.0.0.1:8080", 3)
+proxy.upstream_add(pool, "http://10.0.0.2:8080", 1)
+proxy.health_checks_enable(pool, "/health", 200, 5000, 1000, 2, 3)
+proxy.breaker_configure(pool, 5, 30000, 1)
+cache = proxy.cache_new(1000, 65536, 60, "method_url_vary")
+opts  = proxy.opts_new()
+proxy.opts_bind_cache(opts, cache)
+proxy.use_reverse_proxy(server, "/api", pool, opts)
+```
+
+**Pool + LB:**
+- `proxy.upstream_pool_new(lb_algo, request_timeout_sec, dial_timeout_ms, max_inflight_per_up)` → `ptr` - LB algos: `"round_robin"`, `"least_conn"`, `"ip_hash"`, `"weighted_rr"`.
+- `proxy.upstream_pool_free(pool)` - Decrements refcount; joins health-check thread on zero.
+- `proxy.upstream_add(pool, base_url, weight)` → `string`
+- `proxy.upstream_remove(pool, base_url)` → `string`
+
+**Health checks (one pthread per pool):**
+- `proxy.health_checks_enable(pool, probe_path, expect_status, interval_ms, timeout_ms, healthy_threshold, unhealthy_threshold)` → `string`
+
+**Circuit breaker (per-upstream state, per-pool config):**
+- `proxy.breaker_configure(pool, failure_threshold, open_duration_ms, half_open_max)` → `string` - `failure_threshold = 0` disables.
+
+**Cache (in-memory LRU + TTL):**
+- `proxy.cache_new(max_entries, max_body_bytes, default_ttl_sec, key_strategy)` → `ptr` - Key strategy: `"url"`, `"method_url"`, `"method_url_vary"`. RFC 7234 cacheability gates.
+- `proxy.cache_free(cache)`
+
+**Per-mount options:**
+- `proxy.opts_new()` → `ptr`
+- `proxy.opts_set_strip_prefix(opts, prefix)` → `string` - chops a path prefix before forwarding (e.g. `/api/users` → `/users` upstream).
+- `proxy.opts_set_preserve_host(opts, on)` → `string` - 0 (default) rewrites Host: to upstream; 1 forwards client Host: verbatim.
+- `proxy.opts_set_xforwarded(opts, xff, xfp, xfh)` → `string` - toggles X-Forwarded-{For, Proto, Host} injection (defaults all on).
+- `proxy.opts_bind_cache(opts, cache)` → `string`
+- `proxy.opts_set_body_cap(opts, max_body_bytes)` → `string` - default 8 MiB.
+- `proxy.opts_free(opts)`
+
+**Install:**
+- `proxy.use_reverse_proxy(server, path_prefix, pool, opts)` → `string` - mount the proxy under `path_prefix`. `"/"` forwards everything; `"/api"` forwards just the `/api` subtree.
+- `proxy.use_simple_proxy(server, path_prefix, upstream_url, request_timeout_sec)` → `string` - one-upstream convenience.
+
+See [`docs/http-reverse-proxy.md`](http-reverse-proxy.md) for the full reference (LB algorithms, error responses, performance budget, limitations).
+
 ### HTTP Client Builder (`std.http.client`)
 
 The `http.get` / `http.post` / `http.put` / `http.delete` one-liners above are good for "no auth, JSON in, 200 means good" calls. Reach for `std.http.client` when you need custom request headers, response-header capture, status discrimination, per-request timeouts, or methods other than the four common verbs (PROPFIND, PATCH, custom RPC verbs all work).

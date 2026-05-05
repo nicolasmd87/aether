@@ -438,6 +438,32 @@ double-tag the request.
 
 ---
 
+## Reverse proxy
+
+`std.http.proxy` adds the outbound side: forward inbound requests
+to a pool of upstream HTTP servers. nginx-class feature set —
+weighted load balancing (round-robin / least-conn / ip-hash /
+smooth weighted RR), active health checks, in-memory LRU response
+cache with RFC 7234 cacheability rules, per-upstream circuit
+breaker, and Hop-by-Hop header handling per RFC 7230.
+
+```aether
+import std.http
+import std.http.proxy
+
+main() {
+    server = http.server_create(8080)
+    err = proxy.use_simple_proxy(server, "/", "http://localhost:9000", 30)
+    if err != "" { println("proxy: ${err}"); return }
+    http.server_start(server)
+}
+```
+
+For the production pool shape (weighted RR, health checks, cache,
+circuit breaker), see [Reverse Proxy](http-reverse-proxy.md).
+
+---
+
 ## WebSocket (RFC 6455)
 
 ```aether

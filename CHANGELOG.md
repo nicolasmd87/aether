@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`std.http.proxy` — nginx-class reverse proxy** (`std/http/proxy/`, `Makefile`, `examples/stdlib/http-reverse-proxy.ae`, `tests/integration/http_reverse_proxy/`, `docs/http-reverse-proxy.md`). Closes #381. Adds the outbound side of the HTTP server: forward inbound requests to a pool of upstream HTTP servers via `std.http.client`, with weighted load balancing (round-robin / least-conn / ip-hash / smooth weighted RR — the algorithm nginx uses), active health checks (one pthread per pool, configurable interval / threshold), in-memory LRU response cache with RFC 7234 cacheability gates (Cache-Control max-age clamped to 1h v1; method+URL+Vary keying), per-upstream circuit breaker (closed/open/half-open with CAS-based transitions), and Hop-by-Hop header handling per RFC 7230 §6.1 (strip on both directions; add X-Forwarded-{For, Proto, Host} + Via). Reuses the existing `std.http.client` for the round-trip (TLS, header lookup, timeouts, error classification). Two install paths: `proxy.use_simple_proxy(server, path_prefix, upstream_url, request_timeout_sec)` for single-upstream, and `proxy.use_reverse_proxy(server, path_prefix, pool, opts)` for the production pool shape. Pool-level helpers: `upstream_pool_new`, `upstream_add` / `_remove`, `health_checks_enable`, `breaker_configure`, `cache_new`. Per-mount `opts_*` for path-prefix stripping, Host: rewrite, X-Forwarded-* toggles, body cap. Refuses `Upgrade:` requests with 502 + `X-Aether-Proxy-Error: upgrade_unsupported` (WebSocket / h2 upstream is v2 follow-up; documented). Bodies buffered up to `opts.max_body_bytes` (default 8 MiB); streaming pass-through is the next major feature. Locking via `runtime/utils/aether_thread.h` pthread shim (Windows-MinGW compatible); per-upstream fields are atomics so the LB picker is lock-free in the hot path. The proxy plug into the existing middleware chain via `http_server_use_middleware`, short-circuits with `return 0` after populating the response. 10-case integration test covering basic round-trip, hop-by-hop strip, X-Forwarded-* injection, Host rewrite, 1 KiB POST body round-trip, Upgrade refusal, and timeout → 504. New module under `std/http/proxy/` (7 `.c` files split per concern: pool + lb + breaker + health + cache + opts + middleware glue, ~2500 LOC implementation + tests + docs).
+
+### Changed
+
+- **HTTP server documentation refreshed for current state** (`docs/http-server.md`, `docs/stdlib-reference.md`, `docs/stdlib-api.md`, `README.md`). Intro called HTTP/2 + WebSocket "follow-up PRs" but both shipped in v0.96.0+; rewritten to enumerate the current shipped surface (h2 + h2c via libnghttp2, ALPN, GOAWAY graceful shutdown, server-level pthread pool for per-stream concurrent dispatch, WebSocket RFC 6455, SSE, etc.). Trade-offs section called per-stream concurrent dispatch "not yet implemented" — corrected to describe the actual mechanism. Middleware compatibility table now lists `use_bearer_auth` and `use_session_auth`. Reverse-proxy section added with link to the new `docs/http-reverse-proxy.md` reference. README's "Production-grade HTTP server" bullet now mentions the reverse proxy alongside the other capabilities.
+
+- **Person names removed from code, comments, and changelog** (8 files across docs, runtime, compiler, regression tests, conformance README). Per the project rule (no person names in code/comments/PR descriptions/commit messages); the only retained reference is the MIT-license attribution in `contrib/tinyweb/module.ae` line 3, which the upstream's MIT license requires preserved verbatim. Replacement style: describe behaviour or use case ("a real-world site-poller", "a downstream port", "an external porter") instead of attributing to a specific person.
+
+- **Tree-level READMEs added** (`tests/integration/README.md`, `tests/syntax/README.md`, `tests/regression/README.md`, `examples/README.md`). Brief 20-50 line overviews explaining what each tree contains, where to add a new test or example, and the conventions to follow. Helps new contributors find the right home for a fixture without browsing 100+ subdirectories.
+
+- **23 integration test files have a justification comment above their `extern http_server_start_raw` declaration**. The wrapper `http.server_start` exists but is awkward to use from inside an actor's `receive` handler (the wrapper's `string` return triggers an unused-result warning when discarded). The new comment makes the legitimate use of the raw form clear so future audits don't flag it as an anti-pattern.
+
+### Fixed
+
+- **`tests/integration/test_web_framework.ae` deleted**. The placeholder claimed "HTTP routing/middleware/WebSocket are not yet implemented" but every feature it listed has shipped, with full coverage in `tests/integration/http_server_*/`. The placeholder added confusion without unique test coverage.
+
 ## [0.126.0]
 
 ### Fixed
