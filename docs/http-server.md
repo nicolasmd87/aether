@@ -2,13 +2,11 @@
 
 Aether's built-in HTTP server. Routes, request/response, middleware
 chain, TLS termination, HTTP/1.1 keep-alive, per-connection actor
-dispatch, structured logging, Prometheus metrics, graceful shutdown,
-health probes, and Server-Sent Events — all in `std.http` and
-`std.http.middleware`.
-
-This document covers the surface that ships in the round-2
-issue-pack. HTTP/2 and WebSocket land in follow-up PRs (see
-[`docs/next-steps.md`](next-steps.md) → "remaining Tier 2 protocols").
+dispatch, HTTP/2 (h2 + h2c via libnghttp2 with ALPN, GOAWAY graceful
+shutdown, per-stream concurrent dispatch via a server-level pthread
+pool), WebSocket (RFC 6455), Server-Sent Events, structured access
+logs, Prometheus metrics, graceful shutdown, health probes — all in
+`std.http` and `std.http.middleware`.
 
 ---
 
@@ -224,6 +222,8 @@ HTTP/1.1 path) feed the same chain:
 |--------|------------|
 | `middleware.use_cors`         | ✓ |
 | `middleware.use_basic_auth`   | ✓ |
+| `middleware.use_bearer_auth`  | ✓ — RFC 6750 challenges (`error="invalid_token"` for malformed credentials) emitted regardless of protocol |
+| `middleware.use_session_auth` | ✓ — `Cookie:` header parsed identically on h2 streams; redirect-on-failure works |
 | `middleware.use_rate_limit`   | ✓ |
 | `middleware.use_vhost`        | ✓ |
 | `middleware.use_static`       | ✓ |
@@ -262,16 +262,24 @@ specifically for WS/SSE alongside the h2 traffic.
 
 **Trade-offs:**
 
-- HTTP/2 streams within one connection currently dispatch
-  *sequentially* — server-push and per-stream concurrent
-  dispatch are not yet implemented. Multiplexed-fan-out
-  workloads still benefit from HPACK header compression +
-  single-connection framing; per-stream actor concurrency is
-  tracked as a follow-up optimisation.
-- HPACK Huffman *encoding* is optional per RFC 7541; libnghttp2
-  decodes Huffman-encoded headers from clients but the server
-  emits plain (un-Huffman'd) header bytes. Client-side
-  compression is unaffected.
+- HTTP/2 streams within one connection dispatch *sequentially* by
+  default; opt into per-stream parallelism with
+  `http.server_set_h2_concurrent_dispatch(server, n)`, which
+  provisions a server-level pthread pool of `n` workers shared
+  across every h2 connection on the server. Stream handlers run
+  on the pool while the connection thread keeps reading frames
+  and serialising responses. nghttp2_session is not thread-safe —
+  only the connection thread calls into it; the pool wakes the
+  connection thread via a self-pipe whose read end is exposed as
+  `aether_h2_session_wake_fd` for the caller to poll alongside
+  its socket fd. POSIX-only; on Windows the call is a silent
+  no-op and dispatch stays sequential.
+- HPACK Huffman encoding is enabled by default on POSIX
+  (`NGHTTP2_NV_FLAG_NONE` leaves the choice to nghttp2 per RFC
+  7541 §5.2). libnghttp2 decodes Huffman-encoded headers from
+  clients regardless of platform.
+- Server-push (PUSH_PROMISE, RFC 7540 §6.6) is not implemented;
+  rarely used in practice and tracked as an optional follow-up.
 - The h2 wrapper holds one nghttp2 session per connection. Memory
   cost is bounded by `SETTINGS_HEADER_TABLE_SIZE` (default 4 KiB)
   + per-stream state. With 100 concurrent streams the upper
