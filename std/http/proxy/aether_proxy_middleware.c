@@ -159,11 +159,17 @@ static char* extract_authority(const char* url) {
 static void serve_from_cache(HttpServerResponse* res,
                              AetherProxyCacheEntry* e) {
     http_response_set_status(res, e->status_code);
-    /* Replay headers (minus hop-by-hop, just in case). */
+    /* Replay headers (minus hop-by-hop, just in case). Also skip
+     * X-Cache: cache_store snapshots the outbound response, which
+     * carries our own X-Cache: MISS marker from the original miss.
+     * Replaying that and then setting HIT below would either
+     * duplicate the header or stick MISS depending on whether the
+     * underlying setter appends or replaces. Owning the slot
+     * exclusively is the unambiguous fix. */
     for (int i = 0; i < e->header_count; i++) {
-        if (!is_hop_by_hop(e->header_keys[i])) {
-            http_response_set_header(res, e->header_keys[i], e->header_values[i]);
-        }
+        if (is_hop_by_hop(e->header_keys[i])) continue;
+        if (strcasecmp(e->header_keys[i], "X-Cache") == 0) continue;
+        http_response_set_header(res, e->header_keys[i], e->header_values[i]);
     }
     http_response_set_header(res, "X-Cache", "HIT");
     if (e->body && e->body_length > 0) {
