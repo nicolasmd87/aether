@@ -1785,6 +1785,15 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             if (gen->preempt_loops) {
                 print_line(gen, "if (--_aether_reductions <= 0) { _aether_reductions = 10000; sched_yield(); }");
             }
+            // Issue #343 codegen tripwire: under --emit=lib, emit a
+            // deadline check at every loop head. The check is one
+            // TLS read + one atomic load + branch; clock_gettime
+            // only when the deadline is armed. Zero cost on
+            // --emit=exe builds (the if (gen->emit_lib) gate elides
+            // the print entirely).
+            if (gen->emit_lib) {
+                print_line(gen, "if (aether_caps_deadline_tripped()) { __aether_abort_call(); break; }");
+            }
             if (stmt->child_count > 3 && stmt->children[3]) {
                 // Body is always a statement (could be a block or single statement)
                 generate_statement(gen, stmt->children[3]); // body
@@ -1793,7 +1802,7 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
 
             print_line(gen, "}");
             break;
-            
+
         case AST_WHILE_LOOP: {
             // OPTIMIZATION: Try to collapse arithmetic series loops into O(1) expressions.
             // Only attempt when not inside actors and no sends (sends need batch treatment).
@@ -1827,6 +1836,10 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
             // Cooperative preemption: yield to OS at loop back-edges
             if (gen->preempt_loops) {
                 print_line(gen, "if (--_aether_reductions <= 0) { _aether_reductions = 10000; sched_yield(); }");
+            }
+            // Issue #343 codegen tripwire — see AST_FOR_LOOP comment.
+            if (gen->emit_lib) {
+                print_line(gen, "if (aether_caps_deadline_tripped()) { __aether_abort_call(); break; }");
             }
             if (stmt->child_count > 1) {
                 generate_statement(gen, stmt->children[1]);

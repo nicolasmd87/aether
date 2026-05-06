@@ -1324,6 +1324,19 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
      *      from-source fallback build) provides the symbols.
      */
     print_line(gen, "#include \"aether_stringseq.h\"");
+    /* Issue #343 codegen tripwire: when --emit=lib is set, the loop
+     * codegen emits a check at every loop head that calls
+     * aether_caps_deadline_tripped() / __aether_abort_call(). The
+     * symbols live in runtime/aether_resource_caps.{h,c}, which the
+     * --emit=lib build links via libaether.a; declare the prototypes
+     * inline so the emitted .c compiles cleanly without pulling
+     * runtime headers into user-program path. Zero cost on
+     * --emit=exe builds — the gate elides both the extern decls and
+     * the per-loop checks. */
+    if (gen->emit_lib) {
+        print_line(gen, "extern int  aether_caps_deadline_tripped(void);");
+        print_line(gen, "extern void __aether_abort_call(void);");
+    }
     print_line(gen, "#ifdef _WIN32");
     print_line(gen, "#define NOMINMAX");
     print_line(gen, "#include <windows.h>");
