@@ -27,8 +27,11 @@
 #    didn't reap SIGTERM cleanly on Windows MSYS2, leaving `wait
 #    $pid` blocked indefinitely. SIGKILL maps to TerminateProcess on
 #    MSYS2: synchronous, uninterceptable, no `wait` needed.
-
-set -e
+#
+# 4. NO `set -e`. Every transient curl flake (Windows MSYS2 has
+#    plenty) would otherwise kill the script with no error message,
+#    surfacing in CI as the dreaded "(no output)" failure. Real
+#    failures call `fail` or `exit 1` explicitly with a diagnostic.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
@@ -109,13 +112,30 @@ start_three_upstreams() {
 
 # Reset every upstream's per-subtest state (counter, force_503,
 # eta) so the next subtest sees a clean state without respawning
-# the upstreams. curl -Z fires all three in parallel.
+# the upstreams. Sequential per-port — `curl -Z` with multiple `-X`
+# flags has reportedly inconsistent behaviour across MSYS2 curl
+# builds; sequential is portable and adds <50ms total on localhost.
+# Verifies counter actually reads 0 after reset; on persistent
+# failure exits with a clear diagnostic so a broken /admin/reset
+# surfaces immediately rather than as a confusing downstream
+# arithmetic anomaly.
 reset_upstreams() {
-    curl -Z -s -o /dev/null --max-time 3 \
-        -X POST "http://127.0.0.1:19101/admin/reset" \
-        -X POST "http://127.0.0.1:19102/admin/reset" \
-        -X POST "http://127.0.0.1:19103/admin/reset" \
-        >/dev/null 2>&1 || true
+    for port in 19101 19102 19103; do
+        curl -s -o /dev/null --max-time 3 \
+            -X POST "http://127.0.0.1:$port/admin/reset" >/dev/null 2>&1 || true
+    done
+    for port in 19101 19102 19103; do
+        ok=0
+        for attempt in 1 2 3 4 5; do
+            v=$(curl -s --max-time 3 "http://127.0.0.1:$port/count" 2>/dev/null)
+            if [ "$v" = "0" ]; then ok=1; break; fi
+            sleep 0.1
+        done
+        if [ "$ok" != "1" ]; then
+            echo "  [FAIL] reset_upstreams: port $port did not return counter=0 (got '$v')"
+            exit 1
+        fi
+    done
 }
 
 start_proxy() {
@@ -229,8 +249,21 @@ parallel_echo() {
     curl -Z -s -o /dev/null --max-time 5 $URLS >/dev/null 2>&1 || true
 }
 
+# count_get must return a non-empty integer or fail loudly. A blank
+# return (Windows MSYS2 transient curl failure) would otherwise be
+# interpreted by bash arithmetic as 0, producing false-positive
+# delta=0 cache assertions that look like a flaky proxy when really
+# the test harness lost the counter read.
 count_get() {
-    curl -s --max-time 3 "http://127.0.0.1:$1/count"
+    for attempt in 1 2 3; do
+        v=$(curl -s --max-time 3 "http://127.0.0.1:$1/count" 2>/dev/null)
+        case "$v" in
+            ''|*[!0-9]*) sleep 0.1; continue ;;
+            *) printf '%s' "$v"; return 0 ;;
+        esac
+    done
+    echo "  [FAIL] count_get $1 returned non-integer after 3 attempts: '$v'"
+    exit 1
 }
 
 count_total() {
