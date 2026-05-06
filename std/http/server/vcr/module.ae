@@ -134,7 +134,7 @@ exports (
     last_kind, last_index, set_strict_headers, reset_cursor,
     FIELD_PATH, FIELD_RESPONSE_BODY, FIELD_REQUEST_HEADERS,
     FIELD_REQUEST_BODY, FIELD_RESPONSE_HEADERS,
-    load, eject, tape_length,
+    load, load_url, eject, tape_length,
     load_record, eject_record,
     record, clear_recording, flush, flush_or_check, flush_and_fail_if_changed,
     redact, clear_redactions, unredact, clear_unredactions,
@@ -152,6 +152,13 @@ exports (
     icmp_aether, sort_lines, normalize_recorded_headers,
     parse_one_interaction, parse_tape_file
 )
+
+// ---- HTTP client externs (for load_url) ----
+
+extern http_get_with_timeout_raw(url: string, timeout_ms: int) -> ptr
+extern http_response_error(resp: ptr) -> string
+extern http_response_body(resp: ptr) -> string
+extern http_response_free(resp: ptr)
 
 // ---- Externs into the C-side parser + dispatcher ----
 
@@ -334,6 +341,51 @@ load(tape_path: string, port: int) -> ptr {
     // recorded response.
     register_routes(raw)
 
+    return raw
+}
+
+// Load a Servirtium markdown tape from an HTTP URL, parse it, and
+// bind a playback server to the given port. Useful for centralized
+// tape libraries — the tape doesn't need to be on the local filesystem.
+//
+// Returns a server pointer on success, null on failure. Failures
+// include network errors (DNS, connection refused, timeout) and
+// parse errors (invalid markdown format). Call eject(server) when done.
+load_url(tape_url: string, port: int) -> ptr {
+    vcr_aether_clear_tape()
+
+    // Fetch the tape over HTTP using raw client (30s timeout)
+    resp = http_get_with_timeout_raw(tape_url, 30000)
+    if resp == null {
+        println("vcr.load_url: failed to fetch ${tape_url}")
+        return null
+    }
+
+    err = http_response_error(resp)
+    if err != "" && string.length(err) > 0 {
+        println("vcr.load_url: ${err}")
+        http_response_free(resp)
+        return null
+    }
+
+    tape_markdown = http_response_body(resp)
+    http_response_free(resp)
+
+    // Parse the fetched markdown using the same path as load()
+    // The parser populates the C-side tape storage via vcr_aether_* calls
+    perr = parse_tape_text("http-sourced", tape_markdown)
+    if perr != "" {
+        println("vcr.load_url: ${perr}")
+        return null
+    }
+
+    raw = http.server_create(port)
+    if raw == 0 {
+        println("vcr.load_url: server_create on port ${port} returned 0")
+        return null
+    }
+
+    register_routes(raw)
     return raw
 }
 
@@ -1473,9 +1525,10 @@ parse_one_interaction(chunk: string) -> string {
 // Top-level parser — reads the tape file via fs.read, splits into
 // interaction chunks, dispatches each. Returns "" on success or an
 // error message.
-parse_tape_file(tape_path: string) -> string {
-    contents, rerr = fs.read(tape_path)
-    if rerr != "" { return rerr }
+// Parse a Servirtium markdown string into the in-memory tape.
+// Used by both load (filesystem) and load_url (HTTP) to avoid duplication.
+// Label is for error messages (e.g., "http-sourced" or a file path).
+parse_tape_text(label: string, contents: string) -> string {
     vcr_aether_clear_tape()
 
     delim = "\n## Interaction "
@@ -1488,7 +1541,7 @@ parse_tape_file(tape_path: string) -> string {
         first_chunk_start = 15
     } else {
         d = string.index_of(contents, delim)
-        if d < 0 { return "tape contains no '## Interaction ' headers" }
+        if d < 0 { return "tape (${label}) contains no '## Interaction ' headers" }
         first_chunk_start = d + string.length(delim)
     }
 
@@ -1508,7 +1561,13 @@ parse_tape_file(tape_path: string) -> string {
     }
 
     if vcr_get_tape_count() == 0 {
-        return "tape parsed but yielded zero interactions"
+        return "tape (${label}) parsed but yielded zero interactions"
     }
     return ""
+}
+
+parse_tape_file(tape_path: string) -> string {
+    contents, rerr = fs.read(tape_path)
+    if rerr != "" { return rerr }
+    return parse_tape_text(tape_path, contents)
 }

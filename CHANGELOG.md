@@ -5,9 +5,24 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.111.0]`. When a PR merges to
+**Workflow**: New changes go under `## [current]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
+
+## [current]
+
+### Added
+
+- **`std.http.server.vcr` HTTP-sourced tape loading (Step 16)** — `vcr.load_url(tape_url, port)` fetches Servirtium markdown tapes from HTTP servers, enabling centralized tape libraries. Extracted `parse_tape_text(label, contents)` helper so filesystem and HTTP paths share identical parsing logic. Both endpoints return the same server pointer shape and integrate seamlessly with the existing tape/replay flow.
+
+### Fixed
+
+- **`std.http.server.vcr` snapshot release mutability** — GitHub Actions `release.yml` now creates snapshot releases as `draft: true` instead of `prerelease: true`, keeping releases mutable for asset uploads on every merge. Fixes 404 on `curl https://github.com/aether-lang-org/aether/releases/download/snapshot/aether-source.tar.gz`.
+
+### Testing
+
+- **VCR transparent MITM recorder validation** — `test_vcr_transparent_recorder.ae` validates record-mode forwarding against a refused upstream, asserting that record-mode handler forwards requests, echoes real responses, and correctly populates diagnostic surfaces (`last_error`, `last_kind`, `last_index`).
+- **VCR static-content cache semantics** — `test_vcr_static_content_cache.ae` extends Step 11 (static-content bypass) by validating cache-control headers (ETag, Last-Modified, Cache-Control) on static files. Current state: files are served but lack cache headers; test documents the gap and provides baseline for future conditional-request handling (304 Not Modified).
 
 ## [0.129.0]
 
