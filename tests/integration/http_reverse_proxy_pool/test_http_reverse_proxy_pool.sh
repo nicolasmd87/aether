@@ -28,9 +28,17 @@ fi
 TMPDIR="$(mktemp -d)"
 PIDS=""
 cleanup() {
+    # SIGKILL (-9), not SIGTERM. The aether http_server's signal
+    # handler doesn't reap SIGTERM cleanly on Windows MSYS2, which
+    # left `wait $pid` blocking forever in CI — pinning the test
+    # at 180 s timeout despite the test logic itself finishing in
+    # ~16 s locally. SIGKILL maps to TerminateProcess on MSYS2,
+    # synchronous and uninterceptable, so the pid is dead by the
+    # time `kill -9` returns. Drop the matching `wait` calls —
+    # there's nothing left to wait on, and adding them back risks
+    # the same hang.
     for pid in $PIDS; do
-        kill "$pid" 2>/dev/null || true
-        wait "$pid" 2>/dev/null || true
+        kill -9 "$pid" 2>/dev/null || true
     done
     rm -rf "$TMPDIR"
 }
@@ -48,6 +56,11 @@ start_proc() {
     log="$TMPDIR/$role.log"
     "$TMPDIR/server" "$role" >"$log" 2>&1 &
     new_pid=$!
+    # Stop bash from tracking this child as a job — silences the
+    # "Killed PID command" stderr lines that otherwise leak into
+    # the test runner's stderr file when stop_all calls kill -9.
+    # The process is still our child for kill / wait purposes.
+    disown "$new_pid" 2>/dev/null || true
     PIDS="$PIDS $new_pid"
     eval "PID_$role=\$new_pid"
 }
@@ -79,23 +92,22 @@ wait_for_port() {
 }
 
 stop_all() {
+    # SIGKILL (see cleanup() comment) + skip the matching `wait`.
+    # kill -9 → TerminateProcess on MSYS2 is synchronous, the pid
+    # is gone by the time we move on. The earlier SIGTERM + wait
+    # pattern blocked indefinitely in Windows CI when the http
+    # server didn't reap SIGTERM, pushing the suite past its
+    # 180 s timeout despite local 16 s execution.
     for pid in $PIDS; do
-        kill "$pid" 2>/dev/null || true
-        wait "$pid" 2>/dev/null || true
+        kill -9 "$pid" 2>/dev/null || true
     done
     PIDS=""
-    # Wait for the kernel to release the bound ports — kill is
-    # async, so a fast restart can still see the previous bind
-    # owning the port. Poll the ports directly until they're free
-    # (or 5s passes).
-    deadline=$(($(date +%s) + 5))
-    while [ "$(date +%s)" -lt "$deadline" ]; do
-        if ! lsof -i :19100 -i :19101 -i :19102 -i :19103 \
-              >/dev/null 2>&1; then
-            return 0
-        fi
-        sleep 0.1
-    done
+    # No port-release poll: lsof isn't on Windows MSYS2 and the
+    # loop just returned-fast there anyway (cmd missing → "lsof"
+    # exits non-zero → `! lsof` is true → return). The poll only
+    # mattered on POSIX where SIGTERM-reaped-then-rebind races
+    # could occur; with SIGKILL the close is forced and the
+    # SO_REUSEADDR on the next bind handles any TIME_WAIT residue.
 }
 
 start_three_upstreams() {

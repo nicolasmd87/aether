@@ -28,9 +28,9 @@ fi
 TMPDIR="$(mktemp -d)"
 PIDS=""
 cleanup() {
+    # SIGKILL — see test_http_reverse_proxy_pool.sh for rationale.
     for pid in $PIDS; do
-        kill "$pid" 2>/dev/null || true
-        wait "$pid" 2>/dev/null || true
+        kill -9 "$pid" 2>/dev/null || true
     done
     rm -rf "$TMPDIR"
 }
@@ -52,6 +52,7 @@ start_proc() {
     log="$TMPDIR/$role.log"
     "$TMPDIR/server" "$role" >"$log" 2>&1 &
     new_pid=$!
+    disown "$new_pid" 2>/dev/null || true
     PIDS="$PIDS $new_pid"
     eval "PID_$role=\$new_pid"
 }
@@ -70,19 +71,11 @@ wait_for_port() {
 }
 
 stop_all() {
+    # SIGKILL — see test_http_reverse_proxy_pool.sh for rationale.
     for pid in $PIDS; do
-        kill "$pid" 2>/dev/null || true
-        wait "$pid" 2>/dev/null || true
+        kill -9 "$pid" 2>/dev/null || true
     done
     PIDS=""
-    deadline=$(($(date +%s) + 5))
-    while [ "$(date +%s)" -lt "$deadline" ]; do
-        if ! lsof -i :19100 -i :19101 -i :19102 -i :19103 \
-              >/dev/null 2>&1; then
-            return 0
-        fi
-        sleep 0.1
-    done
 }
 
 start_three_upstreams() {
