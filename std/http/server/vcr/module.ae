@@ -133,7 +133,7 @@ exports (
     vcr_reset_cursor,
     KIND_OK, KIND_PATH_OR_METHOD_DIFF, KIND_HEADER_MISSING,
     KIND_HEADER_VALUE_DIFF, KIND_HEADER_UNEXPECTED,
-    KIND_TAPE_EXHAUSTED, KIND_BODY_DIFF,
+    KIND_TAPE_EXHAUSTED, KIND_BODY_DIFF, KIND_RECORD_ERROR,
     last_kind, last_index, set_strict_headers, reset_cursor,
     FIELD_PATH, FIELD_RESPONSE_BODY, FIELD_REQUEST_HEADERS,
     FIELD_REQUEST_BODY, FIELD_RESPONSE_HEADERS,
@@ -282,6 +282,7 @@ const KIND_HEADER_VALUE_DIFF   = 3
 const KIND_HEADER_UNEXPECTED   = 4
 const KIND_TAPE_EXHAUSTED      = 5
 const KIND_BODY_DIFF           = 6
+const KIND_RECORD_ERROR        = 7
 
 // Aether-side wrappers around the runtime accessors. Call shape
 // matches the rest of the vcr.* surface (e.g. vcr.tape_length()).

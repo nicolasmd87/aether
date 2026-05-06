@@ -87,17 +87,18 @@ Servirtium step 3 says upstream failures in record mode should set the same last
 Current behavior:
 
 - record dispatcher returns `502` / `500` with an explanatory body.
+- record dispatcher updates `vcr.last_error()`, `vcr.last_kind()`, and `vcr.last_index()` on failures.
+- record-mode failures report `KIND_RECORD_ERROR`; failed recordings use `last_index() == -1` because no interaction was accepted into the tape.
 - playback mismatch updates `vcr.last_error()`, `vcr.last_kind()`, and `vcr.last_index()`.
 
 Gap:
 
-- record-mode transport/build/OOM failures should call `last_err_set(...)` and set an appropriate kind/index.
-- May need new kind constants for record-mode failures, e.g. `KIND_UPSTREAM_TRANSPORT_ERROR`.
+- Future slices may split `KIND_RECORD_ERROR` into more specific record-mode failure kinds if tests need to distinguish transport, build, OOM, or tape-append failures.
 
 Tests:
 
-- Record mode against a refused upstream returns 502 and `vcr.last_error()` mentions the upstream transport failure.
-- `clear_last_error()` clears record-mode errors too.
+- `tests/integration/test_vcr_record_last_error.ae`: record mode against a refused upstream returns 502 and `vcr.last_error()` mentions the upstream transport failure.
+- `tests/integration/test_vcr_record_last_error.ae`: `clear_last_error()` clears record-mode errors too.
 
 ## Recording Drift Semantics
 

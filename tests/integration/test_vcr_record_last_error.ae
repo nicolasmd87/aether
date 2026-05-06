@@ -1,0 +1,117 @@
+// Record-mode diagnostics: a failed upstream request should populate
+// the same last_error / last_kind / last_index surface used by playback
+// mismatches. The recorder is acting as a normal server and using the
+// std.http.client path internally, not proxy/CORS behavior.
+
+import std.http.server.vcr
+import std.http.client
+import std.io
+import std.string
+
+extern exit(code: int)
+extern http_server_start_raw(server: ptr) -> int
+
+const RECORD_PORT = 18243
+const REFUSED_UPSTREAM = "http://127.0.0.1:1"
+
+message StartRecord { raw: ptr }
+message Noop {}
+
+actor RecordActor {
+    state s = 0
+    receive { StartRecord(raw) -> { s = raw; http_server_start_raw(raw) } }
+}
+
+actor SchedHelper {
+    state x = 0
+    receive { Noop() -> { x = 1 } }
+}
+
+tape_path() -> {
+    tmp = io.getenv("TEMP")
+    if tmp == 0 { tmp = io.getenv("TMPDIR") }
+    if tmp == 0 { tmp = "/tmp" }
+    return "${tmp}/vcr_record_last_error.tape"
+}
+
+main() {
+    println("=== VCR record-mode last_error ===")
+    vcr.clear_last_error()
+    TAPE_PATH = tape_path()
+
+    raw = vcr.load_record(TAPE_PATH, REFUSED_UPSTREAM, RECORD_PORT)
+    if raw == null {
+        println("FAIL: vcr.load_record returned null")
+        exit(1)
+    }
+
+    spawn(SchedHelper())
+    record_actor = spawn(RecordActor())
+    record_actor ! StartRecord { raw: raw }
+    sleep(500)
+
+    req = client.request("GET", "http://127.0.0.1:${RECORD_PORT}/will-fail")
+    if req == null {
+        println("FAIL: client.request returned null")
+        exit(1)
+    }
+    client.set_timeout(req, 5)
+
+    resp, transport_err = client.send_request(req)
+    client.request_free(req)
+    if transport_err != "" {
+        println("FAIL: request to recorder failed: ${transport_err}")
+        exit(1)
+    }
+
+    status = client.response_status(resp)
+    body = string.copy(client.response_body(resp))
+    client.response_free(resp)
+
+    if status != 502 {
+        println("FAIL: expected recorder to return 502, got ${status}")
+        exit(1)
+    }
+    if string.contains(body, "upstream") != 1 {
+        println("FAIL: recorder response body did not mention upstream")
+        println("      actual: ${body}")
+        exit(1)
+    }
+
+    err = vcr.last_error()
+    if err == "" {
+        println("FAIL: vcr.last_error() empty after record-mode upstream failure")
+        exit(1)
+    }
+    if string.contains(err, "upstream") != 1 {
+        println("FAIL: vcr.last_error() did not mention upstream")
+        println("      actual: ${err}")
+        exit(1)
+    }
+    if vcr.last_kind() != vcr.KIND_RECORD_ERROR {
+        println("FAIL: expected KIND_RECORD_ERROR, got ${vcr.last_kind()}")
+        exit(1)
+    }
+    if vcr.last_index() != -1 {
+        println("FAIL: expected last_index -1 for failed recording, got ${vcr.last_index()}")
+        exit(1)
+    }
+
+    vcr.clear_last_error()
+    if vcr.last_error() != "" {
+        println("FAIL: clear_last_error did not clear last_error")
+        exit(1)
+    }
+    if vcr.last_kind() != vcr.KIND_OK {
+        println("FAIL: clear_last_error did not reset last_kind")
+        exit(1)
+    }
+    if vcr.last_index() != -1 {
+        println("FAIL: clear_last_error did not reset last_index")
+        exit(1)
+    }
+
+    println("PASS")
+    vcr.eject_record(raw, TAPE_PATH)
+    exit(0)
+}

@@ -193,6 +193,7 @@ static char* g_last_error = NULL;
 #define VCR_KIND_HEADER_UNEXPECTED   4
 #define VCR_KIND_TAPE_EXHAUSTED      5
 #define VCR_KIND_BODY_DIFF           6
+#define VCR_KIND_RECORD_ERROR        7
 #define VCR_FIELD_PATH             1
 #define VCR_FIELD_RESPONSE_BODY    2
 #define VCR_FIELD_REQUEST_HEADERS  3
@@ -246,6 +247,14 @@ static void tape_free_storage(void) {
 static void last_err_set(const char* msg) {
     free(g_last_error);
     g_last_error = msg ? strdup(msg) : NULL;
+}
+
+static void record_dispatch_error(void* res, int status, const char* msg) {
+    last_err_set(msg);
+    g_last_kind = VCR_KIND_RECORD_ERROR;
+    g_last_index = -1;
+    http_response_set_status(res, status);
+    http_response_set_body(res, msg);
 }
 
 static void tape_set_err(const char* msg) {
@@ -1270,23 +1279,20 @@ static void vcr_record_dispatch(void* req, void* res, void* ud) {
     (void)ud;
     const VcrHttpRequestPrefix* live_req = (const VcrHttpRequestPrefix*)req;
     if (!g_record_upstream_base || !*g_record_upstream_base) {
-        http_response_set_status(res, 500);
-        http_response_set_body(res, "vcr record mode: upstream base not configured");
+        record_dispatch_error(res, 500, "vcr record mode: upstream base not configured");
         return;
     }
 
     char* url = build_upstream_url(g_record_upstream_base, live_req);
     if (!url) {
-        http_response_set_status(res, 500);
-        http_response_set_body(res, "vcr record mode: OOM building upstream URL");
+        record_dispatch_error(res, 500, "vcr record mode: OOM building upstream URL");
         return;
     }
 
     void* creq = http_request_raw(live_req->method ? live_req->method : "GET", url);
     if (!creq) {
         free(url);
-        http_response_set_status(res, 500);
-        http_response_set_body(res, "vcr record mode: failed to build client request");
+        record_dispatch_error(res, 500, "vcr record mode: failed to build client request");
         return;
     }
 
@@ -1307,8 +1313,7 @@ static void vcr_record_dispatch(void* req, void* res, void* ud) {
     http_request_free_raw(creq);
     if (!cresp) {
         free(url);
-        http_response_set_status(res, 502);
-        http_response_set_body(res, "vcr record mode: upstream request failed");
+        record_dispatch_error(res, 502, "vcr record mode: upstream request failed");
         return;
     }
     const char* cerr = http_response_error(cresp);
@@ -1317,8 +1322,7 @@ static void vcr_record_dispatch(void* req, void* res, void* ud) {
         snprintf(msg, sizeof(msg), "vcr record mode: upstream transport error: %s", cerr);
         http_response_free(cresp);
         free(url);
-        http_response_set_status(res, 502);
-        http_response_set_body(res, msg);
+        record_dispatch_error(res, 502, msg);
         return;
     }
 
@@ -1334,8 +1338,7 @@ static void vcr_record_dispatch(void* req, void* res, void* ud) {
         free(resp_headers); free(content_type); free(req_headers);
         http_response_free(cresp);
         free(url);
-        http_response_set_status(res, 500);
-        http_response_set_body(res, "vcr record mode: OOM recording interaction");
+        record_dispatch_error(res, 500, "vcr record mode: OOM recording interaction");
         return;
     }
 
@@ -1344,8 +1347,7 @@ static void vcr_record_dispatch(void* req, void* res, void* ud) {
         free(resp_headers); free(content_type); free(req_headers);
         http_response_free(cresp);
         free(url);
-        http_response_set_status(res, 500);
-        http_response_set_body(res, "vcr record mode: OOM recording path");
+        record_dispatch_error(res, 500, "vcr record mode: OOM recording path");
         return;
     }
 
@@ -1356,11 +1358,25 @@ static void vcr_record_dispatch(void* req, void* res, void* ud) {
                                          body,
                                          req_headers,
                                          live_req->body ? live_req->body : "");
-    if (ok) vcr_aether_set_resp_headers(g_tape_n - 1, resp_headers);
+    if (!ok) {
+        free(resp_headers);
+        free(content_type);
+        free(req_headers);
+        free(recorded_path);
+        http_response_free(cresp);
+        free(url);
+        record_dispatch_error(res, 500, "vcr record mode: failed to record interaction");
+        return;
+    }
+    vcr_aether_set_resp_headers(g_tape_n - 1, resp_headers);
 
     http_response_set_status(res, http_response_status(cresp));
     emit_recorded_headers_to_response(res, resp_headers);
     http_response_set_body_n(res, body, body_len);
+
+    last_err_set("");
+    g_last_kind = VCR_KIND_OK;
+    g_last_index = g_tape_n - 1;
 
     free(resp_headers);
     free(content_type);
