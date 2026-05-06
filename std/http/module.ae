@@ -18,6 +18,7 @@ exports (
     get, get_with_timeout, post, put, delete,
     http_server_create, http_server_bind_raw, http_server_start_raw,
     http_server_set_host, server_set_host,
+    http_server_start_background_raw,
     http_server_stop, http_server_free,
     http_server_set_tls_raw, server_set_tls,
     http_server_set_keepalive_raw, server_set_keepalive,
@@ -38,7 +39,7 @@ exports (
     http_ws_message_data, http_ws_message_length, http_ws_close,
     ws_send_text, ws_send_binary, ws_recv,
     ws_message, ws_message_length, ws_close,
-    server_bind, server_start,
+    server_bind, server_start, server_start_background,
     http_server_add_route, http_server_get, http_server_post,
     http_server_put, http_server_delete,
     http_server_use_middleware,
@@ -248,6 +249,7 @@ extern http_server_bind_raw(server: ptr, host: string, port: int) -> int
 // loopback binds.
 extern http_server_set_host(server: ptr, host: string)
 extern http_server_start_raw(server: ptr) -> int
+extern http_server_start_background_raw(server: ptr) -> int
 extern http_server_stop(server: ptr)
 extern http_server_free(server: ptr)
 // TLS termination (#260 Tier 0). Loads the cert+key (PEM-encoded);
@@ -520,6 +522,17 @@ server_start(server: ptr) -> {
     rc = http_server_start_raw(server)
     if rc < 0 {
         return "server start failed"
+    }
+    return ""
+}
+
+// Start a server on a detached native thread. Useful for integration
+// tests and embedding hosts that need multiple local servers in one
+// process without tying up the Aether actor scheduler.
+server_start_background(server: ptr) -> {
+    rc = http_server_start_background_raw(server)
+    if rc < 0 {
+        return "server background start failed"
     }
     return ""
 }

@@ -749,6 +749,8 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
         return response;
     }
     if (header_end) {
+        size_t header_bytes = (size_t)((header_end + 4) - full_response);
+        size_t body_bytes = total_len >= header_bytes ? total_len - header_bytes : 0;
         *header_end = '\0';
         char* status_line = full_response;
         char* space1 = strchr(status_line, ' ');
@@ -757,9 +759,9 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
         }
 
         response->headers = string_new(full_response);
-        response->body = string_new(header_end + 4);
+        response->body = string_new_with_length(header_end + 4, body_bytes);
     } else {
-        response->body = string_new(full_response);
+        response->body = string_new_with_length(full_response, total_len);
     }
 
     free(full_response);

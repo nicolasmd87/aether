@@ -77,6 +77,19 @@ extern int         http_response_status(void* response);
 extern const char* http_response_error(void* response);
 extern void        http_response_free(void* response);
 
+/* std.zlib gzip-framed helpers. VCR treats HTTP gzip as a transport
+ * encoding: tapes store decoded semantic bodies, playback restores
+ * gzip only when the caller advertises Accept-Encoding: gzip. */
+extern int         zlib_backend_available(void);
+extern int         zlib_try_gzip_inflate(const char* data, int length);
+extern const char* zlib_get_inflate_bytes(void);
+extern int         zlib_get_inflate_length(void);
+extern void        zlib_release_inflate(void);
+extern int         zlib_try_gzip_deflate(const char* data, int length, int level);
+extern const char* zlib_get_deflate_bytes(void);
+extern int         zlib_get_deflate_length(void);
+extern void        zlib_release_deflate(void);
+
 /* Step 10: header iteration + body access. We need to walk the
  * full set of request headers (not just look one up by name) to
  * detect "extra" headers the tape didn't expect. The HttpRequest
@@ -968,6 +981,7 @@ static char* normalize_live_headers(const VcrHttpRequestPrefix* r) {
         if (icmp(key, "Host") == 0) continue;
         if (icmp(key, "Connection") == 0) continue;
         if (icmp(key, "Content-Length") == 0) continue;
+        if (icmp(key, "Accept-Encoding") == 0) continue;
         if (header_removed_for_field(VCR_FIELD_REQUEST_HEADERS, key)) continue;
         size_t len = strlen(key) + 2 + strlen(val) + 1;
         char* line = (char*)malloc(len);
@@ -1169,7 +1183,9 @@ static int expected_path_includes_query(const char* path) {
     return path && strchr(path, '?') != NULL;
 }
 
-static char* response_headers_for_tape(const char* raw_headers) {
+static char* response_header_value_from_block(const char* headers, const char* name);
+
+static char* response_headers_for_tape(const char* raw_headers, int strip_content_encoding) {
     if (!raw_headers) return strdup("");
     const char* p = strchr(raw_headers, '\n');
     p = p ? p + 1 : raw_headers;
@@ -1192,7 +1208,8 @@ static char* response_headers_for_tape(const char* raw_headers) {
             if (name_len > 0 && name_len < sizeof(name)) {
                 memcpy(name, line_start, name_len);
                 name[name_len] = '\0';
-                if (!is_hop_by_hop_header(name)) {
+                if (!is_hop_by_hop_header(name)
+                    && !(strip_content_encoding && icmp(name, "Content-Encoding") == 0)) {
                     if (off + line_len + 1 >= cap) {
                         cap = cap + line_len + 1024;
                         char* bigger = (char*)realloc(out, cap);
@@ -1210,6 +1227,20 @@ static char* response_headers_for_tape(const char* raw_headers) {
     }
     out[off] = '\0';
     return out;
+}
+
+static int header_block_has_token_value(const char* headers, const char* name, const char* token) {
+    char* v = response_header_value_from_block(headers, name);
+    if (!v) return 0;
+    int yes = ascii_ci_contains(v, token);
+    free(v);
+    return yes;
+}
+
+static int request_accepts_gzip(const VcrHttpRequestPrefix* req) {
+    const char* ae = request_header_value(req, "Accept-Encoding");
+    if (!ae) return 0;
+    return ascii_ci_contains(ae, "gzip");
 }
 
 static char* response_header_value_from_block(const char* headers, const char* name) {
@@ -1330,21 +1361,57 @@ static void vcr_record_dispatch(void* req, void* res, void* ud) {
     const char* body = (cr->body && cr->body->data) ? cr->body->data : "";
     int body_len = (cr->body && cr->body->data) ? (int)cr->body->length : 0;
     const char* raw_headers = (cr->headers && cr->headers->data) ? cr->headers->data : "";
-    char* resp_headers = response_headers_for_tape(raw_headers);
+    char* caller_headers = response_headers_for_tape(raw_headers, 0);
+    int upstream_gzip = header_block_has_token_value(caller_headers ? caller_headers : "", "Content-Encoding", "gzip");
+    char* resp_headers = response_headers_for_tape(raw_headers, upstream_gzip);
     char* content_type = response_header_value_from_block(resp_headers ? resp_headers : "", "Content-Type");
     char* req_headers = normalize_live_headers(live_req);
 
-    if (!resp_headers || !content_type || !req_headers) {
-        free(resp_headers); free(content_type); free(req_headers);
+    if (!caller_headers || !resp_headers || !content_type || !req_headers) {
+        free(caller_headers); free(resp_headers); free(content_type); free(req_headers);
         http_response_free(cresp);
         free(url);
         record_dispatch_error(res, 500, "vcr record mode: OOM recording interaction");
         return;
     }
 
+    const char* body_for_tape = body;
+    char* decoded_body = NULL;
+    if (upstream_gzip) {
+        if (zlib_backend_available() == 0) {
+            free(caller_headers); free(resp_headers); free(content_type); free(req_headers);
+            http_response_free(cresp);
+            free(url);
+            record_dispatch_error(res, 500, "vcr record mode: gzip response but zlib unavailable");
+            return;
+        }
+        if (!zlib_try_gzip_inflate(body, body_len)) {
+            free(caller_headers); free(resp_headers); free(content_type); free(req_headers);
+            http_response_free(cresp);
+            free(url);
+            record_dispatch_error(res, 500, "vcr record mode: failed to decode gzip response");
+            return;
+        }
+        int body_for_tape_len = zlib_get_inflate_length();
+        decoded_body = (char*)malloc((size_t)body_for_tape_len + 1);
+        if (!decoded_body) {
+            zlib_release_inflate();
+            free(caller_headers); free(resp_headers); free(content_type); free(req_headers);
+            http_response_free(cresp);
+            free(url);
+            record_dispatch_error(res, 500, "vcr record mode: OOM decoding gzip response");
+            return;
+        }
+        memcpy(decoded_body, zlib_get_inflate_bytes(), (size_t)body_for_tape_len);
+        decoded_body[body_for_tape_len] = '\0';
+        zlib_release_inflate();
+        body_for_tape = decoded_body;
+    }
+
     char* recorded_path = build_recorded_path(live_req);
     if (!recorded_path) {
-        free(resp_headers); free(content_type); free(req_headers);
+        free(decoded_body);
+        free(caller_headers); free(resp_headers); free(content_type); free(req_headers);
         http_response_free(cresp);
         free(url);
         record_dispatch_error(res, 500, "vcr record mode: OOM recording path");
@@ -1355,10 +1422,12 @@ static void vcr_record_dispatch(void* req, void* res, void* ud) {
                                          recorded_path,
                                          http_response_status(cresp),
                                          content_type,
-                                         body,
+                                         body_for_tape,
                                          req_headers,
                                          live_req->body ? live_req->body : "");
     if (!ok) {
+        free(decoded_body);
+        free(caller_headers);
         free(resp_headers);
         free(content_type);
         free(req_headers);
@@ -1371,13 +1440,15 @@ static void vcr_record_dispatch(void* req, void* res, void* ud) {
     vcr_aether_set_resp_headers(g_tape_n - 1, resp_headers);
 
     http_response_set_status(res, http_response_status(cresp));
-    emit_recorded_headers_to_response(res, resp_headers);
+    emit_recorded_headers_to_response(res, caller_headers);
     http_response_set_body_n(res, body, body_len);
 
     last_err_set("");
     g_last_kind = VCR_KIND_OK;
     g_last_index = g_tape_n - 1;
 
+    free(decoded_body);
+    free(caller_headers);
     free(resp_headers);
     free(content_type);
     free(req_headers);
@@ -1678,7 +1749,10 @@ void vcr_dispatch(void* req, void* res, void* ud) {
              * duplicate-keyed headers. set_header replaces on duplicate;
              * add_header preserves order and multiplicity through to
              * the wire serializer. */
-            http_response_add_header(res, name_buf, val_buf);
+            if (icmp(name_buf, "Content-Length") != 0
+                && icmp(name_buf, "Content-Encoding") != 0) {
+                http_response_add_header(res, name_buf, val_buf);
+            }
         }
     }
     /* Fallback: tapes without a resp_headers block (or with one that
@@ -1698,7 +1772,17 @@ void vcr_dispatch(void* req, void* res, void* ud) {
             http_response_set_body(res, e->body);
         }
     } else {
-        http_response_set_body(res, e->body);
+        if (request_accepts_gzip(live_req) && zlib_backend_available() == 1
+            && zlib_try_gzip_deflate(e->body ? e->body : "", (int)strlen(e->body ? e->body : ""), -1)) {
+            const char* gz = zlib_get_deflate_bytes();
+            int gz_len = zlib_get_deflate_length();
+            http_response_set_body_n(res, gz, gz_len);
+            zlib_release_deflate();
+            http_response_set_header(res, "Content-Encoding", "gzip");
+            http_response_set_header(res, "Vary", "Accept-Encoding");
+        } else {
+            http_response_set_body(res, e->body);
+        }
     }
 
     /* Successful dispatch — clear any prior diagnostic and stamp

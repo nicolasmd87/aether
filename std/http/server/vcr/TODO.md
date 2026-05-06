@@ -118,31 +118,26 @@ Tests:
 
 ## Gzip Normalize/Restore
 
-Servirtium step 3 mentions recording should store uncompressed content but re-gzip for the caller when needed.
+Servirtium step 3 says recordings should store uncompressed content but re-gzip for callers when needed.
 
-Current Aether VCR:
+Current behavior:
 
-- Handles response bodies whose content type says `base64 below`.
-- Does not appear to normalize gzip responses during record mode or restore gzip for callers.
+- Record mode treats `Content-Encoding: gzip` as a transport encoding.
+- The caller still receives the upstream gzip response in record mode.
+- The tape stores the decoded response body.
+- The tape omits `Content-Encoding` and `Content-Length`.
+- Playback serves the decoded body by default.
+- Playback restores gzip and sets `Vary: Accept-Encoding` when the caller sends `Accept-Encoding: gzip`.
 
-Questions before implementation:
+Tests:
 
-- Should gzip be normalized based on `Content-Encoding: gzip` only?
-- Should the tape store decompressed body and omit/change `Content-Encoding`?
-- Should caller response preserve original gzip bytes in record mode, playback mode, or both?
+- `tests/integration/test_vcr_gzip_normalize.ae`: tiny gzipped upstream payload records as readable tape body.
+- `tests/integration/test_vcr_gzip_normalize.ae`: playback without `Accept-Encoding: gzip` returns decoded body.
+- `tests/integration/test_vcr_gzip_normalize.ae`: playback with `Accept-Encoding: gzip` restores gzip headers.
 
-Likely implementation:
+Remaining gap:
 
-- Use existing zlib support if available in std/runtime.
-- Record mode:
-  - if upstream response has `Content-Encoding: gzip`, decompress before storing body.
-  - record headers without `Content-Encoding` and with adjusted `Content-Length`.
-  - return original upstream response bytes to caller unless a caller-response mutation phase is configured.
-- Playback:
-  - serve decompressed body by default.
-  - optionally gzip if caller sent `Accept-Encoding: gzip`.
-
-This needs careful tests with binary-safe response body handling.
+- The first cut assumes decoded gzip bodies are textual enough for the current tape string storage. Full arbitrary binary decoded bodies should go through the existing `base64 below` path once the record-side emitter carries explicit body lengths end to end.
 
 ## HTTP-Sourced Markdown Tapes
 

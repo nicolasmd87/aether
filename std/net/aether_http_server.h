@@ -231,6 +231,7 @@ int http_server_bind_raw(HttpServer* server, const char* host, int port);
 // binds. No-op if `host` is NULL or empty.
 void http_server_set_host(HttpServer* server, const char* host);
 int http_server_start_raw(HttpServer* server);
+int http_server_start_background_raw(HttpServer* server);
 void http_server_stop(HttpServer* server);
 void http_server_free(HttpServer* server);
 
