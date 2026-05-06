@@ -101,6 +101,20 @@ handle_admin_200(req: ptr, res: ptr, ud: ptr) {
     http.response_set_body(res, "ok")
 }
 
+// Zero every per-process knob the test driver might have flipped:
+// the request counter, the force-503 flag (B only), and the
+// simulated-latency value. Mounted on A/B/C so the test runner can
+// reset all three upstreams in parallel between subtests without
+// respawning them — saves ~7 process-spawn round-trips per .sh file
+// on the slow Windows MSYS2 runner.
+handle_admin_reset(req: ptr, res: ptr, ud: ptr) {
+    proxy_test_counter_reset()
+    proxy_test_force_503_set(0)
+    proxy_test_eta_ms_set(0)
+    http.response_set_status(res, 200)
+    http.response_set_body(res, "ok")
+}
+
 handle_health_b(req: ptr, res: ptr, ud: ptr) {
     if proxy_test_force_503_get() != 0 {
         http.response_set_status(res, 503)
@@ -183,6 +197,7 @@ build_upstream_a() {
     http.server_get(s, "/echo_cacheable_ttl",  handle_echo_cacheable_ttl, 0)
     http.server_get(s, "/count",           handle_count,          0)
     http.server_get(s, "/health",          handle_health_ok,      0)
+    http.server_post(s, "/admin/reset",    handle_admin_reset,    0)
     println("READY")
     run_server(s)
 }
@@ -203,6 +218,7 @@ build_upstream_b() {
     http.server_get(s,  "/health",          handle_health_b,       0)
     http.server_post(s, "/admin/503",       handle_admin_503,      0)
     http.server_post(s, "/admin/200",       handle_admin_200,      0)
+    http.server_post(s, "/admin/reset",     handle_admin_reset,    0)
     println("READY")
     run_server(s)
 }
@@ -218,6 +234,7 @@ build_upstream_c() {
     http.server_get(s, "/echo_cacheable_ttl", handle_echo_cacheable_ttl, 0)
     http.server_get(s, "/count",          handle_count,          0)
     http.server_get(s, "/health",         handle_health_ok,      0)
+    http.server_post(s, "/admin/reset",   handle_admin_reset,    0)
     println("READY")
     run_server(s)
 }

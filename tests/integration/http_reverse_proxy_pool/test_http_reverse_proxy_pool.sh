@@ -4,15 +4,29 @@
 # Tests 1-8 live here: round-robin / weighted-RR / ip-hash / cookie-
 # hash / drain / health (× 2) / breaker-open. The remaining tests
 # (breaker-recovery, cache × 3, retry, rate-limit, trace, metrics)
-# live in test_http_reverse_proxy_pool_extra.sh — splitting the
-# suite gives each half its own 180 s timeout budget on the slow
-# Windows mingw CI runner, which the previous single-file form
-# was tripping over.
+# live in test_http_reverse_proxy_pool_extra.sh.
 #
-# Each scenario boots three upstream processes (A, B, C on
-# :19101/19102/19103) plus a proxy process (mode-specific config
-# on :19100), runs the assertions, then tears all four down before
-# moving on.
+# DESIGN — warm upstreams, polling waits, no timeout band-aids.
+#
+# 1. Three upstreams (A, B, C on :19101/19102/19103) spawn ONCE at
+#    the top. They stay alive across every subtest. Per subtest we
+#    only swap the proxy (whose mode varies). Between subtests we
+#    POST /admin/reset to each upstream — that endpoint zeros the
+#    request counter, the force_503 flag, and the simulated latency
+#    knob. Saves 7 of 8 upstream-startups per file × the slow
+#    Windows fork+exec cost.
+#
+# 2. Health / breaker / port-ready waits poll `/proxy-metrics`
+#    (or the /health endpoint) for the deterministic
+#    state-transition rather than `sleep N`. Polling waits for the
+#    actual observable condition; sleep guesses at how slow the
+#    runner is and either masks bugs (too long) or false-fails
+#    (too short).
+#
+# 3. Cleanup uses SIGKILL — the aether http_server's signal handler
+#    didn't reap SIGTERM cleanly on Windows MSYS2, leaving `wait
+#    $pid` blocked indefinitely. SIGKILL maps to TerminateProcess on
+#    MSYS2: synchronous, uninterceptable, no `wait` needed.
 
 set -e
 
@@ -27,16 +41,12 @@ fi
 
 TMPDIR="$(mktemp -d)"
 PIDS=""
+PROXY_PID=""
+
 cleanup() {
-    # SIGKILL (-9), not SIGTERM. The aether http_server's signal
-    # handler doesn't reap SIGTERM cleanly on Windows MSYS2, which
-    # left `wait $pid` blocking forever in CI — pinning the test
-    # at 180 s timeout despite the test logic itself finishing in
-    # ~16 s locally. SIGKILL maps to TerminateProcess on MSYS2,
-    # synchronous and uninterceptable, so the pid is dead by the
-    # time `kill -9` returns. Drop the matching `wait` calls —
-    # there's nothing left to wait on, and adding them back risks
-    # the same hang.
+    if [ -n "$PROXY_PID" ]; then
+        kill -9 "$PROXY_PID" 2>/dev/null || true
+    fi
     for pid in $PIDS; do
         kill -9 "$pid" 2>/dev/null || true
     done
@@ -58,30 +68,25 @@ start_proc() {
     new_pid=$!
     # Stop bash from tracking this child as a job — silences the
     # "Killed PID command" stderr lines that otherwise leak into
-    # the test runner's stderr file when stop_all calls kill -9.
-    # The process is still our child for kill / wait purposes.
+    # the test runner's stderr file when stop_proxy calls kill -9.
     disown "$new_pid" 2>/dev/null || true
     PIDS="$PIDS $new_pid"
     eval "PID_$role=\$new_pid"
 }
 
+# Poll /health on a port until it answers. The /health endpoint is
+# registered on every upstream (A/B/C); the proxy is mounted at
+# /echo so /health on the proxy 404s, which is also a positive
+# "bound and answering" signal. Bounded by deadline; on timeout
+# the build fails loudly with the role's log dumped — no silent
+# wait-forever path.
 wait_for_port() {
     port="$1"
     deadline=$(($(date +%s) + 15))
     while [ "$(date +%s)" -lt "$deadline" ]; do
-        # Probe /health (registered on every upstream + 404 on proxy
-        # since the proxy mount is /echo). Avoid /echo: that's the
-        # proxy mount and would forward to an upstream, incrementing
-        # its counter and corrupting the post-test count_get checks.
-        #
-        # --connect-timeout fails fast on a refused / not-yet-bound
-        # port. Without it, curl on Windows MSYS2 waits the full
-        # --max-time (~1 s) before retrying — and with 15 setups ×
-        # 4 ports per setup × multiple wasted attempts each, that
-        # alone burned more than the CI's 180 s test timeout. The
-        # 0.3 s connect-timeout is well above any sane bind latency
-        # (loopback, in-process) but fast enough that a still-not-
-        # bound port surfaces refusal quickly and the loop iterates.
+        # --connect-timeout fails fast on a refused port; without
+        # it Windows MSYS2 curl waits the full --max-time before
+        # retrying.
         if curl -s -o /dev/null --connect-timeout 0.3 --max-time 1 \
                 "http://127.0.0.1:$port/health" 2>/dev/null; then
             return 0
@@ -91,24 +96,7 @@ wait_for_port() {
     echo "  [FAIL] port $port never accepted"; exit 1
 }
 
-stop_all() {
-    # SIGKILL (see cleanup() comment) + skip the matching `wait`.
-    # kill -9 → TerminateProcess on MSYS2 is synchronous, the pid
-    # is gone by the time we move on. The earlier SIGTERM + wait
-    # pattern blocked indefinitely in Windows CI when the http
-    # server didn't reap SIGTERM, pushing the suite past its
-    # 180 s timeout despite local 16 s execution.
-    for pid in $PIDS; do
-        kill -9 "$pid" 2>/dev/null || true
-    done
-    PIDS=""
-    # No port-release poll: lsof isn't on Windows MSYS2 and the
-    # loop just returned-fast there anyway (cmd missing → "lsof"
-    # exits non-zero → `! lsof` is true → return). The poll only
-    # mattered on POSIX where SIGTERM-reaped-then-rebind races
-    # could occur; with SIGKILL the close is forced and the
-    # SO_REUSEADDR on the next bind handles any TIME_WAIT residue.
-}
+# ----- warm-upstream lifecycle ---------------------------------
 
 start_three_upstreams() {
     start_proc upstream_a
@@ -119,33 +107,117 @@ start_three_upstreams() {
     wait_for_port 19103
 }
 
+# Reset every upstream's per-subtest state (counter, force_503,
+# eta) so the next subtest sees a clean state without respawning
+# the upstreams. curl -Z fires all three in parallel.
+reset_upstreams() {
+    curl -Z -s -o /dev/null --max-time 3 \
+        -X POST "http://127.0.0.1:19101/admin/reset" \
+        -X POST "http://127.0.0.1:19102/admin/reset" \
+        -X POST "http://127.0.0.1:19103/admin/reset" \
+        >/dev/null 2>&1 || true
+}
+
 start_proxy() {
     start_proc "$1"
+    PROXY_PID="$new_pid"
     wait_for_port 19100
 }
 
+# Kill the per-subtest proxy (only) without touching upstreams.
+# kill -9 maps to TerminateProcess on MSYS2 (synchronous); no
+# `wait` needed and no `lsof` poll for port release — the next
+# proxy's bind uses SO_REUSEADDR so any TIME_WAIT residue is
+# tolerated.
+stop_proxy() {
+    if [ -n "$PROXY_PID" ]; then
+        kill -9 "$PROXY_PID" 2>/dev/null || true
+        # Drop the dead PID from $PIDS so cleanup() doesn't try to
+        # double-kill it on exit.
+        new_pids=""
+        for pid in $PIDS; do
+            if [ "$pid" != "$PROXY_PID" ]; then
+                new_pids="$new_pids $pid"
+            fi
+        done
+        PIDS="$new_pids"
+        PROXY_PID=""
+    fi
+}
+
+# Per-subtest setup: reset upstream state, spawn the proxy.
 setup() {
     proxy_role="$1"
-    start_three_upstreams
+    reset_upstreams
     start_proxy "$proxy_role"
-    # `wait_for_port` already confirmed every listener is bound and
-    # answering /health — no extra grace period needed. The previous
-    # `sleep 0.3` here was a leftover from before wait_for_port
-    # existed; on a slow Windows runner ×16 setups it added 4.8 s
-    # of wasted wall-clock for no semantic benefit.
+}
+
+# Backward-compatible alias — the per-subtest body sites still
+# read `stop_all`; today only the proxy needs killing, the
+# upstreams stay warm.
+stop_all() {
+    stop_proxy
 }
 
 PROXY="http://127.0.0.1:19100"
 fail() { echo "  [FAIL] $1"; exit 1; }
 
-# Drive N parallel /echo requests, discarding all output. Used by
-# tests that only need the proxy to observe N arrivals (counter
-# checks, breaker / health detection). Sequential `while curl`
-# loops accumulated ~150 ms × N of latency on Windows mingw CI;
-# across four such tests with N=12 that pushed the suite over CI's
-# 180 s timeout. `curl -Z` runs the requests in one libcurl
-# process so wall-clock cost drops to roughly the slowest single
-# request — same proxy semantics, much cheaper.
+# ----- polling-based state waits -------------------------------
+# These replace the old sleep-N "should be enough on most CI
+# runners" pattern. Polling waits for the actual deterministic
+# state transition published on /proxy-metrics; on a fast machine
+# the wait collapses to a single round-trip, on a slow machine
+# the wait stretches until the state change actually happens.
+
+# Wait until the proxy reports the named upstream's health-check
+# state matches `expected_value` (0 = unhealthy, 1 = healthy).
+# upstream_url is the URL the proxy was configured with (e.g.
+# http://localhost:19102). Bounded by `deadline_sec`; on timeout
+# the test fails with a clear diagnostic.
+wait_for_upstream_health() {
+    upstream_url="$1"
+    expected_value="$2"
+    deadline_sec="${3:-15}"
+    deadline=$(($(date +%s) + deadline_sec))
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        body=$(curl -s --max-time 2 "$PROXY/proxy-metrics" 2>/dev/null || true)
+        if echo "$body" | grep -qF \
+            "aether_proxy_upstream_healthy{upstream=\"${upstream_url}\"} ${expected_value}"; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    echo "  [FAIL] $upstream_url did not reach healthy=$expected_value within ${deadline_sec}s"
+    return 1
+}
+
+# Wait until the named upstream's circuit breaker matches
+# `expected_state` (0 = closed, 1 = open, 2 = half_open).
+wait_for_breaker_state() {
+    upstream_url="$1"
+    expected_state="$2"
+    deadline_sec="${3:-10}"
+    deadline=$(($(date +%s) + deadline_sec))
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        body=$(curl -s --max-time 2 "$PROXY/proxy-metrics" 2>/dev/null || true)
+        if echo "$body" | grep -qF \
+            "aether_proxy_upstream_breaker_state{upstream=\"${upstream_url}\"} ${expected_state}"; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    echo "  [FAIL] $upstream_url breaker did not reach state=$expected_state within ${deadline_sec}s"
+    return 1
+}
+
+# ----- request helpers -----------------------------------------
+
+# Drive N parallel /echo requests via curl's libcurl multiplexer.
+# Used by tests that only need the proxy to observe N arrivals
+# (counter checks, breaker / health detection). Sequential
+# `while curl` loops accumulated ~150 ms × N latency on Windows
+# CI; one curl process amortises that to roughly the slowest
+# single request.
 parallel_echo() {
     n="$1"
     URLS=""
@@ -157,12 +229,10 @@ parallel_echo() {
     curl -Z -s -o /dev/null --max-time 5 $URLS >/dev/null 2>&1 || true
 }
 
-# count_get <port>  →  current shim counter for that upstream
 count_get() {
     curl -s --max-time 3 "http://127.0.0.1:$1/count"
 }
 
-# count_total  →  sum across A+B+C
 count_total() {
     a=$(count_get 19101)
     b=$(count_get 19102)
@@ -170,17 +240,16 @@ count_total() {
     echo $((a + b + c))
 }
 
+# ----- spawn the warm upstreams ONCE ---------------------------
+start_three_upstreams
+
 # ---- Test 1: round-robin distribution ---------------------
 setup proxy_rr
-RESP_TAGS=""
 i=0
 while [ $i -lt 9 ]; do
-    body=$(curl -s --max-time 3 "$PROXY/echo")
-    tag=$(echo "$body" | head -1)
-    RESP_TAGS="$RESP_TAGS $tag"
+    curl -s -o /dev/null --max-time 3 "$PROXY/echo"
     i=$((i + 1))
 done
-# Each upstream should have served 3 of the 9 requests (counter=3).
 [ "$(count_get 19101)" = "3" ] || fail "RR counter A: $(count_get 19101) expected 3"
 [ "$(count_get 19102)" = "3" ] || fail "RR counter B: $(count_get 19102) expected 3"
 [ "$(count_get 19103)" = "3" ] || fail "RR counter C: $(count_get 19103) expected 3"
@@ -188,11 +257,6 @@ stop_all
 
 # ---- Test 2: weighted RR (3:1:1) — 50 requests ----------
 setup proxy_wrr
-# 50 sequential curl calls × ~150 ms per call on Windows mingw CI
-# pushed this loop alone past 7-8 s. Drive them in parallel within
-# a single curl process — the proxy still observes 50 distinct
-# arrivals and applies WRR per request, so the per-upstream
-# counters end up the same; only the wall-clock cost drops.
 URLS=""
 i=0
 while [ $i -lt 50 ]; do
@@ -201,7 +265,6 @@ while [ $i -lt 50 ]; do
 done
 curl -Z -s -o /dev/null --max-time 5 $URLS >/dev/null 2>&1 || true
 A=$(count_get 19101); B=$(count_get 19102); C=$(count_get 19103)
-# 3:1:1 over 50 → A≈30, B≈10, C≈10. Allow ±5 for boundary effects.
 [ "$A" -ge 25 ] && [ "$A" -le 35 ] || fail "WRR A=$A expected 25-35"
 [ "$B" -ge 5  ] && [ "$B" -le 15 ] || fail "WRR B=$B expected 5-15"
 [ "$C" -ge 5  ] && [ "$C" -le 15 ] || fail "WRR C=$C expected 5-15"
@@ -210,7 +273,6 @@ stop_all
 
 # ---- Test 3: ip_hash determinism --------------------------
 setup proxy_ip_hash
-# Same X-Forwarded-For across 12 requests → all hit same upstream.
 i=0
 TAG=""
 while [ $i -lt 12 ]; do
@@ -233,9 +295,6 @@ while [ $i -lt 12 ]; do
     [ "$cur_tag" = "$TAG" ] || fail "cookie_hash inconsistent: $cur_tag vs $TAG"
     i=$((i + 1))
 done
-# Different cookie value should be deterministic on its own (may
-# coincidentally hash to the same upstream — just verify
-# determinism with the second value).
 TAG2=""
 i=0
 while [ $i -lt 8 ]; do
@@ -249,13 +308,7 @@ stop_all
 
 # ---- Test 5: drain — A drained on startup; A counter stays 0 -
 setup proxy_drain
-URLS=""
-i=0
-while [ $i -lt 12 ]; do
-    URLS="$URLS $PROXY/echo"
-    i=$((i + 1))
-done
-curl -Z -s -o /dev/null --max-time 5 $URLS >/dev/null 2>&1 || true
+parallel_echo 12
 A=$(count_get 19101); B=$(count_get 19102); C=$(count_get 19103)
 [ "$A" = "0" ] || fail "drain: A served $A requests (expected 0)"
 [ $((B + C)) -eq 12 ] || fail "drain: B+C=$((B + C)) expected 12"
@@ -263,30 +316,29 @@ stop_all
 
 # ---- Test 6: health checks kill an unhealthy upstream -----
 setup proxy_health
-# First, force B to start serving 503 + flip its /health to 503.
+# Force B's /health endpoint to start serving 503.
 curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/503"
-# Wait long enough for unhealthy_threshold * interval (2 * 200ms = 400ms),
-# plus one extra interval to ensure the first 503 probe completes.
-sleep 1.5
-# Now drive 12 requests; none should land on B.
+# Poll the proxy's /proxy-metrics until it sees B as unhealthy
+# (instead of sleeping for an estimated threshold * interval). On
+# fast machines this collapses to ~one health-check interval; on
+# slow machines it waits as long as the actual state transition
+# takes.
+wait_for_upstream_health "http://localhost:19102" 0 || exit 1
 parallel_echo 12
 B=$(count_get 19102)
-# Tolerance: B may have served 1-2 before being marked down.
+# Up to 2 requests may have landed on B before the health-check
+# thread observed and broadcast the unhealthy state.
 [ "$B" -le 2 ] || fail "health: B served $B requests after marked unhealthy"
 stop_all
 
 # ---- Test 7: health recovery — flip B back, it rejoins -----
 setup proxy_health
 curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/503"
-sleep 1.5  # marked unhealthy
-# Verify B is now skipped
+wait_for_upstream_health "http://localhost:19102" 0 || exit 1
 parallel_echo 6
 B_BEFORE=$(count_get 19102)
-# Flip B back to 200
 curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/200"
-# Wait for healthy_threshold * interval (2 * 200ms) + slack
-sleep 1.5
-# Drive more requests; B should be served again
+wait_for_upstream_health "http://localhost:19102" 1 || exit 1
 parallel_echo 12
 B_AFTER=$(count_get 19102)
 DELTA=$((B_AFTER - B_BEFORE))
@@ -295,10 +347,7 @@ stop_all
 
 # ---- Test 8: circuit breaker opens after consecutive failures ----
 setup proxy_breaker
-# Force B to 503 immediately.
 curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/503"
-# Drive ~10 RR requests; ~3 should hit B (3 failures), then breaker
-# opens. With breaker open, subsequent traffic to B routes elsewhere.
 parallel_echo 12
 B=$(count_get 19102)
 # Once the breaker opens (at threshold=3), B shouldn't receive
