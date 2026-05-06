@@ -845,7 +845,7 @@ main() {
 - `zlib.deflate(data, length, level)` → `(string, int, string)` - Compress the first `length` bytes of `data` at `level` (0..9, or -1 for default). Out-of-range levels are clamped to default. Returns `(bytes, byte_count, "")` on success, `("", 0, error)` on failure.
 - `zlib.inflate(data, length)` → `(string, int, string)` - Decompress a zlib stream (RFC 1950). Returns `(bytes, byte_count, "")` on success, `("", 0, error)` on corruption, truncation, or empty input.
 
-Streaming APIs and gzip-framed (RFC 1952) variants are out of scope for v1 — additive future work under the same module. See [stdlib-vs-contrib.md](stdlib-vs-contrib.md) for the "one obvious shape" criterion.
+Gzip-framed helpers for HTTP `Content-Encoding: gzip` are also available: `zlib.gzip_deflate(data, length, level)` and `zlib.gzip_inflate(data, length)`. Streaming APIs remain out of scope for v1 — additive future work under the same module. See [stdlib-vs-contrib.md](stdlib-vs-contrib.md) for the "one obvious shape" criterion.
 
 ---
 
@@ -1151,15 +1151,24 @@ main() {
 - `vcr.tape_length()` → `int` - How many interactions the tape carries
 
 **Record (capture + flush):**
+- `vcr.load_record(tape_path, upstream_base, port)` - Bind a recording VCR that forwards to `upstream_base`
+- `vcr.eject_record(server, tape_path)` - Stop the record server and flush the tape
 - `vcr.record(method, path, status, content_type, body)` → `string` - Capture an interaction
 - `vcr.record_full(method, path, status, content_type, body, req_headers, req_body)` → `string` - Capture with strict-match metadata
+- `vcr.record_full_response(method, path, status, content_type, body, req_headers, req_body, resp_headers)` → `string` - Capture with request and response metadata
+- `vcr.clear_recording()` - Clear the in-memory tape for direct recorder tests
 - `vcr.flush(tape_path)` → `string` - Write captured interactions to disk
 - `vcr.flush_or_check(tape_path)` → `string` - Re-record byte-diff against an existing tape; leaves a `.actual` sibling on disk if the on-disk tape has drifted
+- `vcr.flush_and_fail_if_changed(tape_path)` → `string` - Write the new tape to `tape_path` and return an error if it differs, so tests fail while `git diff` shows the drift
 
-**Secret scrubbing** (applied at flush time; in-memory capture stays untouched):
+**Secret scrubbing / mutations** (applied at flush or playback-match time; in-memory capture stays untouched):
 - `vcr.redact(field, pattern, replacement)` → `string` - Replace pattern in field
 - `vcr.clear_redactions()` - Drop all registered redactions
-- `vcr.FIELD_PATH`, `vcr.FIELD_RESPONSE_BODY` - Field selectors
+- `vcr.unredact(field, pattern, replacement)` → `string` - Replace redacted tape values before playback matching
+- `vcr.clear_unredactions()` - Drop playback unredactions
+- `vcr.remove_header(field, header_name)` → `string` - Remove named request/response header lines
+- `vcr.clear_header_removals()` - Drop header-removal rules
+- `vcr.FIELD_PATH`, `vcr.FIELD_REQUEST_HEADERS`, `vcr.FIELD_REQUEST_BODY`, `vcr.FIELD_RESPONSE_HEADERS`, `vcr.FIELD_RESPONSE_BODY` - Field selectors
 
 **Per-interaction notes:**
 - `vcr.note(title, body)` → `string` - Stage a `[Note]` block; attaches to the next interaction recorded
@@ -1167,6 +1176,13 @@ main() {
 **Strict request matching:**
 - `vcr.last_error()` → `string` - Most recent dispatch mismatch diagnostic, surfaced to the test's tearDown
 - `vcr.clear_last_error()` - Drop the last-error slot
+- `vcr.last_kind()` → `int`, `vcr.last_index()` → `int` - Machine-readable dispatch outcome and interaction index
+- `vcr.reset_cursor()` - Rewind the loaded tape to interaction 0
+- `vcr.set_strict_headers(on)` - Compare request headers even when the tape block is blank
+
+**Gzip normalize/restore:**
+- Record mode decodes upstream `Content-Encoding: gzip` before writing the tape, omits `Content-Encoding` / `Content-Length`, and still returns the upstream gzip response to the caller.
+- Playback serves decoded bodies by default and restores gzip plus `Vary: Accept-Encoding` when the caller sends `Accept-Encoding: gzip`.
 
 **Static-content mounts** (bypass-the-tape territory for Selenium/Cypress assets):
 - `vcr.static_content(mount_path, fs_dir)` → `string` - Mark an on-disk dir as bypass-the-tape

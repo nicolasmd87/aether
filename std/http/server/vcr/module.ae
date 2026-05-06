@@ -1,12 +1,12 @@
-// std.http.server.vcr — replay-driven HTTP server for testing.
+// std.http.server.vcr — Servirtium-format HTTP record/replay for tests.
 // Import with: import std.http.server.vcr
 //
-// v0.1 — GET-only, replay-only, strict (method, path) matching.
-//
 // The metaphor: a VCR is the device, a tape is the medium, and
-// `record` / `replay` are the operations the device performs on
-// the medium. v0.1 only supports replay (the tape is hand-written;
-// the recorder lands in a later version).
+// `record` / `replay` are the operations the device performs on the
+// medium. Replay serves previously captured markdown tapes. Record
+// mode listens like playback, forwards requests to a real upstream
+// using std.http.client, returns the real response to the caller, and
+// records the same interaction into the tape.
 //
 // A tape is a file describing a sequence of HTTP exchanges. Each
 // entry records the request the SUT (system under test) is
@@ -45,19 +45,14 @@
 //   ok-body
 //   ```
 //
-// v0.1 only consults the response body section (status, content-type,
-// body); the other three sections are accepted-and-ignored. Format
-// compatibility with other Servirtium implementations (Java, Python,
-// Kotlin, Go, ...) is the design goal — tapes recorded by any of
-// them should be replayable by us.
+// Format compatibility with other Servirtium implementations (Java,
+// Python, Kotlin, Go, ...) is the design goal — tapes recorded by any
+// of them should be replayable by us.
 //
-// Matching is strict on (method, path) only — incoming headers and
-// body are ignored. Out-of-order or unmatched-method-or-path
-// requests fail the replay (the dispatcher returns 599 with a body
-// explaining what didn't match, so the failure surfaces at the
-// test layer rather than as a silent miss). Entries are consumed
-// in order; if the SUT sends the same request twice the tape needs
-// two entries.
+// Matching is ordered. The dispatcher always checks method/path; it
+// also checks request headers and request body when the tape carries
+// non-empty blocks or strict headers are enabled. Mismatches return
+// 599 and populate last_error / last_kind / last_index.
 //
 // Usage (caller owns the actor wiring — Aether's import system
 // doesn't merge actor declarations across modules in v0.1, so the
@@ -92,14 +87,16 @@
 //       vcr.eject(raw)
 //   }
 //
-// What's deliberately out of scope for v0.1 (additive future work):
-//   - POST / PUT / DELETE / PATCH (only GET)
-//   - Body-aware matching (only method + path)
-//   - Header-aware matching
-//   - Recording mode (tapes are hand-written today)
+// Supported additive features include record mode, custom verbs,
+// header/body strict matching, notes, redactions, unredactions,
+// header removal, static-content bypass, drift checks, optional
+// markdown formats, repeated response headers, base64 response bodies,
+// and gzip normalize/restore.
+//
+// What's still deliberately out of scope:
 //   - Loose / fuzzy matching, regex paths
-//   - Multi-tape replay (one tape per VCR instance)
-//   - Self-contained actor wiring (caller does spawn + send today)
+//   - Multi-tape/process-global isolation (one active tape today)
+//   - Arbitrary binary decoded record bodies without base64 emission
 
 import std.http
 import std.fs

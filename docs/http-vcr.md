@@ -17,8 +17,9 @@ medium.
   runs replay from the tape — no network, no flakiness, no rate
   limits, no upstream-changed-overnight surprises.
 - **Pin upstream behavior.** The tape becomes a contract: if the
-  upstream service changes its response shape, the re-record
-  check catches the byte-level diff (`vcr.flush_or_check`).
+  upstream service changes its response shape, the re-record checks
+  catch the byte-level diff (`vcr.flush_or_check` or
+  `vcr.flush_and_fail_if_changed`).
 - **Run UI tests offline.** Static-content mounts let
   Selenium/Cypress/Playwright pull CSS/JS/images straight from
   disk without each one polluting the tape.
@@ -33,6 +34,8 @@ medium.
 import std.http.server.vcr
 import std.http
 import std.http.client
+
+extern http_server_stop(server: ptr)
 
 // Use raw form: actor receive handlers can't cleanly discard the
 // wrapper's string return without an unused-result warning.
@@ -53,6 +56,33 @@ main() {
     body, err = http.get("http://127.0.0.1:18099/things/42")
 
     vcr.eject(raw)
+}
+```
+
+## Quick start (record)
+
+```aether
+import std.http.server.vcr
+import std.http
+import std.http.client
+
+main() {
+    raw = vcr.load_record("tests/tapes/my.tape",
+                          "https://supplier.example.test", 18100)
+    http.server_start_background(raw)
+
+    // The SUT/client library points at http://127.0.0.1:18100.
+    // VCR forwards to the supplier and records the interaction.
+    req = client.request("GET", "http://127.0.0.1:18100/things/42")
+    resp, err = client.send_request(req)
+    client.request_free(req)
+    client.response_free(resp)
+
+    // Servirtium-style drift check: stop the recorder, write the new
+    // tape to the normal path, but return an error if it differs so
+    // the test fails and git diff shows the change directly.
+    http_server_stop(raw)
+    ferr = vcr.flush_and_fail_if_changed("tests/tapes/my.tape")
 }
 ```
 
@@ -99,13 +129,26 @@ they're part of the format, not markdown escaping.
 | Feature                           | Functions                                   |
 |-----------------------------------|---------------------------------------------|
 | **Replay** (load + serve)         | `vcr.load`, `vcr.eject`, `vcr.tape_length`  |
-| **Record** (capture + flush)      | `vcr.record`, `vcr.record_full`, `vcr.flush` |
-| **Re-record check**               | `vcr.flush_or_check`                        |
+| **Record server**                 | `vcr.load_record`, `vcr.eject_record`       |
+| **Direct capture + flush**        | `vcr.record`, `vcr.record_full`, `vcr.record_full_response`, `vcr.clear_recording`, `vcr.flush` |
+| **Re-record checks**              | `vcr.flush_or_check`, `vcr.flush_and_fail_if_changed` |
 | **Notes** (per-interaction)       | `vcr.note`                                  |
-| **Redactions** (scrub at flush)   | `vcr.redact`, `vcr.clear_redactions`, `vcr.FIELD_PATH`, `vcr.FIELD_RESPONSE_BODY` |
-| **Strict request matching**       | `vcr.last_error`, `vcr.clear_last_error`    |
+| **Redactions / unredactions**     | `vcr.redact`, `vcr.clear_redactions`, `vcr.unredact`, `vcr.clear_unredactions` |
+| **Header removal**                | `vcr.remove_header`, `vcr.clear_header_removals` |
+| **Strict request matching**       | `vcr.last_error`, `vcr.clear_last_error`, `vcr.last_kind`, `vcr.last_index`, `vcr.reset_cursor`, `vcr.set_strict_headers` |
 | **Static-content mounts**         | `vcr.static_content`, `vcr.clear_static_content` |
 | **Optional markdown formats**     | `vcr.emphasize_http_verbs`, `vcr.indent_code_blocks`, `vcr.clear_format_options` |
+
+Field selectors for mutations: `vcr.FIELD_PATH`,
+`vcr.FIELD_REQUEST_HEADERS`, `vcr.FIELD_REQUEST_BODY`,
+`vcr.FIELD_RESPONSE_HEADERS`, `vcr.FIELD_RESPONSE_BODY`.
+
+Gzip policy: record mode treats `Content-Encoding: gzip` as a
+transport encoding. The caller receives the upstream gzip response,
+but the tape stores the decoded body and omits `Content-Encoding` /
+`Content-Length`. Playback serves decoded bodies by default and
+restores gzip plus `Vary: Accept-Encoding` when the caller sends
+`Accept-Encoding: gzip`.
 
 ## Servirtium roadmap status
 
@@ -121,8 +164,8 @@ new implementations at https://servirtium.dev. Aether's
 | 4    | Re-record byte-diff check                     | ✓ |
 | 5    | Multiple-interaction handling                 | ✓ |
 | 6    | Library extracted to its own module           | ✓ |
-| 7    | Other HTTP verbs (POST/PUT/DELETE/PATCH)      | ✓ |
-| 8    | Mutation operations (redactions)              | ✓ |
+| 7    | Other HTTP verbs                              | ✓ |
+| 8    | Mutation operations                           | ✓ |
 | 9    | Per-interaction Notes                         | ✓ |
 | 10   | Strict request matching + last-error surface  | ✓ |
 | 11   | Static-content serving                        | ✓ |
@@ -191,6 +234,11 @@ where this implementation drifted from the spec).
 | Test file                                              | What it exercises |
 |--------------------------------------------------------|-------------------|
 | `tests/integration/test_vcr_redactions.ae`             | Step 8 — flush-time scrubbing of body / path |
+| `tests/integration/test_vcr_unredactions.ae`           | Step 8/10 — playback unredactions and header removals |
+| `tests/integration/test_vcr_verbs.ae`                  | Step 7 — POST/PUT/HEAD/DELETE/OPTIONS/TRACE/PATCH plus GET-with-body |
+| `tests/integration/test_vcr_drift_fail.ae`             | Step 4 — overwrite-and-fail drift behavior |
+| `tests/integration/test_vcr_record_last_error.ae`      | Step 3/10 — record-mode diagnostics |
+| `tests/integration/test_vcr_gzip_normalize.ae`         | Step 3 — gzip normalize/restore |
 | `tests/integration/test_vcr_notes.ae`                  | Step 9 — per-interaction `[Note]` blocks |
 | `tests/integration/test_vcr_strict_match.ae`           | Step 10 — header mismatch surfaces via `last_error` |
 | `tests/integration/test_vcr_strict_match_body.ae`      | Step 10 — body mismatch surfaces via `last_error` |

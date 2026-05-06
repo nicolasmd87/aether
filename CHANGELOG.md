@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+## [current]
+
+### Added
+
+- **`std.http.server.vcr` record-mode hardening** (`std/http/server/vcr/`, `tests/integration/test_vcr_*.ae`). Adds live forwarding record mode, all-method VCR coverage, record/playback diagnostics, Servirtium-style drift failure via `flush_and_fail_if_changed`, gzip normalize/restore for `Content-Encoding: gzip`, and updated VCR documentation/test coverage maps. Supporting HTTP fixes make client response bodies and server `response_set_body_n` binary-safe for gzip payloads.
+
 ## [0.128.0]
 
 ### Added
