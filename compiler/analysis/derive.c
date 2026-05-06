@@ -185,9 +185,13 @@ static ASTNode* synth_eq(ASTNode* struct_def) {
         chain->node_type = create_type(TYPE_INT);
     }
 
-    /* Build the function definition. Function name: T_eq. */
+    /* Build the function definition. Function name: T_eq.
+     * Precision spec caps the type-name component at 250 bytes
+     * regardless of source length — keeps -Werror=format-truncation
+     * builds happy. Identifiers above 250 bytes don't occur in
+     * practice. */
     char fname[256];
-    snprintf(fname, sizeof(fname), "%s_eq", type_name);
+    snprintf(fname, sizeof(fname), "%.250s_eq", type_name);
     ASTNode* func = create_ast_node(AST_FUNCTION_DEFINITION, fname, line, column);
     func->node_type = create_type(TYPE_INT);
 

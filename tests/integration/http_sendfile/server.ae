@@ -12,15 +12,13 @@ import std.string
 // Use raw form: actor receive handlers can't cleanly discard the
 // wrapper's string return without an unused-result warning.
 extern http_server_start_raw(server: ptr) -> int
-extern http_request_path(req: ptr) -> string
-extern http_serve_file(res: ptr, filepath: string)
 extern exit(code: int)
 
 const PORT = 19200
 
 handle_static(req: ptr, res: ptr, ud: ptr) {
     // Resolve path: /static/<filename> → <root>/<filename>.
-    p = http_request_path(req)
+    p = http.request_path(req)
     if p == null { p = "/" }
     root = aether_args_get(2)
     if string.starts_with(p, "/static/") == 1 {
@@ -30,7 +28,7 @@ handle_static(req: ptr, res: ptr, ud: ptr) {
         plen = string.length(p)
         sub = string.substring(p, i, plen)
         full = "${root}/${sub}"
-        http_serve_file(res, full)
+        http.serve_file(res, full)
         return
     }
     http.response_set_status(res, 404)

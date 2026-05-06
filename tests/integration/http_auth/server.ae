@@ -67,6 +67,7 @@ main() {
 
     if mode == "bearer" {
         raw = http.server_create(18273)
+        http.server_set_host(raw, "127.0.0.1")
         if raw == 0 {
             println("FAIL: server_create returned null")
             exit(1)
@@ -85,6 +86,7 @@ main() {
 
     if mode == "session" {
         raw = http.server_create(18274)
+        http.server_set_host(raw, "127.0.0.1")
         if raw == 0 {
             println("FAIL: server_create returned null")
             exit(1)

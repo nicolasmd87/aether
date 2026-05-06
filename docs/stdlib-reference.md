@@ -899,12 +899,17 @@ All wrappers auto-free the underlying response and return an error string for tr
 
 **Server Lifecycle:**
 - `http.server_create(port)` - Create server (never fails)
+- `http.server_set_host(server, host)` - Set bind address before `server_start`. Default is `"0.0.0.0"`. Pass `"127.0.0.1"` to bind loopback only — useful in tests because macOS / Windows firewalls don't prompt on loopback binds.
 - `http.server_bind(server, host, port)` → `string` - Bind to address, return error string
 - `http.server_start(server)` → `string` - Start serving (blocking), return error string
 - `http.server_stop(server)` - Stop server
 - `http.server_free(server)` - Free server
 
-Raw externs: `http_server_bind_raw`, `http_server_start_raw`.
+Raw externs: `http_server_bind_raw`, `http_server_start_raw`, `http_server_set_host`.
+
+**Static file serving:**
+- `http.serve_file(res, filepath)` - Serve a single file. Issue #383 zero-copy: under HTTP/1.1 cleartext on Linux/macOS, takes the `sendfile(2)` fast path (zero heap allocation for the body); falls back to a buffered read for TLS / HTTP/2 / Range requests / Windows. `Content-Type` resolved via `http.mime_type(filepath)`.
+- `http.serve_static(req, res, base_dir)` - Wildcard-route static-file dispatcher. Path traversal (`..`, `%2e`, etc.) is rejected with 403; missing files return 404.
 
 **Server Routing:**
 - `http.server_get(server, path, handler, user_data)` - Register GET route

@@ -1,0 +1,47 @@
+// `@derive(eq)` — issue #338 v1.
+//
+// The annotation tells the compiler to synthesize an
+// `<StructName>_eq(a, b) -> int` helper from the type definition.
+// Every field is compared with `==`; the helper returns 1 when
+// every field matches, 0 otherwise. Removes the rote
+// `point_eq(a: Point, b: Point) -> int { return a.x == b.x && a.y == b.y }`
+// boilerplate that grows linearly with the field count.
+//
+// Run:    ae run examples/stdlib/derive-eq.ae
+
+@derive(eq)
+struct Point {
+    x: int,
+    y: int
+}
+
+@derive(eq)
+struct User {
+    id: int,
+    name: string,
+    active: bool
+}
+
+main() {
+    p1 = Point { x: 1, y: 2 }
+    p2 = Point { x: 1, y: 2 }
+    p3 = Point { x: 1, y: 3 }
+
+    if Point_eq(p1, p2) == 1 {
+        println("p1 == p2")
+    }
+    if Point_eq(p1, p3) == 0 {
+        println("p1 != p3 (y differs)")
+    }
+
+    a = User { id: 1, name: "alice", active: true }
+    b = User { id: 1, name: "alice", active: true }
+    c = User { id: 1, name: "bob",   active: true }
+
+    if User_eq(a, b) == 1 {
+        println("a == b")
+    }
+    if User_eq(a, c) == 0 {
+        println("a != c (name differs)")
+    }
+}

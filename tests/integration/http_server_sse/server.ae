@@ -32,6 +32,7 @@ actor SchedHelper {
 
 main() {
     raw = http.server_create(PORT)
+    http.server_set_host(raw, "127.0.0.1")
     if raw == 0 { println("FAIL: server_create"); exit(1) }
 
     http.server_sse(raw, "/events", events_handler, null)

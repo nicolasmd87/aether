@@ -53,6 +53,9 @@ exports (
     http_request_method, http_request_path, http_request_body,
     http_request_body_length, http_request_query,
     http_serve_static, http_serve_file, http_mime_type,
+    serve_file, serve_static,
+    request_method, request_path, request_body,
+    request_body_length, request_query,
     ae_io_await, ae_io_cancel, await_io
 )
 
@@ -569,7 +572,10 @@ extern http_server_response_free(res: ptr)
 // HTTP Server - actor dispatch mode
 extern http_server_set_actor_handler(server: ptr, step_fn: ptr, send_fn: ptr, spawn_fn: ptr, release_fn: ptr)
 
-// HTTP Request - field accessors (for actor dispatch mode)
+// HTTP Request - field accessors (for actor dispatch mode).
+// Raw externs first; `http.request_*` wrappers below give callers
+// the namespaced form so user code reads `http.request_path(req)`
+// rather than the bare `http_request_path` raw symbol.
 extern http_request_method(req: ptr) -> string
 extern http_request_path(req: ptr) -> string
 extern http_request_body(req: ptr) -> string
@@ -580,10 +586,49 @@ extern http_request_body(req: ptr) -> string
 extern http_request_body_length(req: ptr) -> int
 extern http_request_query(req: ptr) -> string
 
-// Static file serving
+// Go-style wrappers for the request field accessors.
+request_method(req: ptr) -> string {
+    return http_request_method(req)
+}
+
+request_path(req: ptr) -> string {
+    return http_request_path(req)
+}
+
+request_body(req: ptr) -> string {
+    return http_request_body(req)
+}
+
+request_body_length(req: ptr) -> int {
+    return http_request_body_length(req)
+}
+
+request_query(req: ptr) -> string {
+    return http_request_query(req)
+}
+
+// Static file serving — raw externs.
 extern http_serve_static(req: ptr, res: ptr, base_dir: string)
 extern http_serve_file(res: ptr, filepath: string)
 extern http_mime_type(path: string) -> string
+
+// Go-style wrappers for static file serving. Both return ""
+// implicitly (the underlying externs populate res with status
+// + headers + body / fd; failure paths set 4xx/5xx on res rather
+// than returning an error string).
+//
+// Issue #383 zero-copy: serve_file stages the file via open+fstat
+// when supported, lets the connection writer take the sendfile(2)
+// fast path, and falls back to a buffered read for TLS / HTTP/2
+// / Range requests / Windows. Callers see identical behaviour
+// either way.
+serve_file(res: ptr, filepath: string) {
+    http_serve_file(res, filepath)
+}
+
+serve_static(req: ptr, res: ptr, base_dir: string) {
+    http_serve_static(req, res, base_dir)
+}
 
 // Reactor-pattern async I/O. See std/net/module.ae for full docs.
 // Suspends the current actor until fd is readable. On wake, the

@@ -181,6 +181,67 @@ store(action) callback |a: int, b: int| { return a + b }
 store(action) callback |x: int| -> x * 2
 ```
 
+## DSL Block Receiver Scoping (#333)
+
+When a trailing closure is bound to a member-access call —
+`receiver.method(args) { body }` — bare-name function references
+inside `body` fall back through the receiver's namespace before
+erroring as undefined. Resolution order:
+
+1. Block-local definitions (closure params, `let` bindings).
+2. `<receiver>_<name>` looked up walking the scope chain.
+3. The current file's scope (existing imports, top-level decls).
+4. Otherwise: undefined-name error.
+
+Pre-fix, every downstream project consuming an SDK module had to
+write a two-line import preamble:
+
+```aether
+import bash
+import bash (script, jobs, env)        // ← this companion line
+
+main() {
+    b = build.start()
+    bash.test(b) {
+        script("test_a.sh")             // resolves via the (script, jobs, env) tuple
+        jobs(8)
+    }
+}
+```
+
+Post-fix, the second `import bash (...)` line is unnecessary —
+bare-name calls inside the trailing block fall back to
+`bash_script` / `bash_jobs` automatically:
+
+```aether
+import bash
+
+main() {
+    b = build.start()
+    bash.test(b) {
+        script("test_a.sh")             // resolves via the receiver fallback
+        jobs(8)                         // (no companion import needed)
+    }
+}
+```
+
+Pure additive. Existing code with explicit selective imports
+keeps working unchanged; existing qualified calls
+(`bash.script("x")` inside the block) still resolve via the
+`module.func` path; explicit local definitions still shadow the
+receiver fallback.
+
+Receiver resolution: the prefix is checked first as a visible
+namespace (the `bash` case above); if not, the prefix's typed-value
+struct name (e.g. `b: Builder` → receiver = `Builder`).
+
+Nested DSL blocks stack naturally: `outer.method(o) { mark("o");
+inner.method(i) { note("i") } }` resolves `mark` as
+`outer_mark` and `note` as `inner_note` — the inner block's
+receiver wins for inner-namespace names; outer's receiver applies
+to outer-namespace names by the natural scope-walk in
+`lookup_symbol`.
+
 ## Higher-Order Functions
 
 Closures enable functional patterns with standard library collections:

@@ -170,17 +170,18 @@ Symbol* lookup_symbol(SymbolTable* table, const char* name) {
     // outer block's dsl_receiver is checked when the recursion lands
     // on its scope — natural outer→inner shadowing without explicit
     // stack management.
-    if (table->dsl_receiver) {
-        size_t recv_len = strlen(table->dsl_receiver);
-        size_t name_len = strlen(name);
-        if (recv_len > 0 && name_len > 0 && recv_len + 1 + name_len < 510) {
-            char rewritten[512];
-            snprintf(rewritten, sizeof(rewritten), "%s_%s",
-                     table->dsl_receiver, name);
-            for (SymbolTable* t = table; t; t = t->parent) {
-                Symbol* s = lookup_symbol_local(t, rewritten);
-                if (s) return s;
-            }
+    if (table->dsl_receiver && table->dsl_receiver[0] && name[0]) {
+        /* Bounded snprintf via precision spec — caps each component
+         * at 250 bytes regardless of strlen, which keeps GCC's
+         * format-truncation analyzer happy on -Werror builds.
+         * Identifiers above 250 bytes don't occur in practice
+         * (longest stdlib symbol is <40 chars). */
+        char rewritten[512];
+        snprintf(rewritten, sizeof(rewritten), "%.250s_%.250s",
+                 table->dsl_receiver, name);
+        for (SymbolTable* t = table; t; t = t->parent) {
+            Symbol* s = lookup_symbol_local(t, rewritten);
+            if (s) return s;
         }
     }
 
