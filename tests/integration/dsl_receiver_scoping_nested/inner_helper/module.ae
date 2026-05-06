@@ -1,0 +1,17 @@
+exports (begin, note)
+
+import std.map
+
+builder begin(label: string) {
+    nval = "<unset>"
+    if _builder != null {
+        if map_has(_builder, "note") == 1 {
+            nval, _ = map.get(_builder, "note")
+        }
+    }
+    println("inner: label=${label} note=${nval}")
+}
+
+note(_ctx: ptr, value: string) {
+    map_put(_ctx, "note", value)
+}

@@ -1,0 +1,38 @@
+// Edge-case fixture for issue #333.
+//
+// Same shape as dsl_receiver_scoping/dsl_helper but exposes
+// additional symbols to exercise:
+//
+//   - shadowing: a top-level `tag()` defined in main.ae must beat
+//     `dsl_helper.tag` inside the trailing block (local-first
+//     resolution, the receiver fallback only fires after a miss).
+//
+//   - existing qualified call: writing `dsl_helper.script("x")`
+//     inside the block must continue to work — receiver fallback
+//     is purely additive, never blocking the explicit form.
+
+exports (run, script, tag)
+
+import std.map
+
+builder run(label: string) {
+    sval = "<unset>"
+    tval = "<unset>"
+    if _builder != null {
+        if map_has(_builder, "script") == 1 {
+            sval, _ = map.get(_builder, "script")
+        }
+        if map_has(_builder, "tag") == 1 {
+            tval, _ = map.get(_builder, "tag")
+        }
+    }
+    println("run: label=${label} script=${sval} tag=${tval}")
+}
+
+script(_ctx: ptr, name: string) {
+    map_put(_ctx, "script", name)
+}
+
+tag(_ctx: ptr, name: string) {
+    map_put(_ctx, "tag", name)
+}

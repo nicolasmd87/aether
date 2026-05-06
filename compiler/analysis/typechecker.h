@@ -40,6 +40,16 @@ typedef struct SymbolTable {
     // can only resolve qualified calls to namespaces it explicitly
     // imported. Propagated from parent in create_symbol_table.
     int inside_merged_body;
+    // Issue #333 DSL block receiver scoping: when this scope is the
+    // body of a trailing closure bound to a member-access call
+    // (`receiver.method(args) { body }`), this names the receiver's
+    // namespace (or struct type) so unqualified calls inside `body`
+    // can fall back to `<dsl_receiver>_<name>` before erroring as
+    // undefined. NULL when the scope is not a DSL block body.
+    // Resolution order in lookup_symbol: local, then this fallback,
+    // then parent chain. Local definitions still win; existing
+    // qualified calls and selective imports unchanged.
+    char* dsl_receiver;
 } SymbolTable;
 
 // Symbol table functions

@@ -1,0 +1,25 @@
+// Issue #333 — nested DSL blocks.
+//
+//   outer_helper.open("o") {     <- outer block; receiver = outer_helper
+//       mark("done")              <- resolves to outer_helper_mark
+//       inner_helper.begin("i") { <- inner block; receiver = inner_helper
+//           note("inner-note")    <- resolves to inner_helper_note
+//                                    (NOT outer_helper_note — wouldn't exist)
+//       }
+//   }
+//
+// Inner-most receiver wins for names defined on it; outer's
+// receiver still applies to names not in the inner namespace, by
+// the natural scope-walk semantics in lookup_symbol.
+
+import outer_helper
+import inner_helper
+
+main() {
+    outer_helper.open("o-label") {
+        mark("outer-mark")
+        inner_helper.begin("i-label") {
+            note("inner-note")
+        }
+    }
+}
