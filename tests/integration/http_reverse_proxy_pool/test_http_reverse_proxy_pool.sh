@@ -136,11 +136,18 @@ stop_all
 
 # ---- Test 2: weighted RR (3:1:1) — 50 requests ----------
 setup proxy_wrr
+# 50 sequential curl calls × ~150 ms per call on Windows mingw CI
+# pushed this loop alone past 7-8 s. Drive them in parallel within
+# a single curl process — the proxy still observes 50 distinct
+# arrivals and applies WRR per request, so the per-upstream
+# counters end up the same; only the wall-clock cost drops.
+URLS=""
 i=0
 while [ $i -lt 50 ]; do
-    curl -s -o /dev/null --max-time 3 "$PROXY/echo"
+    URLS="$URLS $PROXY/echo"
     i=$((i + 1))
 done
+curl -Z -s -o /dev/null --max-time 5 $URLS >/dev/null 2>&1 || true
 A=$(count_get 19101); B=$(count_get 19102); C=$(count_get 19103)
 # 3:1:1 over 50 → A≈30, B≈10, C≈10. Allow ±5 for boundary effects.
 [ "$A" -ge 25 ] && [ "$A" -le 35 ] || fail "WRR A=$A expected 25-35"
@@ -190,11 +197,13 @@ stop_all
 
 # ---- Test 5: drain — A drained on startup; A counter stays 0 -
 setup proxy_drain
+URLS=""
 i=0
 while [ $i -lt 12 ]; do
-    curl -s -o /dev/null --max-time 3 "$PROXY/echo"
+    URLS="$URLS $PROXY/echo"
     i=$((i + 1))
 done
+curl -Z -s -o /dev/null --max-time 5 $URLS >/dev/null 2>&1 || true
 A=$(count_get 19101); B=$(count_get 19102); C=$(count_get 19103)
 [ "$A" = "0" ] || fail "drain: A served $A requests (expected 0)"
 [ $((B + C)) -eq 12 ] || fail "drain: B+C=$((B + C)) expected 12"
@@ -361,38 +370,32 @@ stop_all
 
 # ---- Test 14: per-upstream rate limit (1 rps) -------------
 setup proxy_rate_limit
-# Three upstreams, each capped at 1 rps. Burst 1 means each can
-# serve 1 immediately, then ~1/sec. Drive 12 requests as fast
-# as possible — only 3 should succeed (one per upstream's burst);
-# subsequent ones should hit the rate limit and return 503.
-T0=$(date +%s)
-SUCCESSES=0
-FIVE_OH_THREES=0
+# Three upstreams, each capped at 1 rps with burst 1. Drive 12
+# requests in parallel within one curl process so all 12 reach
+# the proxy inside the burst window — before the per-upstream
+# token bucket can refill. Steady-state outcome: 3 successes
+# (one per upstream burst) and 9 × 503.
+#
+# Sequential curls were the original shape, but on Windows mingw
+# CI the per-fork curl spin-up is ~100 ms; twelve sequential
+# forks span >1 s wall-clock and cross a refill boundary, letting
+# extra requests succeed and tripping the assertion. -Z avoids
+# the per-fork latency entirely; the test no longer races against
+# runner speed.
+URLS=""
 i=0
 while [ $i -lt 12 ]; do
-    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$PROXY/echo")
-    if [ "$code" = "200" ]; then SUCCESSES=$((SUCCESSES + 1)); fi
-    if [ "$code" = "503" ]; then FIVE_OH_THREES=$((FIVE_OH_THREES + 1)); fi
+    URLS="$URLS $PROXY/echo"
     i=$((i + 1))
 done
-T1=$(date +%s)
-ELAPSED=$((T1 - T0))
-# 12 requests in ~2s. With max_rps=1 / burst=1 per upstream and 3
-# upstreams, expect 3 initial-burst successes + at most 3 more if
-# the loop straddles the 1-second boundary (one refill window per
-# upstream). Worst-case theoretical: 3+3=6 successes; observed
-# range is 3-8 depending on runner clock granularity. Tolerance
-# ≤10 leaves comfortable headroom on Windows while still failing
-# loudly if the cap stops working entirely (12/12 = no cap).
-#
-# `ELAPSED -le 2` gates the assertion: if the loop took longer
-# than 2 wall seconds (very slow runner), the rate bucket has had
-# time to refill more than once and the success count isn't a
-# tight bound on the cap. Skip rather than false-fail.
-if [ "$ELAPSED" -le 2 ]; then
-    [ "$SUCCESSES" -le 10 ] || fail "rate limit: $SUCCESSES successes in ${ELAPSED}s (expected ≤10)"
-    [ "$FIVE_OH_THREES" -ge 2 ] || fail "rate limit: only $FIVE_OH_THREES 503s (expected ≥2)"
-fi
+RESULTS=$(curl -Z -s -o /dev/null -w '%{http_code}\n' --max-time 3 $URLS)
+SUCCESSES=$(printf '%s\n' "$RESULTS" | grep -c '^200$' || true)
+FIVE_OH_THREES=$(printf '%s\n' "$RESULTS" | grep -c '^503$' || true)
+# Slack of 3 above the deterministic 3-burst result covers the case
+# where curl staggers the parallel sends across a refill — one
+# extra success per bucket × 3 buckets.
+[ "$SUCCESSES" -le 6 ] || fail "rate limit: $SUCCESSES successes (expected ≤6 with parallel arrivals)"
+[ "$FIVE_OH_THREES" -ge 6 ] || fail "rate limit: only $FIVE_OH_THREES 503s (expected ≥6)"
 stop_all
 
 # ---- Test 15: W3C Trace-Context inject -------------------
@@ -412,10 +415,12 @@ stop_all
 setup proxy_rr
 # Drive some traffic to populate the counters.
 i=0
+URLS=""
 while [ $i -lt 6 ]; do
-    curl -s -o /dev/null --max-time 3 "$PROXY/echo"
+    URLS="$URLS $PROXY/echo"
     i=$((i + 1))
 done
+curl -Z -s -o /dev/null --max-time 5 $URLS >/dev/null 2>&1 || true
 METRICS=$(curl -s --max-time 3 "$PROXY/proxy-metrics")
 echo "$METRICS" | grep -q 'aether_proxy_upstream_requests_total' || fail "metrics: requests_total absent"
 echo "$METRICS" | grep -q 'aether_proxy_upstream_inflight'        || fail "metrics: inflight absent"
