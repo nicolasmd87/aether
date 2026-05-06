@@ -35,9 +35,9 @@
  *   vcr_load_tape(path)        -> 1 on success, 0 on parse / I/O failure
  *   vcr_load_err()             -> error string (when vcr_load_tape returned 0)
  *   vcr_tape_length()          -> number of interactions the loaded tape has
- *   vcr_register_routes(srv)   -> walks tape and calls server_get for each
- *                                  unique path so the routing layer dispatches
- *                                  to vcr_dispatch.
+ *   register_routes(srv)       -> Aether-side route registration walks the
+ *                                  loaded tape and points matching routes at
+ *                                  vcr_dispatch.
  *   vcr_dispatch(req, res, ud) -> registered handler. Matches the next tape
  *                                  interaction against (method, path) and
  *                                  emits the recorded response. Mismatch →
@@ -64,6 +64,19 @@ extern void        http_response_clear_headers(void* res);
 extern void        http_response_set_body  (void* res, const char* body);
 extern void        http_response_set_body_n(void* res, const char* body, int length);
 
+/* std.http.client v2 raw surface. Record mode uses these to forward
+ * the incoming request to the real upstream service. This is an
+ * ordinary client request, not an HTTP proxy tunnel. */
+extern void*       http_request_raw(const char* method, const char* url);
+extern int         http_request_set_header_raw(void* req, const char* name, const char* value);
+extern int         http_request_set_body_raw(void* req, const char* body, int length, const char* content_type);
+extern int         http_request_set_timeout_raw(void* req, int seconds);
+extern void        http_request_free_raw(void* req);
+extern void*       http_send_raw(void* req);
+extern int         http_response_status(void* response);
+extern const char* http_response_error(void* response);
+extern void        http_response_free(void* response);
+
 /* Step 10: header iteration + body access. We need to walk the
  * full set of request headers (not just look one up by name) to
  * detect "extra" headers the tape didn't expect. The HttpRequest
@@ -79,8 +92,26 @@ typedef struct VcrHttpRequestPrefix {
     char** header_values;
     int    header_count;
     char*  body;
-    /* (rest of struct ignored — body_length, params, ...) */
+    size_t body_length;
+    /* (rest of struct ignored — params, ...) */
 } VcrHttpRequestPrefix;
+
+typedef struct VcrAetherStringPrefix {
+    unsigned int magic;
+    int          ref_count;
+    size_t       length;
+    size_t       capacity;
+    char*        data;
+} VcrAetherStringPrefix;
+
+typedef struct VcrClientResponsePrefix {
+    int status_code;
+    VcrAetherStringPrefix* body;
+    VcrAetherStringPrefix* headers;
+    VcrAetherStringPrefix* error;
+    VcrAetherStringPrefix* redirect_error;
+    VcrAetherStringPrefix* effective_url;
+} VcrClientResponsePrefix;
 
 /* Step 11: static-content serving externs. The http_server module
  * already implements the heavy lifting (mime-type detection,
@@ -91,11 +122,10 @@ typedef struct VcrHttpRequestPrefix {
 extern void http_serve_file(void* res, const char* filepath);
 extern const char* http_mime_type(const char* path);
 
-/* And the routing extern — used by vcr_register_routes(). v0.1
- * used http_server_get exclusively (replay-of-GET-only); v0.2
- * uses add_route which takes the method as a string and so handles
- * GET / POST / PUT / DELETE / PATCH and any custom verb without
- * per-verb dispatch in C. */
+/* And the routing extern. Replay routes are enumerated in Aether;
+ * record/static routes still need a C call because their handlers
+ * live here. add_route takes the method as a string and so handles
+ * any custom verb without per-verb dispatch in C. */
 extern void http_server_add_route(void* server, const char* method, const char* path, void* handler, void* user_data);
 
 /* ---- Tape storage --------------------------------------------------- */
@@ -163,6 +193,11 @@ static char* g_last_error = NULL;
 #define VCR_KIND_HEADER_UNEXPECTED   4
 #define VCR_KIND_TAPE_EXHAUSTED      5
 #define VCR_KIND_BODY_DIFF           6
+#define VCR_FIELD_PATH             1
+#define VCR_FIELD_RESPONSE_BODY    2
+#define VCR_FIELD_REQUEST_HEADERS  3
+#define VCR_FIELD_REQUEST_BODY     4
+#define VCR_FIELD_RESPONSE_HEADERS 5
 static int g_last_kind = VCR_KIND_OK;
 static int g_last_index = -1;
 
@@ -173,6 +208,7 @@ static int g_last_index = -1;
  * unconditionally — used by tests that want to deliberately
  * exercise the mismatch diagnostic paths. */
 static int g_strict_headers = 0;
+static char* g_record_upstream_base = NULL;
 
 static void tape_free_storage(void) {
     if (g_tape) {
@@ -198,6 +234,7 @@ static void tape_free_storage(void) {
     free(g_pending_note_title); g_pending_note_title = NULL;
     free(g_pending_note_body);  g_pending_note_body  = NULL;
     free(g_last_error);         g_last_error         = NULL;
+    free(g_record_upstream_base); g_record_upstream_base = NULL;
     g_last_kind = VCR_KIND_OK;
     g_last_index = -1;
     /* Static mounts intentionally not freed here — mounts are
@@ -233,6 +270,8 @@ static int ascii_ci_contains(const char* haystack, const char* needle) {
     }
     return 0;
 }
+
+static int icmp(const char* a, const char* b);
 
 static int b64_value(unsigned char c) {
     if (c >= 'A' && c <= 'Z') return (int)(c - 'A');
@@ -361,10 +400,15 @@ static int tape_append(const char* method, const char* path,
  * rtrim() helper, none of which need C. See module.ae's
  * parse_tape_file. */
 
-/* Forward decl for the dispatcher — referenced by vcr_register_routes
- * below and by the static-mount route registration. Body lives further
+/* Forward decl for the dispatcher — referenced by Aether route
+ * registration and by the static-mount route registration. Body lives further
  * down (after the request-normalization helpers). */
 void vcr_dispatch(void* req, void* res, void* ud);
+static void vcr_record_dispatch(void* req, void* res, void* ud);
+int vcr_record_interaction_full(const char* method, const char* path,
+                                int status, const char* content_type, const char* body,
+                                const char* req_headers, const char* req_body);
+void vcr_aether_set_resp_headers(int index, const char* headers);
 
 const char* vcr_load_err(void) {
     return g_tape_err ? g_tape_err : "";
@@ -374,37 +418,32 @@ int vcr_tape_length(void) {
     return g_tape_n;
 }
 
-/* Walk the tape and register the same dispatcher (vcr_dispatch)
- * against each unique (method, path) pair. The dispatcher itself
- * still matches in cursor order and serves whatever's next; routing
- * is just there so the framework knows to call us at all.
- *
- * Dedup is by (method, path), not just path — a tape that has both
- * GET /foo and POST /foo needs both routes registered so the
- * framework dispatches to us for either verb. (The dispatcher then
- * still strict-matches the actual incoming request against the
- * cursor's expected (method, path); the registration is purely
- * "wake me up for this combination.") */
 /* Forward decl — body lives next to the static-mount storage. */
 static void register_static_routes(void* server);
+static void strip_trailing_slash(char* s);
+static char* build_recorded_path(const VcrHttpRequestPrefix* r);
 
-void vcr_register_routes(void* server) {
-    if (!server) return;
-    for (int i = 0; i < g_tape_n; i++) {
-        int already = 0;
-        for (int j = 0; j < i; j++) {
-            if (strcmp(g_tape[i].method, g_tape[j].method) == 0
-                && strcmp(g_tape[i].path, g_tape[j].path) == 0) {
-                already = 1;
-                break;
-            }
-        }
-        if (!already) {
-            http_server_add_route(server, g_tape[i].method, g_tape[i].path,
-                                  (void*)vcr_dispatch, NULL);
-        }
-    }
+void vcr_register_static_routes(void* server) {
     register_static_routes(server);
+}
+
+int vcr_register_record_routes(void* server, const char* upstream_base) {
+    if (!server || !upstream_base || !*upstream_base) {
+        tape_set_err("vcr.record mode: null server or upstream_base");
+        return 0;
+    }
+    char* copy = strdup(upstream_base);
+    if (!copy) {
+        tape_set_err("OOM storing record-mode upstream base");
+        return 0;
+    }
+    strip_trailing_slash(copy);
+    free(g_record_upstream_base);
+    g_record_upstream_base = copy;
+
+    http_server_add_route(server, "*", "*", (void*)vcr_record_dispatch, NULL);
+    register_static_routes(server);
+    return 1;
 }
 
 /* ---- Record-mode externs ---------------------------------------------
@@ -500,58 +539,146 @@ int vcr_add_note(const char* title, const char* body) {
  * interaction and applies every registered redaction.
  * -------------------------------------------------------------------- */
 
-#define VCR_FIELD_PATH          1
-#define VCR_FIELD_RESPONSE_BODY 2
-/* Future: VCR_FIELD_REQUEST_HEADERS, REQUEST_BODY, RESPONSE_HEADERS,
- * once the recorder captures those. */
-
 typedef struct Redaction {
     int   field;        /* VCR_FIELD_* */
     char* pattern;      /* substring to match, owned */
     char* replacement;  /* what to put in its place, owned */
 } Redaction;
 
+typedef struct HeaderRemoval {
+    int   field;        /* VCR_FIELD_REQUEST_HEADERS / RESPONSE_HEADERS */
+    char* name;         /* header name, owned */
+} HeaderRemoval;
+
 static Redaction* g_redactions     = NULL;
 static int        g_redactions_n   = 0;
 static int        g_redactions_cap = 0;
+static Redaction* g_unredactions     = NULL;
+static int        g_unredactions_n   = 0;
+static int        g_unredactions_cap = 0;
+static HeaderRemoval* g_header_removals     = NULL;
+static int            g_header_removals_n   = 0;
+static int            g_header_removals_cap = 0;
 
-static void redactions_free_storage(void) {
-    if (g_redactions) {
-        for (int i = 0; i < g_redactions_n; i++) {
-            free(g_redactions[i].pattern);
-            free(g_redactions[i].replacement);
+static void redaction_list_free(Redaction** items, int* n_items, int* cap_items) {
+    if (*items) {
+        for (int i = 0; i < *n_items; i++) {
+            free((*items)[i].pattern);
+            free((*items)[i].replacement);
         }
-        free(g_redactions);
-        g_redactions = NULL;
+        free(*items);
+        *items = NULL;
     }
-    g_redactions_n = 0;
-    g_redactions_cap = 0;
+    *n_items = 0;
+    *cap_items = 0;
 }
 
-int vcr_add_redaction(int field, const char* pattern, const char* replacement) {
-    if (field != VCR_FIELD_PATH && field != VCR_FIELD_RESPONSE_BODY) {
-        tape_set_err("vcr_add_redaction: unsupported field selector");
+static int valid_redaction_field(int field) {
+    return field == VCR_FIELD_PATH
+        || field == VCR_FIELD_RESPONSE_BODY
+        || field == VCR_FIELD_REQUEST_HEADERS
+        || field == VCR_FIELD_REQUEST_BODY
+        || field == VCR_FIELD_RESPONSE_HEADERS;
+}
+
+static int redaction_list_add(Redaction** items, int* n_items, int* cap_items,
+                              int field, const char* pattern, const char* replacement,
+                              const char* api_name) {
+    if (!valid_redaction_field(field)) {
+        tape_set_err("unsupported field selector");
         return 0;
     }
-    if (!pattern) { tape_set_err("vcr_add_redaction: null pattern"); return 0; }
-    if (g_redactions_n >= g_redactions_cap) {
-        int new_cap = g_redactions_cap ? g_redactions_cap * 2 : 4;
-        Redaction* bigger = (Redaction*)realloc(g_redactions, sizeof(Redaction) * (size_t)new_cap);
-        if (!bigger) { tape_set_err("OOM growing redactions"); return 0; }
-        g_redactions = bigger;
-        g_redactions_cap = new_cap;
+    if (!pattern) { tape_set_err("null pattern"); return 0; }
+    if (*n_items >= *cap_items) {
+        int new_cap = *cap_items ? *cap_items * 2 : 4;
+        Redaction* bigger = (Redaction*)realloc(*items, sizeof(Redaction) * (size_t)new_cap);
+        if (!bigger) {
+            char msg[128];
+            snprintf(msg, sizeof(msg), "OOM growing %s list", api_name);
+            tape_set_err(msg);
+            return 0;
+        }
+        *items = bigger;
+        *cap_items = new_cap;
     }
-    Redaction* r = &g_redactions[g_redactions_n];
+    Redaction* r = &(*items)[*n_items];
     r->field = field;
     r->pattern = strdup(pattern);
     r->replacement = strdup(replacement ? replacement : "");
     if (!r->pattern || !r->replacement) {
         free(r->pattern); free(r->replacement);
-        tape_set_err("OOM appending redaction");
+        tape_set_err("OOM appending replacement");
         return 0;
     }
-    g_redactions_n++;
+    *n_items = *n_items + 1;
     return 1;
+}
+
+int vcr_add_redaction(int field, const char* pattern, const char* replacement) {
+    return redaction_list_add(&g_redactions, &g_redactions_n, &g_redactions_cap,
+                              field, pattern, replacement, "redaction");
+}
+
+int vcr_add_unredaction(int field, const char* pattern, const char* replacement) {
+    return redaction_list_add(&g_unredactions, &g_unredactions_n, &g_unredactions_cap,
+                              field, pattern, replacement, "unredaction");
+}
+
+static int valid_header_removal_field(int field) {
+    return field == VCR_FIELD_REQUEST_HEADERS || field == VCR_FIELD_RESPONSE_HEADERS;
+}
+
+int vcr_add_header_removal(int field, const char* name) {
+    if (!valid_header_removal_field(field)) {
+        tape_set_err("header removal only supports request/response header fields");
+        return 0;
+    }
+    if (!name || !*name) {
+        tape_set_err("header removal requires a header name");
+        return 0;
+    }
+    if (g_header_removals_n >= g_header_removals_cap) {
+        int new_cap = g_header_removals_cap ? g_header_removals_cap * 2 : 4;
+        HeaderRemoval* bigger = (HeaderRemoval*)realloc(g_header_removals,
+                                      sizeof(HeaderRemoval) * (size_t)new_cap);
+        if (!bigger) {
+            tape_set_err("OOM growing header removal list");
+            return 0;
+        }
+        g_header_removals = bigger;
+        g_header_removals_cap = new_cap;
+    }
+    HeaderRemoval* h = &g_header_removals[g_header_removals_n];
+    h->field = field;
+    h->name = strdup(name);
+    if (!h->name) {
+        tape_set_err("OOM appending header removal");
+        return 0;
+    }
+    g_header_removals_n++;
+    return 1;
+}
+
+static int header_removed_for_field(int field, const char* name) {
+    if (!name) return 0;
+    for (int i = 0; i < g_header_removals_n; i++) {
+        if (g_header_removals[i].field == field && icmp(g_header_removals[i].name, name) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void header_removals_free_storage(void) {
+    if (g_header_removals) {
+        for (int i = 0; i < g_header_removals_n; i++) {
+            free(g_header_removals[i].name);
+        }
+        free(g_header_removals);
+        g_header_removals = NULL;
+    }
+    g_header_removals_n = 0;
+    g_header_removals_cap = 0;
 }
 
 /* Step 12: optional markdown formatting toggles for the recorder.
@@ -571,7 +698,15 @@ static int g_emphasize_http_verbs = 0;
 /* Drop all registered redactions. Useful to call between tests in
  * the same process so a redaction set doesn't leak across them. */
 void vcr_clear_redactions(void) {
-    redactions_free_storage();
+    redaction_list_free(&g_redactions, &g_redactions_n, &g_redactions_cap);
+}
+
+void vcr_clear_unredactions(void) {
+    redaction_list_free(&g_unredactions, &g_unredactions_n, &g_unredactions_cap);
+}
+
+void vcr_clear_header_removals(void) {
+    header_removals_free_storage();
 }
 
 /* Step 12 setters — opt the recorder into the alternative markdown
@@ -691,7 +826,7 @@ static void vcr_static_dispatch(void* req, void* res, void* ud) {
 }
 
 /* Register a static-content mount. Append to g_mounts; the
- * actual route registration happens in vcr_register_routes
+ * actual route registration happens in Aether register_routes
  * (which is called by vcr.load — load order is: register tape
  * routes, then mounts; routes overlap is fine since
  * mount-rooted requests don't appear in tapes by definition). */
@@ -735,7 +870,7 @@ void vcr_clear_static_content(void) {
 }
 
 /* Register the wildcard routes for every mount with the http
- * server. Called from vcr_register_routes() after the tape
+ * server. Called from Aether register_routes() after the tape
  * routes go in. */
 static void register_static_routes(void* server) {
     if (!server) return;
@@ -824,6 +959,7 @@ static char* normalize_live_headers(const VcrHttpRequestPrefix* r) {
         if (icmp(key, "Host") == 0) continue;
         if (icmp(key, "Connection") == 0) continue;
         if (icmp(key, "Content-Length") == 0) continue;
+        if (header_removed_for_field(VCR_FIELD_REQUEST_HEADERS, key)) continue;
         size_t len = strlen(key) + 2 + strlen(val) + 1;
         char* line = (char*)malloc(len);
         if (!line) {
@@ -883,6 +1019,357 @@ static void first_header_name(const char* recorded, char* out, size_t max) {
     out[i] = '\0';
 }
 
+static char* replace_all_c(const char* src, const char* pattern, const char* replacement) {
+    if (!src) src = "";
+    if (!pattern || !*pattern) return strdup(src);
+    if (!replacement) replacement = "";
+
+    size_t src_len = strlen(src);
+    size_t pat_len = strlen(pattern);
+    size_t rep_len = strlen(replacement);
+    size_t count = 0;
+    const char* p = src;
+    while ((p = strstr(p, pattern)) != NULL) {
+        count++;
+        p += pat_len;
+    }
+    size_t out_len = src_len + count * (rep_len > pat_len ? rep_len - pat_len : 0);
+    if (rep_len < pat_len) out_len = src_len - count * (pat_len - rep_len);
+    char* out = (char*)malloc(out_len + 1);
+    if (!out) return NULL;
+
+    const char* cursor = src;
+    char* dst = out;
+    while ((p = strstr(cursor, pattern)) != NULL) {
+        size_t chunk = (size_t)(p - cursor);
+        memcpy(dst, cursor, chunk);
+        dst += chunk;
+        memcpy(dst, replacement, rep_len);
+        dst += rep_len;
+        cursor = p + pat_len;
+    }
+    strcpy(dst, cursor);
+    return out;
+}
+
+static char* apply_unredactions_for_c(const char* src, int field) {
+    char* out = strdup(src ? src : "");
+    if (!out) return NULL;
+    for (int i = 0; i < g_unredactions_n; i++) {
+        if (g_unredactions[i].field != field) continue;
+        char* next = replace_all_c(out, g_unredactions[i].pattern, g_unredactions[i].replacement);
+        free(out);
+        if (!next) return NULL;
+        out = next;
+    }
+    return out;
+}
+
+static char* remove_headers_from_block_c(const char* headers, int field) {
+    if (!headers) headers = "";
+    char* out = (char*)malloc(strlen(headers) + 1);
+    if (!out) return NULL;
+    size_t off = 0;
+    const char* p = headers;
+    while (*p) {
+        const char* line_start = p;
+        const char* nl = strchr(p, '\n');
+        size_t line_len = nl ? (size_t)(nl - p) : strlen(p);
+        size_t trimmed_len = line_len;
+        if (trimmed_len > 0 && line_start[trimmed_len - 1] == '\r') trimmed_len--;
+        int keep = 1;
+        const char* colon = memchr(line_start, ':', trimmed_len);
+        if (colon) {
+            size_t name_len = (size_t)(colon - line_start);
+            char name[256];
+            if (name_len > 0 && name_len < sizeof(name)) {
+                memcpy(name, line_start, name_len);
+                name[name_len] = '\0';
+                if (header_removed_for_field(field, name)) keep = 0;
+            }
+        }
+        if (keep && line_len > 0) {
+            memcpy(out + off, line_start, line_len);
+            off += line_len;
+            if (nl) out[off++] = '\n';
+        }
+        if (!nl) break;
+        p = nl + 1;
+    }
+    out[off] = '\0';
+    return out;
+}
+
+static const char* request_header_value(const VcrHttpRequestPrefix* r, const char* name) {
+    if (!r || !name) return "";
+    for (int i = 0; i < r->header_count; i++) {
+        if (r->header_keys[i] && icmp(r->header_keys[i], name) == 0) {
+            return r->header_values[i] ? r->header_values[i] : "";
+        }
+    }
+    return "";
+}
+
+static int is_hop_by_hop_header(const char* name) {
+    if (!name) return 1;
+    return icmp(name, "Host") == 0
+        || icmp(name, "Connection") == 0
+        || icmp(name, "Content-Length") == 0
+        || icmp(name, "Transfer-Encoding") == 0
+        || icmp(name, "Keep-Alive") == 0
+        || icmp(name, "Proxy-Authenticate") == 0
+        || icmp(name, "Proxy-Authorization") == 0
+        || icmp(name, "TE") == 0
+        || icmp(name, "Trailer") == 0
+        || icmp(name, "Upgrade") == 0;
+}
+
+static char* build_upstream_url(const char* base, const VcrHttpRequestPrefix* r) {
+    const char* path = (r && r->path && r->path[0]) ? r->path : "/";
+    const char* query = (r && r->query_string) ? r->query_string : "";
+    size_t base_len = strlen(base ? base : "");
+    size_t path_len = strlen(path);
+    size_t query_len = strlen(query);
+    int need_slash = (base_len > 0 && path[0] != '/');
+    size_t total = base_len + (need_slash ? 1 : 0) + path_len + query_len;
+    char* out = (char*)malloc(total + 1);
+    if (!out) return NULL;
+    char* p = out;
+    if (base_len) { memcpy(p, base, base_len); p += base_len; }
+    if (need_slash) *p++ = '/';
+    memcpy(p, path, path_len); p += path_len;
+    if (query_len) { memcpy(p, query, query_len); p += query_len; }
+    *p = '\0';
+    return out;
+}
+
+static char* build_recorded_path(const VcrHttpRequestPrefix* r) {
+    const char* path = (r && r->path && r->path[0]) ? r->path : "/";
+    const char* query = (r && r->query_string) ? r->query_string : "";
+    size_t path_len = strlen(path);
+    size_t query_len = strlen(query);
+    char* out = (char*)malloc(path_len + query_len + 1);
+    if (!out) return NULL;
+    memcpy(out, path, path_len);
+    if (query_len) memcpy(out + path_len, query, query_len);
+    out[path_len + query_len] = '\0';
+    return out;
+}
+
+static int expected_path_includes_query(const char* path) {
+    return path && strchr(path, '?') != NULL;
+}
+
+static char* response_headers_for_tape(const char* raw_headers) {
+    if (!raw_headers) return strdup("");
+    const char* p = strchr(raw_headers, '\n');
+    p = p ? p + 1 : raw_headers;
+
+    size_t cap = strlen(p) + 1;
+    char* out = (char*)malloc(cap);
+    if (!out) return NULL;
+    size_t off = 0;
+
+    while (*p) {
+        const char* line_start = p;
+        const char* nl = strchr(p, '\n');
+        size_t line_len = nl ? (size_t)(nl - p) : strlen(p);
+        if (line_len > 0 && line_start[line_len - 1] == '\r') line_len--;
+
+        const char* colon = memchr(line_start, ':', line_len);
+        if (colon) {
+            size_t name_len = (size_t)(colon - line_start);
+            char name[256];
+            if (name_len > 0 && name_len < sizeof(name)) {
+                memcpy(name, line_start, name_len);
+                name[name_len] = '\0';
+                if (!is_hop_by_hop_header(name)) {
+                    if (off + line_len + 1 >= cap) {
+                        cap = cap + line_len + 1024;
+                        char* bigger = (char*)realloc(out, cap);
+                        if (!bigger) { free(out); return NULL; }
+                        out = bigger;
+                    }
+                    memcpy(out + off, line_start, line_len);
+                    off += line_len;
+                    out[off++] = '\n';
+                }
+            }
+        }
+        if (!nl) break;
+        p = nl + 1;
+    }
+    out[off] = '\0';
+    return out;
+}
+
+static char* response_header_value_from_block(const char* headers, const char* name) {
+    if (!headers || !name) return strdup("");
+    size_t name_len = strlen(name);
+    const char* p = headers;
+    while (*p) {
+        const char* nl = strchr(p, '\n');
+        size_t line_len = nl ? (size_t)(nl - p) : strlen(p);
+        const char* colon = memchr(p, ':', line_len);
+        if (colon && (size_t)(colon - p) == name_len) {
+            int match = 1;
+            for (size_t i = 0; i < name_len; i++) {
+                char a = p[i], b = name[i];
+                if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+                if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
+                if (a != b) { match = 0; break; }
+            }
+            if (match) {
+                const char* v = colon + 1;
+                const char* end = p + line_len;
+                while (v < end && (*v == ' ' || *v == '\t')) v++;
+                while (end > v && (end[-1] == '\r' || end[-1] == ' ' || end[-1] == '\t')) end--;
+                size_t vlen = (size_t)(end - v);
+                char* out = (char*)malloc(vlen + 1);
+                if (!out) return NULL;
+                memcpy(out, v, vlen);
+                out[vlen] = '\0';
+                return out;
+            }
+        }
+        if (!nl) break;
+        p = nl + 1;
+    }
+    return strdup("");
+}
+
+static void emit_recorded_headers_to_response(void* res, const char* headers) {
+    http_response_clear_headers(res);
+    if (!headers) return;
+    const char* p = headers;
+    while (*p) {
+        const char* nl = strchr(p, '\n');
+        size_t line_len = nl ? (size_t)(nl - p) : strlen(p);
+        if (line_len > 0 && p[line_len - 1] == '\r') line_len--;
+        const char* colon = memchr(p, ':', line_len);
+        if (colon) {
+            size_t name_len = (size_t)(colon - p);
+            const char* val = colon + 1;
+            const char* end = p + line_len;
+            while (val < end && (*val == ' ' || *val == '\t')) val++;
+            size_t val_len = (size_t)(end - val);
+            char name[256];
+            char value[4096];
+            if (name_len > 0 && name_len < sizeof(name) && val_len < sizeof(value)) {
+                memcpy(name, p, name_len); name[name_len] = '\0';
+                memcpy(value, val, val_len); value[val_len] = '\0';
+                http_response_add_header(res, name, value);
+            }
+        }
+        if (!nl) break;
+        p = nl + 1;
+    }
+}
+
+static void vcr_record_dispatch(void* req, void* res, void* ud) {
+    (void)ud;
+    const VcrHttpRequestPrefix* live_req = (const VcrHttpRequestPrefix*)req;
+    if (!g_record_upstream_base || !*g_record_upstream_base) {
+        http_response_set_status(res, 500);
+        http_response_set_body(res, "vcr record mode: upstream base not configured");
+        return;
+    }
+
+    char* url = build_upstream_url(g_record_upstream_base, live_req);
+    if (!url) {
+        http_response_set_status(res, 500);
+        http_response_set_body(res, "vcr record mode: OOM building upstream URL");
+        return;
+    }
+
+    void* creq = http_request_raw(live_req->method ? live_req->method : "GET", url);
+    if (!creq) {
+        free(url);
+        http_response_set_status(res, 500);
+        http_response_set_body(res, "vcr record mode: failed to build client request");
+        return;
+    }
+
+    for (int i = 0; i < live_req->header_count; i++) {
+        const char* key = live_req->header_keys[i];
+        const char* val = live_req->header_values[i] ? live_req->header_values[i] : "";
+        if (!key || is_hop_by_hop_header(key)) continue;
+        http_request_set_header_raw(creq, key, val);
+    }
+
+    if (live_req->body && live_req->body_length > 0) {
+        const char* ctype = request_header_value(live_req, "Content-Type");
+        http_request_set_body_raw(creq, live_req->body, (int)live_req->body_length, ctype);
+    }
+    http_request_set_timeout_raw(creq, 30);
+
+    void* cresp = http_send_raw(creq);
+    http_request_free_raw(creq);
+    if (!cresp) {
+        free(url);
+        http_response_set_status(res, 502);
+        http_response_set_body(res, "vcr record mode: upstream request failed");
+        return;
+    }
+    const char* cerr = http_response_error(cresp);
+    if (cerr && *cerr) {
+        char msg[2048];
+        snprintf(msg, sizeof(msg), "vcr record mode: upstream transport error: %s", cerr);
+        http_response_free(cresp);
+        free(url);
+        http_response_set_status(res, 502);
+        http_response_set_body(res, msg);
+        return;
+    }
+
+    VcrClientResponsePrefix* cr = (VcrClientResponsePrefix*)cresp;
+    const char* body = (cr->body && cr->body->data) ? cr->body->data : "";
+    int body_len = (cr->body && cr->body->data) ? (int)cr->body->length : 0;
+    const char* raw_headers = (cr->headers && cr->headers->data) ? cr->headers->data : "";
+    char* resp_headers = response_headers_for_tape(raw_headers);
+    char* content_type = response_header_value_from_block(resp_headers ? resp_headers : "", "Content-Type");
+    char* req_headers = normalize_live_headers(live_req);
+
+    if (!resp_headers || !content_type || !req_headers) {
+        free(resp_headers); free(content_type); free(req_headers);
+        http_response_free(cresp);
+        free(url);
+        http_response_set_status(res, 500);
+        http_response_set_body(res, "vcr record mode: OOM recording interaction");
+        return;
+    }
+
+    char* recorded_path = build_recorded_path(live_req);
+    if (!recorded_path) {
+        free(resp_headers); free(content_type); free(req_headers);
+        http_response_free(cresp);
+        free(url);
+        http_response_set_status(res, 500);
+        http_response_set_body(res, "vcr record mode: OOM recording path");
+        return;
+    }
+
+    int ok = vcr_record_interaction_full(live_req->method ? live_req->method : "GET",
+                                         recorded_path,
+                                         http_response_status(cresp),
+                                         content_type,
+                                         body,
+                                         req_headers,
+                                         live_req->body ? live_req->body : "");
+    if (ok) vcr_aether_set_resp_headers(g_tape_n - 1, resp_headers);
+
+    http_response_set_status(res, http_response_status(cresp));
+    emit_recorded_headers_to_response(res, resp_headers);
+    http_response_set_body_n(res, body, body_len);
+
+    free(resp_headers);
+    free(content_type);
+    free(req_headers);
+    free(recorded_path);
+    http_response_free(cresp);
+    free(url);
+}
+
 void vcr_dispatch(void* req, void* res, void* ud) {
     (void)ud;
     if (g_tape_cursor >= g_tape_n) {
@@ -895,19 +1382,45 @@ void vcr_dispatch(void* req, void* res, void* ud) {
         return;
     }
     Interaction* e = &g_tape[g_tape_cursor];
+    char* expected_path = apply_unredactions_for_c(e->path, VCR_FIELD_PATH);
+    char* expected_req_headers = apply_unredactions_for_c(e->req_headers, VCR_FIELD_REQUEST_HEADERS);
+    char* expected_req_body = apply_unredactions_for_c(e->req_body, VCR_FIELD_REQUEST_BODY);
+    if (!expected_path || !expected_req_headers || !expected_req_body) {
+        free(expected_path); free(expected_req_headers); free(expected_req_body);
+        last_err_set("OOM applying playback replacements");
+        http_response_set_status(res, 599);
+        http_response_set_body(res, "OOM applying playback replacements");
+        return;
+    }
+    char* expected_req_headers_filtered = remove_headers_from_block_c(expected_req_headers,
+                                                                      VCR_FIELD_REQUEST_HEADERS);
+    free(expected_req_headers);
+    expected_req_headers = expected_req_headers_filtered;
+    if (!expected_req_headers) {
+        free(expected_path); free(expected_req_body);
+        last_err_set("OOM applying playback header removals");
+        http_response_set_status(res, 599);
+        http_response_set_body(res, "OOM applying playback header removals");
+        return;
+    }
 
     /* (method, path) match — same as before step 10, just now
      * recorded into g_last_error too. Mismatch returns without
      * advancing cursor. */
     const char* got_method = http_request_method(req);
     const char* got_path   = http_request_path(req);
+    char* got_path_with_query = NULL;
+    if (expected_path_includes_query(expected_path)) {
+        got_path_with_query = build_recorded_path((const VcrHttpRequestPrefix*)req);
+        got_path = got_path_with_query ? got_path_with_query : got_path;
+    }
     if (!got_method || strcmp(got_method, e->method) != 0
-        || !got_path || strcmp(got_path, e->path) != 0) {
+        || !got_path || strcmp(got_path, expected_path) != 0) {
         char msg[2048];
         snprintf(msg, sizeof(msg),
             "tape mismatch at interaction %d: expected %s %s, got %s %s",
             g_tape_cursor,
-            e->method, e->path,
+            e->method, expected_path,
             got_method ? got_method : "(null)",
             got_path   ? got_path   : "(null)");
         last_err_set(msg);
@@ -915,28 +1428,32 @@ void vcr_dispatch(void* req, void* res, void* ud) {
         g_last_index = g_tape_cursor;
         http_response_set_status(res, 599);
         http_response_set_body(res, msg);
+        free(got_path_with_query);
+        free(expected_path); free(expected_req_headers); free(expected_req_body);
         return;
     }
+    free(got_path_with_query);
 
     /* Request-headers comparison. Fires when EITHER the tape captured
      * a non-blank request_headers block (implicit gate, Step 10) OR
      * the test explicitly opted in via vcr.set_strict_headers(1). The
      * explicit flag lets a test enable strict matching against tapes
-     * whose request blocks have been load-time scrubbed (the canonical
-     * SVN tape's case — recorded headers like `Host: svn.apache.org`
-     * won't match what std.http.client sends to 127.0.0.1, but a test
-     * driver that wants to deliberately exercise the diagnostic paths
-     * can scrub-then-set-strict and construct exact requests). */
+     * whose request blocks have been load-time scrubbed. Recorded
+     * upstream Host headers won't match what std.http.client sends to
+     * 127.0.0.1, but a test driver that wants to deliberately exercise
+     * the diagnostic paths can scrub-then-set-strict and construct
+     * exact requests. */
     const VcrHttpRequestPrefix* live_req = (const VcrHttpRequestPrefix*)req;
-    if (!is_blank(e->req_headers) || g_strict_headers) {
+    if (!is_blank(expected_req_headers) || g_strict_headers) {
         char* live = normalize_live_headers(live_req);
         if (!live) {
+            free(expected_path); free(expected_req_headers); free(expected_req_body);
             last_err_set("OOM normalizing live request headers");
             http_response_set_status(res, 599);
             http_response_set_body(res, "OOM normalizing live request headers");
             return;
         }
-        if (strcmp(live, e->req_headers) != 0) {
+        if (strcmp(live, expected_req_headers) != 0) {
             /* Identify the offending header. Walk the recorded blob
              * line by line: if a recorded line isn't in `live`, the
              * recording expected a header the SUT didn't send →
@@ -951,7 +1468,7 @@ void vcr_dispatch(void* req, void* res, void* ud) {
             int kind = VCR_KIND_HEADER_MISSING;  /* default if neither sweep narrows it */
 
             /* First sweep: recorded lines not present verbatim in live. */
-            const char* p = e->req_headers;
+            const char* p = expected_req_headers;
             while (*p && !found_diag) {
                 const char* eol = strchr(p, '\n');
                 if (!eol) eol = p + strlen(p);
@@ -1014,7 +1531,7 @@ void vcr_dispatch(void* req, void* res, void* ud) {
                         memcpy(one, lp, llen);
                         one[llen] = '\n';
                         one[llen + 1] = '\0';
-                        if (!strstr(e->req_headers, one)) {
+                        if (!strstr(expected_req_headers, one)) {
                             first_header_name(lp, hdr_name, sizeof(hdr_name));
                             snprintf(msg, sizeof(msg),
                                 "interaction %d: '%s' request header encountered but not expected",
@@ -1031,7 +1548,7 @@ void vcr_dispatch(void* req, void* res, void* ud) {
             if (!found_diag) {
                 snprintf(msg, sizeof(msg),
                     "interaction %d: request headers differ — recorded:\n%s\nlive:\n%s",
-                    g_tape_cursor, e->req_headers, live);
+                    g_tape_cursor, expected_req_headers, live);
                 /* Fall-through diagnostic — neither sweep located a
                  * single offender. Call it MISSING by default; the
                  * detailed message is in g_last_error. */
@@ -1041,6 +1558,7 @@ void vcr_dispatch(void* req, void* res, void* ud) {
             g_last_kind = kind;
             g_last_index = g_tape_cursor;
             free(live);
+            free(expected_path); free(expected_req_headers); free(expected_req_body);
             http_response_set_status(res, 599);
             http_response_set_body(res, msg);
             return;
@@ -1049,19 +1567,20 @@ void vcr_dispatch(void* req, void* res, void* ud) {
     }
 
     /* Step 10: request-body comparison. Same opt-in semantics. */
-    if (!is_blank(e->req_body)) {
+    if (!is_blank(expected_req_body)) {
         const char* live_body = live_req->body ? live_req->body : "";
-        if (strcmp(live_body, e->req_body) != 0) {
+        if (strcmp(live_body, expected_req_body) != 0) {
             char msg[2048];
             snprintf(msg, sizeof(msg),
                 "interaction %d: request body different to expectation — "
                 "recorded=%zu bytes, live=%zu bytes",
                 g_tape_cursor,
-                strlen(e->req_body),
+                strlen(expected_req_body),
                 strlen(live_body));
             last_err_set(msg);
             g_last_kind = VCR_KIND_BODY_DIFF;
             g_last_index = g_tape_cursor;
+            free(expected_path); free(expected_req_headers); free(expected_req_body);
             http_response_set_status(res, 599);
             http_response_set_body(res, msg);
             return;
@@ -1139,10 +1658,10 @@ void vcr_dispatch(void* req, void* res, void* ud) {
                 }
                 if (matches_ct) emitted_content_type_from_block = 1;
             }
-            /* add_header (not set_header) — SVN/WebDAV tapes have
-             * many duplicate-keyed headers (13+ `DAV:` per response).
-             * set_header replaces on duplicate; add_header preserves
-             * order and multiplicity through to the wire serializer. */
+            /* add_header (not set_header) — some protocols have many
+             * duplicate-keyed headers. set_header replaces on duplicate;
+             * add_header preserves order and multiplicity through to
+             * the wire serializer. */
             http_response_add_header(res, name_buf, val_buf);
         }
     }
@@ -1175,6 +1694,7 @@ void vcr_dispatch(void* req, void* res, void* ud) {
     g_last_index = g_tape_cursor;
 
     g_tape_cursor++;
+    free(expected_path); free(expected_req_headers); free(expected_req_body);
 }
 
 /* Step 10: surface the most recent dispatch mismatch. The test's
@@ -1375,4 +1895,26 @@ const char* vcr_get_redaction_pattern(int i) {
 const char* vcr_get_redaction_replacement(int i) {
     if (i < 0 || i >= g_redactions_n) return "";
     return safe(g_redactions[i].replacement);
+}
+int vcr_get_unredaction_count(void) { return g_unredactions_n; }
+int vcr_get_unredaction_field(int i) {
+    if (i < 0 || i >= g_unredactions_n) return 0;
+    return g_unredactions[i].field;
+}
+const char* vcr_get_unredaction_pattern(int i) {
+    if (i < 0 || i >= g_unredactions_n) return "";
+    return safe(g_unredactions[i].pattern);
+}
+const char* vcr_get_unredaction_replacement(int i) {
+    if (i < 0 || i >= g_unredactions_n) return "";
+    return safe(g_unredactions[i].replacement);
+}
+int vcr_get_header_removal_count(void) { return g_header_removals_n; }
+int vcr_get_header_removal_field(int i) {
+    if (i < 0 || i >= g_header_removals_n) return 0;
+    return g_header_removals[i].field;
+}
+const char* vcr_get_header_removal_name(int i) {
+    if (i < 0 || i >= g_header_removals_n) return "";
+    return safe(g_header_removals[i].name);
 }

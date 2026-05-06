@@ -2309,7 +2309,7 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
     HttpRoute* matched_route = NULL;
 
     while (route) {
-        if (strcmp(route->method, req->method) == 0) {
+        if (strcmp(route->method, req->method) == 0 || strcmp(route->method, "*") == 0) {
             if (http_route_matches(route->path_pattern, req->path, req)) {
                 matched_route = route;
                 break;
@@ -2445,7 +2445,7 @@ void http_server_dispatch_for_h2(HttpServer* server,
     HttpRoute* head_to_get = NULL;
     while (route) {
         if (http_route_matches(route->path_pattern, req->path, req)) {
-            if (strcmp(route->method, req->method) == 0) {
+            if (strcmp(route->method, req->method) == 0 || strcmp(route->method, "*") == 0) {
                 matched_route = route;
                 break;
             }

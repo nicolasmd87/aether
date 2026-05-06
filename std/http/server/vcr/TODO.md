@@ -1,0 +1,187 @@
+# std.http.server.vcr TODO
+
+Notes from scanning `/home/paul/scm/servirtium-README`, excluding the weather API walkthrough. Keep this file about the generic VCR/Servirtium implementation only.
+
+## Current Shape
+
+- Playback and record mode share the same in-memory tape storage and Servirtium markdown emitter/parser.
+- Record mode listens like playback, forwards with `std.http.client`, records markdown, and writes to the same file path playback uses.
+- Playback supports multiple interactions, custom HTTP methods, strict request header/body matching, notes, static-content bypass, indented code blocks, emphasized HTTP verbs, response headers, and base64-marked response bodies.
+- Recording redactions apply at flush time to path, request headers, request body, response headers, and response body.
+- Playback unredactions apply to path, request headers, and request body before request matching.
+- Header removals apply to request/response header blocks at recording flush time, and to recorded/live request headers before playback strict matching.
+- Route registration already accepts wildcard method/path fallback for both playback and record modes.
+
+## Header Removal Mutations
+
+Delivered first cut:
+
+```aether
+vcr.remove_header(field, header_name) -> string
+vcr.clear_header_removals()
+```
+
+Implementation notes:
+
+- Header removal operates on canonical newline-delimited `Name: Value` blocks.
+- Match header names case-insensitively.
+- Avoid regex until the language/runtime has a standard regex story; exact header-name matching is enough for the first pass.
+- Recording removals run in `emit_one_interaction()` before `emit_code_block()`.
+- Playback-side request-header removal normalizes both the recorded expectation and the live request before comparing.
+
+Tests:
+
+- Recording flush removes `Authorization` from request headers.
+- Recording flush removes `Set-Cookie` from response headers.
+- Playback can ignore a live `X-Request-Id` header when configured.
+- Removal does not mutate in-memory capture; clearing removals and flushing again restores original headers.
+
+## Separate Mutation Phases
+
+Servirtium step 8 distinguishes six mutation points:
+
+- recorder: caller request before forwarding to upstream
+- recorder: real response before recording
+- recorder: caller request as written to tape
+- recorder: real response as returned to caller
+- playback: caller request before matching
+- playback: recorded response before returning to caller
+
+Current Aether VCR intentionally has a simpler model:
+
+- recording redactions at flush time
+- playback unredactions before request matching
+- header removals at recording-flush and playback-match time
+
+Potential next design:
+
+```aether
+const PHASE_RECORDING_TAPE = 1
+const PHASE_PLAYBACK_MATCH = 2
+const PHASE_RECORDING_UPSTREAM = 3
+const PHASE_RECORDING_CALLER_RESPONSE = 4
+const PHASE_PLAYBACK_CALLER_RESPONSE = 5
+```
+
+Do not add all phases unless there is a concrete downstream need. Header removal and response mutation are probably the first useful slices.
+
+## Record-Mode Last Error
+
+Servirtium step 3 says upstream failures in record mode should set the same last-error surface playback uses.
+
+Current behavior:
+
+- record dispatcher returns `502` / `500` with an explanatory body.
+- playback mismatch updates `vcr.last_error()`, `vcr.last_kind()`, and `vcr.last_index()`.
+
+Gap:
+
+- record-mode transport/build/OOM failures should call `last_err_set(...)` and set an appropriate kind/index.
+- May need new kind constants for record-mode failures, e.g. `KIND_UPSTREAM_TRANSPORT_ERROR`.
+
+Tests:
+
+- Record mode against a refused upstream returns 502 and `vcr.last_error()` mentions the upstream transport failure.
+- `clear_last_error()` clears record-mode errors too.
+
+## Recording Drift Semantics
+
+Servirtium step 4 says record mode should fail if the newly recorded markdown differs from the previous recording, while still writing the new markdown so developers can use `git diff`.
+
+Current Aether VCR:
+
+- `flush(tape_path)` overwrites the tape.
+- `flush_or_check(tape_path)` writes a `.actual` sibling and returns an error when bytes differ.
+
+Potential additions:
+
+```aether
+vcr.flush_and_fail_if_changed(tape_path) -> string
+```
+
+Semantics:
+
+- If no prior tape exists, write new tape and return `""`.
+- If prior tape exists and bytes match, return `""`.
+- If prior tape exists and bytes differ, overwrite `tape_path` with the new tape and return a mismatch error.
+
+Keep `flush_or_check()` for callers who prefer the `.actual` workflow.
+
+## Gzip Normalize/Restore
+
+Servirtium step 3 mentions recording should store uncompressed content but re-gzip for the caller when needed.
+
+Current Aether VCR:
+
+- Handles response bodies whose content type says `base64 below`.
+- Does not appear to normalize gzip responses during record mode or restore gzip for callers.
+
+Questions before implementation:
+
+- Should gzip be normalized based on `Content-Encoding: gzip` only?
+- Should the tape store decompressed body and omit/change `Content-Encoding`?
+- Should caller response preserve original gzip bytes in record mode, playback mode, or both?
+
+Likely implementation:
+
+- Use existing zlib support if available in std/runtime.
+- Record mode:
+  - if upstream response has `Content-Encoding: gzip`, decompress before storing body.
+  - record headers without `Content-Encoding` and with adjusted `Content-Length`.
+  - return original upstream response bytes to caller unless a caller-response mutation phase is configured.
+- Playback:
+  - serve decompressed body by default.
+  - optionally gzip if caller sent `Accept-Encoding: gzip`.
+
+This needs careful tests with binary-safe response body handling.
+
+## HTTP-Sourced Markdown Tapes
+
+Servirtium step 16 mentions markdown recordings sourced over HTTP.
+
+Potential API:
+
+```aether
+vcr.load_url(tape_url, port) -> ptr
+```
+
+Implementation:
+
+- Use `std.http.client` to fetch markdown.
+- Parse the fetched string using the existing parser path, probably by extracting a `parse_tape_text(label, markdown)` helper from `parse_tape_file()`.
+- Preserve filesystem `load()` as the default.
+
+Tests:
+
+- Local test server serves a tape markdown file.
+- `vcr.load_url()` replays it.
+- Transport failure returns null and sets/prints a useful load error.
+
+## Compatibility Suite
+
+Servirtium step 15 points to the TODO-backend compatibility suite.
+
+This is a larger conformance target rather than a single API gap.
+
+Useful preparation:
+
+- Ensure record mode can capture all methods used by the suite. Wildcard method routing should already cover this.
+- Ensure repeated response headers round-trip.
+- Ensure request body matching is binary-safe enough for suite traffic.
+- Add a small runner/shim only after core behavior is stable.
+
+## Verb Coverage Smoke Tests
+
+Servirtium step 7 explicitly calls out `POST`, `PUT`, `HEAD`, `DELETE`, `OPTIONS`, `TRACE`, and `PATCH`.
+
+Current VCR route registration is method-agnostic, but the test coverage is still GET-heavy. Useful follow-up:
+
+- Add direct record/playback smoke tests for at least one non-GET verb with a request body.
+- Add one HEAD case to confirm the server's GET-fallback path does not break the tape matcher.
+- Add one `OPTIONS` or `TRACE` case if the compatibility suite needs them later.
+
+## Things To Keep Avoiding
+
+- Do not implement record mode as an HTTP proxy unless explicitly adding the optional proxy mode from the Servirtium roadmap.
+- Do not use CORS tricks for record mode.
+- Keep `std/http/server/vcr` implementation comments generic; tests may mention specific downstream protocols/services, but implementation should not.

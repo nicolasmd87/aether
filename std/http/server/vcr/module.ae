@@ -106,9 +106,11 @@ import std.fs
 import std.string
 
 exports (
-    vcr_load_err, vcr_tape_length, vcr_dispatch, vcr_register_routes,
+    vcr_load_err, vcr_tape_length, vcr_dispatch, vcr_register_static_routes,
     vcr_record_interaction,
     vcr_add_redaction, vcr_clear_redactions,
+    vcr_add_unredaction, vcr_clear_unredactions,
+    vcr_add_header_removal, vcr_clear_header_removals,
     vcr_add_note,
     vcr_record_interaction_full, vcr_last_error, vcr_clear_last_error,
     vcr_add_static_content, vcr_clear_static_content,
@@ -120,6 +122,10 @@ exports (
     vcr_get_indent_code_blocks, vcr_get_emphasize_http_verbs,
     vcr_get_redaction_count, vcr_get_redaction_field,
     vcr_get_redaction_pattern, vcr_get_redaction_replacement,
+    vcr_get_unredaction_count, vcr_get_unredaction_field,
+    vcr_get_unredaction_pattern, vcr_get_unredaction_replacement,
+    vcr_get_header_removal_count, vcr_get_header_removal_field,
+    vcr_get_header_removal_name,
     vcr_aether_clear_tape, vcr_aether_append_interaction,
     vcr_aether_set_load_err, vcr_aether_set_resp_headers,
     vcr_last_kind, vcr_last_index,
@@ -129,15 +135,19 @@ exports (
     KIND_HEADER_VALUE_DIFF, KIND_HEADER_UNEXPECTED,
     KIND_TAPE_EXHAUSTED, KIND_BODY_DIFF,
     last_kind, last_index, set_strict_headers, reset_cursor,
-    FIELD_PATH, FIELD_RESPONSE_BODY,
+    FIELD_PATH, FIELD_RESPONSE_BODY, FIELD_REQUEST_HEADERS,
+    FIELD_REQUEST_BODY, FIELD_RESPONSE_HEADERS,
     load, eject, tape_length,
+    load_record, eject_record,
     record, flush, flush_or_check,
-    redact, clear_redactions,
+    redact, clear_redactions, unredact, clear_unredactions,
+    remove_header, clear_header_removals,
     note,
-    record_full, last_error, clear_last_error,
+    record_full, record_full_response, last_error, clear_last_error,
     static_content, clear_static_content,
     indent_code_blocks, emphasize_http_verbs, clear_format_options,
-    str_replace_all, apply_redactions_for, emit_code_block,
+    str_replace_all, apply_redactions_for, apply_unredactions_for,
+    route_path_for, register_routes, emit_code_block,
     emit_one_interaction, emit_tape,
     find_at_line_start, rtrim,
     extract_code_block_at, extract_indented_at,
@@ -154,7 +164,8 @@ exports (
 extern vcr_load_err() -> string                       // populated by vcr_aether_set_load_err on parse failure
 extern vcr_tape_length() -> int
 extern vcr_dispatch(req: ptr, res: ptr, ud: ptr)     // server handler — matches next entry, emits response
-extern vcr_register_routes(server: ptr)               // walks tape and calls server_get for each unique path
+extern vcr_register_static_routes(server: ptr)         // registers configured static-content mounts
+extern vcr_register_record_routes(server: ptr, upstream_base: string) -> int
 
 // Record-mode externs — append captured interactions, then flush
 // the lot to disk in canonical Servirtium markdown when the test
@@ -166,6 +177,10 @@ extern vcr_record_interaction(method: string, path: string, status: int, content
 // the same VCR can serve replays AND emit redacted tapes.
 extern vcr_add_redaction(field: int, pattern: string, replacement: string) -> int
 extern vcr_clear_redactions()
+extern vcr_add_unredaction(field: int, pattern: string, replacement: string) -> int
+extern vcr_clear_unredactions()
+extern vcr_add_header_removal(field: int, name: string) -> int
+extern vcr_clear_header_removals()
 
 // Note extern (Servirtium step 9). Stages a (title, body) note
 // that attaches to the next interaction recorded.
@@ -177,8 +192,8 @@ extern vcr_last_error() -> string
 extern vcr_clear_last_error()
 
 // Step 11 externs — static-content mount points. Routes are
-// registered when vcr.load() calls vcr_register_routes() — so
-// configure mounts BEFORE loading the tape.
+// registered when vcr.load() calls register_routes() — so configure
+// mounts BEFORE loading the tape.
 extern vcr_add_static_content(mount_path: string, fs_dir: string) -> int
 extern vcr_clear_static_content()
 
@@ -210,6 +225,13 @@ extern vcr_get_redaction_count() -> int
 extern vcr_get_redaction_field(i: int) -> int
 extern vcr_get_redaction_pattern(i: int) -> string
 extern vcr_get_redaction_replacement(i: int) -> string
+extern vcr_get_unredaction_count() -> int
+extern vcr_get_unredaction_field(i: int) -> int
+extern vcr_get_unredaction_pattern(i: int) -> string
+extern vcr_get_unredaction_replacement(i: int) -> string
+extern vcr_get_header_removal_count() -> int
+extern vcr_get_header_removal_field(i: int) -> int
+extern vcr_get_header_removal_name(i: int) -> string
 
 // Setters used by the Aether-side parser to populate the tape.
 // Inverse of the get_* accessors. Single all-fields setter rather
@@ -246,10 +268,8 @@ extern vcr_get_strict_headers() -> int
 
 // Reset the dispatch cursor to interaction 0 without freeing the
 // tape or stopping the server. Used by tests that drive a series
-// of independent cases against the same loaded tape (e.g. the
-// strict-match permutation tests in
-// tests/integration/svn_vcr_strict_match/). Also clears the
-// last_kind / last_index / last_error slots.
+// of independent cases against the same loaded tape. Also clears
+// the last_kind / last_index / last_error slots.
 extern vcr_reset_cursor()
 
 // Kind-of-outcome enum. Returned by vcr.last_kind() after each
@@ -310,10 +330,10 @@ load(tape_path: string, port: int) -> ptr {
         return null
     }
 
-    // Each unique path in the tape gets registered with the routing
-    // layer; the dispatcher then matches on (method, path) and emits
-    // the recorded response.
-    vcr_register_routes(raw)
+    // Aether registers the replay routes from the parsed tape. The
+    // dispatcher then matches on (method, path) and emits the
+    // recorded response.
+    register_routes(raw)
 
     return raw
 }
@@ -329,6 +349,40 @@ eject(server: ptr) {
 // many interactions have been captured so far). Useful for
 // sanity-checking in test setup and after-record verification.
 tape_length() -> int { return vcr_tape_length() }
+
+// Record mode: create a VCR server that listens like playback, but
+// forwards each request to `upstream_base` with std.http.client,
+// returns the real response to the SUT, and records the interaction
+// into the in-memory tape. Call eject_record(server, tape_path) when
+// the run is complete; it writes the markdown tape to the same path
+// vcr.load(tape_path, port) later replays from.
+load_record(tape_path: string, upstream_base: string, port: int) -> ptr {
+    vcr_aether_clear_tape()
+
+    raw = http.server_create(port)
+    if raw == 0 {
+        println("vcr.load_record: server_create on port ${port} returned 0")
+        return null
+    }
+
+    ok = vcr_register_record_routes(raw, upstream_base)
+    if ok == 0 {
+        println("vcr.load_record: ${vcr_load_err()}")
+        http.server_stop(raw)
+        return null
+    }
+
+    return raw
+}
+
+// Stop the record-mode server and write the captured markdown tape
+// to `tape_path`. This deliberately overwrites the playback tape:
+// the developer reviews git diff to decide whether upstream changed
+// legitimately or unexpectedly.
+eject_record(server: ptr, tape_path: string) -> string {
+    http.server_stop(server)
+    return flush(tape_path)
+}
 
 // ---- Record mode -----------------------------------------------------
 //
@@ -424,11 +478,15 @@ flush_or_check(tape_path: string) -> string {
 //   ... drive SUT, capture interactions ...
 //   vcr.flush(tape_path)
 //
-// Field selectors. v0.1 supports path + response body. Future:
-// request headers, request body, response headers (added when
-// the recorder starts capturing those — today it doesn't).
-const FIELD_PATH          = 1
-const FIELD_RESPONSE_BODY = 2
+// Field selectors for recording redactions and playback
+// unredactions. Redactions are applied only when writing a tape;
+// unredactions are applied only when comparing an incoming request
+// to a loaded tape.
+const FIELD_PATH             = 1
+const FIELD_RESPONSE_BODY    = 2
+const FIELD_REQUEST_HEADERS  = 3
+const FIELD_REQUEST_BODY     = 4
+const FIELD_RESPONSE_HEADERS = 5
 
 // Register a redaction. Every occurrence of `pattern` in the
 // designated field is replaced with `replacement` at flush time.
@@ -444,6 +502,42 @@ redact(field: int, pattern: string, replacement: string) -> string {
 // next.
 clear_redactions() {
     vcr_clear_redactions()
+}
+
+// Register a playback-side replacement. Use this when a committed
+// tape intentionally contains redacted values, but the live SUT still
+// sends the real value. For example, a tape may contain
+// `Authorization: Bearer REDACTED`; the test can call:
+//
+//   vcr.unredact(vcr.FIELD_REQUEST_HEADERS, "Bearer REDACTED", real_token)
+//
+// before vcr.load(). The dispatcher applies the replacement to the
+// recorded expectation before comparing path / request headers / body.
+// Response fields are accepted for symmetry but are not used by
+// playback matching today.
+unredact(field: int, pattern: string, replacement: string) -> string {
+    ok = vcr_add_unredaction(field, pattern, replacement)
+    if ok == 0 { return vcr_load_err() }
+    return ""
+}
+
+clear_unredactions() {
+    vcr_clear_unredactions()
+}
+
+// Remove a header by name from request/response header blocks.
+// Recording flush applies this to the emitted tape; playback applies
+// request-header removals to both the recorded expectation and the
+// live incoming request before strict matching. Header-name matching
+// is case-insensitive and exact.
+remove_header(field: int, name: string) -> string {
+    ok = vcr_add_header_removal(field, name)
+    if ok == 0 { return vcr_load_err() }
+    return ""
+}
+
+clear_header_removals() {
+    vcr_clear_header_removals()
 }
 
 // ---- Notes (Servirtium roadmap step 9) -------------------------------
@@ -504,6 +598,17 @@ note(title: string, body: string) -> string {
 record_full(method: string, path: string, status: int, content_type: string, body: string, req_headers: string, req_body: string) -> string {
     ok = vcr_record_interaction_full(method, path, status, content_type, body, req_headers, req_body)
     if ok == 0 { return "vcr.record_full failed" }
+    return ""
+}
+
+// Capture a full interaction including response headers. This is
+// primarily what record-mode uses internally, but tests can drive it
+// directly when no live HTTP server is needed.
+record_full_response(method: string, path: string, status: int, content_type: string, body: string, req_headers: string, req_body: string, resp_headers: string) -> string {
+    ok = vcr_record_interaction_full(method, path, status, content_type, body, req_headers, req_body)
+    if ok == 0 { return "vcr.record_full_response failed" }
+    idx = vcr_tape_length() - 1
+    vcr_aether_set_resp_headers(idx, resp_headers)
     return ""
 }
 
@@ -647,6 +752,113 @@ apply_redactions_for(s: string, field: int) -> string {
     return out
 }
 
+// Apply every registered playback unredaction whose field matches
+// `field` to `s`. Used before registering route paths so tapes with
+// redacted URLs still create the route the live client will request.
+apply_unredactions_for(s: string, field: int) -> string {
+    n = vcr_get_unredaction_count()
+    if n == 0 { return s }
+    out = s
+    i = 0
+    while i < n {
+        if vcr_get_unredaction_field(i) == field {
+            out = str_replace_all(out, vcr_get_unredaction_pattern(i),
+                                       vcr_get_unredaction_replacement(i))
+        }
+        i = i + 1
+    }
+    return out
+}
+
+// Convert a tape path into the route key expected by std.http's
+// router. The dispatcher still compares the full path+query when
+// the tape expects one; routing itself needs only the path segment.
+route_path_for(path: string) -> string {
+    p = apply_unredactions_for(path, FIELD_PATH)
+    q = string.index_of(p, "?")
+    if q >= 0 {
+        p = string.substring(p, 0, q)
+    }
+    if string.length(p) == 0 { return "/" }
+    return p
+}
+
+route_already_registered(method: string, route_path: string, before: int) -> int {
+    j = 0
+    while j < before {
+        prev_method = string.copy(vcr_get_method(j))
+        prev_path = route_path_for(string.copy(vcr_get_path(j)))
+        if prev_method == method && prev_path == route_path {
+            return 1
+        }
+        j = j + 1
+    }
+    return 0
+}
+
+// Register replay routes in Aether. C still owns the dispatcher
+// function pointer and static-content file serving, but route
+// enumeration and path normalization belong with the tape parser.
+register_routes(server: ptr) {
+    http.server_add_route(server, "*", "*", vcr_dispatch, 0)
+
+    n = vcr_get_tape_count()
+    i = 0
+    while i < n {
+        method = string.copy(vcr_get_method(i))
+        route_path = route_path_for(string.copy(vcr_get_path(i)))
+        if route_already_registered(method, route_path, i) == 0 {
+            http.server_add_route(server, method, route_path, vcr_dispatch, 0)
+        }
+        i = i + 1
+    }
+    vcr_register_static_routes(server)
+}
+
+header_removed_for(field: int, name: string) -> int {
+    n = vcr_get_header_removal_count()
+    i = 0
+    while i < n {
+        if vcr_get_header_removal_field(i) == field {
+            if icmp_aether(vcr_get_header_removal_name(i), name) == 0 {
+                return 1
+            }
+        }
+        i = i + 1
+    }
+    return 0
+}
+
+remove_headers_for(headers: string, field: int) -> string {
+    if string.length(headers) == 0 { return headers }
+    out = string.copy("")
+    cursor = 0
+    h_len = string.length(headers)
+    while cursor < h_len {
+        nl_idx = string.index_of_from(headers, "\n", cursor)
+        line_end = h_len
+        if nl_idx >= 0 { line_end = nl_idx }
+        line = string.substring(headers, cursor, line_end)
+        line_len = string.length(line)
+        if line_len > 0 && string.char_at(line, line_len - 1) == 13 {
+            line = string.substring(line, 0, line_len - 1)
+        }
+        keep = 1
+        colon_idx = string.index_of(line, ":")
+        if colon_idx > 0 {
+            name = string.substring(line, 0, colon_idx)
+            if header_removed_for(field, name) == 1 { keep = 0 }
+        }
+        if keep == 1 && string.length(line) > 0 {
+            out = string_concat(out, line)
+            out = string_concat(out, "\n")
+        }
+        if nl_idx < 0 { break }
+        cursor = nl_idx + 1
+    }
+    return out
+}
+
 // Emit one fenced or indented code block. Body may be empty —
 // the form has to land valid markdown either way (an empty fenced
 // block is "```\n```\n", an empty indented block is one 4-space
@@ -712,9 +924,15 @@ emit_one_interaction(i: int) -> string {
     body     = string.copy(vcr_get_body(i))
     req_h    = string.copy(vcr_get_req_headers(i))
     req_b    = string.copy(vcr_get_req_body(i))
+    resp_h   = string.copy(vcr_get_resp_headers(i))
 
-    path_out = apply_redactions_for(path, FIELD_PATH)
-    body_out = apply_redactions_for(body, FIELD_RESPONSE_BODY)
+    path_out   = apply_redactions_for(path, FIELD_PATH)
+    body_out   = apply_redactions_for(body, FIELD_RESPONSE_BODY)
+    req_h_out  = apply_redactions_for(req_h, FIELD_REQUEST_HEADERS)
+    req_b_out  = apply_redactions_for(req_b, FIELD_REQUEST_BODY)
+    resp_h_out = apply_redactions_for(resp_h, FIELD_RESPONSE_HEADERS)
+    req_h_out  = remove_headers_for(req_h_out, FIELD_REQUEST_HEADERS)
+    resp_h_out = remove_headers_for(resp_h_out, FIELD_RESPONSE_HEADERS)
 
     heading = "## Interaction ${i}: ${method} ${path_out}\n\n"
     if vcr_get_emphasize_http_verbs() == 1 {
@@ -737,15 +955,18 @@ emit_one_interaction(i: int) -> string {
         out = string_concat(out, "\n")
     }
 
-    rh_block = emit_code_block(req_h)
-    rb_block = emit_code_block(req_b)
+    rh_block = emit_code_block(req_h_out)
+    rb_block = emit_code_block(req_b_out)
     out = string_concat(out, "### Request headers recorded for playback:\n\n")
     out = string_concat(out, rh_block)
     out = string_concat(out, "### Request body recorded for playback ():\n\n")
     out = string_concat(out, rb_block)
 
     out = string_concat(out, "### Response headers recorded for playback:\n\n")
-    if string.length(ctype) > 0 {
+    if string.length(resp_h_out) > 0 {
+        rsp_h_block = emit_code_block(resp_h_out)
+        out = string_concat(out, rsp_h_block)
+    } else if string.length(ctype) > 0 {
         ct_line = "Content-Type: ${ctype}"
         rsp_h_block = emit_code_block(ct_line)
         out = string_concat(out, rsp_h_block)
