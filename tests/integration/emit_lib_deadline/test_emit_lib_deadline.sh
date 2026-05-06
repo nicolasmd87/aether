@@ -74,13 +74,25 @@ EOF
 # Compile the emitted .c, the caps runtime, and the harness together.
 # The harness includes libaether.h via -I; the runtime files come
 # straight from runtime/.
+# Linker order matters on Linux: archive members are pulled in
+# only when an already-seen object file references them. -laether
+# placed before harness.c (which calls aether_set_call_deadline)
+# would discard the cap symbols. Two ways to fix:
+#   (a) Move -laether AFTER harness.c.
+#   (b) Compile the cap modules directly — sidesteps archive rules
+#       entirely.
+# Going with (a) here so loop_lib.c (which may reference std.string
+# helpers via the emitted prelude) still resolves cleanly against
+# libaether.a — the cap symbols within the archive are pulled in
+# once harness.c's references force the linker to load them.
 cc -O2 -I"$ROOT" -I"$ROOT/runtime" -I"$ROOT/runtime/actors" \
    -I"$ROOT/runtime/scheduler" -I"$ROOT/runtime/utils" \
    -I"$ROOT/runtime/memory" -I"$ROOT/runtime/config" \
    -I"$ROOT/std" -I"$ROOT/std/string" -I"$ROOT/std/collections" \
+   -I"$ROOT/include" \
    "$TMPDIR/loop_lib.c" \
-   -L"$ROOT/build" -laether \
    "$TMPDIR/harness.c" \
+   -L"$ROOT/build" -laether \
    -o "$TMPDIR/harness" \
    -lm -pthread \
    2>"$TMPDIR/cc.log" || {
