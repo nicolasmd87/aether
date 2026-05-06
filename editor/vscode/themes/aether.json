@@ -2,44 +2,48 @@
   "name": "Aether",
   "type": "dark",
   "comments": [
-    "Palette tuned for the actor-with-pattern-matching dialect Aether",
-    "is. Message names render as warm amber (atom-like — they're",
-    "compile-time tags that flow through the message bus). Actors and",
-    "structs are coloured distinctly so a glance tells you which kind",
-    "of definition you're looking at. Pattern arrows `->`, the cons-",
-    "cell pipe `|`, and the actor send / ask operators (`!`, `?`)",
-    "share a coral hue so the dispatch shape of a function pops at a",
-    "distance. Other scopes track the One-Dark-Pro family so any",
-    "Aether file looks at home alongside the rest of a polyglot repo."
+    "Erlang-flavoured palette. The classic Emacs erlang-mode look:",
+    "  - Comments: firebrick-red italic (Erlang's signature)",
+    "  - Strings:  salmon",
+    "  - Keywords: purple (case, of, end, fun, receive, after, …)",
+    "  - Atoms / message names: forest green (the dispatch tags",
+    "    flowing through the message bus — atoms in Erlang)",
+    "  - Variables: gold / tan (font-lock-variable-name-face)",
+    "  - Types:    green (font-lock-type-face)",
+    "  - Functions: blue, bold for definitions",
+    "  - Numbers:  orange",
+    "Pattern arrows `->`, the cons-cell pipe `|`, and the actor",
+    "send/ask operators (`!`, `?`) keep a coral hue for visual",
+    "weight at the dispatch site."
   ],
   "colors": {
-    "editor.background":              "#181a1f",
-    "editor.foreground":              "#d8d8d8",
-    "editorLineNumber.foreground":    "#4b5263",
-    "editorLineNumber.activeForeground": "#abb2bf",
-    "editorCursor.foreground":        "#e5c07b",
-    "editor.selectionBackground":     "#3e4451",
-    "editor.lineHighlightBackground": "#21252b",
-    "editor.selectionHighlightBackground": "#2c313a",
-    "editorBracketMatch.background":  "#3e4451",
-    "editorBracketMatch.border":      "#56b6c2",
-    "editorIndentGuide.background":   "#2c313a",
-    "editorIndentGuide.activeBackground": "#3e4451",
-    "editorWhitespace.foreground":    "#3b4048",
-    "editorGutter.background":        "#181a1f",
-    "editorWidget.background":        "#21252b",
-    "editorHoverWidget.background":   "#21252b",
-    "editorHoverWidget.border":       "#3e4451",
-    "editorSuggestWidget.background": "#21252b",
-    "editorSuggestWidget.border":     "#181a1f",
-    "editorSuggestWidget.selectedBackground": "#2c313a",
-    "editorError.foreground":         "#e06c75",
-    "editorWarning.foreground":       "#e5c07b",
-    "editorInfo.foreground":          "#56b6c2"
+    "editor.background":              "#1a1a1a",
+    "editor.foreground":              "#d4d4d4",
+    "editorLineNumber.foreground":    "#5a5a5a",
+    "editorLineNumber.activeForeground": "#bdbdbd",
+    "editorCursor.foreground":        "#fa8072",
+    "editor.selectionBackground":     "#3a3a3a",
+    "editor.lineHighlightBackground": "#222222",
+    "editor.selectionHighlightBackground": "#2c2c2c",
+    "editorBracketMatch.background":  "#3a3a3a",
+    "editorBracketMatch.border":      "#bf6fff",
+    "editorIndentGuide.background":   "#2c2c2c",
+    "editorIndentGuide.activeBackground": "#3a3a3a",
+    "editorWhitespace.foreground":    "#3b3b3b",
+    "editorGutter.background":        "#1a1a1a",
+    "editorWidget.background":        "#222222",
+    "editorHoverWidget.background":   "#222222",
+    "editorHoverWidget.border":       "#3a3a3a",
+    "editorSuggestWidget.background": "#222222",
+    "editorSuggestWidget.border":     "#1a1a1a",
+    "editorSuggestWidget.selectedBackground": "#2c2c2c",
+    "editorError.foreground":         "#cc6666",
+    "editorWarning.foreground":       "#ff9966",
+    "editorInfo.foreground":          "#5fa8d3"
   },
   "tokenColors": [
     {
-      "name": "Comments",
+      "name": "Comments — Erlang firebrick red italic",
       "scope": [
         "comment",
         "comment.line",
@@ -47,19 +51,19 @@
         "punctuation.definition.comment"
       ],
       "settings": {
-        "foreground": "#5c6370",
+        "foreground": "#cc6666",
         "fontStyle": "italic"
       }
     },
     {
-      "name": "Strings",
+      "name": "Strings — salmon",
       "scope": [
         "string",
         "string.quoted",
         "string.quoted.double.aether"
       ],
       "settings": {
-        "foreground": "#98c379"
+        "foreground": "#fa8072"
       }
     },
     {
@@ -69,7 +73,7 @@
         "constant.character.escape.aether"
       ],
       "settings": {
-        "foreground": "#56b6c2"
+        "foreground": "#ff9966"
       }
     },
     {
@@ -81,17 +85,17 @@
         "meta.interpolation.aether"
       ],
       "settings": {
-        "foreground": "#e06c75"
+        "foreground": "#bf6fff"
       }
     },
     {
-      "name": "Numbers",
+      "name": "Numbers — orange",
       "scope": [
         "constant.numeric",
         "constant.numeric.aether"
       ],
       "settings": {
-        "foreground": "#d19a66"
+        "foreground": "#ff9966"
       }
     },
     {
@@ -102,12 +106,12 @@
         "constant.language.aether"
       ],
       "settings": {
-        "foreground": "#d19a66",
+        "foreground": "#88ee88",
         "fontStyle": "italic"
       }
     },
     {
-      "name": "Control flow keywords (match, receive, if, return, spawn, ...)",
+      "name": "Control flow keywords (match, receive, if, return, spawn, ...) — Erlang purple",
       "scope": [
         "keyword.control",
         "keyword.control.aether",
@@ -115,12 +119,12 @@
         "keyword.control.flow.aether"
       ],
       "settings": {
-        "foreground": "#c678dd",
+        "foreground": "#bf6fff",
         "fontStyle": "italic"
       }
     },
     {
-      "name": "Storage and declaration keywords (actor, struct, message, state, ...)",
+      "name": "Storage and declaration keywords (actor, struct, message, state, ...) — Erlang purple",
       "scope": [
         "storage.type",
         "storage.type.aether",
@@ -130,43 +134,44 @@
         "keyword.other.aether"
       ],
       "settings": {
-        "foreground": "#61afef"
+        "foreground": "#bf6fff",
+        "fontStyle": "italic"
       }
     },
     {
-      "name": "Built-in primitive types (int, string, bool, ...)",
+      "name": "Built-in primitive types (int, string, bool, ...) — forest green",
       "scope": [
         "support.type.primitive.aether",
         "support.type.builtin.aether"
       ],
       "settings": {
-        "foreground": "#56b6c2"
+        "foreground": "#88ee88"
       }
     },
     {
-      "name": "Message names — read like atoms, the dispatch tags between actors",
+      "name": "Message names — atoms (Erlang dispatch tags), forest green bold",
       "scope": [
         "entity.name.message.aether",
         "entity.name.type.message"
       ],
       "settings": {
-        "foreground": "#e5c07b",
+        "foreground": "#88ee88",
         "fontStyle": "bold"
       }
     },
     {
-      "name": "Actor names",
+      "name": "Actor names — forest green bold (akin to module names in Erlang)",
       "scope": [
         "entity.name.actor.aether",
         "entity.name.type.actor"
       ],
       "settings": {
-        "foreground": "#56b6c2",
+        "foreground": "#88ee88",
         "fontStyle": "bold"
       }
     },
     {
-      "name": "Struct names and other user-defined types",
+      "name": "Struct names and other user-defined types — forest green",
       "scope": [
         "entity.name.type",
         "entity.name.type.aether",
@@ -175,45 +180,45 @@
         "support.type"
       ],
       "settings": {
-        "foreground": "#e5c07b"
+        "foreground": "#88ee88"
       }
     },
     {
-      "name": "Function definitions",
+      "name": "Function definitions — blue bold",
       "scope": [
         "entity.name.function",
         "entity.name.function.aether"
       ],
       "settings": {
-        "foreground": "#61afef",
+        "foreground": "#5fa8d3",
         "fontStyle": "bold"
       }
     },
     {
-      "name": "main() entry point",
+      "name": "main() entry point — blue bold italic",
       "scope": [
         "entity.name.function.main",
         "entity.name.function.main.aether",
         "support.function.main"
       ],
       "settings": {
-        "foreground": "#61afef",
+        "foreground": "#5fa8d3",
         "fontStyle": "bold italic"
       }
     },
     {
-      "name": "Function call sites (bare and namespaced)",
+      "name": "Function call sites (bare and namespaced) — blue",
       "scope": [
         "meta.function-call",
         "support.function",
         "support.function.aether"
       ],
       "settings": {
-        "foreground": "#56b6c2"
+        "foreground": "#5fa8d3"
       }
     },
     {
-      "name": "Variables and parameters",
+      "name": "Variables and parameters — gold (Erlang variable face)",
       "scope": [
         "variable",
         "variable.other",
@@ -221,7 +226,7 @@
         "variable.parameter"
       ],
       "settings": {
-        "foreground": "#abb2bf"
+        "foreground": "#dcdcaa"
       }
     },
     {
@@ -232,7 +237,7 @@
         "punctuation.separator.arrow"
       ],
       "settings": {
-        "foreground": "#e06c75",
+        "foreground": "#fa8072",
         "fontStyle": "bold"
       }
     },
@@ -243,17 +248,17 @@
         "punctuation.separator.cons.aether"
       ],
       "settings": {
-        "foreground": "#e06c75",
+        "foreground": "#fa8072",
         "fontStyle": "bold"
       }
     },
     {
-      "name": "Actor send `!` and ask `?` operators",
+      "name": "Actor send `!` and ask `?` operators — Erlang's literal send glyph",
       "scope": [
         "keyword.operator.actor.aether"
       ],
       "settings": {
-        "foreground": "#c678dd",
+        "foreground": "#bf6fff",
         "fontStyle": "bold"
       }
     },
@@ -270,11 +275,11 @@
         "keyword.operator.type.pointer.aether"
       ],
       "settings": {
-        "foreground": "#c678dd"
+        "foreground": "#d4d4d4"
       }
     },
     {
-      "name": "Punctuation (braces, brackets, parens, semicolons, commas)",
+      "name": "Punctuation (braces, brackets, parens, semicolons, commas) — soft gray",
       "scope": [
         "punctuation.section",
         "punctuation.definition",
@@ -283,7 +288,7 @@
         "punctuation.accessor.aether"
       ],
       "settings": {
-        "foreground": "#abb2bf"
+        "foreground": "#a0a0a0"
       }
     }
   ]
