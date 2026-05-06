@@ -1,8 +1,8 @@
 {
   "name": "aether-language",
   "displayName": "Aether Language Support",
-  "description": "Syntax highlighting, color theme, and Language Server integration for Aether — a modern actor-based programming language.",
-  "version": "0.7.1",
+  "description": "Syntax highlighting and Language Server integration for Aether — a modern actor-based programming language.",
+  "version": "0.7.2",
   "publisher": "aether",
   "icon": "icon.png",
   "license": "MIT",
@@ -53,13 +53,6 @@
         "language": "aether",
         "scopeName": "source.aether",
         "path": "./aether.tmLanguage.json"
-      }
-    ],
-    "themes": [
-      {
-        "label": "Aether",
-        "uiTheme": "vs-dark",
-        "path": "./themes/aether.json"
       }
     ],
     "configuration": {

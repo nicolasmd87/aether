@@ -24,19 +24,18 @@ EXT_DIR_NAME="${EXT_BASENAME}-${VERSION}"
 # here too — silently skipping it shipped a broken extension before.
 copy_extension_assets() {
     local target_dir="$1"
-    mkdir -p "$target_dir/themes" "$target_dir/out"
+    mkdir -p "$target_dir/out"
 
     # Manifest + grammar + language config (always required).
     cp "$SCRIPT_DIR/package.json"                 "$target_dir/"
     cp "$SCRIPT_DIR/aether.tmLanguage.json"       "$target_dir/"
     cp "$SCRIPT_DIR/language-configuration.json"  "$target_dir/"
 
-    # Color theme (file-icon theme + UI-color theme). Without these,
-    # VS Code falls back to its default theme and the user sees the
-    # generic colours rather than the Aether palette — the surprise
-    # this script existed to hide.
+    # File-icon theme — gives `.ae` files the module icon in the
+    # explorer pane. Distinct from a *colour* theme; the extension
+    # no longer ships one of those (the user's chosen colour theme
+    # paints the TextMate scopes from the grammar above).
     cp "$SCRIPT_DIR/aether-icon-theme.json"       "$target_dir/"
-    cp "$SCRIPT_DIR/themes/aether.json"           "$target_dir/themes/"
 
     # Icons.
     cp "$SCRIPT_DIR/icon-module.svg"              "$target_dir/"
@@ -68,18 +67,23 @@ install_extension() {
 
     # Remove any prior install of the same extension family (any
     # version) so stale assets from older releases don't shadow new
-    # ones. Two naming patterns to catch:
+    # ones. Three naming patterns to catch:
     #   1. `aether-language-<version>` — folders this script produces.
     #   2. `aether.aether-language-<version>` — folders the VS Code
-    #      Marketplace produces (publisher-id prefixed). Past
-    #      marketplace installs co-existing with side-loaded ones
-    #      caused exactly this "I installed but nothing changed"
-    #      symptom — VS Code prefers the publisher-prefixed flavour.
+    #      Marketplace produces (publisher-id prefixed) when the
+    #      publisher is `aether`.
+    #   3. `aether-lang.aether-language-<version>` — leftover from
+    #      an earlier publisher-id rename (`aether-lang` → `aether`).
+    #      These shadowed the new install and broke activation:
+    #      VS Code saw two folders both registering language id
+    #      `aether` + scope `source.aether` and the older one won.
     # Bounded to the Aether-language basename — never touch unrelated
     # extension folders.
     if [ -d "$extensions_root" ]; then
         find "$extensions_root" -maxdepth 1 -type d \
-            \( -name "${EXT_BASENAME}-*" -o -name "aether.${EXT_BASENAME}-*" \) \
+            \( -name "${EXT_BASENAME}-*" \
+            -o -name "aether.${EXT_BASENAME}-*" \
+            -o -name "aether-lang.${EXT_BASENAME}-*" \) \
             -exec rm -rf {} + 2>/dev/null || true
     fi
 
@@ -87,7 +91,8 @@ install_extension() {
 
     echo "✓ Extension installed successfully."
     echo "  Restart ${editor_name} for the language to register."
-    echo "  Theme: open the command palette → 'Color Theme' → 'Aether'."
+    echo "  Syntax highlighting uses your current colour theme — no"
+    echo "  Aether-specific theme is shipped or required."
     echo "  LSP:   ensure 'aether-lsp' is on PATH (or set 'aether.lsp.path')."
 }
 
