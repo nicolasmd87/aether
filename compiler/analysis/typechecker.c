@@ -655,9 +655,8 @@ static int has_ctx_first_param(ASTNode* func) {
  * integer literal at all (those cases are accepted; runtime
  * truncation matches how other narrowings behave).
  *
- * Catches the obvious typo `b: byte = 256` at compile time per Nic's
- * pick of option (b): literal-range check + runtime truncate for
- * non-literal int. */
+ * Catches the obvious typo `b: byte = 256` at compile time via a
+ * literal-range check + runtime truncate for non-literal int. */
 static int byte_assignment_literal_out_of_range(ASTNode* init) {
     if (!init || init->type != AST_LITERAL || !init->value) return 0;
     if (!init->node_type) return 0;
@@ -2381,7 +2380,7 @@ int typecheck_statement(ASTNode* stmt, SymbolTable* table) {
                 }
                 /* `byte b = <int literal>` — fresh declaration with explicit
                  * `byte` type. Reject out-of-range literals at compile time
-                 * per Nic's option (b). Non-literal int is accepted (runtime
+                 * (literal-range check). Non-literal int is accepted (runtime
                  * truncation, matching int64→int etc.). */
                 if (stmt->node_type && stmt->node_type->kind == TYPE_BYTE &&
                     byte_assignment_literal_out_of_range(init)) {

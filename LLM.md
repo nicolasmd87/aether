@@ -175,8 +175,8 @@ plays that role), no interfaces.
 ## Working with downstream users
 
 - **svn-aether port** (`~/scm/subversion/subversion/`) is the biggest
-  real-world user. Paul Hammant. Port is methodical C → Aether,
-  one-leaf-per-commit. They find the gaps before anyone else.
+  real-world user. Port is methodical C → Aether,
+  one-leaf-per-commit. Downstream finds the gaps before anyone else.
 - **Feature request flow that works**: downstream writes a spec
   (`stdlib_wish.md` is the current example), Aether implements,
   downstream adopts within the same day. The specs are extremely

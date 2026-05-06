@@ -1275,8 +1275,8 @@ int scheduler_register_actor(ActorBase* actor, int preferred_core) {
     // Default placement: pick the worker with the lowest combined
     // load right now. The previous shape — `actor_id % num_cores` —
     // gave perfect distribution only on long actor sequences; on
-    // small actor counts (think Teuvo's two-actor site-poller) two
-    // ids reliably collide on the same core and the second actor
+    // small actor counts (e.g. a two-actor site-poller) two ids
+    // reliably collide on the same core and the second actor
     // starves while the first runs a long handler.
     //
     // The scan is O(num_cores) of relaxed atomic loads, sub-microsecond

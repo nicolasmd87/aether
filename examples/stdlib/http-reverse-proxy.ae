@@ -1,0 +1,60 @@
+// Reverse-proxy demo — std.http.proxy.
+//
+// Forwards every request to a single upstream HTTP server. The
+// proxy strips Hop-by-Hop headers, adds X-Forwarded-{For,Proto,
+// Host} + Via, rewrites Host: to the upstream's host, and returns
+// the upstream's response verbatim (status, headers, body).
+//
+// Run two processes:
+//
+//     # 1) Start an upstream (any HTTP server). For demo purposes
+//     # we use python3's stdlib server:
+//     python3 -m http.server 9000 --directory /tmp
+//
+//     # 2) Build + run this example:
+//     ae build examples/stdlib/http-reverse-proxy.ae -o /tmp/proxy
+//     /tmp/proxy
+//
+//     # 3) Test:
+//     curl http://localhost:8080/                       # served by python
+//     curl -H 'X-Forwarded-For: 1.2.3.4' http://localhost:8080/
+//     # → upstream sees X-Forwarded-For: 1.2.3.4, <client_ip>
+//
+// For the production pool shape (load balancing, health checks,
+// cache, circuit breaker), see docs/http-reverse-proxy.md.
+
+import std.http
+import std.http.proxy
+
+const PORT = 8080
+
+main() {
+    server = http.server_create(PORT)
+    if server == 0 {
+        println("server_create failed")
+        return
+    }
+
+    // Keep-alive so curl --http1.1 can reuse the TCP connection
+    // across multiple proxied requests.
+    ka_err = http.server_set_keepalive(server, 1, 0, 30000)
+    if ka_err != "" {
+        println("keepalive: ${ka_err}")
+        return
+    }
+
+    // Single upstream, RR (no other to balance against), 30s
+    // request timeout, default opts (XFF + XFP + XFH on; Host
+    // rewritten to upstream; 8 MiB body cap).
+    proxy_err = proxy.mount_simple(server, "/", "http://localhost:9000", 30)
+    if proxy_err != "" {
+        println("mount_simple: ${proxy_err}")
+        return
+    }
+
+    println("listening on http://localhost:${PORT}/ (forwarding to localhost:9000)")
+    err = http.server_start(server)
+    if err != "" {
+        println("server_start: ${err}")
+    }
+}

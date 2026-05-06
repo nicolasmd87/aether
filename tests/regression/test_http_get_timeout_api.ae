@@ -3,7 +3,7 @@
 // Issue: http.get blocks indefinitely on hung sites — a hung DNS
 // resolution or a server that accepts the connection but never
 // responds stalls the calling actor's whole message handler.
-// Teuvo's site-poller hit this once a third-party URL went silent.
+// A real-world site-poller hit this once a third-party URL went silent.
 //
 // The fix surfaces the existing http_request_set_timeout_raw
 // (SO_RCVTIMEO / SO_SNDTIMEO) machinery via a new wrapper

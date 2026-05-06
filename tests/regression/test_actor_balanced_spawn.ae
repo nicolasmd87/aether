@@ -4,9 +4,9 @@
 // pick a worker. With small actor counts that hash collides — two
 // or three consecutive spawns can land on Core 0, leaving other
 // cores idle. When a colliding actor runs a long-running message
-// handler, sibling actors on the same core starve. Teuvo's
-// site-poller had to manually pin each actor (`core: N`) to work
-// around this.
+// handler, sibling actors on the same core starve. A real-world
+// site-poller hit this and had to manually pin each actor (`core: N`)
+// to work around the collisions.
 //
 // The fix is a least-loaded scan: when preferred_core < 0, the
 // scheduler picks the worker with the lowest (work_count +

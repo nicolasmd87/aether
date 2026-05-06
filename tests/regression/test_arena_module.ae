@@ -1,7 +1,7 @@
 // Regression test: std.arena module surface
 //
-// Item #2b of the Teuvo-pain branch — exposes the runtime arena
-// allocator (runtime/memory/aether_arena.h) as a discoverable
+// Exposes the runtime arena allocator
+// (runtime/memory/aether_arena.h) as a discoverable
 // std module so users can do per-iteration bulk-free in polling
 // loops without reaching for raw C externs.
 

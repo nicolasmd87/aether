@@ -225,6 +225,11 @@ typedef struct {
 // Server lifecycle
 HttpServer* http_server_create(int port);
 int http_server_bind_raw(HttpServer* server, const char* host, int port);
+// Set the bind host before server_start. Default is "0.0.0.0" (all
+// interfaces). Pass "127.0.0.1" to bind loopback only — useful in
+// tests because macOS / Windows firewalls don't prompt on loopback
+// binds. No-op if `host` is NULL or empty.
+void http_server_set_host(HttpServer* server, const char* host);
 int http_server_start_raw(HttpServer* server);
 void http_server_stop(HttpServer* server);
 void http_server_free(HttpServer* server);

@@ -666,7 +666,7 @@ void generate_actor_definition(CodeGenerator* gen, ASTNode* actor) {
     // state-self alias to "actor" for the duration of the expression
     // and restore it after. Without this swap the user is forced to
     // hardcode a literal (`after 1000`) and roll their own elapsed-
-    // time math against `clock_ns()` — the workaround Teuvo's
+    // time math against `clock_ns()` — the workaround a real-world
     // site-poller had to carry. State has already been initialised
     // a few lines up, so the value the expression reads is the same
     // value the actor will see once it starts running.

@@ -7,6 +7,8 @@
 import std.http
 
 extern exit(code: int)
+// Use raw form: actor receive handlers can't cleanly discard the
+// wrapper's string return without an unused-result warning.
 extern http_server_start_raw(server: ptr) -> int
 
 const PORT = 18110

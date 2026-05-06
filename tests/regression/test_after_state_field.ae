@@ -3,7 +3,7 @@
 // Issue: identifiers in the timeout expression of `after N -> { ... }`
 // did not resolve against the actor's state-field scope, so any code
 // that wanted a per-actor configurable timeout had to hardcode a
-// numeric literal. This blocked Teuvo's site-poller. Codegen for the
+// numeric literal. This blocked a real-world site-poller use case. Codegen for the
 // timeout arm in the spawn function also referenced `self->X` where
 // only a local `actor` was in scope, blowing up at C compile time.
 //

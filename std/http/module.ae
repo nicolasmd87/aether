@@ -17,6 +17,7 @@ exports (
     http_response_error, http_response_ok,
     get, get_with_timeout, post, put, delete,
     http_server_create, http_server_bind_raw, http_server_start_raw,
+    http_server_set_host, server_set_host,
     http_server_stop, http_server_free,
     http_server_set_tls_raw, server_set_tls,
     http_server_set_keepalive_raw, server_set_keepalive,
@@ -241,6 +242,11 @@ delete(url: string) -> {
 // HTTP Server - lifecycle
 extern http_server_create(port: int) -> ptr
 extern http_server_bind_raw(server: ptr, host: string, port: int) -> int
+// Set the bind address before server_start. Default is "0.0.0.0"
+// (all interfaces). Pass "127.0.0.1" to bind loopback only — useful
+// for tests because macOS / Windows firewalls don't prompt on
+// loopback binds.
+extern http_server_set_host(server: ptr, host: string)
 extern http_server_start_raw(server: ptr) -> int
 extern http_server_stop(server: ptr)
 extern http_server_free(server: ptr)
@@ -500,6 +506,13 @@ server_bind(server: ptr, host: string, port: int) -> {
     if rc < 0 {
         return "bind failed"
     }
+    return ""
+}
+
+// Set the bind host before server_start. Default is "0.0.0.0".
+// Pass "127.0.0.1" to bind loopback only.
+server_set_host(server: ptr, host: string) -> {
+    http_server_set_host(server, host)
     return ""
 }
 

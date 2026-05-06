@@ -20,6 +20,7 @@ Aether is a compiled language that brings actor-based concurrency to systems pro
 - Go-style result types: `a, err = func()` with `_` discard
 - Package management: `ae add host/user/repo[@version]` (GitHub, GitLab, Bitbucket, any git host)
 - Production-grade HTTP server in stdlib — TLS, HTTP/1.1 keep-alive, **HTTP/2** (h2 + h2c via libnghttp2 with ALPN, GOAWAY graceful shutdown, server-level pthread pool for concurrent stream dispatch), WebSocket (RFC 6455), Server-Sent Events, plus a stack of composable middleware (CORS, basic/bearer/session-cookie auth, rate limiting, real-IP, vhost, gzip, static files, rewrite, error pages), `/healthz` + `/readyz` health probes, structured access logs, and Prometheus metrics. See [HTTP Server](docs/http-server.md).
+- nginx-class **reverse proxy** in stdlib — `std.http.proxy` forwards inbound requests to a pool of upstream servers with five load-balancing algorithms (round-robin / least-conn / ip-hash / smooth weighted RR / cookie-hash sticky), active health checks, in-memory LRU response cache with Vary-aware keying and RFC 7234 cacheability rules, per-upstream circuit breaker, idempotent retry with `proxy_next_upstream` semantics, per-upstream token-bucket rate limit, active drain, W3C Trace-Context propagation, and a Prometheus 0.0.4 metrics endpoint. Hop-by-Hop header handling per RFC 7230. See [Reverse Proxy](docs/http-reverse-proxy.md).
 
 ## Runtime Features
 
@@ -250,6 +251,7 @@ aether/
 │   ├── http/           # HTTP client + server (TLS, keep-alive, h2, WS, SSE, metrics)
 │   │   ├── client/         # Builder client (request builder, full response, JSON sugar)
 │   │   ├── middleware/     # CORS, basic/bearer/session auth, rate-limit, real-IP, vhost, gzip, static, rewrite, error pages
+│   │   ├── proxy/          # Reverse proxy: upstream pool, LB (RR/LC/iphash/WRR), health, cache, circuit breaker
 │   │   ├── server/h2/      # HTTP/2 framing via libnghttp2 (h2 + h2c + ALPN + GOAWAY + concurrent dispatch)
 │   │   └── server/vcr/     # Servirtium-format record/replay for HTTP tests
 │   ├── tcp/            # TCP client and server
@@ -418,6 +420,8 @@ The runtime employs a tiered optimization strategy:
 - [Language Reference](docs/language-reference.md) - Complete language specification
 - [Standard Library Reference](docs/stdlib-reference.md) - Full stdlib surface
 - [HTTP Server](docs/http-server.md) - TLS, HTTP/2, middleware, health probes, metrics, graceful shutdown
+- [Reverse Proxy](docs/http-reverse-proxy.md) - `std.http.proxy` upstream pool, load balancing, health, cache, circuit breaker
+- [HTTP Record/Replay (VCR)](docs/http-vcr.md) - `std.http.server.vcr` Servirtium-format record/replay for HTTP tests
 - [Install Layout](docs/install-layout.md) - What ships in `~/.aether`, MANIFEST format, downstream-link contract
 - [C Interoperability](docs/c-interop.md) - Using C libraries and the `extern` keyword
 - [Architecture Overview](docs/architecture.md) - Runtime and compiler design
