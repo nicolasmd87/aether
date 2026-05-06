@@ -12,6 +12,21 @@ Notes from scanning `/home/paul/scm/servirtium-README`, excluding the weather AP
 - Header removals apply to request/response header blocks at recording flush time, and to recorded/live request headers before playback strict matching.
 - Route registration already accepts wildcard method/path fallback for both playback and record modes.
 
+## Test Coverage Map
+
+These tests are the long-term contract for the features above:
+
+- Step 3 record mode: `tests/integration/test_vcr_redactions.ae`, `tests/integration/test_vcr_verbs.ae`
+- Step 4 drift/write-out semantics: `tests/integration/test_vcr_redactions.ae` covers flush-and-compare style tape rewriting; full `flush_and_fail_if_changed()` behavior is still pending
+- Step 7 verbs: `tests/integration/test_vcr_verbs.ae`
+- Step 8 redactions and header removals: `tests/integration/test_vcr_redactions.ae`, `tests/integration/test_vcr_unredactions.ae`
+- Step 9 notes: `tests/integration/test_vcr_notes.ae`
+- Step 10 strict playback matching: `tests/integration/test_vcr_strict_match.ae`, `tests/integration/test_vcr_strict_match_body.ae`, `tests/integration/test_vcr_unredactions.ae`
+- Step 11 static content bypass: `tests/integration/test_vcr_static_content.ae`
+- Step 12 markdown formatting options: `tests/integration/test_vcr_format_options.ae`
+- Step 15 compatibility-suite prep: no dedicated test yet
+- Step 16 HTTP-sourced tapes: no dedicated test yet
+
 ## Header Removal Mutations
 
 Delivered first cut:
@@ -169,6 +184,79 @@ Useful preparation:
 - Ensure repeated response headers round-trip.
 - Ensure request body matching is binary-safe enough for suite traffic.
 - Add a small runner/shim only after core behavior is stable.
+
+## Secondary: Embedded Server For Other Languages
+
+Long-horizon goal, probably many months out: make the Aether VCR usable as an embedded Servirtium server behind test-framework wrappers for higher-level languages. The primary product shape should stay server-first: the system under test talks HTTP to an Aether VCR server, and the language wrapper gives the test author a fixture object that exposes a base URL, lifecycle, tape configuration, mutations, and diagnostics.
+
+Reference point:
+
+- `/home/paul/scm/servirtium-java/` shows the kind of user-facing capability expected from a mature language binding.
+- We do not need ABI compatibility with Servirtium-Java or any other existing implementation.
+- We do need capability compatibility: record, playback, redaction/mutation, header removal, notes, drift detection, static bypass, strict matching, markdown interop, and diagnostics should all be available to wrapper authors.
+
+Candidate wrapper targets:
+
+- C#
+- Ruby
+- Python
+- Go
+- Node-side JavaScript
+
+End-user shape to aim for:
+
+- Test code uses a wrapper fixture, e.g. `Servirtium.playback(...).start()`.
+- The application/client library under test knows only the supplier service base URL.
+- Tape paths, record/playback mode, mutation rules, notes, and last-error checks live in test harness setup/teardown, not in the client library.
+- Dynamic ports should be supported so parallel test runners can avoid collisions.
+- Labels should be supported for diagnostics, e.g. a test name like `"cant go overdrawn if checking acct"`, but labels are not the state lookup key.
+
+Native shape to aim for:
+
+- A flattened external VCR library that is easy to link from FFI layers.
+- The embedded Aether webserver is the default runtime model, not an implementation detail to hide.
+- A small, stable C ABI over opaque server handles rather than exposing Aether internals.
+- The native handle is the lifecycle/state key. Host/port is where the SUT connects. Label is human-facing context for errors/logs.
+- Server-bound state: each active embedded server owns its tape, cursor, mutations, static mounts, pending note, and diagnostics.
+- Explicit ownership rules for every returned string/buffer.
+- Binary-safe request/response body APIs, not just NUL-terminated strings.
+- Per-server state, not process-global tape/cursor/mutation state, once multiple simultaneous VCR servers become a real need.
+- A conformance suite shared across wrappers so each language proves the same Servirtium markdown behavior.
+
+Conceptual ABI sketch, not a commitment yet:
+
+```c
+typedef struct AetherVcrServer AetherVcrServer;
+
+AetherVcrServer* aether_vcr_start_playback(
+    const char* label,
+    const char* tape_path,
+    const char* host,
+    int port);
+
+AetherVcrServer* aether_vcr_start_record(
+    const char* label,
+    const char* tape_path,
+    const char* upstream_base,
+    const char* host,
+    int port);
+
+void aether_vcr_stop(AetherVcrServer* server);
+int aether_vcr_port(AetherVcrServer* server);
+char* aether_vcr_base_url(AetherVcrServer* server);
+char* aether_vcr_last_error(AetherVcrServer* server);
+void aether_vcr_free_string(char* s);
+```
+
+Initial implementation direction:
+
+- Do not start other-language bindings yet.
+- Keep the current `std/http/server/vcr` Aether API working.
+- Document v1 embedding as "one active VCR server per process" if globals remain in place.
+- When refactoring, group the current globals into a `VcrState` and hang that state from an eventual `AetherVcrServer` handle.
+- Only add lower-level "feed native request/response events into the core" APIs if a wrapper genuinely needs to bypass the embedded Aether server.
+
+Do this only after the core VCR behavior has settled. The present `std/http/server/vcr` implementation still has C globals and Aether-module boundaries that are fine for in-repo tests but not yet a clean embeddable server contract.
 
 ## Verb Coverage Smoke Tests
 
