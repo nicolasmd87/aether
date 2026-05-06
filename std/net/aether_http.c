@@ -486,13 +486,24 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
             int in_progress = (errno == EINPROGRESS || errno == EWOULDBLOCK);
 #endif
             if (in_progress) {
-                fd_set wfds;
-                FD_ZERO(&wfds);
-                FD_SET(sockfd, &wfds);
+                /* Watch both the writable set (success) and the
+                 * exception set (failure). On POSIX, a refused
+                 * non-blocking connect makes the socket writable
+                 * with SO_ERROR=ECONNREFUSED — only `wfds` matters.
+                 * On Windows, Winsock signals connect failures via
+                 * the *exception* fd set instead, NOT writable —
+                 * so a select that watches only wfds waits the full
+                 * timeout for refused connects rather than failing
+                 * fast. Watching both makes select fire on either
+                 * outcome; SO_ERROR distinguishes success from
+                 * failure afterwards. */
+                fd_set wfds, efds;
+                FD_ZERO(&wfds); FD_SET(sockfd, &wfds);
+                FD_ZERO(&efds); FD_SET(sockfd, &efds);
                 struct timeval tv;
                 tv.tv_sec = req->timeout_secs;
                 tv.tv_usec = 0;
-                int sel = select(sockfd + 1, NULL, &wfds, NULL, &tv);
+                int sel = select(sockfd + 1, NULL, &wfds, &efds, &tv);
                 if (sel == 0) {
                     close(sockfd);
                     response->error = string_new("connect timeout");
@@ -503,8 +514,11 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
                     response->error = string_new("select on connect failed");
                     return response;
                 }
-                /* Check SO_ERROR — non-blocking connect can finish
-                 * with EAGAIN/etc., select reporting writable. */
+                /* Check SO_ERROR — distinguishes "writable because
+                 * connected" from "writable because failed". On
+                 * Windows the failure surfaces via efds; on POSIX
+                 * via wfds with so_err set. SO_ERROR works the
+                 * same in both cases. */
                 int so_err = 0;
                 socklen_t slen = sizeof(so_err);
                 if (getsockopt(sockfd, SOL_SOCKET, SO_ERROR, (char*)&so_err, &slen) < 0
@@ -529,12 +543,30 @@ static HttpResponse* http_request_internal(HttpRequest* req) {
         if (flags >= 0) fcntl(sockfd, F_SETFL, flags);
 #endif
 
-        /* Apply send/recv timeouts equal to the configured value. */
+        /* Apply send/recv timeouts equal to the configured value.
+         *
+         * SO_RCVTIMEO / SO_SNDTIMEO take different shapes on the two
+         * families:
+         *   - POSIX: pointer to `struct timeval` (seconds + microseconds)
+         *   - Winsock: pointer to a 32-bit DWORD in milliseconds
+         *
+         * Passing a struct timeval to Winsock causes it to interpret
+         * the first 4 bytes (tv_sec) as a millisecond count — so
+         * `set_timeout(35)` would degrade to a 35-millisecond recv
+         * timeout, which fires almost instantly and surfaces as
+         * "recv timeout or I/O error" before any sane upstream can
+         * even respond. Use the right type per platform. */
+#ifdef _WIN32
+        DWORD rwtv_ms = (DWORD)req->timeout_secs * 1000U;
+        setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&rwtv_ms, sizeof(rwtv_ms));
+        setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&rwtv_ms, sizeof(rwtv_ms));
+#else
         struct timeval rwtv;
         rwtv.tv_sec = req->timeout_secs;
         rwtv.tv_usec = 0;
         setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&rwtv, sizeof(rwtv));
         setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&rwtv, sizeof(rwtv));
+#endif
     } else {
         connect_rc = connect(sockfd, (struct sockaddr*)&serv_addr, sizeof(serv_addr));
         if (connect_rc < 0) {
