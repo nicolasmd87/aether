@@ -296,7 +296,18 @@ curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/200"
 # Wait open_duration_ms (1500ms) + slack
 sleep 2
 B_BEFORE=$(count_get 19102)
-parallel_echo 9
+# Sequential drive (NOT parallel_echo): with half_open_max=1, the
+# parallel-9 race admitted only the single half-open test request
+# before it could succeed and flip B back to CLOSED — the other 8
+# saw HALF_OPEN with bucket full and went elsewhere. Sequential
+# requests give the breaker time to transition: req1 admits the
+# test, succeeds, B→CLOSED; req2..N see CLOSED and load-balance
+# normally, so ~3/9 land on B.
+i=0
+while [ $i -lt 9 ]; do
+    curl -s -o /dev/null --max-time 3 "$PROXY/echo"
+    i=$((i + 1))
+done
 B_AFTER=$(count_get 19102)
 DELTA=$((B_AFTER - B_BEFORE))
 [ "$DELTA" -ge 2 ] || fail "breaker recovery: B delta=$DELTA expected ≥2"
