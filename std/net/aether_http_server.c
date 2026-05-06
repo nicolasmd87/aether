@@ -3605,7 +3605,12 @@ void http_serve_file(HttpServerResponse* res, const char* filepath) {
     http_response_set_status(res, 200);
     http_response_set_header(res, "Content-Type", http_mime_type(filepath));
     http_response_set_header(res, "Access-Control-Allow-Origin", "*");
-    http_response_set_body(res, content);
+    /* Use the length-aware setter so binary content (gzip, images,
+     * urandom — anything with embedded NULs) round-trips intact.
+     * The strlen-based set_body would truncate at the first \0 in
+     * the body — which the cross-platform sendfile test surfaced
+     * on Windows when serving a 1 MiB urandom file. */
+    http_response_set_body_n(res, content, (int)bytes_read);
     free(content);
 #endif
 }
