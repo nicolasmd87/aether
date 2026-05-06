@@ -17,7 +17,7 @@ Notes from scanning `/home/paul/scm/servirtium-README`, excluding the weather AP
 These tests are the long-term contract for the features above:
 
 - Step 3 record mode: `tests/integration/test_vcr_redactions.ae`, `tests/integration/test_vcr_verbs.ae`
-- Step 4 drift/write-out semantics: `tests/integration/test_vcr_redactions.ae` covers flush-and-compare style tape rewriting; full `flush_and_fail_if_changed()` behavior is still pending
+- Step 4 drift/write-out semantics: `tests/integration/test_vcr_drift_fail.ae`, plus `tests/integration/test_vcr_redactions.ae` for mutation-aware tape rewriting
 - Step 7 verbs: `tests/integration/test_vcr_verbs.ae`
 - Step 8 redactions and header removals: `tests/integration/test_vcr_redactions.ae`, `tests/integration/test_vcr_unredactions.ae`
 - Step 9 notes: `tests/integration/test_vcr_notes.ae`
@@ -108,20 +108,13 @@ Current Aether VCR:
 
 - `flush(tape_path)` overwrites the tape.
 - `flush_or_check(tape_path)` writes a `.actual` sibling and returns an error when bytes differ.
+- `flush_and_fail_if_changed(tape_path)` overwrites `tape_path` with the new recording and returns an error when bytes differ, so tests can fail while `git diff` shows the drift directly.
 
-Potential additions:
+Tests:
 
-```aether
-vcr.flush_and_fail_if_changed(tape_path) -> string
-```
-
-Semantics:
-
-- If no prior tape exists, write new tape and return `""`.
-- If prior tape exists and bytes match, return `""`.
-- If prior tape exists and bytes differ, overwrite `tape_path` with the new tape and return a mismatch error.
-
-Keep `flush_or_check()` for callers who prefer the `.actual` workflow.
+- `tests/integration/test_vcr_drift_fail.ae`: first recording creates the tape without failure.
+- `tests/integration/test_vcr_drift_fail.ae`: identical re-recording returns success and does not create `.actual`.
+- `tests/integration/test_vcr_drift_fail.ae`: changed re-recording overwrites the tape and returns a mismatch error.
 
 ## Gzip Normalize/Restore
 

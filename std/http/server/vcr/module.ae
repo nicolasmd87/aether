@@ -139,7 +139,7 @@ exports (
     FIELD_REQUEST_BODY, FIELD_RESPONSE_HEADERS,
     load, eject, tape_length,
     load_record, eject_record,
-    record, flush, flush_or_check,
+    record, clear_recording, flush, flush_or_check, flush_and_fail_if_changed,
     redact, clear_redactions, unredact, clear_unredactions,
     remove_header, clear_header_removals,
     note,
@@ -300,7 +300,8 @@ reset_cursor() { vcr_reset_cursor() }
 extern string_concat(a: string, b: string) -> string
 
 // String concat for the recheck error path — used by flush_or_check
-// to pin the return type to string. Same shape stdlib wrappers
+// and flush_and_fail_if_changed to pin the return type to string.
+// Same shape stdlib wrappers
 // elsewhere use to dodge tuple-inference confusion.
 extern string_concat(a: string, b: string) -> string
 
@@ -405,6 +406,13 @@ record(method: string, path: string, status: int, content_type: string, body: st
     return ""
 }
 
+// Clear the in-memory tape used by direct recorder tests. load_record()
+// calls this automatically before binding its server; this wrapper is
+// for tests that drive record()/record_full*() without a server.
+clear_recording() {
+    vcr_aether_clear_tape()
+}
+
 // Write every captured interaction to `tape_path` in canonical
 // Servirtium markdown. Overwrites any existing file at that path.
 // Returns "" on success, error string otherwise.
@@ -459,6 +467,30 @@ flush_or_check(tape_path: string) -> string {
     expected_len = string.length(existing)
     actual_len   = string.length(blob)
     return "tape mismatch: expected=${expected_len} bytes, actual=${actual_len} bytes; .actual sibling left at ${actual_path}"
+}
+
+// Servirtium-style re-record check. Unlike flush_or_check(), this
+// writes the newly recorded tape to `tape_path` even when bytes differ,
+// so a normal git diff shows the drift. The non-empty return value lets
+// the test fail loudly after preserving the new recording.
+flush_and_fail_if_changed(tape_path: string) -> string {
+    existing, eerr = fs.read(tape_path)
+    blob = emit_tape()
+
+    werr = fs.write(tape_path, blob)
+    if werr != "" { return werr }
+
+    if eerr != "" {
+        return ""
+    }
+
+    if existing == blob {
+        return ""
+    }
+
+    expected_len = string.length(existing)
+    actual_len   = string.length(blob)
+    return "tape mismatch: expected=${expected_len} bytes, actual=${actual_len} bytes; updated tape written to ${tape_path}"
 }
 
 // ---- Mutation mode (Servirtium roadmap step 8) -----------------------
