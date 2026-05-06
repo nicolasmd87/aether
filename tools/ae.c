@@ -1176,7 +1176,7 @@ static int find_and_chdir_to_aether_toml(const char** file_inout) {
      * at the last '/'. Stop when we either find aether.toml or hit
      * the root. */
     while (1) {
-        char probe[1024];
+        char probe[1040];
         snprintf(probe, sizeof(probe), "%s/aether.toml", walk);
         if (path_exists(probe)) {
             if (chdir(walk) != 0) return 0;
@@ -1208,7 +1208,7 @@ static int find_and_chdir_to_aether_toml(const char** file_inout) {
         if (slash == walk) {
             /* At "/X" — the parent is "/". One more probe at "/". */
             walk[1] = '\0';
-            char root_probe[1024];
+            char root_probe[1040];
             snprintf(root_probe, sizeof(root_probe), "%s/aether.toml", walk);
             if (path_exists(root_probe) && chdir(walk) == 0) return 1;
             break;
@@ -1566,7 +1566,10 @@ static void build_gcc_cmd(char* cmd, size_t size,
     // aether_config_* accessors are bundled into the .so. The .c file
     // lives in runtime/ under dev mode and in include/aether/runtime/
     // (or similar) on installed toolchains.
-    char config_c[2048] = "";
+    // config_c wraps `candidate` in ` "..."` — sized one tier up so
+    // gcc's -Wformat-truncation heuristic doesn't fire on the
+    // wrapper bytes (snprintf would truncate safely either way).
+    char config_c[2056] = "";
     if (g_emit_lib) {
         char candidate[2048];
         snprintf(candidate, sizeof(candidate), "%s/runtime/aether_config.c", tc.root);
@@ -2971,9 +2974,9 @@ static int emit_java_sdk(const CapturedManifest* m,
 
     /* Per-input setter (camelCase). */
     for (int i = 0; i < m->input_count; i++) {
-        char setter[160];
         char input_camel[160];
         to_camel(m->inputs[i].name, input_camel, sizeof(input_camel));
+        char setter[168];  // input_camel + "set" + NUL with headroom
         snprintf(setter, sizeof(setter), "set%s", input_camel);
         const char* jt = java_jtype_for(m->inputs[i].type);
         if (!jt) jt = "Object";
@@ -3296,7 +3299,7 @@ int cmd_build_namespace(int argc, char** argv) {
     mkdirs(tmpdir);
 
     /* Step 1: produce the describe.c stub from manifest.ae. */
-    char describe_c[1024];
+    char describe_c[1056];  // tmpdir[1024] + "/aether_describe.c" + NUL
     snprintf(describe_c, sizeof(describe_c), "%s/aether_describe.c", tmpdir);
     char cmd[16384];
     snprintf(cmd, sizeof(cmd),
@@ -3352,7 +3355,7 @@ int cmd_build_namespace(int argc, char** argv) {
      * deduplicate `import` lines (a script uses `import std.host` for
      * notify/manifest builders; concatenating two such siblings would
      * import twice). Everything else passes through unchanged. */
-    char concat_path[1024];
+    char concat_path[1056];  // tmpdir[1024] + "/_namespace.ae" + NUL
     snprintf(concat_path, sizeof(concat_path), "%s/_namespace.ae", tmpdir);
     FILE* concat = fopen(concat_path, "w");
     if (!concat) { perror("fopen concat"); return 1; }
@@ -3666,12 +3669,12 @@ static int cmd_build(int argc, char** argv) {
 
     // Resolve directory argument (e.g. "." or "myproject/") to src/main.ae
     if (file && dir_exists(file)) {
-        static char resolved_build_file[512];
+        static char resolved_build_file[1040];  // file path + "/src/main.ae" + NUL
         snprintf(resolved_build_file, sizeof(resolved_build_file), "%s/src/main.ae", file);
         if (path_exists(resolved_build_file)) {
             file = resolved_build_file;
         } else {
-            char toml_path[512];
+            char toml_path[1040];  // file path + "/aether.toml" + NUL
             snprintf(toml_path, sizeof(toml_path), "%s/aether.toml", file);
             if (path_exists(toml_path))
                 fprintf(stderr, "Error: No src/main.ae found in %s\n", file);
@@ -3781,7 +3784,14 @@ static int cmd_build(int argc, char** argv) {
                 basename_noext[blen - elen] = '\0';
             }
         }
-        snprintf(exe_file, sizeof(exe_file), "%slib%s%s", buf, basename_noext, lib_ext);
+        // Stage through a wider scratch buffer so gcc -Wformat-truncation
+        // sees enough room for the worst-case prefix + "lib" + basename +
+        // lib_ext concatenation; we then copy back into exe_file's
+        // existing 2048-byte slot.
+        char composed[3072];
+        snprintf(composed, sizeof(composed), "%slib%s%s", buf, basename_noext, lib_ext);
+        strncpy(exe_file, composed, sizeof(exe_file) - 1);
+        exe_file[sizeof(exe_file) - 1] = '\0';
     }
 
     // Pre-flight: verify emcc for wasm target before starting compilation
@@ -5318,7 +5328,9 @@ static int cmd_version_use(const char* version) {
     // we start mutating anything. This catches extraction-layout bugs
     // early rather than leaving the user with a half-switched install.
     {
-        char src_ae[1024];
+        // src_bin is 1024 bytes; adding "/ae" + EXE_EXT (".exe" worst
+        // case) + NUL needs 8 bytes of headroom over the source.
+        char src_ae[1040];
         snprintf(src_ae, sizeof(src_ae), "%s/ae" EXE_EXT, src_bin);
         if (!path_exists(src_ae)) {
             fprintf(stderr, "Error: no ae binary at %s. The install for %s looks incomplete.\n", src_ae, vtag);
