@@ -53,7 +53,17 @@ wait_for_port() {
         # since the proxy mount is /echo). Avoid /echo: that's the
         # proxy mount and would forward to an upstream, incrementing
         # its counter and corrupting the post-test count_get checks.
-        if curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$port/health" 2>/dev/null; then
+        #
+        # --connect-timeout fails fast on a refused / not-yet-bound
+        # port. Without it, curl on Windows MSYS2 waits the full
+        # --max-time (~1 s) before retrying — and with 15 setups ×
+        # 4 ports per setup × multiple wasted attempts each, that
+        # alone burned more than the CI's 180 s test timeout. The
+        # 0.3 s connect-timeout is well above any sane bind latency
+        # (loopback, in-process) but fast enough that a still-not-
+        # bound port surfaces refusal quickly and the loop iterates.
+        if curl -s -o /dev/null --connect-timeout 0.3 --max-time 1 \
+                "http://127.0.0.1:$port/health" 2>/dev/null; then
             return 0
         fi
         sleep 0.1
@@ -99,11 +109,34 @@ setup() {
     proxy_role="$1"
     start_three_upstreams
     start_proxy "$proxy_role"
-    sleep 0.3
+    # `wait_for_port` already confirmed every listener is bound and
+    # answering /health — no extra grace period needed. The previous
+    # `sleep 0.3` here was a leftover from before wait_for_port
+    # existed; on a slow Windows runner ×16 setups it added 4.8 s
+    # of wasted wall-clock for no semantic benefit.
 }
 
 PROXY="http://127.0.0.1:19100"
 fail() { echo "  [FAIL] $1"; exit 1; }
+
+# Drive N parallel /echo requests, discarding all output. Used by
+# tests that only need the proxy to observe N arrivals (counter
+# checks, breaker / health detection). Sequential `while curl`
+# loops accumulated ~150 ms × N of latency on Windows mingw CI;
+# across four such tests with N=12 that pushed the suite over CI's
+# 180 s timeout. `curl -Z` runs the requests in one libcurl
+# process so wall-clock cost drops to roughly the slowest single
+# request — same proxy semantics, much cheaper.
+parallel_echo() {
+    n="$1"
+    URLS=""
+    i=0
+    while [ $i -lt $n ]; do
+        URLS="$URLS $PROXY/echo"
+        i=$((i + 1))
+    done
+    curl -Z -s -o /dev/null --max-time 5 $URLS >/dev/null 2>&1 || true
+}
 
 # count_get <port>  →  current shim counter for that upstream
 count_get() {
@@ -217,11 +250,7 @@ curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/503"
 # plus one extra interval to ensure the first 503 probe completes.
 sleep 1.5
 # Now drive 12 requests; none should land on B.
-i=0
-while [ $i -lt 12 ]; do
-    curl -s -o /dev/null --max-time 3 "$PROXY/echo"
-    i=$((i + 1))
-done
+parallel_echo 12
 B=$(count_get 19102)
 # Tolerance: B may have served 1-2 before being marked down.
 [ "$B" -le 2 ] || fail "health: B served $B requests after marked unhealthy"
@@ -232,22 +261,14 @@ setup proxy_health
 curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/503"
 sleep 1.5  # marked unhealthy
 # Verify B is now skipped
-i=0
-while [ $i -lt 6 ]; do
-    curl -s -o /dev/null --max-time 3 "$PROXY/echo"
-    i=$((i + 1))
-done
+parallel_echo 6
 B_BEFORE=$(count_get 19102)
 # Flip B back to 200
 curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/200"
 # Wait for healthy_threshold * interval (2 * 200ms) + slack
 sleep 1.5
 # Drive more requests; B should be served again
-i=0
-while [ $i -lt 12 ]; do
-    curl -s -o /dev/null --max-time 3 "$PROXY/echo"
-    i=$((i + 1))
-done
+parallel_echo 12
 B_AFTER=$(count_get 19102)
 DELTA=$((B_AFTER - B_BEFORE))
 [ "$DELTA" -ge 2 ] || fail "health recovery: B delta=$DELTA expected ≥2"
@@ -259,11 +280,7 @@ setup proxy_breaker
 curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/503"
 # Drive ~10 RR requests; ~3 should hit B (3 failures), then breaker
 # opens. With breaker open, subsequent traffic to B routes elsewhere.
-i=0
-while [ $i -lt 12 ]; do
-    curl -s -o /dev/null --max-time 3 "$PROXY/echo"
-    i=$((i + 1))
-done
+parallel_echo 12
 B=$(count_get 19102)
 # Once the breaker opens (at threshold=3), B shouldn't receive
 # more new requests. Allow a small tolerance for half-open probe.
@@ -273,21 +290,13 @@ stop_all
 # ---- Test 9: circuit breaker half-open recovery ------------
 setup proxy_breaker
 curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/503"
-i=0
-while [ $i -lt 8 ]; do
-    curl -s -o /dev/null --max-time 3 "$PROXY/echo"
-    i=$((i + 1))
-done
+parallel_echo 8
 # Breaker open. Flip B to 200.
 curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/200"
 # Wait open_duration_ms (1500ms) + slack
 sleep 2
 B_BEFORE=$(count_get 19102)
-i=0
-while [ $i -lt 9 ]; do
-    curl -s -o /dev/null --max-time 3 "$PROXY/echo"
-    i=$((i + 1))
-done
+parallel_echo 9
 B_AFTER=$(count_get 19102)
 DELTA=$((B_AFTER - B_BEFORE))
 [ "$DELTA" -ge 2 ] || fail "breaker recovery: B delta=$DELTA expected ≥2"
