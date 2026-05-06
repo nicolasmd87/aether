@@ -5,10 +5,11 @@ All notable changes to Aether are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-**Workflow**: New changes go under `## [0.111.0]`. When a PR merges to
+**Workflow**: New changes go under `## [0.130.0]`. When a PR merges to
 `main`, the release pipeline automatically replaces `[current]` with the
 next version number before tagging the release.
 
+<<<<<<< feat/issues-383-343-333-338
 ## [current]
 
 ### Added
@@ -20,6 +21,23 @@ next version number before tagging the release.
 - **Per-call resource caps for `--emit=lib`** (`runtime/aether_resource_caps.{c,h}`, `runtime/libaether_caps.c`, `include/libaether.h`, `compiler/codegen/codegen_stmt.c`, `compiler/codegen/codegen.c`, `std/string/aether_string.c`, `std/collections/aether_collections.c`, `std/collections/aether_hashmap.c`, `runtime/memory/aether_arena.c`, `runtime/memory/aether_pool.c`, `tests/runtime/test_resource_caps.c`, `tests/runtime/test_libaether_caps.c`, `tests/integration/emit_lib_deadline/`). Closes #343. Adds the runtime memory ceiling and per-thread wall-clock deadline that `--emit=lib` plugin hosts use to bound untrusted Aether guests. Public C surface in `include/libaether.h`: `aether_set_memory_cap(uint64_t bytes)` (process-wide cap; 0 disables), `aether_set_call_deadline(int64_t ms)` (per-thread monotonic deadline; 0 disables), `aether_deadline_tripped()` (codegen-emitted tripwire target). Memory accounting: an `_Atomic uint64_t` tracks current usage (NOT high-water-mark) — long-running guests that allocate-and-free in a loop don't trip the cap on cumulative churn. Cap-aware allocators (`aether_caps_malloc` / `_calloc` / `_realloc` / `_free`) are libc-compatible — no hidden header — so a libc free() on a returned pointer is heap-safe (cap accounting is lost in that case but heap integrity is preserved). 5 stdlib + runtime allocator files instrumented: `string_new_with_length` / `string_release` (struct + capacity); `list_new` / `list_free` / `list_add_raw` (struct + capacity * sizeof(void*)); `map_new` / `map_free` / `map_put_raw` / `map_remove` / `map_clear` / `hashmap_resize` (struct + buckets array + per-entry); `hashmap_create` / `hashmap_free` / `hashmap_resize` (struct + entries array); `arena_create` / `arena_destroy` (struct + memory block); `pool_create` / `pool_destroy` / `standard_pools_create` / `standard_pools_destroy` (struct + backing memory). Codegen emits `if (aether_caps_deadline_tripped()) { __aether_abort_call(); break; }` at every `for` / `while` loop head when `gen->emit_lib` is set — mirrors the existing `gen->preempt_loops` precedent at `codegen_stmt.c:1827`. The `break` exits the immediately-enclosing loop after marking the sticky tripped flag; outer loops re-check the flag at their next iteration and break too — N tripwire-bounded breaks unwind any depth of nesting. Zero overhead under `--emit=exe`: both per-loop emission and prelude extern decls are gated on `gen->emit_lib`. End-to-end test compiles a 1-billion-iteration loop fixture, links it with the runtime cap module + a C harness that arms a 1 ms deadline, and asserts the call returns within 1 second. `--emit=exe` zero-overhead is verified by `grep`-counting tripwire references in the emitted C (must be 0).
 
 - **`@derive(eq)` synthesizer for structs (v1)** (`compiler/parser/parser.c`, `compiler/analysis/derive.{c,h}`, `compiler/aetherc.c`, `tests/integration/derive_eq/`). Issue #338 v1. The `@derive(eq)` annotation on a struct synthesizes a `int T_eq(T a, T b)` helper that returns a `&&` chain over per-field `==`. v1 supports primitive numeric (int / long / float / byte / bool) and string fields — the existing codegen lowers `string == string` to `strcmp(...) == 0` automatically, so the synthesizer doesn't need a special path. Empty structs return `1` (always equal). Pre-typecheck pass (`derive_synthesize_pass`) walks `program->children`, finds annotated structs, builds AST_FUNCTION_DEFINITION nodes, and inserts them as siblings — normal typecheck + codegen runs them through unchanged. Out of v1 scope (each emits a precise compile-time diagnostic so users hit a deliberate signal, not silent omission): `format` / `clone` / `hash` derives ("not yet supported in v1" pointing at the annotation; the eq pattern is the expansion seam for follow-up commits); nested struct fields (would need topological sort over inter-struct dependencies + recursion to `<F>_eq`); array / list / map / ptr fields. 3 positive struct cases (Point with two int fields, User with int + string + bool, Empty zero-field) plus 2 negative cases (`@derive(format)` surfaces v1 limitation; `@derive(eq)` on a `ptr`-field struct surfaces unsupported-type diagnostic).
+=======
+## [0.130.0]
+
+### Added
+
+- **`std.http.server.vcr` HTTP-sourced tape loading (Step 16)** — `vcr.load_url(tape_url, port)` fetches Servirtium markdown tapes from HTTP servers, enabling centralized tape libraries. Extracted `parse_tape_text(label, contents)` helper so filesystem and HTTP paths share identical parsing logic. Both endpoints return the same server pointer shape and integrate seamlessly with the existing tape/replay flow.
+
+### Fixed
+
+- **`std.http.server.vcr` snapshot release mutability** — GitHub Actions `release.yml` now creates snapshot releases as `draft: true` instead of `prerelease: true`, keeping releases mutable for asset uploads on every merge. Fixes 404 on `curl https://github.com/aether-lang-org/aether/releases/download/snapshot/aether-source.tar.gz`.
+
+### Testing
+
+- **VCR transparent MITM recorder validation** — `test_vcr_transparent_recorder.ae` validates record-mode forwarding against a refused upstream, asserting that record-mode handler forwards requests, echoes real responses, and correctly populates diagnostic surfaces (`last_error`, `last_kind`, `last_index`).
+- **VCR static-content cache semantics** — `test_vcr_static_content_cache.ae` extends Step 11 (static-content bypass) by validating cache-control headers (ETag, Last-Modified, Cache-Control) on static files. Current state: files are served but lack cache headers; test documents the gap and provides baseline for future conditional-request handling (304 Not Modified).
+
+>>>>>>> main
 ## [0.129.0]
 
 ### Added

@@ -538,8 +538,8 @@ jobs:
 
           Latest commit: `${{ env.COMMIT }}`
           VERSION file: `${{ env.VERSION }}`
-        prerelease: true
-        draft: false
+        prerelease: false
+        draft: true
         files: |
           aether-source.tar.gz
           aether-source.zip
