@@ -183,7 +183,7 @@ endif
 
 COMPILER_SRC = compiler/aetherc.c compiler/parser/lexer.c compiler/parser/parser.c compiler/ast.c compiler/analysis/typechecker.c compiler/codegen/codegen.c compiler/codegen/codegen_expr.c compiler/codegen/codegen_stmt.c compiler/codegen/codegen_actor.c compiler/codegen/codegen_func.c compiler/aether_error.c compiler/aether_module.c compiler/analysis/type_inference.c compiler/codegen/optimizer.c compiler/aether_diagnostics.c runtime/actors/aether_message_registry.c lsp/aether_lsp.c
 COMPILER_LIB_SRC = compiler/parser/lexer.c compiler/parser/parser.c compiler/ast.c compiler/analysis/typechecker.c compiler/codegen/codegen.c compiler/codegen/codegen_expr.c compiler/codegen/codegen_stmt.c compiler/codegen/codegen_actor.c compiler/codegen/codegen_func.c compiler/aether_error.c compiler/aether_module.c compiler/analysis/type_inference.c compiler/codegen/optimizer.c compiler/aether_diagnostics.c runtime/actors/aether_message_registry.c lsp/aether_lsp.c
-RUNTIME_SRC = $(SCHEDULER_SRC) runtime/scheduler/scheduler_optimizations.c runtime/scheduler/aether_io_poller_epoll.c runtime/scheduler/aether_io_poller_kqueue.c runtime/scheduler/aether_io_poller_poll.c runtime/config/aether_optimization_config.c runtime/memory/memory.c runtime/memory/aether_arena.c runtime/memory/aether_pool.c runtime/memory/aether_memory_stats.c runtime/utils/aether_tracing.c runtime/utils/aether_bounds_check.c runtime/utils/aether_test.c runtime/memory/aether_arena_optimized.c runtime/aether_runtime_types.c runtime/utils/aether_cpu_detect.c runtime/memory/aether_batch.c runtime/utils/aether_simd_vectorized.c runtime/aether_runtime.c runtime/aether_numa.c runtime/aether_sandbox.c runtime/aether_spawn_sandboxed.c runtime/aether_shared_map.c runtime/aether_host.c runtime/actors/aether_send_buffer.c runtime/actors/aether_send_message.c runtime/actors/aether_actor_thread.c runtime/actors/aether_panic.c
+RUNTIME_SRC = $(SCHEDULER_SRC) runtime/scheduler/scheduler_optimizations.c runtime/scheduler/aether_io_poller_epoll.c runtime/scheduler/aether_io_poller_kqueue.c runtime/scheduler/aether_io_poller_poll.c runtime/config/aether_optimization_config.c runtime/memory/memory.c runtime/memory/aether_arena.c runtime/memory/aether_pool.c runtime/memory/aether_memory_stats.c runtime/utils/aether_tracing.c runtime/utils/aether_bounds_check.c runtime/utils/aether_test.c runtime/memory/aether_arena_optimized.c runtime/aether_runtime_types.c runtime/utils/aether_cpu_detect.c runtime/memory/aether_batch.c runtime/utils/aether_simd_vectorized.c runtime/aether_runtime.c runtime/aether_numa.c runtime/aether_sandbox.c runtime/aether_spawn_sandboxed.c runtime/aether_shared_map.c runtime/aether_host.c runtime/aether_resource_caps.c runtime/libaether_caps.c runtime/actors/aether_send_buffer.c runtime/actors/aether_send_message.c runtime/actors/aether_actor_thread.c runtime/actors/aether_panic.c
 STD_SRC = std/string/aether_string.c std/math/aether_math.c std/net/aether_http.c std/net/aether_http_server.c std/net/aether_net.c std/collections/aether_collections.c std/json/aether_json.c std/fs/aether_fs.c std/log/aether_log.c std/io/aether_io.c std/os/aether_os.c std/ipc/aether_ipc.c std/cryptography/aether_cryptography.c std/zlib/aether_zlib.c std/dl/aether_dl.c std/http/middleware/aether_middleware.c std/http/server/vcr/aether_vcr.c std/http/server/h2/aether_h2.c std/http/proxy/aether_proxy_pool.c std/http/proxy/aether_proxy_lb.c std/http/proxy/aether_proxy_breaker.c std/http/proxy/aether_proxy_health.c std/http/proxy/aether_proxy_cache.c std/http/proxy/aether_proxy_opts.c std/http/proxy/aether_proxy_metrics.c std/http/proxy/aether_proxy_middleware.c std/bytes/aether_bytes.c std/config/aether_config.c std/actors/aether_actor_registry.c
 # Stdlib sources that reference scheduler internals (scheduler_io_register,
 # g_sync_step_actor, current_core_id). Excluded from the compiler binary
@@ -231,6 +231,8 @@ TEST_SRC = tests/runtime/test_harness.c \
            tests/runtime/test_spsc_queue.c \
            tests/runtime/test_worksteal_race.c \
            tests/runtime/test_http_server.c \
+           tests/runtime/test_resource_caps.c \
+           tests/runtime/test_libaether_caps.c \
            tests/memory/test_memory_arena.c \
            tests/memory/test_memory_pool.c \
            tests/compiler/test_lexer.c \
@@ -257,9 +259,9 @@ $(OBJ_DIR)/%.o: %.c | $(OBJ_DIR)/compiler $(OBJ_DIR)/compiler/parser $(OBJ_DIR)/
 	@$(CC) $(CFLAGS) -c $< -o $@
 
 # Compiler target (incremental build with object files)
-compiler: $(COMPILER_OBJS) $(STD_OBJS) $(COLLECTIONS_OBJS) $(OBJ_DIR)/runtime/aether_sandbox.o $(IO_POLLER_OBJS)
+compiler: $(COMPILER_OBJS) $(STD_OBJS) $(COLLECTIONS_OBJS) $(OBJ_DIR)/runtime/aether_sandbox.o $(OBJ_DIR)/runtime/aether_resource_caps.o $(IO_POLLER_OBJS)
 	@echo "Linking compiler..."
-	@$(CC) $(COMPILER_OBJS) $(STD_OBJS) $(COLLECTIONS_OBJS) $(OBJ_DIR)/runtime/aether_sandbox.o $(IO_POLLER_OBJS) -o build/aetherc$(EXE_EXT) $(LDFLAGS)
+	@$(CC) $(COMPILER_OBJS) $(STD_OBJS) $(COLLECTIONS_OBJS) $(OBJ_DIR)/runtime/aether_sandbox.o $(OBJ_DIR)/runtime/aether_resource_caps.o $(IO_POLLER_OBJS) -o build/aetherc$(EXE_EXT) $(LDFLAGS)
 	@echo "Compiler built successfully"
 
 # Fast compiler target (monolithic, for clean builds)
@@ -269,7 +271,7 @@ ifdef WINDOWS_NATIVE
 else
 	@$(MKDIR) build
 endif
-	$(CC) $(CFLAGS) $(COMPILER_SRC) $(STD_SRC) $(COLLECTIONS_SRC) $(IO_POLLER_SRC) -o build/aetherc$(EXE_EXT) $(LDFLAGS)
+	$(CC) $(CFLAGS) $(COMPILER_SRC) $(STD_SRC) $(COLLECTIONS_SRC) $(IO_POLLER_SRC) runtime/aether_resource_caps.c -o build/aetherc$(EXE_EXT) $(LDFLAGS)
 
 test: $(TEST_OBJS) $(COMPILER_LIB_OBJS) $(RUNTIME_OBJS) $(STD_OBJS) $(STD_REACTOR_OBJS) $(COLLECTIONS_OBJS)
 	@echo "==================================="
@@ -1086,7 +1088,7 @@ release: clean
 	@# only the release-target hand-rolled gcc invocation was missing it.
 	@$(CC) -O3 -DNDEBUG -flto -Werror -Icompiler -Iruntime -Istd -Istd/collections \
 		-DAETHER_VERSION=\"$(VERSION)\" \
-		$(COMPILER_SRC) $(STD_SRC) $(COLLECTIONS_SRC) \
+		$(COMPILER_SRC) $(STD_SRC) $(COLLECTIONS_SRC) runtime/aether_resource_caps.c \
 		-o build/aetherc-release$(EXE_EXT) $(LDFLAGS)
 ifeq ($(DETECTED_OS),Linux)
 	@echo "Stripping debug symbols..."

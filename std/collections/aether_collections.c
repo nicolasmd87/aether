@@ -1,4 +1,5 @@
 #include "aether_collections.h"
+#include "../../runtime/aether_resource_caps.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -9,7 +10,9 @@ struct ArrayList {
 };
 
 ArrayList* list_new() {
-    ArrayList* list = (ArrayList*)malloc(sizeof(ArrayList));
+    /* #343: cap-aware. Items array is allocated lazily on first
+     * add — only the struct is accounted here. */
+    ArrayList* list = (ArrayList*)aether_caps_malloc(sizeof(ArrayList));
     if (!list) return NULL;
     list->items = NULL;
     list->size = 0;
@@ -25,7 +28,10 @@ int list_add_raw(ArrayList* list, void* item) {
 
     if (list->size >= list->capacity) {
         int new_capacity = list->capacity == 0 ? 8 : list->capacity * 2;
-        void** new_items = (void**)realloc(list->items, new_capacity * sizeof(void*));
+        size_t old_bytes = (size_t)list->capacity * sizeof(void*);
+        size_t new_bytes = (size_t)new_capacity * sizeof(void*);
+        void** new_items = (void**)aether_caps_realloc(list->items,
+                                                       old_bytes, new_bytes);
         if (!new_items) return 0;
         list->items = new_items;
         list->capacity = new_capacity;
@@ -65,8 +71,14 @@ void list_clear(ArrayList* list) {
 
 void list_free(ArrayList* list) {
     if (!list) return;
-    if (list->items) free(list->items);
-    free(list);
+    /* Items array's allocated bytes = capacity × sizeof(void*).
+     * Struct is sizeof(ArrayList). Both pair with the alloc-side
+     * accounting in list_new + list_add_raw. */
+    if (list->items) {
+        aether_caps_free(list->items,
+                         (size_t)list->capacity * sizeof(void*));
+    }
+    aether_caps_free(list, sizeof(ArrayList));
 }
 
 #define HASHMAP_INITIAL_CAPACITY 16
@@ -114,12 +126,13 @@ static int key_equals(const HashMapEntry* e, const char* b, unsigned int b_len) 
 }
 
 HashMap* map_new() {
-    HashMap* map = (HashMap*)malloc(sizeof(HashMap));
+    HashMap* map = (HashMap*)aether_caps_malloc(sizeof(HashMap));
     if (!map) return NULL;
     map->capacity = HASHMAP_INITIAL_CAPACITY;
     map->size = 0;
-    map->buckets = (HashMapEntry**)calloc(map->capacity, sizeof(HashMapEntry*));
-    if (!map->buckets) { free(map); return NULL; }
+    map->buckets = (HashMapEntry**)aether_caps_calloc(
+        (size_t)map->capacity, sizeof(HashMapEntry*));
+    if (!map->buckets) { aether_caps_free(map, sizeof(HashMap)); return NULL; }
     return map;
 }
 
@@ -128,7 +141,8 @@ static void hashmap_resize(HashMap* map) {
     HashMapEntry** old_buckets = map->buckets;
     int new_capacity = map->capacity * 2;
 
-    HashMapEntry** new_buckets = (HashMapEntry**)calloc(new_capacity, sizeof(HashMapEntry*));
+    HashMapEntry** new_buckets = (HashMapEntry**)aether_caps_calloc(
+        (size_t)new_capacity, sizeof(HashMapEntry*));
     if (!new_buckets) return;  // Keep existing map on alloc failure
 
     map->capacity = new_capacity;
@@ -148,7 +162,8 @@ static void hashmap_resize(HashMap* map) {
         }
     }
 
-    free(old_buckets);
+    aether_caps_free(old_buckets,
+                     (size_t)old_capacity * sizeof(HashMapEntry*));
 }
 
 // map_put_raw returns 1 on success, 0 on failure (null map/key or OOM).
@@ -178,10 +193,10 @@ int map_put_raw(HashMap* map, const char* key, void* value) {
         entry = entry->next;
     }
 
-    HashMapEntry* new_entry = (HashMapEntry*)malloc(sizeof(HashMapEntry));
+    HashMapEntry* new_entry = (HashMapEntry*)aether_caps_malloc(sizeof(HashMapEntry));
     if (!new_entry) return 0;
     new_entry->key = string_new(key);
-    if (!new_entry->key) { free(new_entry); return 0; }
+    if (!new_entry->key) { aether_caps_free(new_entry, sizeof(HashMapEntry)); return 0; }
     new_entry->value   = value;
     new_entry->hash    = hash;
     new_entry->key_len = key_len;
@@ -231,7 +246,7 @@ void map_remove(HashMap* map, const char* key) {
             }
 
             string_release(entry->key);
-            free(entry);
+            aether_caps_free(entry, sizeof(HashMapEntry));
             map->size--;
             return;
         }
@@ -252,7 +267,7 @@ void map_clear(HashMap* map) {
         while (entry) {
             HashMapEntry* next = entry->next;
             string_release(entry->key);
-            free(entry);
+            aether_caps_free(entry, sizeof(HashMapEntry));
             entry = next;
         }
         map->buckets[i] = NULL;
@@ -263,8 +278,9 @@ void map_clear(HashMap* map) {
 void map_free(HashMap* map) {
     if (!map) return;
     map_clear(map);
-    free(map->buckets);
-    free(map);
+    aether_caps_free(map->buckets,
+                     (size_t)map->capacity * sizeof(HashMapEntry*));
+    aether_caps_free(map, sizeof(HashMap));
 }
 
 MapKeys* map_keys_raw(HashMap* map) {

@@ -1,4 +1,5 @@
 #include "aether_pool.h"
+#include "../aether_resource_caps.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -18,13 +19,16 @@ MemoryPool* pool_create(size_t object_size, int initial_count) {
     if (object_size < sizeof(FreeNode)) {
         object_size = sizeof(FreeNode);
     }
-    
-    MemoryPool* pool = (MemoryPool*)malloc(sizeof(MemoryPool));
+
+    /* #343: cap-aware. Both the MemoryPool struct and the backing
+     * memory block are accounted; pool_destroy frees both with
+     * their known sizes. */
+    MemoryPool* pool = (MemoryPool*)aether_caps_malloc(sizeof(MemoryPool));
     if (!pool) return NULL;
-    
-    pool->memory = malloc(object_size * initial_count);
+
+    pool->memory = aether_caps_malloc(object_size * (size_t)initial_count);
     if (!pool->memory) {
-        free(pool);
+        aether_caps_free(pool, sizeof(MemoryPool));
         return NULL;
     }
     
@@ -74,12 +78,12 @@ int pool_get_used(MemoryPool* pool) {
 
 void pool_destroy(MemoryPool* pool) {
     if (!pool) return;
-    free(pool->memory);
-    free(pool);
+    aether_caps_free(pool->memory, pool->object_size * (size_t)pool->capacity);
+    aether_caps_free(pool, sizeof(MemoryPool));
 }
 
 StandardPools* standard_pools_create() {
-    StandardPools* pools = (StandardPools*)malloc(sizeof(StandardPools));
+    StandardPools* pools = (StandardPools*)aether_caps_malloc(sizeof(StandardPools));
     if (!pools) return NULL;
     
     pools->pool_8 = pool_create(8, 256);
@@ -140,7 +144,7 @@ void standard_pools_destroy(StandardPools* pools) {
     if (pools->pool_64) pool_destroy(pools->pool_64);
     if (pools->pool_128) pool_destroy(pools->pool_128);
     if (pools->pool_256) pool_destroy(pools->pool_256);
-    
-    free(pools);
+
+    aether_caps_free(pools, sizeof(StandardPools));
 }
 

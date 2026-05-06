@@ -1,4 +1,5 @@
 #include "aether_string.h"
+#include "../../runtime/aether_resource_caps.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -47,10 +48,14 @@ AetherString* string_new(const char* cstr) {
 }
 
 AetherString* string_new_with_length(const char* data, size_t length) {
-    AetherString* str = (AetherString*)malloc(sizeof(AetherString));
+    /* Issue #343: cap-aware allocation. Both the struct and the data
+     * buffer are accounted; string_release frees both with their
+     * recorded sizes (sizeof(AetherString) and capacity), keeping
+     * the cap counter at current-usage rather than high-water-mark. */
+    AetherString* str = (AetherString*)aether_caps_malloc(sizeof(AetherString));
     if (!str) return NULL;
-    char* buf = (char*)malloc(length + 1);
-    if (!buf) { free(str); return NULL; }
+    char* buf = (char*)aether_caps_malloc(length + 1);
+    if (!buf) { aether_caps_free(str, sizeof(AetherString)); return NULL; }
     str->magic = AETHER_STRING_MAGIC;
     str->length = length;
     str->capacity = length + 1;
@@ -75,8 +80,12 @@ void string_release(const void* str) {
     AetherString* s = (AetherString*)str;
     s->ref_count--;
     if (s->ref_count <= 0) {
-        free(s->data);
-        free(s);
+        /* Cap accounting: data buffer was allocated with `capacity`
+         * bytes (length + 1 NUL terminator); struct is one
+         * sizeof(AetherString). Both pair with the alloc-side
+         * accounting in string_new_with_length. */
+        aether_caps_free(s->data, s->capacity);
+        aether_caps_free(s, sizeof(AetherString));
     }
 }
 
