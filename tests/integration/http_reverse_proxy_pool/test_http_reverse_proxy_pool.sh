@@ -1,11 +1,18 @@
 #!/bin/sh
-# std.http.proxy pool/LB/health/breaker/cache/drain/retry/rate-limit/trace/metrics integration tests.
+# std.http.proxy pool/LB/health/breaker integration tests, part 1 of 2.
+#
+# Tests 1-8 live here: round-robin / weighted-RR / ip-hash / cookie-
+# hash / drain / health (× 2) / breaker-open. The remaining tests
+# (breaker-recovery, cache × 3, retry, rate-limit, trace, metrics)
+# live in test_http_reverse_proxy_pool_extra.sh — splitting the
+# suite gives each half its own 180 s timeout budget on the slow
+# Windows mingw CI runner, which the previous single-file form
+# was tripping over.
 #
 # Each scenario boots three upstream processes (A, B, C on
 # :19101/19102/19103) plus a proxy process (mode-specific config
 # on :19100), runs the assertions, then tears all four down before
-# moving on. Exhaustive — covers every proxy feature beyond what
-# tests/integration/http_reverse_proxy/ already covers.
+# moving on.
 
 set -e
 
@@ -287,167 +294,4 @@ B=$(count_get 19102)
 [ "$B" -le 5 ] || fail "breaker: B served $B requests (expected ≤5)"
 stop_all
 
-# ---- Test 9: circuit breaker half-open recovery ------------
-setup proxy_breaker
-curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/503"
-parallel_echo 8
-# Breaker open. Flip B to 200.
-curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/200"
-# Wait open_duration_ms (1500ms) + slack
-sleep 2
-B_BEFORE=$(count_get 19102)
-# Sequential drive (NOT parallel_echo): with half_open_max=1, the
-# parallel-9 race admitted only the single half-open test request
-# before it could succeed and flip B back to CLOSED — the other 8
-# saw HALF_OPEN with bucket full and went elsewhere. Sequential
-# requests give the breaker time to transition: req1 admits the
-# test, succeeds, B→CLOSED; req2..N see CLOSED and load-balance
-# normally, so ~3/9 land on B.
-i=0
-while [ $i -lt 9 ]; do
-    curl -s -o /dev/null --max-time 3 "$PROXY/echo"
-    i=$((i + 1))
-done
-B_AFTER=$(count_get 19102)
-DELTA=$((B_AFTER - B_BEFORE))
-[ "$DELTA" -ge 2 ] || fail "breaker recovery: B delta=$DELTA expected ≥2"
-stop_all
-
-# ---- Test 10: cache hit — counter unchanged on second call --
-# Cache reads aggregate counters across A+B+C because the TTL-
-# expired refetch under round-robin can land on any upstream.
-setup proxy_cache
-curl -s -o /dev/null --max-time 3 "$PROXY/echo_cacheable"
-COUNT_BEFORE=$(count_total)
-# Repeat the same URL; cache should HIT — total counter unchanged.
-i=0
-while [ $i -lt 5 ]; do
-    curl -s -o /dev/null --max-time 3 "$PROXY/echo_cacheable"
-    i=$((i + 1))
-done
-COUNT_AFTER=$(count_total)
-DELTA=$((COUNT_AFTER - COUNT_BEFORE))
-[ "$DELTA" = "0" ] || fail "cache hit: counter delta=$DELTA expected 0"
-HDRS=$(curl -s -D - --max-time 3 -o /dev/null "$PROXY/echo_cacheable")
-echo "$HDRS" | grep -qi '^X-Cache: HIT' || fail "cache hit: missing X-Cache: HIT header"
-stop_all
-
-# ---- Test 11: cache TTL expiry ------------------------------
-# Uses the dedicated short-TTL route /echo_cacheable_ttl (max-age=1).
-# Keeping it on its own path lets the HIT test above (T10) use a
-# generous TTL on /echo_cacheable without coupling the two.
-setup proxy_cache
-curl -s -o /dev/null --max-time 3 "$PROXY/echo_cacheable_ttl"
-COUNT_BEFORE=$(count_total)
-sleep 2.5
-curl -s -o /dev/null --max-time 3 "$PROXY/echo_cacheable_ttl"
-COUNT_AFTER=$(count_total)
-DELTA=$((COUNT_AFTER - COUNT_BEFORE))
-[ "$DELTA" -ge 1 ] || fail "cache TTL: counter delta=$DELTA expected ≥1"
-stop_all
-
-# ---- Test 12: cache Vary — different Accept-Encoding = different entry --
-setup proxy_cache
-# First gzip request — miss.
-curl -s -o /dev/null --max-time 3 -H 'Accept-Encoding: gzip' "$PROXY/echo_vary"
-# Repeat same encoding — should HIT (counter unchanged).
-COUNT_BEFORE=$(count_total)
-curl -s -o /dev/null --max-time 3 -H 'Accept-Encoding: gzip' "$PROXY/echo_vary"
-COUNT_AFTER_GZIP=$(count_total)
-[ "$COUNT_AFTER_GZIP" = "$COUNT_BEFORE" ] || fail "cache Vary: same key delta=$((COUNT_AFTER_GZIP - COUNT_BEFORE)) expected 0"
-# Different Accept-Encoding — different cache key, MISS.
-curl -s -o /dev/null --max-time 3 -H 'Accept-Encoding: identity' "$PROXY/echo_vary"
-COUNT_AFTER_BOTH=$(count_total)
-[ $((COUNT_AFTER_BOTH - COUNT_AFTER_GZIP)) -ge 1 ] \
-    || fail "cache Vary: identity didn't refetch (delta=$((COUNT_AFTER_BOTH - COUNT_AFTER_GZIP)))"
-stop_all
-
-# ---- Test 13: idempotent retry on 5xx ----------------------
-setup proxy_retry
-# Force B to 503. RR will at some point land on B; with retries
-# the request should succeed against another upstream eventually.
-# To keep the test deterministic, we use a low-traffic check:
-# fire 9 requests; each should return 200 thanks to retries.
-curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/503"
-i=0
-ALL_OK=1
-while [ $i -lt 9 ]; do
-    body=$(curl -s --max-time 5 "$PROXY/echo")
-    tag=$(echo "$body" | head -1 | cut -d: -f1)
-    case "$tag" in
-        tag=A|tag=C) : ;;  # ok — retry landed on A or C
-        tag=B)
-            # B answered with 503; retry should have fired.
-            # If status was 503 the body would be "B-down:N" not "tag=B".
-            # Either way: ok if proxy ultimately returned a tag=*.
-            : ;;
-        *) ALL_OK=0 ;;
-    esac
-    i=$((i + 1))
-done
-[ "$ALL_OK" = "1" ] || fail "retry: not all 9 requests returned a tag= response"
-stop_all
-
-# ---- Test 14: per-upstream rate limit (1 rps) -------------
-setup proxy_rate_limit
-# Three upstreams, each capped at 1 rps with burst 1. Drive 12
-# requests in parallel within one curl process so all 12 reach
-# the proxy inside the burst window — before the per-upstream
-# token bucket can refill. Steady-state outcome: 3 successes
-# (one per upstream burst) and 9 × 503.
-#
-# Sequential curls were the original shape, but on Windows mingw
-# CI the per-fork curl spin-up is ~100 ms; twelve sequential
-# forks span >1 s wall-clock and cross a refill boundary, letting
-# extra requests succeed and tripping the assertion. -Z avoids
-# the per-fork latency entirely; the test no longer races against
-# runner speed.
-URLS=""
-i=0
-while [ $i -lt 12 ]; do
-    URLS="$URLS $PROXY/echo"
-    i=$((i + 1))
-done
-RESULTS=$(curl -Z -s -o /dev/null -w '%{http_code}\n' --max-time 3 $URLS)
-SUCCESSES=$(printf '%s\n' "$RESULTS" | grep -c '^200$' || true)
-FIVE_OH_THREES=$(printf '%s\n' "$RESULTS" | grep -c '^503$' || true)
-# Slack of 3 above the deterministic 3-burst result covers the case
-# where curl staggers the parallel sends across a refill — one
-# extra success per bucket × 3 buckets.
-[ "$SUCCESSES" -le 6 ] || fail "rate limit: $SUCCESSES successes (expected ≤6 with parallel arrivals)"
-[ "$FIVE_OH_THREES" -ge 6 ] || fail "rate limit: only $FIVE_OH_THREES 503s (expected ≥6)"
-stop_all
-
-# ---- Test 15: W3C Trace-Context inject -------------------
-setup proxy_trace
-# Inbound request with no traceparent. We can't easily inspect the
-# OUTBOUND traceparent (the upstream's /echo doesn't echo it back),
-# so test the passthrough form: send WITH traceparent, verify the
-# proxy forwards it. Inject behaviour is exercised at the C-level
-# by the inject_traceparent_if_absent unit logic — covered by the
-# build itself.
-INBOUND='00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01'
-RESP=$(curl -s --max-time 3 -H "traceparent: $INBOUND" "$PROXY/echo")
-echo "$RESP" | head -1 | grep -qE '^tag=[ABC]' || fail "trace passthrough: no tag in response"
-stop_all
-
-# ---- Test 16: Prometheus metrics endpoint ----------------
-setup proxy_rr
-# Drive some traffic to populate the counters.
-i=0
-URLS=""
-while [ $i -lt 6 ]; do
-    URLS="$URLS $PROXY/echo"
-    i=$((i + 1))
-done
-curl -Z -s -o /dev/null --max-time 5 $URLS >/dev/null 2>&1 || true
-METRICS=$(curl -s --max-time 3 "$PROXY/proxy-metrics")
-echo "$METRICS" | grep -q 'aether_proxy_upstream_requests_total' || fail "metrics: requests_total absent"
-echo "$METRICS" | grep -q 'aether_proxy_upstream_inflight'        || fail "metrics: inflight absent"
-echo "$METRICS" | grep -q 'aether_proxy_upstream_healthy'         || fail "metrics: healthy absent"
-echo "$METRICS" | grep -q 'aether_proxy_upstream_breaker_state'   || fail "metrics: breaker absent"
-echo "$METRICS" | grep -q 'aether_proxy_cache_hits_total'         || fail "metrics: cache_hits absent"
-echo "$METRICS" | grep -q '# TYPE'                                || fail "metrics: TYPE block absent"
-stop_all
-
-echo "  [PASS] http_reverse_proxy_pool: 16/16 — RR/WRR/ip_hash/cookie_hash/drain/health(2)/breaker(2)/cache(3)/retry/rate-limit/trace/metrics"
+echo "  [PASS] http_reverse_proxy_pool: 8/8 — RR/WRR/ip_hash/cookie_hash/drain/health(2)/breaker-open"
