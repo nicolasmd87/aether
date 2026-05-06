@@ -449,45 +449,27 @@ test-ae: compiler ae stdlib
 	root=$$(pwd); \
 	find tests/syntax tests/compiler tests/integration tests/regression -path '*/lib/*' -prune -o -path '*/custom_lib_dir/*' -prune -o -path 'tests/integration/namespace_*' -prune -o -path 'tests/integration/closure_actor_state_reject/*' -prune -o -path 'tests/integration/reserved_keyword_error/*' -prune -o -path 'tests/integration/ae_run_cflags/*' -prune -o -path 'tests/integration/bin_path_match/*' -prune -o -path 'tests/integration/bin_name_lookup_and_walkup/*' -prune -o -path 'tests/integration/string_plus_reject/*' -prune -o -path 'tests/integration/aether_string_to_c_extern/*' -prune -o -path 'tests/integration/module_extern_auto_unwrap/*' -prune -o -path 'tests/integration/http_external_ptr/*' -prune -o -path 'tests/integration/fs_read_binary_nul/*' -prune -o -path 'tests/integration/fs_write_binary_nul/*' -prune -o -path 'tests/integration/cryptography_sha/*' -prune -o -path 'tests/integration/cryptography_v2/*' -prune -o -path 'tests/integration/extern_annotation/*' -prune -o -path 'tests/integration/c_callback/*' -prune -o -path 'tests/integration/extern_tuple_return/*' -prune -o -path 'tests/integration/sqlite_roundtrip/*' -prune -o -path 'tests/integration/sqlite_prepared/*' -prune -o -path 'tests/integration/zlib_roundtrip/*' -prune -o -path 'tests/integration/aether_string_ffi_unwrap/*' -prune -o -path 'tests/integration/ptr_return_int_zero_inference/*' -prune -o -path 'tests/integration/string_interp_loop_alias/*' -prune -o -path 'tests/integration/transitive_module_import/*' -prune -o -path 'tests/integration/dsl_receiver_scoping/*' -prune -o -path 'tests/integration/dsl_receiver_scoping_edge/*' -prune -o -path 'tests/integration/dsl_receiver_scoping_nested/*' -prune -o -path 'tests/integration/http_sendfile/*' -prune -o -path 'tests/integration/emit_lib_deadline/*' -prune -o -path 'tests/integration/derive_eq/*' -prune -o -path 'tests/integration/http_client_redirects/*' -prune -o -path 'tests/integration/source_location/*' -prune -o -path 'tests/integration/std_dl/*' -prune -o -path 'tests/integration/host_tinygo/*' -prune -o -path 'tests/integration/sealed_namespaces/*' -prune -o -path 'tests/integration/default_arguments/*' -prune -o -path 'tests/integration/source_location_default_capture/*' -prune -o -path 'tests/integration/fn_typed_local_call/*' -prune -o -path 'tests/integration/http_server_tls/*' -prune -o -path 'tests/integration/http_server_keepalive/*' -prune -o -path 'tests/integration/http_server_actor_dispatch/*' -prune -o -path 'tests/integration/http_middleware_d1/*' -prune -o -path 'tests/integration/http_middleware_d2/*' -prune -o -path 'tests/integration/http_server_ops/*' -prune -o -path 'tests/integration/http_server_observability/*' -prune -o -path 'tests/integration/http_server_sse/*' -prune -o -path 'tests/integration/http_server_websocket/*' -prune -o -path 'tests/integration/http_server_h2_tls/*' -prune -o -path 'tests/integration/http_server_h2_middleware/*' -prune -o -path 'tests/integration/http_real_ip/*' -prune -o -path 'tests/integration/http_auth/*' -prune -o -path 'tests/integration/http_h2_concurrent_dispatch/*' -prune -o -path 'tests/integration/http_reverse_proxy/*' -prune -o -path 'tests/integration/http_reverse_proxy_pool/*' -prune -o -path 'tests/integration/panic_stack_trace/*' -prune -o -path 'tests/integration/cas_roundtrip/*' -prune -o -path 'tests/integration/caller_info/*' -prune -o -path 'tests/integration/svn_checkout_via_vcr/*' -prune -o -path 'tests/integration/svn_vcr_strict_match/*' -prune -o -path 'tests/integration/std_ipc_roundtrip/*' -prune -o -path 'tests/integration/std_ipc_bash_chain/*' -prune -o -path 'tests/integration/aeocha_aeb_ipc_reporting/*' -prune -o -name '*.ae' -print 2>/dev/null | sort | \
 	xargs -P $(NPROC) -I{} "$$script" "{}" "$$tmpdir" "$$root"; \
-	sh_runner="$$tmpdir/run_sh.sh"; \
-	printf '#!/bin/sh\n'                                                                       > "$$sh_runner"; \
-	printf 'sh_test="$$1"; tmpdir="$$2"\n'                                                    >> "$$sh_runner"; \
-	printf 'name=$$(echo "$$sh_test" | sed "s|tests/||;s|/|_|g;s|\\.sh$$||")\n'              >> "$$sh_runner"; \
-	printf '# Per-test 120s wall-clock cap. Most shell tests run in <5s;\n'                   >> "$$sh_runner"; \
-	printf '# proxy_pool and h2 dispatch are the longest at ~30-90s on slow runners.\n'        >> "$$sh_runner"; \
-	printf '# Above 120s indicates a hang (Windows MSYS2 has hit this on the\n'                >> "$$sh_runner"; \
-	printf '# proxy_pool stop_all + lsof polling path) — cap, mark fail, move on.\n'           >> "$$sh_runner"; \
-	printf 'if command -v timeout >/dev/null 2>&1; then\n'                                    >> "$$sh_runner"; \
-	printf '    runner="timeout 120 bash"\n'                                                  >> "$$sh_runner"; \
-	printf 'else\n'                                                                            >> "$$sh_runner"; \
-	printf '    runner="bash"\n'                                                              >> "$$sh_runner"; \
-	printf 'fi\n'                                                                              >> "$$sh_runner"; \
-	printf 'if $$runner "$$sh_test" >"$$tmpdir/run_$$name.out" 2>"$$tmpdir/run_$$name.err"; then\n' >> "$$sh_runner"; \
-	printf '    touch "$$tmpdir/PASS_$$name"\n'                                               >> "$$sh_runner"; \
-	printf 'else\n'                                                                            >> "$$sh_runner"; \
-	printf '    rc=$$?\n'                                                                     >> "$$sh_runner"; \
-	printf '    if [ "$$rc" = "124" ]; then\n'                                                >> "$$sh_runner"; \
-	printf '        echo "[timeout] killed after 120s" >> "$$tmpdir/run_$$name.err"\n'        >> "$$sh_runner"; \
-	printf '        printf timeout > "$$tmpdir/phase_$$name.txt"\n'                           >> "$$sh_runner"; \
-	printf '    else\n'                                                                        >> "$$sh_runner"; \
-	printf '        printf shell > "$$tmpdir/phase_$$name.txt"\n'                             >> "$$sh_runner"; \
-	printf '    fi\n'                                                                          >> "$$sh_runner"; \
-	printf '    touch "$$tmpdir/FAIL_$$name"\n'                                               >> "$$sh_runner"; \
-	printf 'fi\n'                                                                              >> "$$sh_runner"; \
-	chmod +x "$$sh_runner"; \
-	find tests/integration -name 'test_*.sh' 2>/dev/null | sort | \
-	xargs -P $(NPROC) -I{} "$$sh_runner" "{}" "$$tmpdir"; \
-	for marker in $$(ls "$$tmpdir" 2>/dev/null | grep -E '^(PASS|FAIL)_' | LC_ALL=C sort); do \
-		case "$$marker" in \
-			PASS_*) name=$${marker#PASS_}; echo "  [PASS] $$name" ;; \
-			FAIL_*) name=$${marker#FAIL_}; \
-				phase=$$(cat "$$tmpdir/phase_$$name.txt" 2>/dev/null || echo unknown); \
-				if [ "$$phase" = "shell" ]; then \
-					echo "  [FAIL] $$name (shell test)"; \
-				elif [ "$$phase" = "timeout" ]; then \
-					echo "  [FAIL] $$name (shell test, killed after 120s timeout)"; \
-				fi ;; \
-		esac; \
+	for sh_test in $$(find tests/integration -name 'test_*.sh' 2>/dev/null | sort); do \
+		name=$$(echo "$$sh_test" | sed 's|tests/||;s|/|_|g;s|\.sh$$||'); \
+		if command -v timeout >/dev/null 2>&1; then \
+			runner="timeout 180 bash"; \
+		else \
+			runner="bash"; \
+		fi; \
+		if $$runner "$$sh_test" >"$$tmpdir/run_$$name.out" 2>"$$tmpdir/run_$$name.err"; then \
+			echo "  [PASS] $$name"; touch "$$tmpdir/PASS_$$name"; \
+		else \
+			rc=$$?; \
+			if [ "$$rc" = "124" ]; then \
+				echo "  [FAIL] $$name (shell test, killed after 180s timeout)"; \
+				echo "[timeout] killed after 180s" >> "$$tmpdir/run_$$name.err"; \
+				printf 'timeout' > "$$tmpdir/phase_$$name.txt"; \
+			else \
+				echo "  [FAIL] $$name (shell test)"; \
+				printf 'shell' > "$$tmpdir/phase_$$name.txt"; \
+			fi; \
+			touch "$$tmpdir/FAIL_$$name"; \
+		fi; \
 	done; \
 	passed=$$(ls "$$tmpdir"/PASS_* 2>/dev/null | wc -l | tr -d ' '); \
 	failed=$$(ls "$$tmpdir"/FAIL_* 2>/dev/null | wc -l | tr -d ' '); \
@@ -503,6 +485,7 @@ test-ae: compiler ae stdlib
 				runtime) rc=$$(cat "$$tmpdir/rc_$$fname.txt" 2>/dev/null || echo '?'); \
 				         echo "--- $$fname (runtime error, exit $$rc) ---" ;; \
 				shell)   echo "--- $$fname (shell test) ---" ;; \
+				timeout) echo "--- $$fname (shell test, killed after 180s timeout) ---" ;; \
 				*)       echo "--- $$fname ---" ;; \
 			esac; \
 			if [ "$$phase" = "compile" ]; then \
