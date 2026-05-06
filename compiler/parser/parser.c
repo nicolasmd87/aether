@@ -3326,6 +3326,51 @@ ASTNode* parse_program(Parser* parser) {
                 // The lexer classifies `extern` as TOKEN_EXTERN (reserved
                 // keyword); `c_callback` is TOKEN_IDENTIFIER.
                 Token* attr = peek_token(parser);
+                // @derive(eq[, format, clone, hash]) struct T { ... }
+                //
+                // Issue #338: synthesize trait-shaped helpers from
+                // type definitions. Pre-typecheck pass picks up the
+                // annotation and generates the matching helper
+                // functions (T_eq / T_format / T_clone / T_hash)
+                // before the struct is type-checked.
+                if (attr && attr->type == TOKEN_IDENTIFIER &&
+                    attr->value && strcmp(attr->value, "derive") == 0) {
+                    advance_token(parser);  // consume 'derive'
+                    if (!expect_token(parser, TOKEN_LEFT_PAREN)) continue;
+                    // Parse the comma-separated derive list.
+                    char tag[256];
+                    snprintf(tag, sizeof(tag), "derive:");
+                    size_t tag_len = strlen(tag);
+                    int first = 1;
+                    while (1) {
+                        Token* d = expect_token(parser, TOKEN_IDENTIFIER);
+                        if (!d || !d->value) break;
+                        size_t dlen = strlen(d->value);
+                        if (tag_len + dlen + 2 >= sizeof(tag)) break;
+                        if (!first) { tag[tag_len++] = ','; }
+                        memcpy(tag + tag_len, d->value, dlen);
+                        tag_len += dlen;
+                        tag[tag_len] = '\0';
+                        first = 0;
+                        if (!match_token(parser, TOKEN_COMMA)) break;
+                    }
+                    if (!expect_token(parser, TOKEN_RIGHT_PAREN)) continue;
+                    // The next decl should be a struct. Parse it via the
+                    // normal struct path, then attach the annotation.
+                    Token* next_tok = peek_token(parser);
+                    if (next_tok && next_tok->type == TOKEN_STRUCT) {
+                        ASTNode* sd = parse_struct_definition(parser);
+                        if (sd) {
+                            if (sd->annotation) free(sd->annotation);
+                            sd->annotation = strdup(tag);
+                        }
+                        node = sd;
+                        break;
+                    } else {
+                        parser_error(parser, "@derive(...) must precede a `struct` definition");
+                        continue;
+                    }
+                }
                 if (attr && attr->type == TOKEN_IDENTIFIER &&
                     attr->value && strcmp(attr->value, "c_callback") == 0) {
                     advance_token(parser);  // consume 'c_callback'
