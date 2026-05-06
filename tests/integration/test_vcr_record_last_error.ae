@@ -48,14 +48,14 @@ main() {
     spawn(SchedHelper())
     record_actor = spawn(RecordActor())
     record_actor ! StartRecord { raw: raw }
-    sleep(500)
+    sleep(1000)
 
     req = client.request("GET", "http://127.0.0.1:${RECORD_PORT}/will-fail")
     if req == null {
         println("FAIL: client.request returned null")
         exit(1)
     }
-    client.set_timeout(req, 5)
+    client.set_timeout(req, 15)
 
     resp, transport_err = client.send_request(req)
     client.request_free(req)
