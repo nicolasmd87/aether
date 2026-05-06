@@ -2,8 +2,7 @@
  *
  * v1 exposes two pure functions that operate on in-memory byte
  * buffers. Streaming is deliberately out of scope (separate future
- * API); gzip-framed variants are additive and will land later under
- * the same module.
+ * API). gzip-framed variants use the same split-accessor shape.
  *
  * The Aether boundary uses the split-accessor pattern (same as
  * fs.read_binary): a `try_` entry point performs the operation and
@@ -53,5 +52,12 @@ int zlib_try_inflate(const char* data, int length);
 const char* zlib_get_inflate_bytes(void);
 int         zlib_get_inflate_length(void);
 void        zlib_release_inflate(void);
+
+/* gzip-framed siblings (RFC 1952), intended for HTTP
+ * Content-Encoding: gzip. They share the same TLS output slots as
+ * deflate/inflate respectively, so the same get/release accessors
+ * apply after a successful call. */
+int zlib_try_gzip_deflate(const char* data, int length, int level);
+int zlib_try_gzip_inflate(const char* data, int length);
 
 #endif /* AETHER_ZLIB_H */

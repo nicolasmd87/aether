@@ -791,13 +791,17 @@ main() {
 
 **Replay:** `vcr.load(tape_path, port)` / `vcr.eject(server)` / `vcr.tape_length()`.
 
-**Record:** `vcr.record(method, path, status, content_type, body)` / `vcr.record_full(...)` / `vcr.flush(tape_path)` / `vcr.flush_or_check(tape_path)` (re-record byte-diff with `.actual` sibling on mismatch).
+**Record:** `vcr.load_record(tape_path, upstream_base, port)` / `vcr.eject_record(server, tape_path)` for live forwarding record mode, or direct `vcr.record(...)` / `vcr.record_full(...)` / `vcr.record_full_response(...)` / `vcr.flush(tape_path)` for tests that build interactions in-process.
 
-**Secret scrubbing** (applied at flush time; in-memory capture stays untouched): `vcr.redact(field, pattern, replacement)` / `vcr.clear_redactions()` with `vcr.FIELD_PATH` and `vcr.FIELD_RESPONSE_BODY` selectors.
+**Drift checks:** `vcr.flush_or_check(tape_path)` leaves a `.actual` sibling on mismatch; `vcr.flush_and_fail_if_changed(tape_path)` writes the new tape to the normal path and returns an error when bytes differ.
+
+**Secret scrubbing** (applied at flush time; in-memory capture stays untouched): `vcr.redact(...)` / `vcr.clear_redactions()` / `vcr.unredact(...)` / `vcr.clear_unredactions()` / `vcr.remove_header(...)` / `vcr.clear_header_removals()` with request/response/path/body field selectors.
 
 **Per-interaction notes:** `vcr.note(title, body)` — record-only `[Note]` markdown block attached to the next interaction.
 
-**Strict request matching:** `vcr.last_error()` / `vcr.clear_last_error()` — tearDown-readable mismatch diagnostics.
+**Strict request matching:** `vcr.last_error()` / `vcr.clear_last_error()` / `vcr.last_kind()` / `vcr.last_index()` / `vcr.reset_cursor()` / `vcr.set_strict_headers(on)` — tearDown-readable mismatch diagnostics.
+
+**Gzip:** record mode stores decoded bodies for `Content-Encoding: gzip`, omits encoding/length from the tape, and playback restores gzip when callers send `Accept-Encoding: gzip`.
 
 **Static content:** `vcr.static_content(mount_path, fs_dir)` / `vcr.clear_static_content()` — bypass-the-tape mounts for Selenium/Cypress assets.
 

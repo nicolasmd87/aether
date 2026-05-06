@@ -73,6 +73,7 @@ static inline int aether_nop_key_create(pthread_key_t* k, void (*d)(void*)) { (v
 static inline int aether_nop_key_delete(pthread_key_t k) { (void)k; return 0; }
 static inline int aether_nop_setspecific(pthread_key_t k, const void* v) { (void)k; (void)v; return 0; }
 static inline void* aether_nop_getspecific(pthread_key_t k) { (void)k; return NULL; }
+static inline int aether_nop_detach(pthread_t t) { (void)t; return 0; }
 
 // Redirect pthread calls to no-op stubs via macros
 #define pthread_mutex_init(m, a)     aether_nop_mutex_init((m), (a))
@@ -90,6 +91,7 @@ static inline void* aether_nop_getspecific(pthread_key_t k) { (void)k; return NU
 #define pthread_key_delete(k)        aether_nop_key_delete(k)
 #define pthread_setspecific(k, v)    aether_nop_setspecific((k), (v))
 #define pthread_getspecific(k)       aether_nop_getspecific(k)
+#define pthread_detach(t)            aether_nop_detach(t)
 
 // sched_yield stub — must come after any system header that declares it
 #if !defined(__linux__) && !defined(__APPLE__) && !defined(__EMSCRIPTEN__)
@@ -177,6 +179,11 @@ static inline int pthread_create(pthread_t* t, pthread_attr_t* attr,
 static inline int pthread_join(pthread_t t, void** retval) {
     (void)retval;
     WaitForSingleObject(t, INFINITE);
+    CloseHandle(t);
+    return 0;
+}
+
+static inline int pthread_detach(pthread_t t) {
     CloseHandle(t);
     return 0;
 }
