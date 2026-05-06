@@ -48,14 +48,35 @@ main() {
     spawn(SchedHelper())
     record_actor = spawn(RecordActor())
     record_actor ! StartRecord { raw: raw }
-    sleep(1000)
+
+    // Wait for server to start listening. Retry with backoff to handle slow CI runners.
+    connected = 0
+    attempt = 0
+    while attempt < 20 && connected == 0 {
+        sleep(100)
+        req_probe = client.request("GET", "http://127.0.0.1:${RECORD_PORT}/health")
+        if req_probe != null {
+            client.set_timeout(req_probe, 1)
+            resp_probe, err_probe = client.send_request(req_probe)
+            client.request_free(req_probe)
+            if err_probe == "" {
+                connected = 1
+                client.response_free(resp_probe)
+            }
+        }
+        attempt = attempt + 1
+    }
+    if connected == 0 {
+        println("FAIL: server did not start listening within 2 seconds")
+        exit(1)
+    }
 
     req = client.request("GET", "http://127.0.0.1:${RECORD_PORT}/will-fail")
     if req == null {
         println("FAIL: client.request returned null")
         exit(1)
     }
-    client.set_timeout(req, 15)
+    client.set_timeout(req, 10)
 
     resp, transport_err = client.send_request(req)
     client.request_free(req)
