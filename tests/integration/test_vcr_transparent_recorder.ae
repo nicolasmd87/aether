@@ -121,6 +121,6 @@ main() {
 
     // Clean up and exit
     vcr.eject_record(raw, TAPE_PATH)
-    println("PASS: transparent MITM recorder successfully forwarded and failed over refused upstream")
+    println("PASS: transparent MITM recorder forwarded and failed over refused upstream")
     exit(0)
 }

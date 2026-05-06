@@ -134,7 +134,7 @@ main() {
     }
 
     println("\nTest 5: Second request to same URL succeeds")
-    s5, b5, _, _ = get_full_response(url)
+    s5, _, _, _ = get_full_response(url)
     if s5 != 200 {
         println("  FAIL: expected 200, got ${s5}")
         exit(1)
