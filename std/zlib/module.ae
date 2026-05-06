@@ -1,4 +1,4 @@
-// std.zlib - One-shot zlib deflate/inflate.
+// std.zlib - One-shot zlib and gzip deflate/inflate.
 // Import with: import std.zlib
 //
 // v1 exposes two functions that operate on in-memory byte buffers:
@@ -12,9 +12,9 @@
 // via string_new_with_length, so string.length matches the reported
 // byte count.
 //
-// Streaming APIs and gzip-framed (RFC 1952) variants are out of
-// scope for v1 — additive future work under the same module. See
-// docs/stdlib-vs-contrib.md for the "one obvious shape" criterion.
+// Streaming APIs are out of scope for v1 — additive future work
+// under the same module. See docs/stdlib-vs-contrib.md for the
+// "one obvious shape" criterion.
 //
 // When the toolchain was built without zlib (AETHER_HAS_ZLIB
 // undefined), the wrappers return ("", 0, "zlib unavailable")
@@ -26,7 +26,8 @@ exports (
     zlib_release_deflate,
     zlib_try_inflate, zlib_get_inflate_bytes, zlib_get_inflate_length,
     zlib_release_inflate,
-    available, deflate, inflate
+    zlib_try_gzip_deflate, zlib_try_gzip_inflate,
+    available, deflate, inflate, gzip_deflate, gzip_inflate
 )
 
 // Probe: returns 1 when the toolchain was built with zlib detected,
@@ -49,6 +50,9 @@ extern zlib_try_inflate(data: string, length: int) -> int
 extern zlib_get_inflate_bytes() -> string
 extern zlib_get_inflate_length() -> int
 extern zlib_release_inflate()
+
+extern zlib_try_gzip_deflate(data: string, length: int, level: int) -> int
+extern zlib_try_gzip_inflate(data: string, length: int) -> int
 
 // Length-preserving string constructor from std.string — takes an
 // explicit byte count so binary payloads with embedded NULs survive
@@ -90,6 +94,38 @@ inflate(data: string, length: int) -> {
     ok = zlib_try_inflate(data, length)
     if ok == 0 {
         return "", 0, "zlib inflate failed"
+    }
+    raw = zlib_get_inflate_bytes()
+    n = zlib_get_inflate_length()
+    owned = string_new_with_length(raw, n)
+    zlib_release_inflate()
+    return owned, n, ""
+}
+
+// gzip-framed siblings (RFC 1952), intended for HTTP
+// Content-Encoding: gzip.
+gzip_deflate(data: string, length: int, level: int) -> {
+    if zlib_backend_available() == 0 {
+        return "", 0, "zlib unavailable"
+    }
+    ok = zlib_try_gzip_deflate(data, length, level)
+    if ok == 0 {
+        return "", 0, "gzip deflate failed"
+    }
+    raw = zlib_get_deflate_bytes()
+    n = zlib_get_deflate_length()
+    owned = string_new_with_length(raw, n)
+    zlib_release_deflate()
+    return owned, n, ""
+}
+
+gzip_inflate(data: string, length: int) -> {
+    if zlib_backend_available() == 0 {
+        return "", 0, "zlib unavailable"
+    }
+    ok = zlib_try_gzip_inflate(data, length)
+    if ok == 0 {
+        return "", 0, "gzip inflate failed"
     }
     raw = zlib_get_inflate_bytes()
     n = zlib_get_inflate_length()

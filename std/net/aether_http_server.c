@@ -21,6 +21,7 @@ HttpServer* http_server_create(int p) { (void)p; return NULL; }
 int http_server_bind_raw(HttpServer* s, const char* h, int p) { (void)s; (void)h; (void)p; return -1; }
 void http_server_set_host(HttpServer* s, const char* h) { (void)s; (void)h; }
 int http_server_start_raw(HttpServer* s) { (void)s; return -1; }
+int http_server_start_background_raw(HttpServer* s) { (void)s; return -1; }
 void http_server_stop(HttpServer* s) { (void)s; }
 void http_server_free(HttpServer* s) { (void)s; }
 const char* http_server_set_tls_raw(HttpServer* s, const char* c, const char* k) {
@@ -1308,12 +1309,16 @@ void http_response_set_body_n(HttpServerResponse* res, const char* body, int len
         res->body = NULL;
         res->body_length = 0;
     } else {
+        const char* src = body;
+        if (is_aether_string(body)) {
+            src = ((const AetherString*)body)->data;
+        }
         res->body = (char*)malloc((size_t)length + 1);
         if (!res->body) {
             res->body_length = 0;
             return;
         }
-        memcpy(res->body, body, (size_t)length);
+        memcpy(res->body, src, (size_t)length);
         res->body[length] = '\0';
         res->body_length = (size_t)length;
     }
@@ -2309,7 +2314,7 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
     HttpRoute* matched_route = NULL;
 
     while (route) {
-        if (strcmp(route->method, req->method) == 0) {
+        if (strcmp(route->method, req->method) == 0 || strcmp(route->method, "*") == 0) {
             if (http_route_matches(route->path_pattern, req->path, req)) {
                 matched_route = route;
                 break;
@@ -2445,7 +2450,7 @@ void http_server_dispatch_for_h2(HttpServer* server,
     HttpRoute* head_to_get = NULL;
     while (route) {
         if (http_route_matches(route->path_pattern, req->path, req)) {
-            if (strcmp(route->method, req->method) == 0) {
+            if (strcmp(route->method, req->method) == 0 || strcmp(route->method, "*") == 0) {
                 matched_route = route;
                 break;
             }
@@ -3087,6 +3092,22 @@ int http_server_start_raw(HttpServer* server) {
         }
     }
 
+    return 0;
+}
+
+static void* http_server_background_main(void* arg) {
+    HttpServer* server = (HttpServer*)arg;
+    http_server_start_raw(server);
+    return NULL;
+}
+
+int http_server_start_background_raw(HttpServer* server) {
+    if (!server) return -1;
+    pthread_t tid;
+    if (pthread_create(&tid, NULL, http_server_background_main, server) != 0) {
+        return -1;
+    }
+    pthread_detach(tid);
     return 0;
 }
 
