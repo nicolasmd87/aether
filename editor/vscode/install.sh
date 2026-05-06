@@ -91,8 +91,8 @@ install_extension() {
 
     echo "✓ Extension installed successfully."
     echo "  Restart ${editor_name} for the language to register."
-    echo "  Syntax highlighting uses your current colour theme — no"
-    echo "  Aether-specific theme is shipped or required."
+    echo "  .ae files use a fixed palette regardless of your theme;"
+    echo "  every other file type still uses your active colour theme."
     echo "  LSP:   ensure 'aether-lsp' is on PATH (or set 'aether.lsp.path')."
 }
 
