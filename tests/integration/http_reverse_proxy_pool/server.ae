@@ -166,8 +166,19 @@ run_server(srv: ptr) {
     spawn(SchedHelper())
     a = spawn(SrvActor())
     a ! StartSrv { raw: srv }
-    sleep(60000)
-    exit(0)
+    // Block until the test harness SIGKILLs us. The earlier shape
+    // here was `sleep(60000); exit(0)` — a "safety timer" intended
+    // to prevent runaway leaked processes, but the test harness's
+    // trap-driven SIGKILL teardown already does that. The 60-second
+    // timer was actively harmful: any test that ran longer than 60
+    // wall-clock seconds saw all upstreams self-exit mid-suite, with
+    // exit code 0, no crash trace, no log line. Subsequent assertions
+    // failed with mysterious "h=000" / "metric_2xx returned non-
+    // integer" symptoms that looked like a server stability bug.
+    // Block forever instead — the harness owns the lifecycle.
+    while true {
+        sleep(3600000)
+    }
 }
 
 // ---- Upstream builders ----------------------------------
