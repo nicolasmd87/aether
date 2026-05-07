@@ -130,7 +130,41 @@ clear_upstream_b_503() {
 }
 
 PROXY="http://127.0.0.1:19100"
-fail() { echo "  [FAIL] $1"; exit 1; }
+
+# Dump everything anyone could want to know about the test state in
+# one snapshot, then exit 1. Every failure path on this script
+# routes through here so a CI failure produces a self-contained
+# diagnostic — no round-trip to add `cat upstream.log` and re-run.
+dump_diagnostics() {
+    echo "  --- diagnostic snapshot ---"
+    for r in upstream_a upstream_b upstream_c proxy; do
+        case $r in
+            proxy) pid="$PROXY_PID" ;;
+            *)     pid=$(eval echo \$PID_$r) ;;
+        esac
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            echo "  $r (pid=$pid): alive"
+        else
+            echo "  $r (pid=$pid): DEAD"
+            log="$TMPDIR/$r.log"
+            # Use the matching <role>.log; for proxy the role name
+            # varies per subtest, so search the proxy_* logs.
+            if [ "$r" = "proxy" ] && [ ! -f "$log" ]; then
+                log=$(ls "$TMPDIR"/proxy_*.log 2>/dev/null | tail -1)
+            fi
+            if [ -n "$log" ] && [ -f "$log" ]; then
+                echo "  $r log tail:"
+                tail -15 "$log" 2>/dev/null | sed 's/^/    /'
+            fi
+        fi
+    done
+    echo "  --- live /proxy-metrics (counters/health/breaker) ---"
+    curl -s --max-time 3 "$PROXY/proxy-metrics" 2>/dev/null \
+        | grep -E "requests_total|upstream_healthy|breaker_state|cache_hits" \
+        | head -30 | sed 's/^/    /' || echo "    (proxy not responding)"
+}
+
+fail() { echo "  [FAIL] $1"; dump_diagnostics; exit 1; }
 
 # ----- proxy-side counter reads --------------------------------
 # Read aether_proxy_upstream_requests_total{upstream=X,class="2xx"}
@@ -150,8 +184,7 @@ metric_2xx() {
             *) printf '%s' "$v"; return 0 ;;
         esac
     done
-    echo "  [FAIL] metric_2xx $upstream_url returned non-integer after 3 attempts: '$v'"
-    exit 1
+    fail "metric_2xx $upstream_url returned non-integer after 3 attempts: '$v'"
 }
 
 # Wait until /proxy-metrics reports the upstream's health-check
@@ -167,8 +200,7 @@ wait_for_upstream_health() {
         fi
         sleep 0.1
     done
-    echo "  [FAIL] $upstream_url did not reach healthy=$expected_value within ${deadline_sec}s"
-    return 1
+    fail "$upstream_url did not reach healthy=$expected_value within ${deadline_sec}s"
 }
 
 parallel_echo() {

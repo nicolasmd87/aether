@@ -99,7 +99,36 @@ clear_upstream_b_503() {
 }
 
 PROXY="http://127.0.0.1:19100"
-fail() { echo "  [FAIL] $1"; exit 1; }
+
+# Comprehensive diagnostic snapshot on every failure — see part 1.
+dump_diagnostics() {
+    echo "  --- diagnostic snapshot ---"
+    for r in upstream_a upstream_b upstream_c proxy; do
+        case $r in
+            proxy) pid="$PROXY_PID" ;;
+            *)     pid=$(eval echo \$PID_$r) ;;
+        esac
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            echo "  $r (pid=$pid): alive"
+        else
+            echo "  $r (pid=$pid): DEAD"
+            log="$TMPDIR/$r.log"
+            if [ "$r" = "proxy" ] && [ ! -f "$log" ]; then
+                log=$(ls "$TMPDIR"/proxy_*.log 2>/dev/null | tail -1)
+            fi
+            if [ -n "$log" ] && [ -f "$log" ]; then
+                echo "  $r log tail:"
+                tail -15 "$log" 2>/dev/null | sed 's/^/    /'
+            fi
+        fi
+    done
+    echo "  --- live /proxy-metrics (counters/health/breaker/cache) ---"
+    curl -s --max-time 3 "$PROXY/proxy-metrics" 2>/dev/null \
+        | grep -E "requests_total|upstream_healthy|breaker_state|cache_hits" \
+        | head -30 | sed 's/^/    /' || echo "    (proxy not responding)"
+}
+
+fail() { echo "  [FAIL] $1"; dump_diagnostics; exit 1; }
 
 metric_2xx() {
     upstream_url="$1"
@@ -113,8 +142,7 @@ metric_2xx() {
             *) printf '%s' "$v"; return 0 ;;
         esac
     done
-    echo "  [FAIL] metric_2xx $upstream_url returned non-integer after 3 attempts: '$v'"
-    exit 1
+    fail "metric_2xx $upstream_url returned non-integer after 3 attempts: '$v'"
 }
 
 # Total 2xx requests forwarded across all 3 upstreams. Used by the
@@ -137,8 +165,7 @@ wait_for_breaker_state() {
         fi
         sleep 0.1
     done
-    echo "  [FAIL] $upstream_url breaker did not reach state=$expected_state within ${deadline_sec}s"
-    return 1
+    fail "$upstream_url breaker did not reach state=$expected_state within ${deadline_sec}s"
 }
 
 # Drive probe requests until the breaker for `upstream_url` returns
@@ -158,8 +185,7 @@ wait_for_breaker_recovery() {
         fi
         sleep 0.1
     done
-    echo "  [FAIL] $upstream_url breaker did not recover within ${deadline_sec}s"
-    return 1
+    fail "$upstream_url breaker did not recover within ${deadline_sec}s"
 }
 
 parallel_echo() {
