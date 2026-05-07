@@ -42,6 +42,8 @@ main() {
     }
 
     raw = http.server_create(PORT)
+
+    http.server_set_host(raw, "127.0.0.1")
     if raw == 0 {
         println("FAIL: server_create returned null")
         exit(1)

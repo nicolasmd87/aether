@@ -1,5 +1,6 @@
 #include "aether_hashmap.h"
 #include "../../runtime/utils/aether_compiler.h"
+#include "../../runtime/aether_resource_caps.h"
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -64,17 +65,19 @@ HashMap* hashmap_create(size_t initial_capacity,
                        void (*value_free)(void*),
                        void* (*key_clone)(const void*),
                        void* (*value_clone)(const void*)) {
-    
-    HashMap* map = (HashMap*)malloc(sizeof(HashMap));
+
+    /* #343: cap-aware. Both struct and entries array accounted;
+     * hashmap_free pairs the frees. */
+    HashMap* map = (HashMap*)aether_caps_malloc(sizeof(HashMap));
     if (!map) return NULL;
-    
+
     if (initial_capacity < DEFAULT_CAPACITY) {
         initial_capacity = DEFAULT_CAPACITY;
     }
-    
-    map->entries = (HashMapEntry*)calloc(initial_capacity, sizeof(HashMapEntry));
+
+    map->entries = (HashMapEntry*)aether_caps_calloc(initial_capacity, sizeof(HashMapEntry));
     if (!map->entries) {
-        free(map);
+        aether_caps_free(map, sizeof(HashMap));
         return NULL;
     }
     
@@ -93,7 +96,7 @@ HashMap* hashmap_create(size_t initial_capacity,
 
 void hashmap_free(HashMap* map) {
     if (!map) return;
-    
+
     if (map->entries) {
         for (size_t i = 0; i < map->capacity; i++) {
             if (map->entries[i].occupied) {
@@ -101,10 +104,10 @@ void hashmap_free(HashMap* map) {
                 if (map->value_free) map->value_free(map->entries[i].value);
             }
         }
-        free(map->entries);
+        aether_caps_free(map->entries, map->capacity * sizeof(HashMapEntry));
     }
-    
-    free(map);
+
+    aether_caps_free(map, sizeof(HashMap));
 }
 
 // Resize hashmap
@@ -113,7 +116,7 @@ static void hashmap_resize(HashMap* map) {
     HashMapEntry* old_entries = map->entries;
     
     map->capacity *= 2;
-    map->entries = (HashMapEntry*)calloc(map->capacity, sizeof(HashMapEntry));
+    map->entries = (HashMapEntry*)aether_caps_calloc(map->capacity, sizeof(HashMapEntry));
     if (!map->entries) {
         // Failed to allocate, restore old state
         map->capacity = old_capacity;
@@ -131,7 +134,7 @@ static void hashmap_resize(HashMap* map) {
         }
     }
     
-    free(old_entries);
+    aether_caps_free(old_entries, old_capacity * sizeof(HashMapEntry));
 }
 
 // Robin Hood hashing insert

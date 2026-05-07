@@ -1,4 +1,5 @@
 #include "aether_arena.h"
+#include "../aether_resource_caps.h"
 #include <stdlib.h>
 #include <string.h>
 
@@ -9,20 +10,23 @@ Arena* arena_create(size_t size) {
     if (size == 0) {
         size = ARENA_DEFAULT_SIZE;
     }
-    
-    Arena* arena = (Arena*)malloc(sizeof(Arena));
+
+    /* #343: cap-aware. Both the Arena struct and the backing memory
+     * block are accounted; arena_destroy frees them with their
+     * known sizes (sizeof(Arena) and arena->size). */
+    Arena* arena = (Arena*)aether_caps_malloc(sizeof(Arena));
     if (!arena) return NULL;
-    
-    arena->memory = (char*)malloc(size);
+
+    arena->memory = (char*)aether_caps_malloc(size);
     if (!arena->memory) {
-        free(arena);
+        aether_caps_free(arena, sizeof(Arena));
         return NULL;
     }
-    
+
     arena->size = size;
     arena->used = 0;
     arena->next = NULL;
-    
+
     return arena;
 }
 
@@ -66,8 +70,8 @@ void arena_reset(Arena* arena) {
 void arena_destroy(Arena* arena) {
     while (arena) {
         Arena* next = arena->next;
-        free(arena->memory);
-        free(arena);
+        aether_caps_free(arena->memory, arena->size);
+        aether_caps_free(arena, sizeof(Arena));
         arena = next;
     }
 }

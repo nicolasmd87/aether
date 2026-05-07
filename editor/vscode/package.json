@@ -1,8 +1,8 @@
 {
   "name": "aether-language",
   "displayName": "Aether Language Support",
-  "description": "Syntax highlighting, color theme, and Language Server integration for Aether — a modern actor-based programming language.",
-  "version": "0.7.0",
+  "description": "Syntax highlighting and Language Server integration for Aether — a modern actor-based programming language.",
+  "version": "0.7.3",
   "publisher": "aether",
   "icon": "icon.png",
   "license": "MIT",
@@ -55,13 +55,85 @@
         "path": "./aether.tmLanguage.json"
       }
     ],
-    "themes": [
-      {
-        "label": "Aether",
-        "uiTheme": "vs-dark",
-        "path": "./themes/aether.json"
+    "configurationDefaults": {
+      "editor.tokenColorCustomizations": {
+        "textMateRules": [
+          {
+            "_comment": "Aether keeps a fixed palette for the .aether-suffixed scopes the grammar emits, regardless of which colour theme the user has active. The user's theme still paints everything outside this list (markdown, JSON, JS, etc. — and anything in an .ae file we don't enumerate here). Without this block, default themes paint the grammar's scopes wildly differently across machines (Dark+ → teal/blue, Monokai → orange/red, etc.). Locking only the .aether scopes gives consistent .ae rendering without overriding the user's choices anywhere else.",
+            "scope": "comment.line.aether,comment.block.aether,comment.line.double-slash.aether,punctuation.definition.comment.aether",
+            "settings": { "foreground": "#cc6666", "fontStyle": "italic" }
+          },
+          {
+            "scope": "string.quoted.double.aether,punctuation.definition.string.begin.aether,punctuation.definition.string.end.aether",
+            "settings": { "foreground": "#fa8072" }
+          },
+          {
+            "scope": "constant.character.escape.aether",
+            "settings": { "foreground": "#ff9966" }
+          },
+          {
+            "scope": "punctuation.section.interpolation.begin.aether,punctuation.section.interpolation.end.aether,meta.interpolation.aether",
+            "settings": { "foreground": "#bf6fff" }
+          },
+          {
+            "scope": "constant.numeric.aether,constant.numeric.decimal.aether,constant.numeric.binary.aether,constant.numeric.hex.aether,constant.numeric.octal.aether,constant.numeric.float.aether",
+            "settings": { "foreground": "#ff9966" }
+          },
+          {
+            "scope": "constant.language.aether,constant.language.boolean.aether,constant.language.null.aether",
+            "settings": { "foreground": "#88ee88", "fontStyle": "italic" }
+          },
+          {
+            "scope": "keyword.control.aether,keyword.declaration.aether",
+            "settings": { "foreground": "#bf6fff", "fontStyle": "italic" }
+          },
+          {
+            "scope": "storage.type.aether",
+            "settings": { "foreground": "#bf6fff", "fontStyle": "italic" }
+          },
+          {
+            "scope": "support.type.primitive.aether",
+            "settings": { "foreground": "#88ee88" }
+          },
+          {
+            "scope": "entity.name.message.aether,entity.name.actor.aether",
+            "settings": { "foreground": "#88ee88", "fontStyle": "bold" }
+          },
+          {
+            "scope": "entity.name.struct.aether,entity.name.type.aether",
+            "settings": { "foreground": "#88ee88" }
+          },
+          {
+            "scope": "entity.name.function.aether",
+            "settings": { "foreground": "#5fa8d3", "fontStyle": "bold" }
+          },
+          {
+            "scope": "entity.name.function.main.aether",
+            "settings": { "foreground": "#5fa8d3", "fontStyle": "bold italic" }
+          },
+          {
+            "scope": "support.function.aether",
+            "settings": { "foreground": "#5fa8d3" }
+          },
+          {
+            "scope": "variable.other.aether",
+            "settings": { "foreground": "#dcdcaa" }
+          },
+          {
+            "scope": "keyword.operator.arrow.aether,keyword.operator.actor.aether,punctuation.separator.cons.aether,meta.pattern.cons.aether",
+            "settings": { "foreground": "#fa8072", "fontStyle": "bold" }
+          },
+          {
+            "scope": "keyword.operator.assignment.aether,keyword.operator.comparison.aether,keyword.operator.logical.aether,keyword.operator.arithmetic.aether,keyword.operator.bitwise.aether,keyword.operator.type.pointer.aether",
+            "settings": { "foreground": "#d4d4d4" }
+          },
+          {
+            "scope": "punctuation.section.brackets.begin.aether,punctuation.section.brackets.end.aether,punctuation.accessor.aether",
+            "settings": { "foreground": "#a0a0a0" }
+          }
+        ]
       }
-    ],
+    },
     "configuration": {
       "title": "Aether",
       "properties": {

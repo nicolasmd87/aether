@@ -1,0 +1,70 @@
+// std.http http_serve_file zero-copy fast path test driver (#383).
+//
+// Boots a static-file server on the configured port. The handler
+// invokes http.serve_file(res, path); the connection writer in
+// handle_one_request decides whether to take the sendfile(2) fast
+// path or fall back to the buffered read.
+
+import std.http
+import std.os
+import std.string
+
+// Use raw form: actor receive handlers can't cleanly discard the
+// wrapper's string return without an unused-result warning.
+extern http_server_start_raw(server: ptr) -> int
+extern exit(code: int)
+
+const PORT = 19200
+
+handle_static(req: ptr, res: ptr, ud: ptr) {
+    // Resolve path: /static/<filename> → <root>/<filename>.
+    p = http.request_path(req)
+    if p == null { p = "/" }
+    root = aether_args_get(2)
+    if string.starts_with(p, "/static/") == 1 {
+        // Slice off "/static/" prefix manually because the wildcard
+        // route surface here is plain — no path params.
+        i = 8
+        plen = string.length(p)
+        sub = string.substring(p, i, plen)
+        full = "${root}/${sub}"
+        http.serve_file(res, full)
+        return
+    }
+    http.response_set_status(res, 404)
+    http.response_set_body(res, "not found")
+}
+
+message StartSrv { raw: ptr }
+message Noop {}
+actor SrvActor {
+    state s = 0
+    receive { StartSrv(raw) -> { s = raw; http_server_start_raw(raw) } }
+}
+actor SchedHelper {
+    state x = 0
+    receive { Noop() -> { x = 1 } }
+}
+
+main() {
+    n = aether_args_count()
+    if n < 3 {
+        println("usage: server <port> <root>")
+        exit(1)
+    }
+
+    s = http.server_create(PORT)
+    if s == 0 { println("FAIL: server_create"); exit(1) }
+    http.server_set_host(s, "127.0.0.1")
+    http.server_set_keepalive(s, 1, 0, 5000)
+    // Wildcard match — the handler does its own prefix check.
+    http.server_get(s, "/static/*", handle_static, 0)
+
+    println("READY")
+
+    spawn(SchedHelper())
+    a = spawn(SrvActor())
+    a ! StartSrv { raw: s }
+    sleep(60000)
+    exit(0)
+}

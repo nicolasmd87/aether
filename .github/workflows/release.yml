@@ -505,7 +505,22 @@ jobs:
         echo "VERSION=$VERSION" >> "$GITHUB_ENV"
         echo "COMMIT=$COMMIT" >> "$GITHUB_ENV"
 
-    - name: Update snapshot release
+    # GitHub made published releases IMMUTABLE — once a release is
+    # published, you can't replace its assets. The previous shape
+    # (`softprops/action-gh-release` updating the existing `snapshot`
+    # release in-place) failed every merge after the first with
+    # `Cannot upload asset ... to an immutable release`. Fix is
+    # delete-then-recreate: drop the prior release + its tag, then
+    # create a fresh release with the new assets. Brief gap (~1s)
+    # while the URL is unavailable; acceptable for a snapshot.
+    - name: Delete previous snapshot release + tag
+      run: |
+        # Best-effort delete; missing release is fine on the first run.
+        gh release delete snapshot --yes --cleanup-tag 2>/dev/null || true
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Create fresh snapshot release
       uses: softprops/action-gh-release@v2
       with:
         tag_name: snapshot

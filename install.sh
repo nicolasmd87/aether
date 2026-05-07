@@ -283,15 +283,22 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
             fi
         done
 
-        # Write active_version marker and update current symlink
+        # Write active_version marker and update current symlink.
+        # `current` is a symlink on POSIX; on Windows MinGW, `ln -sf`
+        # silently degrades to a directory copy (no admin / developer
+        # mode = no real symlinks), so on a re-install we may find
+        # `current` as a real directory rather than a link. `rm -rf`
+        # handles both cases; without it, `set -eo pipefail` would
+        # abort here on the second install ("rm: cannot remove
+        # 'current': Is a directory") and the PATH-setup block
+        # below would never run.
         echo "$INSTALLED_VER" > "$INSTALL_DIR/active_version"
-        rm -f "$INSTALL_DIR/current"
-        ln -sf "$VER_ENTRY" "$INSTALL_DIR/current"
+        rm -rf "$INSTALL_DIR/current"
+        ln -sf "$VER_ENTRY" "$INSTALL_DIR/current" 2>/dev/null \
+            || cp -r "$VER_ENTRY" "$INSTALL_DIR/current"
     else
-        # Fallback: just remove stale symlink
-        if [ -L "$INSTALL_DIR/current" ]; then
-            rm -f "$INSTALL_DIR/current"
-        fi
+        # Fallback: just remove stale symlink/directory
+        rm -rf "$INSTALL_DIR/current" 2>/dev/null || true
     fi
 
     ok "  Installed successfully"
@@ -302,10 +309,75 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
     EXPORT_LINE="export PATH=\"$BIN_DIR:\$PATH\""
     AETHER_HOME_LINE="export AETHER_HOME=\"$INSTALL_DIR\""
 
+    # Detect Windows (MSYS2 / MinGW / Cygwin / Git Bash). On Windows
+    # the persistent PATH lives in the Windows registry — updating
+    # ~/.bash_profile alone reaches only login bash and misses every
+    # other shell (PowerShell, cmd.exe, VS Code's terminal, the
+    # interactive bash-shell that doesn't source .bash_profile).
+    # `setx PATH ...` writes to the user-level Windows env block,
+    # which propagates to all future shells regardless of which
+    # one the user picks.
+    IS_WINDOWS=0
+    case "$(uname -s)" in
+        MINGW*|MSYS*|CYGWIN*) IS_WINDOWS=1 ;;
+    esac
+
     IN_PATH=0
     case ":$PATH:" in
         *":$BIN_DIR:"*) IN_PATH=1 ;;
     esac
+    # On Windows, also probe the registry-persisted user PATH —
+    # the in-process $PATH may not yet reflect a newly-applied
+    # setx from a prior install.
+    if [ "$IS_WINDOWS" -eq 1 ] && [ "$IN_PATH" -eq 0 ]; then
+        BIN_DIR_WIN="$(cygpath -w "$BIN_DIR" 2>/dev/null || echo "$BIN_DIR")"
+        # PowerShell -Command can be slow but is the only reliable
+        # way to read the Windows User-scope PATH from MSYS2 bash.
+        WIN_USER_PATH="$(powershell.exe -NoProfile -Command "[Environment]::GetEnvironmentVariable('PATH','User')" 2>/dev/null | tr -d '\r' | tr -d '\n')"
+        case ";$WIN_USER_PATH;" in
+            *";$BIN_DIR_WIN;"*) IN_PATH=1 ;;
+        esac
+    fi
+
+    if [ "$IS_WINDOWS" -eq 1 ]; then
+        info "Setting up Windows user PATH (visible in PowerShell + cmd.exe + future bash)..."
+        BIN_DIR_WIN="$(cygpath -w "$BIN_DIR" 2>/dev/null || echo "$BIN_DIR")"
+        INSTALL_DIR_WIN="$(cygpath -w "$INSTALL_DIR" 2>/dev/null || echo "$INSTALL_DIR")"
+        # Read the current user PATH, prepend our bin dir if absent,
+        # and write back via setx. Reading via PowerShell avoids
+        # mangling that `setx PATH "%PATH%;..."` would do (which
+        # snapshots the *expanded* system+user PATH into user).
+        CUR_USER_PATH="$(powershell.exe -NoProfile -Command "[Environment]::GetEnvironmentVariable('PATH','User')" 2>/dev/null | tr -d '\r' | tr -d '\n')"
+        case ";$CUR_USER_PATH;" in
+            *";$BIN_DIR_WIN;"*)
+                ok "  Already in Windows User PATH: $BIN_DIR_WIN"
+                ;;
+            *)
+                if [ -z "$CUR_USER_PATH" ]; then
+                    NEW_USER_PATH="$BIN_DIR_WIN"
+                else
+                    NEW_USER_PATH="$BIN_DIR_WIN;$CUR_USER_PATH"
+                fi
+                if powershell.exe -NoProfile -Command "[Environment]::SetEnvironmentVariable('PATH','$NEW_USER_PATH','User')" 2>/dev/null; then
+                    ok "  Added $BIN_DIR_WIN to Windows User PATH"
+                else
+                    warn "  Could not update Windows User PATH; add $BIN_DIR_WIN manually:"
+                    echo "       setx PATH \"$BIN_DIR_WIN;%PATH%\""
+                fi
+                ;;
+        esac
+        # Also set AETHER_HOME at the Windows level so child processes
+        # and other shells see it.
+        powershell.exe -NoProfile -Command "[Environment]::SetEnvironmentVariable('AETHER_HOME','$INSTALL_DIR_WIN','User')" 2>/dev/null \
+            && ok "  Set AETHER_HOME=$INSTALL_DIR_WIN" \
+            || warn "  Could not set Windows AETHER_HOME"
+        echo ""
+        # Don't touch shell rc files on Windows: the Windows PATH
+        # update covers MSYS2 bash too (Windows env propagates into
+        # the bash subshell environment). Touching .bash_profile
+        # here would only add a duplicate entry on every login.
+        IN_PATH=1
+    fi
 
     if [ "$IN_PATH" -eq 0 ]; then
         info "Setting up PATH..."
@@ -377,6 +449,12 @@ if [ "$EDITOR_ONLY" -eq 0 ]; then
     if [ "$IN_PATH" -eq 0 ] && [ -n "$SHELL_RC" ]; then
         warn "Restart your terminal or run:"
         echo "  source $SHELL_RC"
+        echo ""
+    elif [ "$IS_WINDOWS" -eq 1 ]; then
+        warn "Open a NEW terminal (PowerShell, cmd.exe, or bash) for"
+        echo "  the PATH change to take effect. Existing shells won't"
+        echo "  see the update — Windows env-var changes propagate to"
+        echo "  newly-spawned processes only."
         echo ""
     fi
 

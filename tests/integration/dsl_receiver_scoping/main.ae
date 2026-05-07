@@ -1,0 +1,34 @@
+// Issue #333 — DSL block receiver scoping.
+//
+// `dsl_helper.run("label") { script("a"); tag("t1") }` MUST resolve
+// `script` / `tag` inside the trailing block to `dsl_helper.script`
+// / `dsl_helper.tag` without the user having to write
+// `import dsl_helper (script, tag)`.
+//
+// Pre-fix behaviour: bare-name calls inside the block errored as
+// "Undefined function 'script'" because the namespace prefix wasn't
+// applied during identifier resolution.
+//
+// Post-fix: typecheck_function_call detects the member-access call
+// + trailing closure pattern and stamps the closure with the
+// receiver's namespace. lookup_symbol then falls back through
+// `<receiver>_<name>` after a local miss.
+
+import dsl_helper
+
+main() {
+    // No selective import (`import dsl_helper (script, tag)`) and no
+    // qualified call (`dsl_helper.script("a")`) — bare-name fallback
+    // is what's under test.
+    dsl_helper.run("test1") {
+        script("a.sh")
+        tag("smoke")
+    }
+
+    // Second invocation with different values — confirms the receiver
+    // stamping is applied per-call, not stuck on a first stamp.
+    dsl_helper.run("test2") {
+        script("b.sh")
+        tag("integration")
+    }
+}

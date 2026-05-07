@@ -32,6 +32,20 @@ typedef struct {
     int header_count;
     char* body;
     size_t body_length;
+    /* Issue #383 zero-copy fast path. When the response body lives
+     * on disk (set by http_serve_file), the file is `open(2)`'d
+     * here and `fstat(2)`'d into sendfile_size. The connection
+     * writer in handle_one_request decides at send time whether
+     * the connection is eligible for sendfile(2) (cleartext +
+     * HTTP/1.1 + no Range request) — eligible: serialize headers
+     * only, then sendfile the body and close the fd. Ineligible:
+     * read the fd into res->body and fall through to the buffered
+     * serialize+send path. http_response_free closes the fd if
+     * still open, so the FD is owned by the response struct from
+     * the moment http_serve_file returns until response cleanup.
+     * sendfile_fd == -1 means no zero-copy path is staged. */
+    int       sendfile_fd;
+    long long sendfile_size;
 } HttpServerResponse;
 
 // Route handler callback

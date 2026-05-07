@@ -1,0 +1,22 @@
+// Issue #343 codegen tripwire — fixture for the deadline test.
+//
+// `spin` enters a deliberately tight loop. Under --emit=lib the
+// codegen emits a tripwire at the loop head; the harness arms the
+// deadline and asserts the call returns within the configured
+// window even though the source iterates billions of times.
+
+spin(iters: int) -> int {
+    i = 0
+    s = 0
+    while i < iters {
+        // Branch + accumulator that the codegen can't fold to a
+        // closed-form expression at compile time.
+        if i % 2 == 0 { s = s + i } else { s = s - i }
+        i = i + 1
+    }
+    return s
+}
+
+main() {
+    println("${spin(8)}")
+}

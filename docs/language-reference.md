@@ -1381,6 +1381,27 @@ main() {
 
 By default the C symbol matches the Aether-side name (or its namespace-prefixed form when the function lives in an imported module). For a specific C symbol, use the parenthesised form: `@c_callback("aether_signal_handler") on_sigint(sig: int) { … }`. See [`docs/c-interop.md`](c-interop.md#exporting-an-aether-function-as-a-c-callback--c_callback) for the full reference.
 
+### `@derive(eq)` — synthesize an equality helper for a struct
+
+Annotate a struct definition with `@derive(eq)` and the compiler synthesizes `int <StructName>_eq(<StructName> a, <StructName> b)` automatically — a field-by-field `==` chain that returns `1` when every field matches, `0` otherwise:
+
+```aether
+@derive(eq)
+struct Point { x: int, y: int }
+
+main() {
+    a = Point { x: 1, y: 2 }
+    b = Point { x: 1, y: 2 }
+    if Point_eq(a, b) == 1 { println("equal") }
+}
+```
+
+Supported field types in v1: primitive numeric (`int`, `long`, `float`, `byte`, `bool`) and `string`. The codegen lowers `string == string` to `strcmp(...) == 0` automatically, so the synthesizer doesn't need a special path.
+
+`@derive(format)` / `clone` / `hash` and nested-struct fields surface a precise compile-time diagnostic — they're explicitly out of v1 scope and tracked for follow-up commits.
+
+Issue #338.
+
 ---
 
 ## Built-in Functions

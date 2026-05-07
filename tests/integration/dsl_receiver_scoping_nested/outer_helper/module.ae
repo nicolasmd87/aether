@@ -1,0 +1,17 @@
+exports (open, mark)
+
+import std.map
+
+builder open(label: string) {
+    mval = "<unset>"
+    if _builder != null {
+        if map_has(_builder, "mark") == 1 {
+            mval, _ = map.get(_builder, "mark")
+        }
+    }
+    println("outer: label=${label} mark=${mval}")
+}
+
+mark(_ctx: ptr, value: string) {
+    map_put(_ctx, "mark", value)
+}

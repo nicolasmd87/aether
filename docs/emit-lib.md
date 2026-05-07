@@ -293,6 +293,51 @@ etc. Users see idiomatic API calls; the opaque pointer is hidden.
 
 See `tests/integration/emit_lib_swig/` for a worked Python round-trip.
 
+## Per-call resource caps (#343)
+
+Hosts loading untrusted Aether scripts bound the script's
+resource use via two TLS-backed knobs in `include/libaether.h`:
+
+```c
+#include <libaether.h>
+
+aether_set_memory_cap(64 * 1024 * 1024);   // 64 MiB ceiling
+aether_set_call_deadline(50);              // 50 ms wall-clock
+
+call_into_aether();                        // returns inside both bounds
+
+if (aether_deadline_tripped()) {
+    /* The deadline fired mid-call. The Aether call returned
+     * early via the codegen tripwire. Any partial state is
+     * the host's to interpret. */
+}
+```
+
+**Memory cap.** Process-wide. The cap-aware allocators (`std/string`,
+`std/collections`, `runtime/memory/{arena,pool}`) check + account
+against a single `_Atomic uint64_t` counter. The counter tracks
+**current usage**, not high-water-mark — long-running guests that
+allocate-and-free in a loop don't trip the cap on cumulative churn.
+Allocations past the cap return NULL through the existing
+error-string convention; stdlib functions surface "out of memory:
+cap exceeded" up the call chain rather than aborting. Pass `0` to
+disable.
+
+**Wall-clock deadline.** Per-thread monotonic (`CLOCK_MONOTONIC`).
+The codegen emits `if (aether_caps_deadline_tripped()) {
+__aether_abort_call(); break; }` at every `for` / `while` loop head
+under `--emit=lib` — not under `--emit=exe` (zero overhead on
+non-sandboxed builds). On trip the sticky flag flips; subsequent
+loop heads in the same call exit too, so any depth of nested loops
+unwinds in O(N) tripwire-bounded breaks. Pass `0` to disable; pass
+a fresh ms value to clear the sticky flag and re-arm.
+
+The trip is observable via `aether_deadline_tripped()` — the host
+checks after the call to know whether the result was complete or
+truncated. Retrying a tripped deadline is the host's policy:
+re-arm + call again with a more generous budget, or surface
+`Deadline` to the user.
+
 ## What's out of scope for v1
 
 1. **Callbacks held live** — a host can't pass a closure into Aether and
@@ -304,13 +349,11 @@ See `tests/integration/emit_lib_swig/` for a worked Python round-trip.
    (fs / net / os). Fine-grained gates like "allow file_open but not
    dir_delete" don't match any concrete threat model for the
    default-deny shape, and every additional flag is API surface.
-4. **Wall-clock timeout / allocation budget** — if the embedded script
-   loops forever it hangs the host.
-5. **Deep-recursive `aether_config_free`** — the v1 free only releases
+4. **Deep-recursive `aether_config_free`** — the v1 free only releases
    the root map/list; nested containers leak unless the caller walks
    the tree. In practice scripts build one tree and it's all released
    when the host is done.
-6. **Typed returns beyond `void*`** — functions returning `map`/`list`
+5. **Typed returns beyond `void*`** — functions returning `map`/`list`
    come back as `AetherValue*` with no schema. Host knows the shape.
 
 ## Working tests

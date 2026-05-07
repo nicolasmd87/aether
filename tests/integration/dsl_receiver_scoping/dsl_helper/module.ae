@@ -1,0 +1,35 @@
+// Test fixture for issue #333 — DSL block receiver scoping.
+//
+// Models the pattern an SDK module would use: a builder function
+// (`run`) that accepts a trailing block, plus setter functions
+// (`script`, `tag`) that the trailing block invokes. Without
+// receiver scoping, callers had to write `import dsl_helper (script,
+// tag)` to make the bare-name calls resolve. With #333 the bare
+// names fall through to `dsl_helper_script` / `dsl_helper_tag`
+// automatically.
+
+exports (run, script, tag)
+
+import std.map
+
+builder run(label: string) {
+    sval = "<unset>"
+    tval = "<unset>"
+    if _builder != null {
+        if map_has(_builder, "script") == 1 {
+            sval, _ = map.get(_builder, "script")
+        }
+        if map_has(_builder, "tag") == 1 {
+            tval, _ = map.get(_builder, "tag")
+        }
+    }
+    println("run: label=${label} script=${sval} tag=${tval}")
+}
+
+script(_ctx: ptr, name: string) {
+    map_put(_ctx, "script", name)
+}
+
+tag(_ctx: ptr, name: string) {
+    map_put(_ctx, "tag", name)
+}

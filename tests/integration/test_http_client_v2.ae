@@ -233,6 +233,8 @@ main() {
     print("=== std.http.client v2 ===\n\n")
 
     raw = http.server_create(PORT)
+
+    http.server_set_host(raw, "127.0.0.1")
     if raw == 0 {
         print("FAIL: server_create returned 0\n")
         exit(1)

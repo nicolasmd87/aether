@@ -1,13 +1,40 @@
 #!/bin/sh
-# std.http.proxy pool/LB/health/breaker/cache/drain/retry/rate-limit/trace/metrics integration tests.
+# std.http.proxy pool/LB/health/breaker integration tests, part 1 of 2.
 #
-# Each scenario boots three upstream processes (A, B, C on
-# :19101/19102/19103) plus a proxy process (mode-specific config
-# on :19100), runs the assertions, then tears all four down before
-# moving on. Exhaustive — covers every proxy feature beyond what
-# tests/integration/http_reverse_proxy/ already covers.
-
-set -e
+# Tests 1-8 live here: round-robin / weighted-RR / ip-hash / cookie-
+# hash / drain / health (× 2) / breaker-open. The remaining tests
+# (breaker-recovery, cache × 3, retry, rate-limit, trace, metrics)
+# live in test_http_reverse_proxy_pool_extra.sh.
+#
+# DESIGN — warm upstreams + fresh proxy + proxy-side metrics.
+#
+# 1. Three upstreams (A, B, C on :19101/19102/19103) spawn ONCE at
+#    the top and stay alive across every subtest. Per subtest only
+#    the proxy bounces. Cuts process spawns from 4×8=32 to 3+8=11
+#    on the slow Windows MSYS2 runner — proven necessary after
+#    per-subtest spawn timed out at 180s in CI.
+#
+# 2. Counters come from the proxy's own /proxy-metrics endpoint
+#    (`aether_proxy_upstream_requests_total{upstream=X,class="2xx"}`)
+#    rather than a custom /count on each upstream. The proxy is
+#    fresh per subtest so its metrics start at 0 — no /admin/reset
+#    handshake, no shared mutable state across subtests, no false-
+#    positive arithmetic when a curl flakes mid-test.
+#
+# 3. Health / breaker waits poll /proxy-metrics for the actual gauge
+#    rather than `sleep N`. On fast machines the wait collapses to
+#    a single round-trip; on slow machines it stretches until the
+#    state actually changes.
+#
+# 4. SIGKILL teardown — SIGTERM left `wait $pid` blocked
+#    indefinitely on MSYS2 because the http_server's signal handler
+#    didn't fully reap. kill -9 maps to TerminateProcess on MSYS2
+#    (synchronous, uninterceptable, no `wait` needed).
+#
+# 5. NO `set -e`. A transient curl flake would otherwise kill the
+#    script with no diagnostic, surfacing in CI as the dreaded
+#    "(no output)" failure. Real failures call `fail` or `exit 1`
+#    explicitly with a clear message.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
@@ -20,10 +47,14 @@ fi
 
 TMPDIR="$(mktemp -d)"
 PIDS=""
+PROXY_PID=""
+
 cleanup() {
+    if [ -n "$PROXY_PID" ]; then
+        kill -9 "$PROXY_PID" 2>/dev/null || true
+    fi
     for pid in $PIDS; do
-        kill "$pid" 2>/dev/null || true
-        wait "$pid" 2>/dev/null || true
+        kill -9 "$pid" 2>/dev/null || true
     done
     rm -rf "$TMPDIR"
 }
@@ -41,379 +72,261 @@ start_proc() {
     log="$TMPDIR/$role.log"
     "$TMPDIR/server" "$role" >"$log" 2>&1 &
     new_pid=$!
-    PIDS="$PIDS $new_pid"
+    disown "$new_pid" 2>/dev/null || true
     eval "PID_$role=\$new_pid"
 }
 
+# Poll /health on the named port until it answers OR the named pid
+# dies. On timeout dump the role's log so the next failure is
+# self-explaining instead of producing the dreaded "(no output)".
 wait_for_port() {
-    port="$1"
+    role="$1"; port="$2"
+    log="$TMPDIR/$role.log"
+    pid=$(eval echo \$PID_$role)
     deadline=$(($(date +%s) + 15))
     while [ "$(date +%s)" -lt "$deadline" ]; do
-        # Probe /health (registered on every upstream + 404 on proxy
-        # since the proxy mount is /echo). Avoid /echo: that's the
-        # proxy mount and would forward to an upstream, incrementing
-        # its counter and corrupting the post-test count_get checks.
-        if curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$port/health" 2>/dev/null; then
+        if ! kill -0 "$pid" 2>/dev/null; then
+            echo "  [FAIL] $role died:"; head -30 "$log"; exit 1
+        fi
+        if curl -s -o /dev/null --connect-timeout 0.3 --max-time 1 \
+                "http://127.0.0.1:$port/health" 2>/dev/null; then
             return 0
         fi
         sleep 0.1
     done
-    echo "  [FAIL] port $port never accepted"; exit 1
-}
-
-stop_all() {
-    for pid in $PIDS; do
-        kill "$pid" 2>/dev/null || true
-        wait "$pid" 2>/dev/null || true
-    done
-    PIDS=""
-    # Wait for the kernel to release the bound ports — kill is
-    # async, so a fast restart can still see the previous bind
-    # owning the port. Poll the ports directly until they're free
-    # (or 5s passes).
-    deadline=$(($(date +%s) + 5))
-    while [ "$(date +%s)" -lt "$deadline" ]; do
-        if ! lsof -i :19100 -i :19101 -i :19102 -i :19103 \
-              >/dev/null 2>&1; then
-            return 0
-        fi
-        sleep 0.1
-    done
+    echo "  [FAIL] $role never accepted on port $port:"; head -30 "$log"; exit 1
 }
 
 start_three_upstreams() {
-    start_proc upstream_a
-    start_proc upstream_b
-    start_proc upstream_c
-    wait_for_port 19101
-    wait_for_port 19102
-    wait_for_port 19103
+    start_proc upstream_a; PIDS="$PIDS $PID_upstream_a"
+    start_proc upstream_b; PIDS="$PIDS $PID_upstream_b"
+    start_proc upstream_c; PIDS="$PIDS $PID_upstream_c"
+    wait_for_port upstream_a 19101
+    wait_for_port upstream_b 19102
+    wait_for_port upstream_c 19103
 }
 
+# Bounce just the proxy. The 3 upstreams stay warm.
 start_proxy() {
-    start_proc "$1"
-    wait_for_port 19100
+    proxy_role="$1"
+    start_proc "$proxy_role"
+    PROXY_PID=$(eval echo \$PID_$proxy_role)
+    wait_for_port "$proxy_role" 19100
 }
 
-setup() {
-    proxy_role="$1"
-    start_three_upstreams
-    start_proxy "$proxy_role"
-    sleep 0.3
+stop_proxy() {
+    if [ -n "$PROXY_PID" ]; then
+        kill -9 "$PROXY_PID" 2>/dev/null || true
+        PROXY_PID=""
+    fi
+}
+
+# Reset upstream-side test knobs (force_503 only — counters are
+# read from the proxy side now). Idempotent: each subtest that
+# cares calls /admin/200 to undo any prior /admin/503 from another
+# subtest. Per-subtest cleanup, not per-subtest setup.
+clear_upstream_b_503() {
+    curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/200" 2>/dev/null || true
 }
 
 PROXY="http://127.0.0.1:19100"
-fail() { echo "  [FAIL] $1"; exit 1; }
 
-# count_get <port>  →  current shim counter for that upstream
-count_get() {
-    curl -s --max-time 3 "http://127.0.0.1:$1/count"
+# Dump everything anyone could want to know about the test state in
+# one snapshot, then exit 1. Every failure path on this script
+# routes through here so a CI failure produces a self-contained
+# diagnostic — no round-trip to add `cat upstream.log` and re-run.
+dump_diagnostics() {
+    echo "  --- diagnostic snapshot ---"
+    for r in upstream_a upstream_b upstream_c proxy; do
+        case $r in
+            proxy) pid="$PROXY_PID" ;;
+            *)     pid=$(eval echo \$PID_$r) ;;
+        esac
+        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+            echo "  $r (pid=$pid): alive"
+        else
+            echo "  $r (pid=$pid): DEAD"
+            log="$TMPDIR/$r.log"
+            # Use the matching <role>.log; for proxy the role name
+            # varies per subtest, so search the proxy_* logs.
+            if [ "$r" = "proxy" ] && [ ! -f "$log" ]; then
+                log=$(ls "$TMPDIR"/proxy_*.log 2>/dev/null | tail -1)
+            fi
+            if [ -n "$log" ] && [ -f "$log" ]; then
+                echo "  $r log tail:"
+                tail -15 "$log" 2>/dev/null | sed 's/^/    /'
+            fi
+        fi
+    done
+    echo "  --- live /proxy-metrics (counters/health/breaker) ---"
+    curl -s --max-time 3 "$PROXY/proxy-metrics" 2>/dev/null \
+        | grep -E "requests_total|upstream_healthy|breaker_state|cache_hits" \
+        | head -30 | sed 's/^/    /' || echo "    (proxy not responding)"
 }
 
-# count_total  →  sum across A+B+C
-count_total() {
-    a=$(count_get 19101)
-    b=$(count_get 19102)
-    c=$(count_get 19103)
-    echo $((a + b + c))
+fail() { echo "  [FAIL] $1"; dump_diagnostics; exit 1; }
+
+# ----- proxy-side counter reads --------------------------------
+# Read aether_proxy_upstream_requests_total{upstream=X,class="2xx"}
+# from /proxy-metrics. Fresh proxy → starts at 0 each subtest.
+# Retries on transient curl failure; exits loudly on persistent
+# failure so a malformed metric or dead proxy doesn't get masked
+# as a value of "0" via bash arithmetic on an empty string.
+metric_2xx() {
+    upstream_url="$1"
+    for attempt in 1 2 3; do
+        body=$(curl -s --max-time 3 "$PROXY/proxy-metrics" 2>/dev/null)
+        v=$(printf '%s\n' "$body" \
+            | grep -F "aether_proxy_upstream_requests_total{upstream=\"${upstream_url}\",class=\"2xx\"}" \
+            | awk '{print $NF}')
+        case "$v" in
+            ''|*[!0-9]*) sleep 0.1; continue ;;
+            *) printf '%s' "$v"; return 0 ;;
+        esac
+    done
+    fail "metric_2xx $upstream_url returned non-integer after 3 attempts: '$v'"
 }
+
+# Wait until /proxy-metrics reports the upstream's health-check
+# state matches `expected_value` (0 = unhealthy, 1 = healthy).
+wait_for_upstream_health() {
+    upstream_url="$1"; expected_value="$2"; deadline_sec="${3:-15}"
+    deadline=$(($(date +%s) + deadline_sec))
+    while [ "$(date +%s)" -lt "$deadline" ]; do
+        body=$(curl -s --max-time 2 "$PROXY/proxy-metrics" 2>/dev/null || true)
+        if echo "$body" | grep -qF \
+            "aether_proxy_upstream_healthy{upstream=\"${upstream_url}\"} ${expected_value}"; then
+            return 0
+        fi
+        sleep 0.1
+    done
+    fail "$upstream_url did not reach healthy=$expected_value within ${deadline_sec}s"
+}
+
+parallel_echo() {
+    n="$1"
+    URLS=""
+    i=0
+    while [ $i -lt $n ]; do
+        URLS="$URLS $PROXY/echo"
+        i=$((i + 1))
+    done
+    curl -Z -s -o /dev/null --max-time 5 $URLS >/dev/null 2>&1 || true
+}
+
+# ----- spawn the warm upstreams ONCE ---------------------------
+start_three_upstreams
 
 # ---- Test 1: round-robin distribution ---------------------
-setup proxy_rr
-RESP_TAGS=""
+start_proxy proxy_rr
 i=0
 while [ $i -lt 9 ]; do
-    body=$(curl -s --max-time 3 "$PROXY/echo")
-    tag=$(echo "$body" | head -1)
-    RESP_TAGS="$RESP_TAGS $tag"
+    curl -s -o /dev/null --max-time 3 "$PROXY/echo" || true
     i=$((i + 1))
 done
-# Each upstream should have served 3 of the 9 requests (counter=3).
-[ "$(count_get 19101)" = "3" ] || fail "RR counter A: $(count_get 19101) expected 3"
-[ "$(count_get 19102)" = "3" ] || fail "RR counter B: $(count_get 19102) expected 3"
-[ "$(count_get 19103)" = "3" ] || fail "RR counter C: $(count_get 19103) expected 3"
-stop_all
+A=$(metric_2xx "http://localhost:19101")
+B=$(metric_2xx "http://localhost:19102")
+C=$(metric_2xx "http://localhost:19103")
+[ "$A" = "3" ] || fail "RR A=$A expected 3"
+[ "$B" = "3" ] || fail "RR B=$B expected 3"
+[ "$C" = "3" ] || fail "RR C=$C expected 3"
+stop_proxy
 
 # ---- Test 2: weighted RR (3:1:1) — 50 requests ----------
-setup proxy_wrr
-i=0
-while [ $i -lt 50 ]; do
-    curl -s -o /dev/null --max-time 3 "$PROXY/echo"
-    i=$((i + 1))
-done
-A=$(count_get 19101); B=$(count_get 19102); C=$(count_get 19103)
-# 3:1:1 over 50 → A≈30, B≈10, C≈10. Allow ±5 for boundary effects.
+start_proxy proxy_wrr
+parallel_echo 50
+A=$(metric_2xx "http://localhost:19101")
+B=$(metric_2xx "http://localhost:19102")
+C=$(metric_2xx "http://localhost:19103")
 [ "$A" -ge 25 ] && [ "$A" -le 35 ] || fail "WRR A=$A expected 25-35"
 [ "$B" -ge 5  ] && [ "$B" -le 15 ] || fail "WRR B=$B expected 5-15"
 [ "$C" -ge 5  ] && [ "$C" -le 15 ] || fail "WRR C=$C expected 5-15"
 [ $((A + B + C)) -eq 50 ] || fail "WRR total=$((A + B + C)) expected 50"
-stop_all
+stop_proxy
 
 # ---- Test 3: ip_hash determinism --------------------------
-setup proxy_ip_hash
-# Same X-Forwarded-For across 12 requests → all hit same upstream.
+start_proxy proxy_ip_hash
 i=0
 TAG=""
 while [ $i -lt 12 ]; do
-    body=$(curl -s --max-time 3 -H 'X-Forwarded-For: 192.0.2.42' "$PROXY/echo")
+    body=$(curl -s --max-time 3 -H 'X-Forwarded-For: 192.0.2.42' "$PROXY/echo" 2>/dev/null)
     cur_tag=$(echo "$body" | head -1 | cut -d: -f1)
     if [ -z "$TAG" ]; then TAG="$cur_tag"; fi
     [ "$cur_tag" = "$TAG" ] || fail "ip_hash inconsistent: $cur_tag vs $TAG"
     i=$((i + 1))
 done
-stop_all
+stop_proxy
 
 # ---- Test 4: cookie_hash determinism ----------------------
-setup proxy_cookie_hash
+start_proxy proxy_cookie_hash
 i=0
 TAG=""
 while [ $i -lt 12 ]; do
-    body=$(curl -s --max-time 3 -H 'Cookie: SESSIONID=user-12345' "$PROXY/echo")
+    body=$(curl -s --max-time 3 -H 'Cookie: SESSIONID=user-12345' "$PROXY/echo" 2>/dev/null)
     cur_tag=$(echo "$body" | head -1 | cut -d: -f1)
     if [ -z "$TAG" ]; then TAG="$cur_tag"; fi
     [ "$cur_tag" = "$TAG" ] || fail "cookie_hash inconsistent: $cur_tag vs $TAG"
     i=$((i + 1))
 done
-# Different cookie value should be deterministic on its own (may
-# coincidentally hash to the same upstream — just verify
-# determinism with the second value).
 TAG2=""
 i=0
 while [ $i -lt 8 ]; do
-    body=$(curl -s --max-time 3 -H 'Cookie: SESSIONID=user-other' "$PROXY/echo")
+    body=$(curl -s --max-time 3 -H 'Cookie: SESSIONID=user-other' "$PROXY/echo" 2>/dev/null)
     cur_tag=$(echo "$body" | head -1 | cut -d: -f1)
     if [ -z "$TAG2" ]; then TAG2="$cur_tag"; fi
     [ "$cur_tag" = "$TAG2" ] || fail "cookie_hash second-cookie inconsistent"
     i=$((i + 1))
 done
-stop_all
+stop_proxy
 
 # ---- Test 5: drain — A drained on startup; A counter stays 0 -
-setup proxy_drain
-i=0
-while [ $i -lt 12 ]; do
-    curl -s -o /dev/null --max-time 3 "$PROXY/echo"
-    i=$((i + 1))
-done
-A=$(count_get 19101); B=$(count_get 19102); C=$(count_get 19103)
+start_proxy proxy_drain
+parallel_echo 12
+A=$(metric_2xx "http://localhost:19101")
+B=$(metric_2xx "http://localhost:19102")
+C=$(metric_2xx "http://localhost:19103")
 [ "$A" = "0" ] || fail "drain: A served $A requests (expected 0)"
 [ $((B + C)) -eq 12 ] || fail "drain: B+C=$((B + C)) expected 12"
-stop_all
+stop_proxy
 
 # ---- Test 6: health checks kill an unhealthy upstream -----
-setup proxy_health
-# First, force B to start serving 503 + flip its /health to 503.
-curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/503"
-# Wait long enough for unhealthy_threshold * interval (2 * 200ms = 400ms),
-# plus one extra interval to ensure the first 503 probe completes.
-sleep 1.5
-# Now drive 12 requests; none should land on B.
-i=0
-while [ $i -lt 12 ]; do
-    curl -s -o /dev/null --max-time 3 "$PROXY/echo"
-    i=$((i + 1))
-done
-B=$(count_get 19102)
-# Tolerance: B may have served 1-2 before being marked down.
+start_proxy proxy_health
+curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/503" 2>/dev/null || true
+wait_for_upstream_health "http://localhost:19102" 0 || exit 1
+parallel_echo 12
+B=$(metric_2xx "http://localhost:19102")
+# Up to 2 requests may have landed on B before the health-check
+# thread observed and broadcast the unhealthy state.
 [ "$B" -le 2 ] || fail "health: B served $B requests after marked unhealthy"
-stop_all
+clear_upstream_b_503
+stop_proxy
 
 # ---- Test 7: health recovery — flip B back, it rejoins -----
-setup proxy_health
-curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/503"
-sleep 1.5  # marked unhealthy
-# Verify B is now skipped
-i=0
-while [ $i -lt 6 ]; do
-    curl -s -o /dev/null --max-time 3 "$PROXY/echo"
-    i=$((i + 1))
-done
-B_BEFORE=$(count_get 19102)
-# Flip B back to 200
-curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/200"
-# Wait for healthy_threshold * interval (2 * 200ms) + slack
-sleep 1.5
-# Drive more requests; B should be served again
-i=0
-while [ $i -lt 12 ]; do
-    curl -s -o /dev/null --max-time 3 "$PROXY/echo"
-    i=$((i + 1))
-done
-B_AFTER=$(count_get 19102)
+start_proxy proxy_health
+curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/503" 2>/dev/null || true
+wait_for_upstream_health "http://localhost:19102" 0 || exit 1
+parallel_echo 6
+B_BEFORE=$(metric_2xx "http://localhost:19102")
+curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/200" 2>/dev/null || true
+wait_for_upstream_health "http://localhost:19102" 1 || exit 1
+parallel_echo 12
+B_AFTER=$(metric_2xx "http://localhost:19102")
 DELTA=$((B_AFTER - B_BEFORE))
 [ "$DELTA" -ge 2 ] || fail "health recovery: B delta=$DELTA expected ≥2"
-stop_all
+stop_proxy
 
 # ---- Test 8: circuit breaker opens after consecutive failures ----
-setup proxy_breaker
-# Force B to 503 immediately.
-curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/503"
-# Drive ~10 RR requests; ~3 should hit B (3 failures), then breaker
-# opens. With breaker open, subsequent traffic to B routes elsewhere.
-i=0
-while [ $i -lt 12 ]; do
-    curl -s -o /dev/null --max-time 3 "$PROXY/echo"
-    i=$((i + 1))
-done
-B=$(count_get 19102)
+start_proxy proxy_breaker
+curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/503" 2>/dev/null || true
+parallel_echo 12
+B_5xx=$(curl -s --max-time 3 "$PROXY/proxy-metrics" 2>/dev/null \
+    | grep -F 'aether_proxy_upstream_requests_total{upstream="http://localhost:19102",class="5xx"}' \
+    | awk '{print $NF}')
+B_5xx="${B_5xx:-0}"
 # Once the breaker opens (at threshold=3), B shouldn't receive
 # more new requests. Allow a small tolerance for half-open probe.
-[ "$B" -le 5 ] || fail "breaker: B served $B requests (expected ≤5)"
-stop_all
+[ "$B_5xx" -le 5 ] || fail "breaker: B served $B_5xx 5xx requests (expected ≤5)"
+clear_upstream_b_503
+stop_proxy
 
-# ---- Test 9: circuit breaker half-open recovery ------------
-setup proxy_breaker
-curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/503"
-i=0
-while [ $i -lt 8 ]; do
-    curl -s -o /dev/null --max-time 3 "$PROXY/echo"
-    i=$((i + 1))
-done
-# Breaker open. Flip B to 200.
-curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/200"
-# Wait open_duration_ms (1500ms) + slack
-sleep 2
-B_BEFORE=$(count_get 19102)
-i=0
-while [ $i -lt 9 ]; do
-    curl -s -o /dev/null --max-time 3 "$PROXY/echo"
-    i=$((i + 1))
-done
-B_AFTER=$(count_get 19102)
-DELTA=$((B_AFTER - B_BEFORE))
-[ "$DELTA" -ge 2 ] || fail "breaker recovery: B delta=$DELTA expected ≥2"
-stop_all
-
-# ---- Test 10: cache hit — counter unchanged on second call --
-# Cache reads aggregate counters across A+B+C because the TTL-
-# expired refetch under round-robin can land on any upstream.
-setup proxy_cache
-curl -s -o /dev/null --max-time 3 "$PROXY/echo_cacheable"
-COUNT_BEFORE=$(count_total)
-# Repeat the same URL; cache should HIT — total counter unchanged.
-i=0
-while [ $i -lt 5 ]; do
-    curl -s -o /dev/null --max-time 3 "$PROXY/echo_cacheable"
-    i=$((i + 1))
-done
-COUNT_AFTER=$(count_total)
-DELTA=$((COUNT_AFTER - COUNT_BEFORE))
-[ "$DELTA" = "0" ] || fail "cache hit: counter delta=$DELTA expected 0"
-HDRS=$(curl -s -D - --max-time 3 -o /dev/null "$PROXY/echo_cacheable")
-echo "$HDRS" | grep -qi '^X-Cache: HIT' || fail "cache hit: missing X-Cache: HIT header"
-stop_all
-
-# ---- Test 11: cache TTL expiry ------------------------------
-# Uses the dedicated short-TTL route /echo_cacheable_ttl (max-age=1).
-# Keeping it on its own path lets the HIT test above (T10) use a
-# generous TTL on /echo_cacheable without coupling the two.
-setup proxy_cache
-curl -s -o /dev/null --max-time 3 "$PROXY/echo_cacheable_ttl"
-COUNT_BEFORE=$(count_total)
-sleep 2.5
-curl -s -o /dev/null --max-time 3 "$PROXY/echo_cacheable_ttl"
-COUNT_AFTER=$(count_total)
-DELTA=$((COUNT_AFTER - COUNT_BEFORE))
-[ "$DELTA" -ge 1 ] || fail "cache TTL: counter delta=$DELTA expected ≥1"
-stop_all
-
-# ---- Test 12: cache Vary — different Accept-Encoding = different entry --
-setup proxy_cache
-# First gzip request — miss.
-curl -s -o /dev/null --max-time 3 -H 'Accept-Encoding: gzip' "$PROXY/echo_vary"
-# Repeat same encoding — should HIT (counter unchanged).
-COUNT_BEFORE=$(count_total)
-curl -s -o /dev/null --max-time 3 -H 'Accept-Encoding: gzip' "$PROXY/echo_vary"
-COUNT_AFTER_GZIP=$(count_total)
-[ "$COUNT_AFTER_GZIP" = "$COUNT_BEFORE" ] || fail "cache Vary: same key delta=$((COUNT_AFTER_GZIP - COUNT_BEFORE)) expected 0"
-# Different Accept-Encoding — different cache key, MISS.
-curl -s -o /dev/null --max-time 3 -H 'Accept-Encoding: identity' "$PROXY/echo_vary"
-COUNT_AFTER_BOTH=$(count_total)
-[ $((COUNT_AFTER_BOTH - COUNT_AFTER_GZIP)) -ge 1 ] \
-    || fail "cache Vary: identity didn't refetch (delta=$((COUNT_AFTER_BOTH - COUNT_AFTER_GZIP)))"
-stop_all
-
-# ---- Test 13: idempotent retry on 5xx ----------------------
-setup proxy_retry
-# Force B to 503. RR will at some point land on B; with retries
-# the request should succeed against another upstream eventually.
-# To keep the test deterministic, we use a low-traffic check:
-# fire 9 requests; each should return 200 thanks to retries.
-curl -s -o /dev/null --max-time 3 -X POST "http://127.0.0.1:19102/admin/503"
-i=0
-ALL_OK=1
-while [ $i -lt 9 ]; do
-    body=$(curl -s --max-time 5 "$PROXY/echo")
-    tag=$(echo "$body" | head -1 | cut -d: -f1)
-    case "$tag" in
-        tag=A|tag=C) : ;;  # ok — retry landed on A or C
-        tag=B)
-            # B answered with 503; retry should have fired.
-            # If status was 503 the body would be "B-down:N" not "tag=B".
-            # Either way: ok if proxy ultimately returned a tag=*.
-            : ;;
-        *) ALL_OK=0 ;;
-    esac
-    i=$((i + 1))
-done
-[ "$ALL_OK" = "1" ] || fail "retry: not all 9 requests returned a tag= response"
-stop_all
-
-# ---- Test 14: per-upstream rate limit (1 rps) -------------
-setup proxy_rate_limit
-# Three upstreams, each capped at 1 rps. Burst 1 means each can
-# serve 1 immediately, then ~1/sec. Drive 12 requests as fast
-# as possible — only 3 should succeed (one per upstream's burst);
-# subsequent ones should hit the rate limit and return 503.
-T0=$(date +%s)
-SUCCESSES=0
-FIVE_OH_THREES=0
-i=0
-while [ $i -lt 12 ]; do
-    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 3 "$PROXY/echo")
-    if [ "$code" = "200" ]; then SUCCESSES=$((SUCCESSES + 1)); fi
-    if [ "$code" = "503" ]; then FIVE_OH_THREES=$((FIVE_OH_THREES + 1)); fi
-    i=$((i + 1))
-done
-T1=$(date +%s)
-ELAPSED=$((T1 - T0))
-# In the first second, expect ~3 successes (one per upstream
-# burst). The remaining 9 hit the cap → 503. Allow some tolerance
-# because if the loop takes >1s the bucket may refill.
-if [ "$ELAPSED" -le 2 ]; then
-    [ "$SUCCESSES" -le 7 ] || fail "rate limit: $SUCCESSES successes in ${ELAPSED}s (expected ≤7)"
-    [ "$FIVE_OH_THREES" -ge 3 ] || fail "rate limit: only $FIVE_OH_THREES 503s (expected ≥3)"
-fi
-stop_all
-
-# ---- Test 15: W3C Trace-Context inject -------------------
-setup proxy_trace
-# Inbound request with no traceparent. We can't easily inspect the
-# OUTBOUND traceparent (the upstream's /echo doesn't echo it back),
-# so test the passthrough form: send WITH traceparent, verify the
-# proxy forwards it. Inject behaviour is exercised at the C-level
-# by the inject_traceparent_if_absent unit logic — covered by the
-# build itself.
-INBOUND='00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01'
-RESP=$(curl -s --max-time 3 -H "traceparent: $INBOUND" "$PROXY/echo")
-echo "$RESP" | head -1 | grep -qE '^tag=[ABC]' || fail "trace passthrough: no tag in response"
-stop_all
-
-# ---- Test 16: Prometheus metrics endpoint ----------------
-setup proxy_rr
-# Drive some traffic to populate the counters.
-i=0
-while [ $i -lt 6 ]; do
-    curl -s -o /dev/null --max-time 3 "$PROXY/echo"
-    i=$((i + 1))
-done
-METRICS=$(curl -s --max-time 3 "$PROXY/proxy-metrics")
-echo "$METRICS" | grep -q 'aether_proxy_upstream_requests_total' || fail "metrics: requests_total absent"
-echo "$METRICS" | grep -q 'aether_proxy_upstream_inflight'        || fail "metrics: inflight absent"
-echo "$METRICS" | grep -q 'aether_proxy_upstream_healthy'         || fail "metrics: healthy absent"
-echo "$METRICS" | grep -q 'aether_proxy_upstream_breaker_state'   || fail "metrics: breaker absent"
-echo "$METRICS" | grep -q 'aether_proxy_cache_hits_total'         || fail "metrics: cache_hits absent"
-echo "$METRICS" | grep -q '# TYPE'                                || fail "metrics: TYPE block absent"
-stop_all
-
-echo "  [PASS] http_reverse_proxy_pool: 16/16 — RR/WRR/ip_hash/cookie_hash/drain/health(2)/breaker(2)/cache(3)/retry/rate-limit/trace/metrics"
+echo "  [PASS] http_reverse_proxy_pool: 8/8 — RR/WRR/ip_hash/cookie_hash/drain/health(2)/breaker-open"

@@ -32,6 +32,15 @@ SymbolTable* create_symbol_table(SymbolTable* parent) {
     // Inherit merged-body flag so nested scopes (loops, blocks, closures
     // inside a merged function) keep the relaxed namespace visibility.
     table->inside_merged_body = parent ? parent->inside_merged_body : 0;
+    // dsl_receiver does NOT inherit. It is a per-trailing-closure-scope
+    // marker that typecheck_function_call stamps on the immediate
+    // closure body. Nested closures inside that body get their own
+    // scope without a receiver unless they are themselves trailing
+    // closures of another member-access call. Lookup walks the parent
+    // chain when the local fallback misses, so an outer DSL block's
+    // receiver still wins over the file scope for nested-but-non-DSL
+    // identifiers — see lookup_symbol below.
+    table->dsl_receiver = NULL;
     return table;
 }
 
@@ -59,6 +68,7 @@ void free_symbol_table(SymbolTable* table) {
 
     free_name_list(table->hidden_names);
     free_name_list(table->seal_whitelist);
+    if (table->dsl_receiver) free(table->dsl_receiver);
 
     free(table);
 }
@@ -144,6 +154,36 @@ Symbol* lookup_symbol(SymbolTable* table, const char* name) {
     // resolution that would walk OUT of this scope into a parent.
     Symbol* symbol = lookup_symbol_local(table, name);
     if (symbol) return symbol;
+
+    // Issue #333 DSL block receiver fallback: when this scope is the
+    // body of a `receiver.method(args) { ... }` trailing closure,
+    // `dsl_receiver` names the receiver namespace or struct type.
+    // Try `<dsl_receiver>_<name>` — that's how Aether codegen names
+    // namespace and struct-method helpers (e.g. `bash_script`,
+    // `Builder_configure`). The walk uses lookup_symbol_local at
+    // each level to avoid re-entering this DSL fallback at parent
+    // scopes (lookup_symbol is the recursion vector; lookup_symbol_local
+    // is not).
+    //
+    // Nested DSL blocks: inner block's dsl_receiver is checked first.
+    // If the rewrite misses and the parent chain is then walked, the
+    // outer block's dsl_receiver is checked when the recursion lands
+    // on its scope — natural outer→inner shadowing without explicit
+    // stack management.
+    if (table->dsl_receiver && table->dsl_receiver[0] && name[0]) {
+        /* Bounded snprintf via precision spec — caps each component
+         * at 250 bytes regardless of strlen, which keeps GCC's
+         * format-truncation analyzer happy on -Werror builds.
+         * Identifiers above 250 bytes don't occur in practice
+         * (longest stdlib symbol is <40 chars). */
+        char rewritten[512];
+        snprintf(rewritten, sizeof(rewritten), "%.250s_%.250s",
+                 table->dsl_receiver, name);
+        for (SymbolTable* t = table; t; t = t->parent) {
+            Symbol* s = lookup_symbol_local(t, rewritten);
+            if (s) return s;
+        }
+    }
 
     // Crossing the scope boundary upward: enforce hide / seal directives.
     // - `hide foo` blocks any name in the hidden_names list.
@@ -2969,6 +3009,20 @@ int typecheck_expression(ASTNode* expr, SymbolTable* table) {
             // Create a child scope for the closure's parameters
             SymbolTable* closure_scope = create_symbol_table(table);
 
+            // Issue #333: when typecheck_function_call stamped a
+            // `dsl_recv:<name>` annotation on this closure (because
+            // the closure is the trailing block of a member-access
+            // call), seed the closure scope's dsl_receiver. lookup_symbol
+            // uses it to resolve unqualified calls inside the body
+            // through the `<receiver>_<name>` rewrite.
+            if (expr->annotation &&
+                strncmp(expr->annotation, "dsl_recv:", 9) == 0) {
+                const char* recv = expr->annotation + 9;
+                if (*recv) {
+                    closure_scope->dsl_receiver = strdup(recv);
+                }
+            }
+
             // Register closure parameters in the child scope
             for (int i = 0; i < expr->child_count; i++) {
                 ASTNode* child = expr->children[i];
@@ -3328,6 +3382,41 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
     // Use qualified lookup to handle namespaced calls like string.new -> string_new
     Symbol* symbol = lookup_qualified_symbol(table, call->value);
 
+    // Issue #333 DSL receiver fallback: when the call is bare-name
+    // (no dot in call->value) and the symbol resolved through the
+    // <receiver>_<name> rewrite in lookup_symbol, the symbol's
+    // canonical C name differs from call->value. Rewrite call->value
+    // to the qualified form `<receiver>.<name>` so codegen (which
+    // converts `.` to `_`) emits the resolved C symbol rather than
+    // the bare identifier — without this, you get
+    // "implicit function declaration" warnings and a link error.
+    if (symbol && call->value && !strchr(call->value, '.') &&
+        symbol->name && strcmp(symbol->name, call->value) != 0) {
+        // The fallback rewrite is `<receiver>_<name>`. Reverse the
+        // direction so call->value carries `<receiver>.<name>` —
+        // matching the convention used by lookup_qualified_symbol's
+        // qualified-form input. Find the underscore that separates
+        // the receiver prefix from the original bare name (suffix
+        // matches call->value).
+        size_t orig_len = strlen(call->value);
+        size_t resolved_len = strlen(symbol->name);
+        if (resolved_len > orig_len + 1 &&
+            strcmp(symbol->name + resolved_len - orig_len, call->value) == 0 &&
+            symbol->name[resolved_len - orig_len - 1] == '_') {
+            size_t prefix_len = resolved_len - orig_len - 1;
+            size_t qualified_len = prefix_len + 1 + orig_len + 1;
+            char* qualified = malloc(qualified_len);
+            if (qualified) {
+                memcpy(qualified, symbol->name, prefix_len);
+                qualified[prefix_len] = '.';
+                memcpy(qualified + prefix_len + 1, call->value, orig_len);
+                qualified[qualified_len - 1] = '\0';
+                free(call->value);
+                call->value = qualified;
+            }
+        }
+    }
+
     // Rewrite import alias to qualified name for codegen (e.g. "release" -> "build.release")
     if (symbol && symbol->is_function && call->value) {
         const char* alias_target = find_import_alias(call->value);
@@ -3497,6 +3586,89 @@ int typecheck_function_call(ASTNode* call, SymbolTable* table) {
                 rewrite_caller_site_intrinsics(default_clone, call->line, call->column);
                 add_child(call, default_clone);
                 param_idx++;
+            }
+        }
+    }
+
+    // Issue #333 DSL block receiver scoping: when the call is in
+    // member-access form (`receiver.method(args) { body }`) and has
+    // trailing AST_CLOSURE children, stamp those closures with the
+    // receiver's namespace so unqualified calls inside the body can
+    // fall back through `<receiver>_<name>` (see lookup_symbol).
+    //
+    // Receiver resolution: split call->value on `.`. If the prefix
+    // is a visible namespace (`bash` in `bash.test(...)`), use it
+    // verbatim. If the prefix is a local variable of struct type
+    // (`b: Builder`), use the type's name (`Builder`). The rewrite
+    // is the same in both cases — namespace and struct-method helpers
+    // share the `<prefix>_<name>` codegen convention.
+    //
+    // Stamping uses the AST_CLOSURE node's annotation field with a
+    // `dsl_recv:` prefix; AST_CLOSURE typecheck reads it and seeds
+    // closure_scope->dsl_receiver. Idempotent: existing annotations
+    // (none today on AST_CLOSURE; `defer` factory annotations live
+    // on AST_VARIABLE_DECLARATION) are preserved.
+    if (call->value && strchr(call->value, '.')) {
+        const char* dot = strchr(call->value, '.');
+        size_t prefix_len = (size_t)(dot - call->value);
+        if (prefix_len > 0 && prefix_len < 256) {
+            char prefix[256];
+            memcpy(prefix, call->value, prefix_len);
+            prefix[prefix_len] = '\0';
+
+            const char* dsl_recv_name = NULL;
+            char type_name_buf[256];
+
+            // Namespace receiver: directly visible.
+            if (is_visible_namespace(prefix, table)) {
+                dsl_recv_name = prefix;
+            } else {
+                // Typed-value receiver: prefix is a local variable;
+                // use its struct type's name.
+                Symbol* recv_sym = lookup_symbol(table, prefix);
+                if (recv_sym && recv_sym->type) {
+                    const char* tn = type_name(recv_sym->type);
+                    if (tn && tn[0] != '\0' &&
+                        strlen(tn) < sizeof(type_name_buf) &&
+                        strcmp(tn, "unknown") != 0 &&
+                        strcmp(tn, "int") != 0 &&
+                        strcmp(tn, "long") != 0 &&
+                        strcmp(tn, "float") != 0 &&
+                        strcmp(tn, "double") != 0 &&
+                        strcmp(tn, "bool") != 0 &&
+                        strcmp(tn, "string") != 0) {
+                        strncpy(type_name_buf, tn, sizeof(type_name_buf) - 1);
+                        type_name_buf[sizeof(type_name_buf) - 1] = '\0';
+                        dsl_recv_name = type_name_buf;
+                    }
+                }
+            }
+
+            if (dsl_recv_name) {
+                for (int i = 0; i < call->child_count; i++) {
+                    ASTNode* child = call->children[i];
+                    if (child && child->type == AST_CLOSURE) {
+                        // Idempotent: skip if already stamped.
+                        if (child->annotation &&
+                            strncmp(child->annotation, "dsl_recv:", 9) == 0) {
+                            continue;
+                        }
+                        size_t a_len = 9 + strlen(dsl_recv_name) + 1;
+                        char* ann = malloc(a_len);
+                        if (ann) {
+                            snprintf(ann, a_len, "dsl_recv:%s", dsl_recv_name);
+                            // Defensive: if annotation is unset, set it.
+                            // If it's set to something else (no current
+                            // user of AST_CLOSURE annotation, but be safe),
+                            // leave it alone so we don't stomp.
+                            if (!child->annotation) {
+                                child->annotation = ann;
+                            } else {
+                                free(ann);
+                            }
+                        }
+                    }
+                }
             }
         }
     }

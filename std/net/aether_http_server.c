@@ -129,13 +129,22 @@ const char* http_request_query(HttpRequest* r) { (void)r; return ""; }
     #endif
 #else
     #include <sys/socket.h>
+    #include <sys/stat.h>          /* fstat / struct stat / S_ISREG */
     #include <netinet/in.h>
     #include <arpa/inet.h>
+    #include <netinet/tcp.h>       /* TCP_CORK / TCP_NOPUSH for sendfile coalescing */
     #include <unistd.h>
     #include <fcntl.h>
     #include <limits.h>
     #include <poll.h>
     #include <errno.h>
+    /* Linux + macOS sendfile(2) live in different headers with
+     * different signatures. Only one is pulled in per platform. */
+    #if defined(__linux__)
+        #include <sys/sendfile.h>
+    #elif defined(__APPLE__)
+        #include <sys/uio.h>
+    #endif
     // I/O polling is handled by aether_io_poller (included via multicore_scheduler.h)
 #endif
 
@@ -207,6 +216,212 @@ static int conn_send(HttpConn* c, const void* buf, int len) {
     }
 #endif
     return (int)send(c->fd, buf, len, 0);
+}
+
+/* Issue #383 zero-copy helpers. */
+
+/* Coalesce headers + sendfile-emitted body into one TCP segment
+ * (or as few as possible) by setting TCP_CORK / TCP_NOPUSH around
+ * the header write + body sendfile. Without it, the kernel may
+ * push a small headers-only segment immediately and follow with
+ * separate body segments — measurable latency hit for small files.
+ *
+ * No-op on Windows (the fast path doesn't run there) and on
+ * platforms without either socket option. Errors are non-fatal:
+ * worst case the response still goes out, just less coalesced. */
+static void conn_cork(HttpConn* c, int on) {
+    if (!c || c->fd < 0) return;
+#ifdef _WIN32
+    (void)on;
+    return;
+#else
+    int v = on ? 1 : 0;
+#  if defined(TCP_CORK)
+    setsockopt(c->fd, IPPROTO_TCP, TCP_CORK, (const void*)&v, sizeof(v));
+#  elif defined(TCP_NOPUSH)
+    setsockopt(c->fd, IPPROTO_TCP, TCP_NOPUSH, (const void*)&v, sizeof(v));
+#  else
+    (void)v;
+#  endif
+#endif
+}
+
+/* Drain `size` bytes from `in_fd` to the connection's socket via
+ * sendfile(2). Returns total bytes written on success, or -1 on
+ * failure (caller should close the connection — partial sends
+ * leave the wire in an inconsistent state for keep-alive).
+ *
+ * Returns -1 on platforms without sendfile (Windows, BSD variants
+ * we haven't wired); the caller falls back to the buffered path.
+ * Never invoked on TLS connections — handle_one_request gates the
+ * call by checking conn->ssl == NULL. */
+static long long conn_sendfile_drain(HttpConn* c, int in_fd, long long size) {
+    if (!c || c->fd < 0 || in_fd < 0 || size < 0) return -1;
+#if defined(__linux__)
+    off_t off = 0;
+    long long total = 0;
+    while (total < size) {
+        size_t want = (size_t)(size - total);
+        ssize_t n = sendfile(c->fd, in_fd, &off, want);
+        if (n > 0) {
+            total += n;
+            continue;
+        }
+        if (n < 0) {
+            if (errno == EINTR) continue;
+            if (errno == EAGAIN || errno == EWOULDBLOCK) {
+                /* Edge case for non-blocking sockets — cooperate
+                 * with poll. The server's accepted sockets are
+                 * blocking by default so this branch is rare. */
+                struct pollfd pfd = { c->fd, POLLOUT, 0 };
+                if (poll(&pfd, 1, 5000) <= 0) return -1;
+                continue;
+            }
+            return -1;
+        }
+        /* n == 0: EOF on input or kernel said zero. Either way
+         * we've sent all that's coming. */
+        break;
+    }
+    return total;
+#elif defined(__APPLE__)
+    long long total = 0;
+    while (total < size) {
+        off_t len = (off_t)(size - total);
+        int rc = sendfile(in_fd, c->fd, (off_t)total, &len, NULL, 0);
+        /* macOS sendfile writes `len` bytes regardless of return
+         * code; len is updated to the actual count. EINTR /
+         * EAGAIN: partial; loop. Other errors: abort. */
+        if (len > 0) total += (long long)len;
+        if (rc == 0) break;
+        if (errno == EINTR) continue;
+        if (errno == EAGAIN || errno == EWOULDBLOCK) {
+            struct pollfd pfd = { c->fd, POLLOUT, 0 };
+            if (poll(&pfd, 1, 5000) <= 0) return -1;
+            continue;
+        }
+        return -1;
+    }
+    return total;
+#else
+    /* Windows / FreeBSD / unsupported. */
+    (void)c; (void)in_fd; (void)size;
+    return -1;
+#endif
+}
+
+/* Returns 1 if the connection + request can take the sendfile fast
+ * path: cleartext (no TLS), HTTP/1.1 (no h2 stream), and no Range
+ * request (slice-aware sendfile is v2). */
+static int sendfile_eligible(HttpConn* c, HttpRequest* req) {
+    if (!c) return 0;
+#ifdef AETHER_HAS_OPENSSL
+    if (c->ssl) return 0;
+#endif
+    if (c->is_h2) return 0;
+    if (req && req->header_keys && req->header_values) {
+        for (int i = 0; i < req->header_count; i++) {
+            if (req->header_keys[i] &&
+                strcasecmp(req->header_keys[i], "Range") == 0) {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+/* Send `res` to `conn`. When res->sendfile_fd is set AND the
+ * request/connection is sendfile-eligible, takes the zero-copy
+ * path: serialize headers only (body is NULL on this path), cork
+ * the socket, conn_send the headers, sendfile the body, uncork.
+ * On ineligibility, reads the fd into res->body first then falls
+ * through to the buffered serialize+send. Either way, owns and
+ * closes the fd before returning.
+ *
+ * Returns 1 when the caller should force-close the connection
+ * (sendfile partial-write, header-send failure, etc.); 0 when the
+ * connection is safe to keep alive. */
+static int send_response_with_optional_sendfile(HttpConn* conn,
+                                                HttpServerResponse* res,
+                                                HttpRequest* req) {
+    if (!conn || !res) return 0;
+
+    int force_close = 0;
+    int sent_via_sendfile = 0;
+
+    if (res->sendfile_fd >= 0 && sendfile_eligible(conn, req)) {
+        size_t resp_len = 0;
+        /* Serialize headers only — body is NULL on the fd path. */
+        char* hdrs = http_response_serialize_len(res, &resp_len);
+        if (hdrs) {
+            conn_cork(conn, 1);
+            int header_send = conn_send(conn, hdrs, (int)resp_len);
+            free(hdrs);
+            if (header_send < 0) {
+                close(res->sendfile_fd);
+                res->sendfile_fd = -1;
+                force_close = 1;
+            } else {
+                long long sent = conn_sendfile_drain(conn, res->sendfile_fd,
+                                                    res->sendfile_size);
+                conn_cork(conn, 0);
+                close(res->sendfile_fd);
+                res->sendfile_fd = -1;
+                if (sent != res->sendfile_size) {
+                    /* Bytes written ≠ Content-Length — wire is
+                     * inconsistent for keep-alive. Force close. */
+                    force_close = 1;
+                } else {
+                    sent_via_sendfile = 1;
+                }
+            }
+        }
+    } else if (res->sendfile_fd >= 0) {
+        /* Ineligible: read the fd into res->body before serializing.
+         * The 2 GiB cap is conservative — buffered bodies above that
+         * are unusual for static serves and would memory-press a
+         * runtime that doesn't intend the cost. The fast path
+         * (sendfile) has no such limit. */
+        long long size = res->sendfile_size;
+        if (size >= 0 && size <= (long long)0x7FFFFFFF) {
+            char* buf = (char*)malloc((size_t)size + 1);
+            if (buf) {
+                size_t total = 0;
+#ifndef _WIN32
+                lseek(res->sendfile_fd, 0, SEEK_SET);
+                while (total < (size_t)size) {
+                    ssize_t n = read(res->sendfile_fd, buf + total,
+                                     (size_t)size - total);
+                    if (n <= 0) break;
+                    total += (size_t)n;
+                }
+#endif
+                if (total == (size_t)size) {
+                    buf[size] = '\0';
+                    free(res->body);
+                    res->body = buf;
+                    res->body_length = (size_t)size;
+                } else {
+                    free(buf);
+                }
+            }
+        }
+#ifndef _WIN32
+        close(res->sendfile_fd);
+#endif
+        res->sendfile_fd = -1;
+    }
+
+    if (!sent_via_sendfile) {
+        size_t resp_len = 0;
+        char* response_str = http_response_serialize_len(res, &resp_len);
+        if (response_str) {
+            conn_send(conn, response_str, (int)resp_len);
+            free(response_str);
+        }
+    }
+
+    return force_close;
 }
 
 static void conn_close(HttpConn* c) {
@@ -1179,6 +1394,9 @@ HttpServerResponse* http_response_create() {
     res->header_count = 0;
     res->body = NULL;
     res->body_length = 0;
+    /* No sendfile path staged by default. */
+    res->sendfile_fd = -1;
+    res->sendfile_size = 0;
 
     // Add default headers
     http_response_set_header(res, "Content-Type", "text/html; charset=utf-8");
@@ -1384,6 +1602,16 @@ void http_server_response_free(HttpServerResponse* res) {
     }
     free(res->header_keys);
     free(res->header_values);
+
+    /* Issue #383: close any sendfile FD still owned by the response.
+     * The connection writer normally closes it when the fast path
+     * completes, but we close again here defensively for the
+     * ineligible-fallback or error paths where the fd may still be
+     * open. -1 indicates "already closed or never opened". */
+    if (res->sendfile_fd >= 0) {
+        close(res->sendfile_fd);
+        res->sendfile_fd = -1;
+    }
 
     free(res);
 }
@@ -2135,9 +2363,14 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
 
     // If middleware blocked, send response and close.
     if (!should_continue) {
-        size_t resp_len = 0;
-        char* response_str = http_response_serialize_len(res, &resp_len);
-        if (response_str) { conn_send(conn, response_str, (int)resp_len); free(response_str); }
+        /* Goes through the same zero-copy helper as the route-handler
+         * path (#383). When a middleware (e.g. static_files) staged
+         * a sendfile FD on the response, this is where we still
+         * serve it — the chain doesn't fall through to the regular
+         * end-of-handler path, so without this the FD-stashed
+         * response would emit headers with Content-Length but no
+         * body. */
+        send_response_with_optional_sendfile(conn, res, req);
         http_request_free(req);
         http_server_response_free(res);
         return 0;
@@ -2389,13 +2622,12 @@ static int handle_one_request(HttpServer* server, HttpConn* conn,
         http_response_set_header(res, "Connection", "close");
     }
 
-    // Send response — length-aware so binary bodies (e.g. gzip-
-    // compressed) survive intact past their first NUL byte.
-    {
-        size_t resp_len = 0;
-        char* response_str = http_response_serialize_len(res, &resp_len);
-        if (response_str) { conn_send(conn, response_str, (int)resp_len); free(response_str); }
-    }
+    /* Issue #383 zero-copy: dispatched via the helper so the same
+     * behaviour applies whether we got here from the route handler
+     * or from a middleware short-circuit (the chain at line ~2270
+     * also calls this helper). */
+    int force_close = send_response_with_optional_sendfile(conn, res, req);
+    if (force_close) will_keep_alive = 0;
 
     // Cleanup
     http_request_free(req);
@@ -3283,30 +3515,106 @@ const char* http_mime_type(const char* path) {
     return "application/octet-stream";
 }
 
-// Serve a single file
+// Serve a single file.
+//
+// Issue #383 zero-copy: on POSIX (Linux, macOS, BSDs), open the
+// file and fstat it, then stash the fd + size on the response.
+// The connection writer in handle_one_request takes the sendfile(2)
+// fast path when eligible (cleartext + HTTP/1.1 + no Range request)
+// and falls back to reading the fd into the response body
+// otherwise. Body remains NULL until the fallback runs — eligible
+// requests pay zero allocation for the body.
+//
+// Open + fstat (rather than stat + open) closes the stat-vs-content
+// race: Content-Length is computed from the same file descriptor
+// that sendfile will read, so byte count and header agree even if
+// the file is rewritten between calls. The FD is owned by the
+// response from this point — http_server_response_free closes it
+// if no other path took ownership first.
+//
+// Windows uses the buffered fopen+fread path. The Win32 send-file
+// equivalent (TransmitFile) is a Winsock primitive that doesn't
+// share API shape with sendfile; out of scope for v1. The `close()`
+// macro Windows uses to redirect the symbol at closesocket() also
+// makes mixing socket and file fds messy on this side; the buffered
+// path stays clean of the redefine.
 void http_serve_file(HttpServerResponse* res, const char* filepath) {
+#ifndef _WIN32
+    int fd = open(filepath, O_RDONLY
+#ifdef O_CLOEXEC
+        | O_CLOEXEC
+#endif
+    );
+    if (fd < 0) {
+        http_response_set_status(res, 404);
+        http_response_set_body(res, "404 - File Not Found");
+        return;
+    }
+
+    struct stat st;
+    if (fstat(fd, &st) < 0) {
+        close(fd);
+        http_response_set_status(res, 500);
+        http_response_set_body(res, "500 - Server Error");
+        return;
+    }
+
+    /* Refuse directories — open(2) succeeds but reading would be
+     * meaningless. The static-serve dispatcher already rewrites
+     * `/` to `/index.html`; guard the direct call path too. */
+    if (!S_ISREG(st.st_mode)) {
+        close(fd);
+        http_response_set_status(res, 404);
+        http_response_set_body(res, "404 - Not a regular file");
+        return;
+    }
+
+    char content_length_buf[32];
+    snprintf(content_length_buf, sizeof(content_length_buf),
+             "%lld", (long long)st.st_size);
+
+    http_response_set_status(res, 200);
+    http_response_set_header(res, "Content-Type", http_mime_type(filepath));
+    http_response_set_header(res, "Content-Length", content_length_buf);
+    http_response_set_header(res, "Access-Control-Allow-Origin", "*");
+
+    /* Stash the fd + size. handle_one_request decides at send time
+     * whether the fast path is taken; either way the response now
+     * owns the fd. */
+    if (res->sendfile_fd >= 0) {
+        /* Idempotent: replace any prior staged fd (rare — handler
+         * called http_serve_file twice on the same response). */
+        close(res->sendfile_fd);
+    }
+    /* Clear any prior body so the headers-only serialization on
+     * the fast path doesn't emit stale content alongside the
+     * sendfile-emitted body. */
+    if (res->body) {
+        free(res->body);
+        res->body = NULL;
+        res->body_length = 0;
+    }
+    res->sendfile_fd = fd;
+    res->sendfile_size = (long long)st.st_size;
+#else
+    /* Windows: buffered path. */
     FILE* f = fopen(filepath, "rb");
     if (!f) {
         http_response_set_status(res, 404);
         http_response_set_body(res, "404 - File Not Found");
         return;
     }
-
-    // Get file size
     fseek(f, 0, SEEK_END);
     long size = ftell(f);
     fseek(f, 0, SEEK_SET);
-
-    // Read file content
-    char* content = (char*)malloc(size + 1);
+    char* content = (char*)malloc((size_t)size + 1);
     if (!content) {
         fclose(f);
         http_response_set_status(res, 500);
         http_response_set_body(res, "500 - Server Error");
         return;
     }
-
-    size_t bytes_read = fread(content, 1, size, f);
+    size_t bytes_read = fread(content, 1, (size_t)size, f);
     fclose(f);
     if (bytes_read == 0 && size > 0) {
         free(content);
@@ -3315,13 +3623,17 @@ void http_serve_file(HttpServerResponse* res, const char* filepath) {
         return;
     }
     content[bytes_read] = '\0';
-
-    // Set response
     http_response_set_status(res, 200);
     http_response_set_header(res, "Content-Type", http_mime_type(filepath));
     http_response_set_header(res, "Access-Control-Allow-Origin", "*");
-    http_response_set_body(res, content);
+    /* Use the length-aware setter so binary content (gzip, images,
+     * urandom — anything with embedded NULs) round-trips intact.
+     * The strlen-based set_body would truncate at the first \0 in
+     * the body — which the cross-platform sendfile test surfaced
+     * on Windows when serving a 1 MiB urandom file. */
+    http_response_set_body_n(res, content, (int)bytes_read);
     free(content);
+#endif
 }
 
 // Static file serving handler (for use with wildcard routes)

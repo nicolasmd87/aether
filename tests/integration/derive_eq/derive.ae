@@ -1,0 +1,46 @@
+// Issue #338 — `@derive(eq)` synthesizer end-to-end.
+//
+// The annotation generates `<T>_eq(a, b)` automatically; users
+// don't have to hand-write the field-by-field comparison.
+
+@derive(eq)
+struct Point {
+    x: int,
+    y: int
+}
+
+@derive(eq)
+struct User {
+    id: int,
+    name: string,
+    active: bool
+}
+
+@derive(eq)
+struct Empty {
+}
+
+main() {
+    p1 = Point { x: 1, y: 2 }
+    p2 = Point { x: 1, y: 2 }
+    p3 = Point { x: 1, y: 3 }
+    if Point_eq(p1, p2) != 1 { println("FAIL: Point eq"); exit(1) }
+    if Point_eq(p1, p3) != 0 { println("FAIL: Point neq"); exit(1) }
+    println("Point ok")
+
+    a = User { id: 1, name: "alice", active: true }
+    b = User { id: 1, name: "alice", active: true }
+    c = User { id: 1, name: "bob",   active: true }
+    d = User { id: 1, name: "alice", active: false }
+    if User_eq(a, b) != 1 { println("FAIL: User a==b"); exit(1) }
+    if User_eq(a, c) != 0 { println("FAIL: User a!=c (string)"); exit(1) }
+    if User_eq(a, d) != 0 { println("FAIL: User a!=d (bool)"); exit(1) }
+    println("User ok")
+
+    e1 = Empty {}
+    e2 = Empty {}
+    if Empty_eq(e1, e2) != 1 { println("FAIL: Empty eq"); exit(1) }
+    println("Empty ok")
+
+    println("DERIVE_EQ_DONE")
+}

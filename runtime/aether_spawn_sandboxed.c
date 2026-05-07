@@ -71,7 +71,11 @@ static int serialize_grants(void* grant_list) {
     int fd = shm_open(shm_name, O_CREAT | O_RDWR, 0600);
     if (fd < 0) return -1;
 
-    ftruncate(fd, pos + 1);
+    if (ftruncate(fd, pos + 1) != 0) {
+        close(fd);
+        shm_unlink(shm_name);
+        return -1;
+    }
     void* mem = mmap(NULL, pos + 1, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (mem == MAP_FAILED) { close(fd); return -1; }
 

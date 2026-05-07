@@ -166,8 +166,19 @@ run_server(srv: ptr) {
     spawn(SchedHelper())
     a = spawn(SrvActor())
     a ! StartSrv { raw: srv }
-    sleep(60000)
-    exit(0)
+    // Block until the test harness SIGKILLs us. The earlier shape
+    // here was `sleep(60000); exit(0)` — a "safety timer" intended
+    // to prevent runaway leaked processes, but the test harness's
+    // trap-driven SIGKILL teardown already does that. The 60-second
+    // timer was actively harmful: any test that ran longer than 60
+    // wall-clock seconds saw all upstreams self-exit mid-suite, with
+    // exit code 0, no crash trace, no log line. Subsequent assertions
+    // failed with mysterious "h=000" / "metric_2xx returned non-
+    // integer" symptoms that looked like a server stability bug.
+    // Block forever instead — the harness owns the lifecycle.
+    while true {
+        sleep(3600000)
+    }
 }
 
 // ---- Upstream builders ----------------------------------
@@ -271,20 +282,20 @@ build_proxy_wrr() {
     proxy.upstream_add(pool, "http://localhost:19102", 1)
     proxy.upstream_add(pool, "http://localhost:19103", 1)
     opts = proxy.opts_new()
-    build_and_start_proxy(pool, opts, 0)
+    build_and_start_proxy(pool, opts, 1)
 }
 
 build_proxy_ip_hash() {
     pool = build_pool_three("ip_hash")
     opts = proxy.opts_new()
-    build_and_start_proxy(pool, opts, 0)
+    build_and_start_proxy(pool, opts, 1)
 }
 
 build_proxy_cookie_hash() {
     pool = build_pool_three("cookie_hash")
     proxy.pool_set_cookie_name(pool, "SESSIONID")
     opts = proxy.opts_new()
-    build_and_start_proxy(pool, opts, 0)
+    build_and_start_proxy(pool, opts, 1)
 }
 
 build_proxy_health() {
@@ -328,7 +339,7 @@ build_proxy_trace() {
     pool = build_pool_three("round_robin")
     opts = proxy.opts_new()
     proxy.opts_set_trace_inject(opts, 1)
-    build_and_start_proxy(pool, opts, 0)
+    build_and_start_proxy(pool, opts, 1)
 }
 
 build_proxy_drain() {
@@ -338,6 +349,7 @@ build_proxy_drain() {
     if s == 0 { println("FAIL: drain server_create"); exit(1) }
     http.server_set_host(s, "127.0.0.1")
     http.server_set_keepalive(s, 1, 0, 5000)
+    http.server_get(s, "/proxy-metrics", handle_proxy_metrics, pool)
     err = proxy.mount(s, "/echo", pool, opts)
     if err != "" { println("FAIL: drain mount: ${err}"); exit(1) }
     proxy.upstream_drain(pool, "http://localhost:19101")

@@ -217,7 +217,12 @@ char* aether_shared_map_to_shm(AetherSharedMap* map) {
     int fd = shm_open(shm_name, O_CREAT | O_RDWR, 0600);
     if (fd < 0) { free(shm_name); return NULL; }
 
-    ftruncate(fd, pos);
+    if (ftruncate(fd, pos) != 0) {
+        close(fd);
+        shm_unlink(shm_name);
+        free(shm_name);
+        return NULL;
+    }
     void* mem = mmap(NULL, pos, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (mem == MAP_FAILED) { close(fd); shm_unlink(shm_name); free(shm_name); return NULL; }
 

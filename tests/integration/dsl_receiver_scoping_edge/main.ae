@@ -1,0 +1,29 @@
+// Edge cases for issue #333:
+//   - explicit qualified call inside the block still works (no
+//     receiver-fallback regression on existing user code).
+//
+// Shadowing is verified separately in the negative test; this file
+// drives the positive cases that must stay green.
+
+import dsl_helper
+
+main() {
+    // Bare-name fallback: same as the main test.
+    dsl_helper.run("plain") {
+        script("p.sh")
+        tag("plain-tag")
+    }
+
+    // Explicit qualified form inside the block — must continue to
+    // work alongside the fallback.
+    dsl_helper.run("explicit") {
+        dsl_helper.script("e.sh")
+        dsl_helper.tag("explicit-tag")
+    }
+
+    // Mixed bare + qualified inside the same block.
+    dsl_helper.run("mixed") {
+        script("m.sh")
+        dsl_helper.tag("mixed-tag")
+    }
+}

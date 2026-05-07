@@ -23,6 +23,7 @@
 #include "ast.h"
 #include "parser/parser.h"
 #include "analysis/typechecker.h"
+#include "analysis/derive.h"
 #include "codegen/optimizer.h"
 #include "codegen/codegen.h"
 #include "aether_error.h"
@@ -614,6 +615,24 @@ int compile_source(const char* input_path, const char* output_path) {
     // closure can see merged helpers) and before typecheck (so dead
     // bodies don't slow it down). See module_prune_unreachable.
     module_prune_unreachable(program);
+
+    // Step 2.67: `@derive(...)` synthesizer (#338).
+    // Walks AST_STRUCT_DEFINITION nodes carrying a `derive:<list>`
+    // annotation, synthesizes the helper function definitions
+    // (T_eq today; format / clone / hash in follow-up commits),
+    // and inserts them as siblings into the program. Runs AFTER
+    // module_prune_unreachable so synthesized functions don't get
+    // pruned as "unused" before the call sites that need them
+    // type-check, and BEFORE typecheck_program so synthesized
+    // bodies type-check normally.
+    if (derive_synthesize_pass(program) != 0) {
+        module_registry_shutdown();
+        free_ast_node(program);
+        for (int k = 0; k < token_count; k++) free_token(tokens[k]);
+        free_parser(parser);
+        free(source);
+        return 0;
+    }
 
     // Step 2.7: --emit=lib capability-empty check.
     // In lib mode the output is consumed by another process (Java host,
