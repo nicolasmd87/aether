@@ -451,23 +451,11 @@ test-ae: compiler ae stdlib
 	xargs -P $(NPROC) -I{} "$$script" "{}" "$$tmpdir" "$$root"; \
 	for sh_test in $$(find tests/integration -name 'test_*.sh' 2>/dev/null | sort); do \
 		name=$$(echo "$$sh_test" | sed 's|tests/||;s|/|_|g;s|\.sh$$||'); \
-		if command -v timeout >/dev/null 2>&1; then \
-			runner="timeout 180 bash"; \
-		else \
-			runner="bash"; \
-		fi; \
-		if $$runner "$$sh_test" >"$$tmpdir/run_$$name.out" 2>"$$tmpdir/run_$$name.err"; then \
+		if bash "$$sh_test" >"$$tmpdir/run_$$name.out" 2>"$$tmpdir/run_$$name.err"; then \
 			echo "  [PASS] $$name"; touch "$$tmpdir/PASS_$$name"; \
 		else \
-			rc=$$?; \
-			if [ "$$rc" = "124" ]; then \
-				echo "  [FAIL] $$name (shell test, killed after 180s timeout)"; \
-				echo "[timeout] killed after 180s" >> "$$tmpdir/run_$$name.err"; \
-				printf 'timeout' > "$$tmpdir/phase_$$name.txt"; \
-			else \
-				echo "  [FAIL] $$name (shell test)"; \
-				printf 'shell' > "$$tmpdir/phase_$$name.txt"; \
-			fi; \
+			echo "  [FAIL] $$name (shell test)"; \
+			printf 'shell' > "$$tmpdir/phase_$$name.txt"; \
 			touch "$$tmpdir/FAIL_$$name"; \
 		fi; \
 	done; \
@@ -485,7 +473,6 @@ test-ae: compiler ae stdlib
 				runtime) rc=$$(cat "$$tmpdir/rc_$$fname.txt" 2>/dev/null || echo '?'); \
 				         echo "--- $$fname (runtime error, exit $$rc) ---" ;; \
 				shell)   echo "--- $$fname (shell test) ---" ;; \
-				timeout) echo "--- $$fname (shell test, killed after 180s timeout) ---" ;; \
 				*)       echo "--- $$fname ---" ;; \
 			esac; \
 			if [ "$$phase" = "compile" ]; then \
