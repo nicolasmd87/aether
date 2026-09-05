@@ -11,6 +11,30 @@ version number before tagging the release.
 
 ## [current]
 
+### Added
+
+- **`std.jsonpath` — RFC 9535 JSONPath.** A parser with a reusable compiled
+  AST and `query` / `query_values` / `query_paths`, result accessors, and
+  ownership-safe teardown, over parsed `std.json` documents. 703/703 on the
+  JSONPath compliance test suite; parser and query suites and a reentrancy
+  test ship with the module.
+
+### Fixed
+
+- **A by-name module could not have submodules: its own imports resolved
+  against the consumer's directory, not its own.** The import search directory
+  was pinned once to the entry program's file and never updated when the
+  compiler descended into an imported module, so a module facade that imports
+  its own implementation files (e.g. `std.jsonpath`'s `module.ae` doing
+  `import parser`) failed with "unresolved import" for every external caller —
+  it only compiled when run from inside the module's own directory.
+  `orchestrate_module` now sets the source directory to each module's own
+  location while resolving that module's imports, and restores it afterwards.
+- **`std.jsonpath` freed plain string buffers through a `free(const char*)`
+  extern**, which warns under `-Wdiscarded-qualifiers` on Linux and is a hard
+  error under macOS clang `-Werror`. The frees are now bound as `free(ptr)` and
+  the owned buffers punned to a bare pointer at the call site.
+
 ## [0.640.0]
 
 ### Fixed

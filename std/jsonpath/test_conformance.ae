@@ -1,0 +1,289 @@
+// test_conformance — runs the official RFC 9535 JSONPath Compliance Test Suite
+//
+// Reads the vendored `compliance-test-suite/cts.json` (the upstream corpus from
+// github.com/jsonpath-standard/jsonpath-compliance-test-suite) and executes
+// every case against this library.
+//
+// Each case is one of two shapes:
+//
+//   invalid_selector: true   — the selector MUST fail to parse.
+//   otherwise                — the selector must parse, and the
+//                              resulting nodelist must equal `result`
+//                              (and `result_paths`, when present).
+//                              `results` / `results_paths` list several
+//                              acceptable orderings, for the cases where
+//                              the RFC leaves object-member order to the
+//                              implementation.
+//
+// Usage:
+//     ae run std/jsonpath/test_conformance.ae [-v]   (from the repo root)
+//     ae run test_conformance.ae [-v]                 (from this module's dir)
+//
+// Exit code 0 when every case passes, 1 otherwise. `-v` prints each
+// failure's expected/actual; without it only the summary and the first
+// few failures are shown.
+
+import std.json
+import std.list
+import std.string
+import std.file
+import std.os
+import query
+import parser
+
+// The corpus is resolved relative to the repo root (how `make test-ae` runs
+// this) with a fallback to the module-local path (a manual `ae run` from inside
+// std/jsonpath). Same shape std.yaml's suite test uses for its fixtures.
+const CTS_PATH_ROOT = "std/jsonpath/compliance-test-suite/cts.json"
+const CTS_PATH_LOCAL = "compliance-test-suite/cts.json"
+
+var _verbose: int = 0
+var _passed: int = 0
+var _failed: int = 0
+var _shown: int = 0
+
+main() {
+    argc = os.args_count()
+    i = 0
+    while i < argc {
+        if string.equals(os.args_get(i), "-v") == 1 { _verbose = 1 }
+        i = i + 1
+    }
+
+    cts_path = CTS_PATH_ROOT
+    if file.exists(cts_path) == 0 { cts_path = CTS_PATH_LOCAL }
+    src, err = file.read(cts_path)
+    if err != "" {
+        println("cannot read ${cts_path}: ${err}")
+        println("(the suite is vendored in this repo; re-clone if missing)")
+        exit(1)
+    }
+
+    doc, jerr = json.parse(src)
+    if jerr != "" {
+        println("cts.json is not valid JSON: ${jerr}")
+        exit(1)
+    }
+
+    tests = json.json_object_get_raw(doc, "tests")
+    n = json.json_array_size(tests)
+    println("RFC 9535 compliance test suite: ${n} cases")
+    println("")
+
+    i = 0
+    while i < n {
+        _run_case(json.json_array_get_raw(tests, i))
+        i = i + 1
+    }
+
+    json.json_free(doc)
+
+    total = _passed + _failed
+    println("")
+    println("  ${_passed}/${total} passing")
+    if _failed > 0 {
+        println("  ${_failed} failing")
+        exit(1)
+    }
+}
+
+_run_case(t: ptr) {
+    name = _str_field(t, "name")
+    selector = _str_field(t, "selector")
+
+    // Invalid-selector case: parsing must fail.
+    if json.json_object_has(t, "invalid_selector") == 1 {
+        if json.json_get_bool(json.json_object_get_raw(t, "invalid_selector")) == 1 {
+            ast, _perr = parser.parse(selector)
+            if ast == null {
+                _passed = _passed + 1
+            } else {
+                parser.free_query(ast)
+                _fail(name, selector, "expected a parse error, but the selector parsed")
+            }
+            return
+        }
+    }
+
+    document = json.json_object_get_raw(t, "document")
+    if document == null {
+        // A valid-selector case with no document only asserts parseability.
+        ast, perr = parser.parse(selector)
+        if ast == null {
+            _fail(name, selector, "expected the selector to parse: ${perr}")
+        } else {
+            parser.free_query(ast)
+            _passed = _passed + 1
+        }
+        return
+    }
+
+    cursors, qerr = query.query(document, selector)
+    if qerr != "" {
+        _fail(name, selector, "unexpected parse error: ${qerr}")
+        return
+    }
+
+    ok = 0
+    if json.json_object_has(t, "result") == 1 {
+        ok = _match_one(cursors, json.json_object_get_raw(t, "result"),
+            _opt(t, "result_paths"))
+    } else {
+        if json.json_object_has(t, "results") == 1 {
+            ok = _match_any(cursors, json.json_object_get_raw(t, "results"),
+                _opt(t, "results_paths"))
+        } else {
+            // No expectation recorded — parseability only.
+            ok = 1
+        }
+    }
+
+    if ok == 1 {
+        _passed = _passed + 1
+    } else {
+        _fail(name, selector, _describe(cursors, t))
+    }
+    query.free_result(cursors)
+}
+
+// Compare the nodelist against one expected array of values, and (when
+// given) one expected array of normalized paths.
+_match_one(cursors: ptr, want: ptr, want_paths: ptr) -> int {
+    n = query.result_size(cursors)
+    if json.json_array_size(want) != n { return 0 }
+
+    i = 0
+    while i < n {
+        if _json_equal(query.result_value(cursors, i), json.json_array_get_raw(want, i)) == 0 {
+            return 0
+        }
+        i = i + 1
+    }
+
+    if want_paths != null {
+        if json.json_array_size(want_paths) != n { return 0 }
+        i = 0
+        while i < n {
+            wp = json.json_get_string_raw(json.json_array_get_raw(want_paths, i))
+            if string.equals(query.result_path(cursors, i), wp) == 0 { return 0 }
+            i = i + 1
+        }
+    }
+    return 1
+}
+
+// `results` holds several acceptable orderings; any one matching is a
+// pass. When `results_paths` is present its i-th entry pairs with
+// `results`' i-th entry.
+_match_any(cursors: ptr, wants: ptr, want_paths: ptr) -> int {
+    n = json.json_array_size(wants)
+    i = 0
+    while i < n {
+        paths = null
+        if want_paths != null {
+            if i < json.json_array_size(want_paths) {
+                paths = json.json_array_get_raw(want_paths, i)
+            }
+        }
+        if _match_one(cursors, json.json_array_get_raw(wants, i), paths) == 1 { return 1 }
+        i = i + 1
+    }
+    return 0
+}
+
+// Structural JSON equality, for comparing a matched node against the
+// suite's expected value.
+_json_equal(a: ptr, b: ptr) -> int {
+    ta = json.json_type(a)
+    tb = json.json_type(b)
+    if ta != tb { return 0 }
+
+    if ta == 0 { return 1 }
+    if ta == 1 {
+        if json.json_get_bool(a) == json.json_get_bool(b) { return 1 }
+        return 0
+    }
+    if ta == 2 {
+        if json.json_get_number(a) == json.json_get_number(b) { return 1 }
+        return 0
+    }
+    if ta == 3 {
+        return string.equals(json.json_get_string_raw(a), json.json_get_string_raw(b))
+    }
+    if ta == 4 {
+        n = json.json_array_size(a)
+        if n != json.json_array_size(b) { return 0 }
+        i = 0
+        while i < n {
+            if _json_equal(json.json_array_get_raw(a, i), json.json_array_get_raw(b, i)) == 0 { return 0 }
+            i = i + 1
+        }
+        return 1
+    }
+    n = json.json_object_size_raw(a)
+    if n != json.json_object_size_raw(b) { return 0 }
+    i = 0
+    while i < n {
+        k = json.json_object_key_at(a, i)
+        if json.json_object_has(b, k) == 0 { return 0 }
+        if _json_equal(json.json_object_value_at(a, i), json.json_object_get_raw(b, k)) == 0 { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+_opt(t: ptr, key: string) -> ptr {
+    if json.json_object_has(t, key) == 0 { return null }
+    return json.json_object_get_raw(t, key)
+}
+
+_str_field(t: ptr, key: string) -> string {
+    if json.json_object_has(t, key) == 0 { return "" }
+    return json.json_get_string_raw(json.json_object_get_raw(t, key))
+}
+
+// Render actual-vs-expected for a failing case.
+_describe(cursors: ptr, t: ptr) -> string {
+    n = query.result_size(cursors)
+    got = "["
+    i = 0
+    while i < n {
+        if i > 0 { got = string.concat(got, ", ") }
+        got = string.concat(got, json.json_stringify_raw(query.result_value(cursors, i)))
+        i = i + 1
+    }
+    got = string.concat(got, "]")
+
+    want = "(none)"
+    if json.json_object_has(t, "result") == 1 {
+        want = json.json_stringify_raw(json.json_object_get_raw(t, "result"))
+    } else {
+        if json.json_object_has(t, "results") == 1 {
+            want = json.json_stringify_raw(json.json_object_get_raw(t, "results"))
+        }
+    }
+
+    paths = "["
+    i = 0
+    while i < n {
+        if i > 0 { paths = string.concat(paths, ", ") }
+        paths = string.concat(paths, query.result_path(cursors, i))
+        i = i + 1
+    }
+    paths = string.concat(paths, "]")
+
+    return "expected ${want}, got ${got} at ${paths}"
+}
+
+_fail(name: string, selector: string, detail: string) {
+    _failed = _failed + 1
+    show = 0
+    if _verbose == 1 { show = 1 }
+    if _shown < 100 { show = 1 }
+    if show == 1 {
+        _shown = _shown + 1
+        println("\x1b[31m  ✗\x1b[0m ${name}")
+        println("      selector: ${selector}")
+        println("      ${detail}")
+    }
+}

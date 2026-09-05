@@ -1,0 +1,1200 @@
+// jsonpath.query — the RFC 9535 evaluation engine
+//
+// Ported from zig-jsonpath's `src/query.zig` + `src/model_query.zig`
+// (the cursor-list traversal model) with jsonpath-rust's
+// `src/query/comparison.rs` semantics for the comparison rules, where
+// the two differ in ways the CTS can see.
+//
+// The evaluation model is a CURSOR LIST. A cursor is a (json value,
+// normalized path) pair. Evaluation starts with one cursor at the root
+// (`$`) and each segment maps the current cursor list to the next one.
+// The final list IS the nodelist RFC 9535 §2.1 describes, in document
+// order, with the normalized path recorded alongside so callers can ask
+// for either.
+//
+// Memory: cursors own their path strings but BORROW the json values
+// from the caller's document, which must outlive the result (the same
+// contract zig-jsonpath's JsonPathResult documents). `free_result`
+// releases the cursor list and its paths, never the document.
+
+import std.json
+import std.list
+import std.string
+import std.strbuilder
+import std.regex
+import std.mem
+import model
+import parser
+
+// Normalized paths are plain char* buffers (strbuilder.finish); freed with a
+// raw libc free. Bound as `ptr` and punned from string via `_free_path` so the
+// emitted free takes void*, not const char* (see model.ae for the rationale).
+@extern("free") _free_plain_path(path: ptr)
+
+_free_path(path: string) {
+    _free_plain_path(mem.long_to_ptr(mem.ptr_to_long(path)))
+}
+
+exports(
+    query, query_paths, query_values, query_ast,
+    result_size, result_value, result_path, free_result
+)
+
+// PCRE2 compile options std.regex does not re-export. Needed for the
+// I-Regexp semantics RFC 9535 §2.4.7 requires — see _eval_regex_fn.
+// Values are from pcre2.h and are ABI-stable.
+const PCRE2_UTF = 0x00080000
+const PCRE2_UCP = 0x00020000
+
+// A RESULT SET is a pair of parallel std.lists: `values` holds the
+// borrowed JSON pointers, `paths` holds the normalized path strings
+// (RFC 9535 §2.7) that reached them, index for index.
+//
+// Two lists rather than a list of Cursor structs, because std.list
+// already has exactly the ownership behaviour needed here: it OWNS the
+// strings added to it and releases them on list.free. A `heap.new`
+// box, by contrast, owns its `string` fields only while the compiler
+// can see the box's whole lifetime in one scope. The explicit list
+// ownership below keeps result paths reclaimable across those helpers.
+//
+// The Cursor struct is an internal result-set handle; callers use the
+// result_size / result_value / result_path accessors rather than its fields.
+struct Cursor {
+    values: ptr, // std.list of borrowed json pointers — NOT owned
+    paths: ptr // std.list of owned path strings
+}
+
+// ---------------------------------------------------------------------------
+// Public API
+//
+// Mirrors jsonpath-rust's trio: `query` (values + paths),
+// `query_values`, `query_only_path`. `query` returns an internal cursor
+// handle that the caller frees with free_result; the other two return lists.
+// ---------------------------------------------------------------------------
+
+// Run `path` against the parsed JSON document `root`.
+// Returns (cursor_list, "") on success or (null, message) if the path
+// failed to parse — the Go-style convention std uses throughout.
+query(root: ptr, path: string) -> ptr! {
+    ast, parse_err = parse_path(path)
+    if ast == null {
+        return null, parse_err
+    }
+    // parser.parse returns a uniformly heap-owned diagnostic slot even on
+    // success, where it contains only the empty sentinel. This call consumes
+    // that slot before the result escapes.
+    string.free(parse_err)
+    res = query_ast(root, ast)
+    model.free_query(ast)
+    return res, string.concat("", "")
+}
+
+// Values only, as a std.list of borrowed json pointers.
+query_values(root: ptr, path: string) -> ptr! {
+    cursors, err = query(root, path)
+    if err != "" { return null, err }
+    string.free(err)
+    out = list.new()
+    n = result_size(cursors)
+    i = 0
+    while i < n {
+        list.list_add_raw(out, result_value(cursors, i))
+        i = i + 1
+    }
+    free_result(cursors)
+    return out, string.concat("", "")
+}
+
+// Normalized paths only, as a std.list of strings.
+query_paths(root: ptr, path: string) -> ptr! {
+    cursors, err = query(root, path)
+    if err != "" { return null, err }
+    string.free(err)
+    out = list.new()
+    n = result_size(cursors)
+    i = 0
+    while i < n {
+        list.add(out, string.copy(result_path(cursors, i)))
+        i = i + 1
+    }
+    free_result(cursors)
+    return out, string.concat("", "")
+}
+
+// Run a PRE-PARSED query. Reach for this when the same path runs against
+// many documents — parsing once and evaluating repeatedly is the whole
+// reason the AST is a public type.
+query_ast(root: ptr, ast: ptr) -> ptr {
+    cursors = _new_result()
+    _push_borrowed(cursors, root, "$")
+
+    qp = ast as *Query
+    segs = qp.segments
+    n = list.size(segs)
+    i = 0
+    while i < n {
+        cursors = _apply_segment(list.get_raw(segs, i), cursors, root)
+        i = i + 1
+    }
+    return cursors
+}
+
+result_size(cursors: ptr) -> int {
+    return list.size((cursors as *Cursor).values)
+}
+
+result_value(cursors: ptr, i: int) -> ptr {
+    return list.get_raw((cursors as *Cursor).values, i)
+}
+
+// The returned string BORROWS the result set's storage; it stays
+// valid until free_result. Copy it if it must outlive the result.
+result_path(cursors: ptr, i: int) -> string {
+    return list.get_raw((cursors as *Cursor).paths, i)
+}
+
+// Release a result set. The path strings are owned by their list and
+// released by list.free; the JSON values are borrowed and are NOT
+// touched.
+free_result(cursors: ptr) {
+    if cursors == null { return }
+    c = cursors as *Cursor
+    list.free(c.values)
+    list.free(c.paths)
+    heap.free(cursors)
+}
+
+// The parser lives in its own module; these two thin shims keep the
+// public surface to a single import for the common case.
+parse_path(path: string) -> ptr! {
+    return parser.parse(path)
+}
+
+// ---------------------------------------------------------------------------
+// Cursor helpers
+// ---------------------------------------------------------------------------
+
+// A fresh, empty result set.
+_new_result() -> ptr {
+    c = heap.new(Cursor)
+    c.values = list.new()
+    c.paths = list.new()
+    return c
+}
+
+// Append one matched node. The path is a borrowed string at this point;
+// list_add_string_owned copies it into the list's managed storage.
+_push(cursors: ptr, value: ptr, path: string) {
+    c = cursors as *Cursor
+    list.list_add_raw(c.values, value)
+    list.list_add_string_owned(c.paths, path)
+}
+
+// _push for a freshly built plain libc string: stores a managed copy and
+// releases the builder buffer after the list has copied it.
+_push_owned(cursors: ptr, value: ptr, path: string) {
+    c = cursors as *Cursor
+    list.list_add_raw(c.values, value)
+    list.list_add_string_owned(c.paths, path)
+    _free_path(path)
+}
+
+// _push for a path the caller continues to own (a string literal, or
+// another entry's path read back out of a result set).
+_push_borrowed(cursors: ptr, value: ptr, path: string) {
+    _push(cursors, value, path)
+}
+
+// Free a cursor list without touching values (used when a stage
+// replaces the list wholesale).
+_drop(cursors: ptr) {
+    free_result(cursors)
+}
+
+// A shallow copy — same borrowed values, copied paths. Used to fork an
+// evaluation for a filter branch.
+_fork(cursors: ptr) -> ptr {
+    out = _new_result()
+    n = result_size(cursors)
+    i = 0
+    while i < n {
+        _push_borrowed(out, result_value(cursors, i), result_path(cursors, i))
+        i = i + 1
+    }
+    return out
+}
+
+_fork_single(value: ptr, path: string) -> ptr {
+    out = _new_result()
+    _push_borrowed(out, value, path)
+    return out
+}
+
+// ---------------------------------------------------------------------------
+// Normalized paths (RFC 9535 §2.7)
+//
+// The normalized form always uses bracket notation with single-quoted
+// names: `$['store']['book'][0]`. The CTS checks these strings exactly
+// (`result_paths`), so the escaping rules matter: within a normalized
+// name, `'` and `\` are backslash-escaped and the control characters get
+// their short or \u00xx form.
+// ---------------------------------------------------------------------------
+
+normalize_name_segment(base: string, name: string) -> string {
+    b = strbuilder.new(string.length(base) + string.length(name) + 8)
+    strbuilder.append(b, base)
+    strbuilder.append(b, "['")
+    n = string.length(name)
+    i = 0
+    while i < n {
+        c = string.char_at_n(name, n, i)
+        if c == 39 { // '  -> \'
+            strbuilder.append(b, "\\'")
+        } else { if c == 92 { // \  -> \\
+                strbuilder.append(b, "\\\\")
+            } else { if c == 8 {
+                    strbuilder.append(b, "\\b")
+                } else { if c == 12 {
+                        strbuilder.append(b, "\\f")
+                    } else { if c == 10 {
+                            strbuilder.append(b, "\\n")
+                        } else { if c == 13 {
+                                strbuilder.append(b, "\\r")
+                            } else { if c == 9 {
+                                    strbuilder.append(b, "\\t")
+                                } else { if c < 32 {
+                                        strbuilder.append(b, "\\u")
+                                        strbuilder.append(b, _hex4(c))
+                                    } else {
+                                        strbuilder.append_byte(b, c)
+                                    } } } } } } } }
+        i = i + 1
+    }
+    strbuilder.append(b, "']")
+    return strbuilder.finish(b)
+}
+
+_hex4(v: int) -> string {
+    digits = "0123456789abcdef"
+    b = strbuilder.new(4)
+    strbuilder.append_byte(b, string.char_at(digits, (v / 4096) % 16))
+    strbuilder.append_byte(b, string.char_at(digits, (v / 256) % 16))
+    strbuilder.append_byte(b, string.char_at(digits, (v / 16) % 16))
+    strbuilder.append_byte(b, string.char_at(digits, v % 16))
+    return strbuilder.finish(b)
+}
+
+normalize_index_segment(base: string, idx: int) -> string {
+    // Keep the two normalizers on one ownership contract. Interpolation
+    // produces an AetherString while the name normalizer uses the plain
+    // strbuilder buffer; mixed ownership made the handoff below ambiguous.
+    b = strbuilder.new(string.length(base) + 24)
+    strbuilder.append(b, base)
+    strbuilder.append(b, "[")
+    strbuilder.append_int(b, idx)
+    strbuilder.append_byte(b, 93)
+    return strbuilder.finish(b)
+}
+
+// ---------------------------------------------------------------------------
+// Segment application
+// ---------------------------------------------------------------------------
+
+// Apply one segment to the cursor list, returning the new list and
+// freeing the old one.
+_apply_segment(seg: ptr, cursors: ptr, root: ptr) -> ptr {
+    sp = seg as *Segment
+
+    // A descendant segment first expands each cursor to itself plus all
+    // its descendants (document order, pre-order), then applies the
+    // selectors to that expanded set.
+    input = cursors
+    if sp.kind == model.SEG_DESCENDANT {
+        input = _expand_descendants(cursors)
+        _drop(cursors)
+    }
+
+    out = _new_result()
+    sels = sp.selectors
+    ns = list.size(sels)
+    nc = result_size(input)
+
+    // Selector-major within each cursor: RFC 9535 §2.5.1.2 orders the
+    // result of `[a, b]` as all of a's matches then all of b's, per
+    // input node.
+    i = 0
+    while i < nc {
+        v = result_value(input, i)
+        pth = result_path(input, i)
+        j = 0
+        while j < ns {
+            _apply_selector(list.get_raw(sels, j), v, pth, out, root)
+            j = j + 1
+        }
+        i = i + 1
+    }
+
+    _drop(input)
+    return out
+}
+
+// Pre-order walk: the node itself, then its children in document order.
+_expand_descendants(cursors: ptr) -> ptr {
+    out = _new_result()
+    n = result_size(cursors)
+    i = 0
+    while i < n {
+        _collect_descendants(result_value(cursors, i), result_path(cursors, i), out)
+        i = i + 1
+    }
+    return out
+}
+
+// Pre-order: this node, then each child. Child paths are plain builder
+// buffers; the recursive call copies them into the result list and the
+// local buffer is released after the subtree it labels is walked.
+_collect_descendants(value: ptr, path: string, out: ptr) {
+    _push_borrowed(out, value, path)
+    t = json.json_type(value)
+
+    if t == 4 { // array
+        n = json.json_array_size(value)
+        i = 0
+        while i < n {
+            child = json.json_array_get_raw(value, i)
+            child_path = normalize_index_segment(path, i)
+            _collect_descendants(child, child_path, out)
+            _free_path(child_path)
+            i = i + 1
+        }
+        return
+    }
+
+    if t == 5 { // object
+        n = json.json_object_size_raw(value)
+        i = 0
+        while i < n {
+            k = json.json_object_key_at(value, i)
+            child = json.json_object_value_at(value, i)
+            child_path = normalize_name_segment(path, k)
+            _collect_descendants(child, child_path, out)
+            _free_path(child_path)
+            i = i + 1
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Selectors
+// ---------------------------------------------------------------------------
+
+_apply_selector(sel: ptr, value: ptr, path: string, out: ptr, root: ptr) {
+    s = sel as *Selector
+
+    if s.kind == model.SEL_NAME {
+        if json.json_type(value) != 5 { return }
+        if json.json_object_has(value, s.name) == 0 { return }
+        child = json.json_object_get_raw(value, s.name)
+        _push_owned(out, child, normalize_name_segment(path, s.name))
+        return
+    }
+
+    if s.kind == model.SEL_WILDCARD {
+        t = json.json_type(value)
+        if t == 4 {
+            n = json.json_array_size(value)
+            i = 0
+            while i < n {
+                _push_owned(out, json.json_array_get_raw(value, i), normalize_index_segment(path, i))
+                i = i + 1
+            }
+            return
+        }
+        if t == 5 {
+            n = json.json_object_size_raw(value)
+            i = 0
+            while i < n {
+                k = json.json_object_key_at(value, i)
+                _push_owned(out, json.json_object_value_at(value, i), normalize_name_segment(path, k))
+                i = i + 1
+            }
+        }
+        return
+    }
+
+    if s.kind == model.SEL_INDEX {
+        if json.json_type(value) != 4 { return }
+        n = json.json_array_size(value)
+        idx = _resolve_index(s.index, n)
+        if idx < 0 { return }
+        if idx >= n { return }
+        _push_owned(out, json.json_array_get_raw(value, idx), normalize_index_segment(path, idx))
+        return
+    }
+
+    if s.kind == model.SEL_SLICE {
+        _apply_slice(s.slice as *Slice, value, path, out)
+        return
+    }
+
+    if s.kind == model.SEL_FILTER {
+        _apply_filter(s.filter, value, path, out, root)
+    }
+}
+
+// A negative index counts from the end. Returns -1 when out of range.
+_resolve_index(idx: long, n: int) -> int {
+    if idx >= 0 {
+        if idx >= n { return -1 }
+        return idx as int
+    }
+    abs = 0 - idx
+    if abs > n { return -1 }
+    return n - (abs as int)
+}
+
+// RFC 9535 §2.3.4.2's slice algorithm, transcribed. The bounds/normalize
+// split matters for negative steps, where lower/upper swap roles.
+_apply_slice(sl: *Slice, value: ptr, path: string, out: ptr) {
+    if json.json_type(value) != 4 { return }
+    len = json.json_array_size(value)
+
+    step = 1
+    if sl.has_step == 1 { step = sl.step as int }
+    if step == 0 { return } // a zero step selects nothing
+
+    if step > 0 {
+        start = 0
+        if sl.has_start == 1 { start = _norm(sl.start as int, len) }
+        end = len
+        if sl.has_end == 1 { end = _norm(sl.end as int, len) }
+
+        lower = _clamp(start, 0, len)
+        upper = _clamp(end, 0, len)
+
+        i = lower
+        while i < upper {
+            _push_owned(out, json.json_array_get_raw(value, i), normalize_index_segment(path, i))
+            i = i + step
+        }
+        return
+    }
+
+    start = len - 1
+    if sl.has_start == 1 { start = _norm(sl.start as int, len) }
+    end = 0 - len - 1
+    if sl.has_end == 1 { end = _norm(sl.end as int, len) }
+
+    upper = _clamp(start, -1, len - 1)
+    lower = _clamp(end, -1, len - 1)
+
+    i = upper
+    while i > lower {
+        _push_owned(out, json.json_array_get_raw(value, i), normalize_index_segment(path, i))
+        i = i + step
+    }
+}
+
+_norm(i: int, len: int) -> int {
+    if i >= 0 { return i }
+    return len + i
+}
+
+_clamp(v: int, lo: int, hi: int) -> int {
+    r = v
+    if r < lo { r = lo }
+    if r > hi { r = hi }
+    return r
+}
+
+// A filter selector tests each CHILD of the current node (RFC 9535
+// §2.3.5.2), not the node itself.
+_apply_filter(f: ptr, value: ptr, path: string, out: ptr, root: ptr) {
+    t = json.json_type(value)
+
+    if t == 4 {
+        n = json.json_array_size(value)
+        i = 0
+        while i < n {
+            child = json.json_array_get_raw(value, i)
+            if _eval_filter(f, child, root) == 1 {
+                _push_owned(out, child, normalize_index_segment(path, i))
+            }
+            i = i + 1
+        }
+        return
+    }
+
+    if t == 5 {
+        n = json.json_object_size_raw(value)
+        i = 0
+        while i < n {
+            k = json.json_object_key_at(value, i)
+            child = json.json_object_value_at(value, i)
+            if _eval_filter(f, child, root) == 1 {
+                _push_owned(out, child, normalize_name_segment(path, k))
+            }
+            i = i + 1
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Filter evaluation
+//
+// `current` is the node `@` refers to; `root` is `$`. Returns 1/0.
+// ---------------------------------------------------------------------------
+
+_eval_filter(f: ptr, current: ptr, root: ptr) -> int {
+    fp = f as *Filter
+
+    if fp.kind == model.F_OR {
+        n = list.size(fp.children)
+        i = 0
+        while i < n {
+            if _eval_filter(list.get_raw(fp.children, i), current, root) == 1 { return 1 }
+            i = i + 1
+        }
+        return 0
+    }
+
+    if fp.kind == model.F_AND {
+        n = list.size(fp.children)
+        i = 0
+        while i < n {
+            if _eval_filter(list.get_raw(fp.children, i), current, root) == 0 { return 0 }
+            i = i + 1
+        }
+        return 1
+    }
+
+    if fp.kind == model.F_NOT {
+        if _eval_filter(fp.left, current, root) == 1 { return 0 }
+        return 1
+    }
+
+    if fp.kind == model.F_PAREN {
+        return _eval_filter(fp.left, current, root)
+    }
+
+    if fp.kind == model.F_COMPARE {
+        return _eval_comparison(fp.cmp, current, root)
+    }
+
+    if fp.kind == model.F_TEST {
+        return _eval_test(fp.test, current, root)
+    }
+
+    return 0
+}
+
+// An existence test is true when the embedded query matches at least one
+// node; a LogicalType function test is true when the function says so.
+_eval_test(t: ptr, current: ptr, root: ptr) -> int {
+    tp = t as *Test
+
+    if tp.kind == model.T_FUNCTION {
+        fp = tp.func as *TestFn
+        // match/search return LogicalType directly.
+        if fp.kind == model.FN_MATCH { return _eval_regex_fn(fp, current, root, 0) }
+        if fp.kind == model.FN_SEARCH { return _eval_regex_fn(fp, current, root, 1) }
+        // The parser already rejected length/count/value in test
+        // position, so nothing else can reach here.
+        return 0
+    }
+
+    base = current
+    if tp.kind == model.T_ABS_QUERY { base = root }
+
+    cursors = _fork_single(base, "$")
+    segs = tp.segments
+    n = list.size(segs)
+    i = 0
+    while i < n {
+        cursors = _apply_segment(list.get_raw(segs, i), cursors, root)
+        i = i + 1
+    }
+    found = result_size(cursors)
+    _drop(cursors)
+
+    if found > 0 { return 1 }
+    return 0
+}
+
+// ---------------------------------------------------------------------------
+// Comparisons (RFC 9535 §2.3.5.2.2)
+//
+// Each side evaluates to one of: a value, or Nothing (an empty result).
+// Nothing compares equal only to Nothing, and is unordered against
+// everything, so all four relational operators are false when either
+// side is Nothing.
+//
+// A present value is carried as a (found, json ptr) pair; `_cmp_slot`
+// is the pair, packed into a struct because Aether returns tuples but
+// not optionals across this many call sites.
+// ---------------------------------------------------------------------------
+
+struct Slot { found: int, value: ptr, owned: ptr }
+
+_eval_comparison(c: ptr, current: ptr, root: ptr) -> int {
+    cp = c as *Comparison
+    lhs = _eval_comparable(cp.left, current, root)
+    rhs = _eval_comparable(cp.right, current, root)
+
+    r = _compare_slots(cp.op, lhs, rhs)
+
+    // A function result (length/count/value) is a freshly-built json
+    // value this comparison owns; a query result is borrowed.
+    if lhs.owned != null { json.json_free(lhs.owned) }
+    if rhs.owned != null { json.json_free(rhs.owned) }
+    heap.free(lhs)
+    heap.free(rhs)
+    return r
+}
+
+_compare_slots(op: int, l: *Slot, r: *Slot) -> int {
+    // Both Nothing.
+    if l.found == 0 {
+        if r.found == 0 {
+            if op == model.OP_EQ { return 1 }
+            if op == model.OP_NE { return 0 }
+            // RFC 9535: Nothing <= Nothing is true (equality holds),
+            // strict < / > are false.
+            if op == model.OP_LTE { return 1 }
+            if op == model.OP_GTE { return 1 }
+            return 0
+        }
+    }
+    // Exactly one Nothing — never equal, never ordered.
+    if l.found == 0 {
+        if op == model.OP_NE { return 1 }
+        return 0
+    }
+    if r.found == 0 {
+        if op == model.OP_NE { return 1 }
+        return 0
+    }
+
+    if op == model.OP_EQ { return _json_eq(l.value, r.value) }
+    if op == model.OP_NE {
+        if _json_eq(l.value, r.value) == 1 { return 0 }
+        return 1
+    }
+
+    // RFC 9535 §2.3.5.2.2 defines the non-strict operators in terms of
+    // the strict one PLUS equality: `a <= b` is `a < b || a == b`. That
+    // matters for the unordered types — `null <= null` and
+    // `true >= true` are TRUE via the equality half even though null and
+    // booleans have no ordering. So equality is checked first, and only
+    // then does the strict comparison run.
+    if op == model.OP_LTE {
+        if _json_eq(l.value, r.value) == 1 { return 1 }
+    }
+    if op == model.OP_GTE {
+        if _json_eq(l.value, r.value) == 1 { return 1 }
+    }
+
+    // Strict ordering is defined only for two numbers or two strings;
+    // anything else is unordered, so `<`/`>` are false and the
+    // non-strict pair falls back on the equality result above.
+    ord = _json_cmp(l.value, r.value)
+    if ord == CMP_UNORDERED { return 0 }
+
+    if op == model.OP_LT {
+        if ord < 0 { return 1 }
+        return 0
+    }
+    if op == model.OP_GT {
+        if ord > 0 { return 1 }
+        return 0
+    }
+    if op == model.OP_LTE {
+        if ord < 0 { return 1 }
+        return 0
+    }
+    if op == model.OP_GTE {
+        if ord > 0 { return 1 }
+        return 0
+    }
+    return 0
+}
+
+// Evaluate one side of a comparison to a Slot.
+_eval_comparable(c: ptr, current: ptr, root: ptr) -> *Slot {
+    cp = c as *Comparable
+    s = heap.new(Slot)
+    s.found = 0
+    s.value = null
+    s.owned = null
+
+    if cp.kind == model.C_LITERAL {
+        v = _literal_to_json(cp.lit)
+        s.found = 1
+        s.value = v
+        s.owned = v
+        return s
+    }
+
+    if cp.kind == model.C_SINGULAR {
+        v = _eval_singular(cp.singular, current, root)
+        if v != null {
+            s.found = 1
+            s.value = v
+        }
+        return s
+    }
+
+    // C_FUNCTION — length/count/value yield ValueType.
+    fp = cp.func as *TestFn
+    v = _eval_value_fn(fp, current, root)
+    if v != null {
+        s.found = 1
+        s.value = v
+        s.owned = v
+    }
+    return s
+}
+
+// A literal becomes a temporary json value so comparison has one code
+// path. The caller frees it via Slot.owned.
+_literal_to_json(l: ptr) -> ptr {
+    lp = l as *Literal
+    if lp.kind == model.L_INT { return json.json_create_int(lp.ival) }
+    if lp.kind == model.L_FLOAT { return json.json_create_number(lp.fval) }
+    if lp.kind == model.L_STRING { return json.json_create_string(lp.sval) }
+    if lp.kind == model.L_BOOL { return json.json_create_bool(lp.bval) }
+    return json.json_create_null()
+}
+
+// Walk a singular query. Returns the borrowed value, or null for
+// Nothing.
+_eval_singular(sq: ptr, current: ptr, root: ptr) -> ptr {
+    sp = sq as *SingularQuery
+    node = current
+    if sp.kind == model.SQ_ROOT { node = root }
+
+    segs = sp.segments
+    n = list.size(segs)
+    i = 0
+    while i < n {
+        if node == null { return null }
+        seg = list.get_raw(segs, i) as *SingularSeg
+
+        if seg.is_name == 1 {
+            if json.json_type(node) != 5 { return null }
+            if json.json_object_has(node, seg.name) == 0 { return null }
+            node = json.json_object_get_raw(node, seg.name)
+        } else {
+            if json.json_type(node) != 4 { return null }
+            len = json.json_array_size(node)
+            idx = _resolve_index(seg.index, len)
+            if idx < 0 { return null }
+            node = json.json_array_get_raw(node, idx)
+        }
+        i = i + 1
+    }
+    return node
+}
+
+// ---------------------------------------------------------------------------
+// JSON value equality and ordering
+//
+// Equality is structural and recursive, with int/float interoperability
+// (RFC 9535 §2.3.5.2.2: 1 and 1.0 are equal). std.json gives one number
+// type, so both sides read as doubles and compare exactly — which is
+// what the RFC wants, since the two spellings denote the same value.
+// ---------------------------------------------------------------------------
+
+_json_eq(a: ptr, b: ptr) -> int {
+    ta = json.json_type(a)
+    tb = json.json_type(b)
+
+    // Numbers compare numerically regardless of int/float spelling.
+    if ta == 2 {
+        if tb == 2 {
+            if json.json_get_number(a) == json.json_get_number(b) { return 1 }
+            return 0
+        }
+        return 0
+    }
+
+    if ta != tb { return 0 }
+
+    if ta == 0 { return 1 } // null == null
+    if ta == 1 { // bool
+        if json.json_get_bool(a) == json.json_get_bool(b) { return 1 }
+        return 0
+    }
+    if ta == 3 { // string
+        return string.equals(json.json_get_string_raw(a), json.json_get_string_raw(b))
+    }
+
+    if ta == 4 { // array — element-wise, order-sensitive
+        n = json.json_array_size(a)
+        if n != json.json_array_size(b) { return 0 }
+        i = 0
+        while i < n {
+            if _json_eq(json.json_array_get_raw(a, i), json.json_array_get_raw(b, i)) == 0 { return 0 }
+            i = i + 1
+        }
+        return 1
+    }
+
+    if ta == 5 { // object — same keys, same values, order-INsensitive
+        n = json.json_object_size_raw(a)
+        if n != json.json_object_size_raw(b) { return 0 }
+        i = 0
+        while i < n {
+            k = json.json_object_key_at(a, i)
+            if json.json_object_has(b, k) == 0 { return 0 }
+            va = json.json_object_value_at(a, i)
+            vb = json.json_object_get_raw(b, k)
+            if _json_eq(va, vb) == 0 { return 0 }
+            i = i + 1
+        }
+        return 1
+    }
+
+    return 0
+}
+
+// -1 / 0 / 1 for ordered pairs; CMP_UNORDERED for "incomparable" (the
+// RFC leaves null, booleans, arrays and objects unordered).
+//
+// The sentinel is deliberately outside the range any sign convention
+// could produce: std.string.compare returns the raw BYTE DIFFERENCE
+// (compare("c","a") == 2), not a normalized -1/0/1, so a small positive
+// value like 2 is a perfectly ordinary "greater than" result. Using 2
+// as the sentinel silently made every string pair differing by exactly
+// two bytes look incomparable — `'c' > 'a'` came back false.
+const CMP_UNORDERED = 99
+
+_json_cmp(a: ptr, b: ptr) -> int {
+    ta = json.json_type(a)
+    tb = json.json_type(b)
+
+    if ta == 2 {
+        if tb != 2 { return CMP_UNORDERED }
+        x = json.json_get_number(a)
+        y = json.json_get_number(b)
+        if x < y { return -1 }
+        if x > y { return 1 }
+        return 0
+    }
+
+    if ta == 3 {
+        if tb != 3 { return CMP_UNORDERED }
+        // Byte-wise ordering, which matches the RFC's codepoint
+        // ordering (UTF-8 sorts byte-wise in codepoint order).
+        // NORMALIZED to -1/0/1: string.compare hands back the raw byte
+        // difference, and the callers below treat the magnitude as
+        // meaningful only through its sign.
+        d = string.compare(json.json_get_string_raw(a), json.json_get_string_raw(b))
+        if d < 0 { return -1 }
+        if d > 0 { return 1 }
+        return 0
+    }
+
+    return CMP_UNORDERED
+}
+
+// ---------------------------------------------------------------------------
+// Function extensions (RFC 9535 §2.4)
+// ---------------------------------------------------------------------------
+
+// length() / count() / value() — ValueType results. Returns a freshly
+// allocated json value the caller owns, or null for Nothing.
+_eval_value_fn(fp: *TestFn, current: ptr, root: ptr) -> ptr {
+    if fp.kind == model.FN_LENGTH {
+        arg = list.get_raw(fp.args, 0)
+        v = _arg_to_value(arg, current, root)
+        if v == null { return null }
+        out = null
+        t = json.json_type(v)
+        if t == 3 {
+            // Length of a string is its CODEPOINT count, not its byte
+            // count (RFC 9535 §2.4.4).
+            out = json.json_create_int(_utf8_length(json.json_get_string_raw(v)) as long)
+        }
+        if t == 4 { out = json.json_create_int(json.json_array_size(v) as long) }
+        if t == 5 { out = json.json_create_int(json.json_object_size_raw(v) as long) }
+        _release_arg_value(arg, v)
+        return out
+    }
+
+    if fp.kind == model.FN_COUNT {
+        arg = list.get_raw(fp.args, 0)
+        n = _arg_nodelist_size(arg, current, root)
+        return json.json_create_int(n as long)
+    }
+
+    if fp.kind == model.FN_VALUE {
+        arg = list.get_raw(fp.args, 0)
+        v = _arg_to_value(arg, current, root)
+        if v == null { return null }
+        // value() yields the node itself; copy so the Slot can own it
+        // uniformly with the literal path.
+        out = _json_copy(v)
+        _release_arg_value(arg, v)
+        return out
+    }
+
+    return null
+}
+
+// Evaluate a function argument down to a single value, or null when the
+// argument's nodelist is not exactly one node (RFC 9535 §2.4.4: length()
+// of a multi-node or empty nodelist is Nothing).
+_arg_to_value(arg: ptr, current: ptr, root: ptr) -> ptr {
+    ap = arg as *FnArg
+
+    if ap.lit != null {
+        // A literal argument: build it, but it must be freed by the
+        // caller. Only value()/length() see this, and both copy.
+        return _literal_to_json(ap.lit)
+    }
+
+    if ap.test != null {
+        tp = ap.test as *Test
+        if tp.kind == model.T_FUNCTION {
+            return _eval_value_fn(tp.func as *TestFn, current, root)
+        }
+        base = current
+        if tp.kind == model.T_ABS_QUERY { base = root }
+        cursors = _fork_single(base, "$")
+        segs = tp.segments
+        n = list.size(segs)
+        i = 0
+        while i < n {
+            cursors = _apply_segment(list.get_raw(segs, i), cursors, root)
+            i = i + 1
+        }
+        v = null
+        if result_size(cursors) == 1 {
+            v = result_value(cursors, 0)
+        }
+        _drop(cursors)
+        return v
+    }
+
+    return null
+}
+
+// _arg_to_value returns borrowed document nodes for path arguments, but
+// constructs fresh JSON nodes for literals and value-producing function
+// arguments. Keep that distinction local so callers cannot accidentally free
+// a node owned by std.json.
+_arg_value_is_owned(arg: ptr) -> int {
+    ap = arg as *FnArg
+    if ap.lit != null { return 1 }
+    if ap.test != null {
+        tp = ap.test as *Test
+        if tp.kind == model.T_FUNCTION {
+            fp = tp.func as *TestFn
+            if fp.kind == model.FN_LENGTH { return 1 }
+            if fp.kind == model.FN_COUNT { return 1 }
+            if fp.kind == model.FN_VALUE { return 1 }
+        }
+    }
+    return 0
+}
+
+_release_arg_value(arg: ptr, value: ptr) {
+    if value != null {
+        if _arg_value_is_owned(arg) == 1 { json.json_free(value) }
+    }
+}
+
+// The node COUNT of a query argument, for count().
+_arg_nodelist_size(arg: ptr, current: ptr, root: ptr) -> int {
+    ap = arg as *FnArg
+    if ap.test == null { return 0 }
+
+    tp = ap.test as *Test
+    if tp.kind == model.T_FUNCTION { return 0 }
+
+    base = current
+    if tp.kind == model.T_ABS_QUERY { base = root }
+    cursors = _fork_single(base, "$")
+    segs = tp.segments
+    n = list.size(segs)
+    i = 0
+    while i < n {
+        cursors = _apply_segment(list.get_raw(segs, i), cursors, root)
+        i = i + 1
+    }
+    sz = result_size(cursors)
+    _drop(cursors)
+    return sz
+}
+
+// match() and search() — LogicalType results.
+//
+// RFC 9535 §2.4.6/§2.4.7 specify I-Regexp semantics: match() must match
+// the WHOLE string, search() any substring. std.regex is PCRE2, so
+// match() gets explicit anchors. Both return false (not an error) when
+// either argument is not a string, per the RFC's type rules.
+_eval_regex_fn(fp: *TestFn, current: ptr, root: ptr, substring: int) -> int {
+    if list.size(fp.args) != 2 { return 0 }
+
+    lhs_arg = list.get_raw(fp.args, 0)
+    lhs = _arg_to_value(lhs_arg, current, root)
+    if lhs == null { return 0 }
+    if json.json_type(lhs) != 3 {
+        _release_arg_value(lhs_arg, lhs)
+        return 0
+    }
+    input = json.json_get_string_raw(lhs)
+
+    rhs_arg = list.get_raw(fp.args, 1)
+    rhs = _arg_to_value(rhs_arg, current, root)
+    if rhs == null {
+        _release_arg_value(lhs_arg, lhs)
+        return 0
+    }
+    if json.json_type(rhs) != 3 {
+        _release_arg_value(lhs_arg, lhs)
+        _release_arg_value(rhs_arg, rhs)
+        return 0
+    }
+    pattern = json.json_get_string_raw(rhs)
+
+    prepared = _iregexp_dot(pattern)
+    if substring == 0 {
+        // match() is whole-string. The pattern is WRAPPED rather than
+        // anchored in place so an alternation (`a|b`) anchors as a
+        // whole, instead of `^` binding to only its first branch.
+        prepared = "^(?:${prepared})$"
+    }
+
+    // I-Regexp semantics (RFC 9485, mandated by RFC 9535 section 2.4.7)
+    // need two PCRE2 options that are off by default:
+    //   UTF - makes `.` consume one CODEPOINT rather than one byte,
+    //         which is what the suite's surrogate-pair and
+    //         line-separator cases turn on.
+    //   UCP - makes \p{Lu} / \P{Lu} and the \w family use Unicode
+    //         properties instead of their ASCII-only defaults.
+    //
+    // NOT DOTALL. RFC 9485 section 3 defines I-Regexp's `.` as exactly
+    // [^\n\r] — it matches U+2028 and U+2029 (which PCRE2's default `.`
+    // also does), but it must NOT match CR or LF. PCRE2's default is
+    // [^\n] only, so `.` would wrongly match a bare \r; DOTALL is the
+    // opposite error, matching both. Hence the explicit rewrite below.
+    re, err = regex.compile_flags(prepared, PCRE2_UTF + PCRE2_UCP)
+    if err != "" {
+        _release_arg_value(lhs_arg, lhs)
+        _release_arg_value(rhs_arg, rhs)
+        return 0
+    }
+    m = regex.matches(re, input)
+    regex.free(re)
+    _release_arg_value(lhs_arg, lhs)
+    _release_arg_value(rhs_arg, rhs)
+    if m == 1 { return 1 }
+    return 0
+}
+
+// Rewrite every I-Regexp `.` to its explicit PCRE2 equivalent.
+//
+// RFC 9485 §3 defines the I-Regexp dot as `[^\n\r]`: unlike PCRE2's
+// default (`[^\n]`) it also excludes carriage return, and unlike PCRE2
+// under DOTALL it is not "everything". Both of PCRE2's modes are wrong
+// in a way the CTS observes (a bare "\r" must NOT match `.`, while
+// U+2028 must), so the dot is rewritten rather than flag-configured.
+//
+// Only a dot that is BOTH unescaped and outside a character class is a
+// metacharacter; inside `[...]` a dot is a literal, and `\.` is a
+// literal anywhere. The scan tracks those two states so it rewrites
+// exactly the metacharacter dots.
+_iregexp_dot(pattern: string) -> string {
+    n = string.length(pattern)
+    b = strbuilder.new(n + 16)
+    in_class = 0
+    i = 0
+    while i < n {
+        c = string.char_at_n(pattern, n, i)
+
+        if c == 92 { // backslash — copy it and whatever it escapes
+            strbuilder.append_byte(b, c)
+            if i + 1 < n {
+                strbuilder.append_byte(b, string.char_at_n(pattern, n, i + 1))
+                i = i + 2
+            } else {
+                i = i + 1
+            }
+        } else { if c == 91 { // '['
+                in_class = 1
+                strbuilder.append_byte(b, c)
+                i = i + 1
+            } else { if c == 93 { // ']'
+                    in_class = 0
+                    strbuilder.append_byte(b, c)
+                    i = i + 1
+                } else { if c == 46 { // '.'
+                        if in_class == 1 {
+                            strbuilder.append_byte(b, c)
+                        } else {
+                            // Emit the six-BYTE sequence `[^\n\r]` — that is, a
+                            // literal backslash followed by 'n', not an actual
+                            // newline. An Aether "\\n" literal would resolve to a
+                            // real 0x0A byte, which inside a character class means
+                            // the same thing to PCRE2 but is far easier to misread;
+                            // spelling the bytes out keeps the intent explicit.
+                            strbuilder.append_byte(b, 91) // [
+                            strbuilder.append_byte(b, 94) // ^
+                            strbuilder.append_byte(b, 92) // backslash
+                            strbuilder.append_byte(b, 110) // n
+                            strbuilder.append_byte(b, 92) // backslash
+                            strbuilder.append_byte(b, 114) // r
+                            strbuilder.append_byte(b, 93) // ]
+                        }
+                        i = i + 1
+                    } else {
+                        strbuilder.append_byte(b, c)
+                        i = i + 1
+                    } } } }
+    }
+    return strbuilder.finish(b)
+}
+
+// Count UTF-8 codepoints: every byte that is not a continuation byte
+// (0b10xxxxxx) starts one.
+_utf8_length(s: string) -> int {
+    n = string.length(s)
+    count = 0
+    i = 0
+    while i < n {
+        c = string.char_at_n(s, n, i)
+        if c < 128 { count = count + 1 }
+        else { if c >= 192 { count = count + 1 } }
+        i = i + 1
+    }
+    return count
+}
+
+// A deep copy of a json value, so value() can hand back an owned result.
+_json_copy(v: ptr) -> ptr {
+    t = json.json_type(v)
+    if t == 0 { return json.json_create_null() }
+    if t == 1 { return json.json_create_bool(json.json_get_bool(v)) }
+    if t == 2 { return json.json_create_number(json.json_get_number(v)) }
+    if t == 3 { return json.json_create_string(json.json_get_string_raw(v)) }
+    if t == 4 {
+        a = json.json_create_array()
+        n = json.json_array_size(v)
+        i = 0
+        while i < n {
+            json.json_array_add_raw(a, _json_copy(json.json_array_get_raw(v, i)))
+            i = i + 1
+        }
+        return a
+    }
+    o = json.json_create_object()
+    n = json.json_object_size_raw(v)
+    i = 0
+    while i < n {
+        json.json_object_set_raw(o, json.json_object_key_at(v, i), _json_copy(json.json_object_value_at(v, i)))
+        i = i + 1
+    }
+    return o
+}

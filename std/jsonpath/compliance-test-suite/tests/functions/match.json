@@ -1,0 +1,466 @@
+{
+  "tests": [
+    {
+      "name": "found match",
+      "selector": "$[?match(@.a, 'a.*')]",
+      "document": [
+        {
+          "a": "ab"
+        }
+      ],
+      "result": [
+        {
+          "a": "ab"
+        }
+      ],
+      "result_paths": [
+        "$[0]"
+      ],
+      "tags": [
+        "function",
+        "match"
+      ]
+    },
+    {
+      "name": "double quotes",
+      "selector": "$[?match(@.a, \"a.*\")]",
+      "document": [
+        {
+          "a": "ab"
+        }
+      ],
+      "result": [
+        {
+          "a": "ab"
+        }
+      ],
+      "result_paths": [
+        "$[0]"
+      ],
+      "tags": [
+        "function",
+        "match"
+      ]
+    },
+    {
+      "name": "regex from the document",
+      "selector": "$.values[?match(@, $.regex)]",
+      "document": {
+        "regex": "b.?b",
+        "values": [
+          "abc",
+          "bcd",
+          "bab",
+          "bba",
+          "bbab",
+          "b",
+          true,
+          [],
+          {}
+        ]
+      },
+      "result": [
+        "bab"
+      ],
+      "result_paths": [
+        "$['values'][2]"
+      ],
+      "tags": [
+        "function",
+        "match"
+      ]
+    },
+    {
+      "name": "don't select match",
+      "selector": "$[?!match(@.a, 'a.*')]",
+      "document": [
+        {
+          "a": "ab"
+        }
+      ],
+      "result": [],
+      "result_paths": [],
+      "tags": [
+        "function",
+        "match"
+      ]
+    },
+    {
+      "name": "not a match",
+      "selector": "$[?match(@.a, 'a.*')]",
+      "document": [
+        {
+          "a": "bc"
+        }
+      ],
+      "result": [],
+      "result_paths": [],
+      "tags": [
+        "function",
+        "match"
+      ]
+    },
+    {
+      "name": "select non-match",
+      "selector": "$[?!match(@.a, 'a.*')]",
+      "document": [
+        {
+          "a": "bc"
+        }
+      ],
+      "result": [
+        {
+          "a": "bc"
+        }
+      ],
+      "result_paths": [
+        "$[0]"
+      ],
+      "tags": [
+        "function",
+        "match"
+      ]
+    },
+    {
+      "name": "non-string first arg",
+      "selector": "$[?match(1, 'a.*')]",
+      "document": [
+        {
+          "a": "bc"
+        }
+      ],
+      "result": [],
+      "result_paths": [],
+      "tags": [
+        "function",
+        "match"
+      ]
+    },
+    {
+      "name": "non-string second arg",
+      "selector": "$[?match(@.a, 1)]",
+      "document": [
+        {
+          "a": "bc"
+        }
+      ],
+      "result": [],
+      "result_paths": [],
+      "tags": [
+        "function",
+        "match"
+      ]
+    },
+    {
+      "name": "filter, match function, unicode char class, uppercase",
+      "selector": "$[?match(@, '\\\\p{Lu}')]",
+      "document": [
+        "ж",
+        "Ж",
+        "1",
+        "жЖ",
+        true,
+        [],
+        {}
+      ],
+      "result": [
+        "Ж"
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "function",
+        "match"
+      ]
+    },
+    {
+      "name": "filter, match function, unicode char class negated, uppercase",
+      "selector": "$[?match(@, '\\\\P{Lu}')]",
+      "document": [
+        "ж",
+        "Ж",
+        "1",
+        true,
+        [],
+        {}
+      ],
+      "result": [
+        "ж",
+        "1"
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[2]"
+      ],
+      "tags": [
+        "function",
+        "match"
+      ]
+    },
+    {
+      "name": "filter, match function, unicode, surrogate pair",
+      "selector": "$[?match(@, 'a.b')]",
+      "document": [
+        "a𐄁b",
+        "ab",
+        "1",
+        true,
+        [],
+        {}
+      ],
+      "result": [
+        "a𐄁b"
+      ],
+      "result_paths": [
+        "$[0]"
+      ],
+      "tags": [
+        "function",
+        "match"
+      ]
+    },
+    {
+      "name": "dot matcher on \\u2028",
+      "selector": "$[?match(@, '.')]",
+      "document": [
+        " ",
+        "\r",
+        "\n",
+        true,
+        [],
+        {}
+      ],
+      "result": [
+        " "
+      ],
+      "result_paths": [
+        "$[0]"
+      ],
+      "tags": [
+        "function",
+        "match"
+      ]
+    },
+    {
+      "name": "dot matcher on \\u2029",
+      "selector": "$[?match(@, '.')]",
+      "document": [
+        " ",
+        "\r",
+        "\n",
+        true,
+        [],
+        {}
+      ],
+      "result": [
+        " "
+      ],
+      "result_paths": [
+        "$[0]"
+      ],
+      "tags": [
+        "function",
+        "match"
+      ]
+    },
+    {
+      "name": "result cannot be compared",
+      "selector": "$[?match(@.a, 'a.*')==true]",
+      "invalid_selector": true,
+      "tags": [
+        "function",
+        "match"
+      ]
+    },
+    {
+      "name": "too few params",
+      "selector": "$[?match(@.a)==1]",
+      "invalid_selector": true,
+      "tags": [
+        "function",
+        "match"
+      ]
+    },
+    {
+      "name": "too many params",
+      "selector": "$[?match(@.a,@.b,@.c)==1]",
+      "invalid_selector": true,
+      "tags": [
+        "function",
+        "match"
+      ]
+    },
+    {
+      "name": "arg is a function expression",
+      "selector": "$.values[?match(@.a, value($..['regex']))]",
+      "document": {
+        "regex": "a.*",
+        "values": [
+          {
+            "a": "ab"
+          },
+          {
+            "a": "ba"
+          }
+        ]
+      },
+      "result": [
+        {
+          "a": "ab"
+        }
+      ],
+      "result_paths": [
+        "$['values'][0]"
+      ],
+      "tags": [
+        "function",
+        "match",
+        "value"
+      ]
+    },
+    {
+      "name": "dot in character class",
+      "selector": "$[?match(@, 'a[.b]c')]",
+      "document": [
+        "abc",
+        "a.c",
+        "axc"
+      ],
+      "result": [
+        "abc",
+        "a.c"
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "function",
+        "match"
+      ]
+    },
+    {
+      "name": "escaped dot",
+      "selector": "$[?match(@, 'a\\\\.c')]",
+      "document": [
+        "abc",
+        "a.c",
+        "axc"
+      ],
+      "result": [
+        "a.c"
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "function",
+        "match"
+      ]
+    },
+    {
+      "name": "escaped backslash before dot",
+      "selector": "$[?match(@, 'a\\\\\\\\.c')]",
+      "document": [
+        "abc",
+        "a.c",
+        "axc",
+        "a\\ c"
+      ],
+      "result": [
+        "a\\ c"
+      ],
+      "result_paths": [
+        "$[3]"
+      ],
+      "tags": [
+        "function",
+        "match"
+      ]
+    },
+    {
+      "name": "escaped left square bracket",
+      "selector": "$[?match(@, 'a\\\\[.c')]",
+      "document": [
+        "abc",
+        "a.c",
+        "a[ c"
+      ],
+      "result": [
+        "a[ c"
+      ],
+      "result_paths": [
+        "$[2]"
+      ],
+      "tags": [
+        "function",
+        "match"
+      ]
+    },
+    {
+      "name": "escaped right square bracket",
+      "selector": "$[?match(@, 'a[\\\\].]c')]",
+      "document": [
+        "abc",
+        "a.c",
+        "a c",
+        "a]c"
+      ],
+      "result": [
+        "a.c",
+        "a]c"
+      ],
+      "result_paths": [
+        "$[1]",
+        "$[3]"
+      ],
+      "tags": [
+        "function",
+        "match"
+      ]
+    },
+    {
+      "name": "explicit caret",
+      "selector": "$[?match(@, '^ab.*')]",
+      "document": [
+        "abc",
+        "axc",
+        "ab",
+        "xab"
+      ],
+      "result": [
+        "abc",
+        "ab"
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[2]"
+      ],
+      "tags": [
+        "function",
+        "match"
+      ]
+    },
+    {
+      "name": "explicit dollar",
+      "selector": "$[?match(@, '.*bc$')]",
+      "document": [
+        "abc",
+        "axc",
+        "ab",
+        "abcx"
+      ],
+      "result": [
+        "abc"
+      ],
+      "result_paths": [
+        "$[0]"
+      ],
+      "tags": [
+        "function",
+        "match"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,439 @@
+// Query-engine specs — evaluation semantics (RFC 9535 §2.3-§2.7).
+//
+// Ported from zig-jsonpath's `test/model_test.zig` and the query-side
+// tests in jsonpath-rust's `src/query/*.rs`, restated as std.spec
+// describe/it blocks.
+//
+// The house document is the RFC's own bookstore example, which both
+// source repos use in their READMEs — so the expectations here read
+// against the same data any JSONPath user already knows.
+//
+// Run with:  ae run std/jsonpath/test_query.ae
+
+import std.spec
+import std.json
+import std.list
+import std.string
+import query
+import parser
+
+// The RFC 9535 / Goessner bookstore document.
+const STORE = <<JSON
+{
+  "store": {
+    "book": [
+      { "category": "reference", "author": "Nigel Rees",
+        "title": "Sayings of the Century", "price": 8.95 },
+      { "category": "fiction", "author": "Evelyn Waugh",
+        "title": "Sword of Honour", "price": 12.99 },
+      { "category": "fiction", "author": "Herman Melville",
+        "title": "Moby Dick", "isbn": "0-553-21311-3", "price": 8.99 },
+      { "category": "fiction", "author": "J. R. R. Tolkien",
+        "title": "The Lord of the Rings", "isbn": "0-395-19395-8", "price": 22.99 }
+    ],
+    "bicycle": { "color": "red", "price": 19.95 }
+  },
+  "expensive": 10
+}
+JSON
+
+// The document under test, parsed once in before_each.
+var doc: ptr = null
+
+// --- helpers -------------------------------------------------------
+//
+// Each returns a plain value so the specs read as one assertion per
+// line rather than a nest of list plumbing.
+
+// How many nodes `path` selects.
+count_of(path: string) -> int {
+    cur, err = query.query(doc, path)
+    if err != "" { return -1 }
+    n = query.result_size(cur)
+    query.free_result(cur)
+    return n
+}
+
+// The i-th matched node, serialized — the easiest thing to assert on.
+nth_json(path: string, i: int) -> string {
+    cur, err = query.query(doc, path)
+    if err != "" { return "ERR: ${err}" }
+    out = "(none)"
+    if i < query.result_size(cur) {
+        out = string.copy(json.json_stringify_raw(query.result_value(cur, i)))
+    }
+    query.free_result(cur)
+    return out
+}
+
+// The i-th normalized path.
+nth_path(path: string, i: int) -> string {
+    cur, err = query.query(doc, path)
+    if err != "" { return "ERR: ${err}" }
+    out = "(none)"
+    if i < query.result_size(cur) {
+        out = string.copy(query.result_path(cur, i))
+    }
+    query.free_result(cur)
+    return out
+}
+
+// Every match joined with "|" — for asserting a whole ordered nodelist
+// in one line.
+all_json(path: string) -> string {
+    cur, err = query.query(doc, path)
+    if err != "" { return "ERR: ${err}" }
+    out = ""
+    n = query.result_size(cur)
+    i = 0
+    while i < n {
+        if i > 0 { out = string.concat(out, "|") }
+        out = string.concat(out, json.json_stringify_raw(query.result_value(cur, i)))
+        i = i + 1
+    }
+    query.free_result(cur)
+    return out
+}
+
+// 1 when `path` parses, 0 when it is a syntax error.
+parses(path: string) -> int {
+    q, _err = parser.parse(path)
+    if q == null { return 0 }
+    parser.free_query(q)
+    return 1
+}
+
+// Query a caller-supplied document rather than the shared one.
+all_json_of(src: string, path: string) -> string {
+    d, jerr = json.parse(src)
+    if jerr != "" { return "JSONERR: ${jerr}" }
+    cur, err = query.query(d, path)
+    if err != "" { json.json_free(d); return "ERR: ${err}" }
+    out = ""
+    n = query.result_size(cur)
+    i = 0
+    while i < n {
+        if i > 0 { out = string.concat(out, "|") }
+        out = string.concat(out, json.json_stringify_raw(query.result_value(cur, i)))
+        i = i + 1
+    }
+    query.free_result(cur)
+    json.json_free(d)
+    return out
+}
+
+main() {
+    fw = spec.init()
+
+    // Parsed once up front rather than per-it: the engine never mutates
+    // the document, so every spec can share it.
+    d, jerr = json.parse(STORE)
+    if jerr != "" {
+        println("fixture is not valid JSON: ${jerr}")
+        exit(1)
+    }
+    doc = d
+
+    spec.describe(fw, "query") {
+        spec.describe("root and name selectors") {
+            spec.it("selects the root itself") callback {
+                spec.assert_eq(count_of("$"), 1, "root is one node")
+                spec.assert_str_eq(nth_path("$", 0), "$", "root path")
+            }
+            spec.it("walks named members") callback {
+                spec.assert_str_eq(nth_json("$.expensive", 0), "10", "expensive")
+                spec.assert_str_eq(nth_json("$.store.bicycle.color", 0), "\"red\"", "bicycle colour")
+            }
+            spec.it("yields nothing for a missing member") callback {
+                spec.assert_eq(count_of("$.nosuch"), 0, "missing key")
+                spec.assert_eq(count_of("$.store.nosuch.deeper"), 0, "missing mid-path")
+            }
+            spec.it("treats bracket and dot notation alike") callback {
+                spec.assert_str_eq(nth_json("$['expensive']", 0), "10", "bracket form")
+                spec.assert_str_eq(nth_json("$[\"expensive\"]", 0), "10", "double-quoted form")
+            }
+            spec.it("records normalized paths in bracket form") callback {
+                // RFC 9535 §2.7 — always bracket-and-single-quote,
+                // whatever notation the query used.
+                spec.assert_str_eq(nth_path("$.store.bicycle.color", 0),
+                    "$['store']['bicycle']['color']", "normalized path")
+            }
+        }
+
+        spec.describe("wildcard selector") {
+            spec.it("expands array elements") callback {
+                spec.assert_eq(count_of("$.store.book[*]"), 4, "four books")
+            }
+            spec.it("expands object members") callback {
+                spec.assert_eq(count_of("$.store.*"), 2, "book + bicycle")
+            }
+            spec.it("selects nothing from a scalar") callback {
+                spec.assert_eq(count_of("$.expensive.*"), 0, "scalar has no members")
+            }
+            spec.it("composes with a following segment") callback {
+                spec.assert_str_eq(all_json("$.store.book[*].price"),
+                    "8.95|12.99|8.99|22.99", "all prices in order")
+            }
+        }
+
+        spec.describe("index selector") {
+            spec.it("indexes from the front") callback {
+                spec.assert_str_eq(nth_json("$.store.book[0].title", 0),
+                    "\"Sayings of the Century\"", "first book")
+            }
+            spec.it("indexes from the back") callback {
+                spec.assert_str_eq(nth_json("$.store.book[-1].title", 0),
+                    "\"The Lord of the Rings\"", "last book")
+                spec.assert_str_eq(nth_json("$.store.book[-2].title", 0),
+                    "\"Moby Dick\"", "second to last")
+            }
+            spec.it("yields nothing when out of range") callback {
+                spec.assert_eq(count_of("$.store.book[9]"), 0, "past the end")
+                spec.assert_eq(count_of("$.store.book[-9]"), 0, "before the start")
+            }
+            spec.it("normalizes a negative index to its actual position") callback {
+                spec.assert_str_eq(nth_path("$.store.book[-1]", 0),
+                    "$['store']['book'][3]", "negative index resolves")
+            }
+        }
+
+        spec.describe("slice selector") {
+            spec.it("slices with start and end") callback {
+                spec.assert_str_eq(all_json_of("[0,1,2,3,4]", "$[1:3]"), "1|2", "start:end")
+            }
+            spec.it("defaults the omitted components") callback {
+                spec.assert_str_eq(all_json_of("[0,1,2,3,4]", "$[:2]"), "0|1", "end only")
+                spec.assert_str_eq(all_json_of("[0,1,2,3,4]", "$[3:]"), "3|4", "start only")
+                spec.assert_str_eq(all_json_of("[0,1,2,3,4]", "$[:]"), "0|1|2|3|4", "everything")
+            }
+            spec.it("honours the step") callback {
+                spec.assert_str_eq(all_json_of("[0,1,2,3,4]", "$[::2]"), "0|2|4", "every other")
+                spec.assert_str_eq(all_json_of("[0,1,2,3,4]", "$[1:5:2]"), "1|3", "stepped range")
+            }
+            spec.it("reverses on a negative step") callback {
+                spec.assert_str_eq(all_json_of("[0,1,2,3,4]", "$[::-1]"), "4|3|2|1|0", "reversed")
+                spec.assert_str_eq(all_json_of("[0,1,2,3,4]", "$[4:1:-1]"), "4|3|2", "reversed range")
+            }
+            spec.it("takes a zero step to select nothing") callback {
+                // RFC 9535 §2.3.4.2.2 — a zero step yields an empty
+                // nodelist rather than looping forever.
+                spec.assert_str_eq(all_json_of("[0,1,2,3,4]", "$[::0]"), "", "zero step")
+            }
+            spec.it("clamps out-of-range bounds") callback {
+                spec.assert_str_eq(all_json_of("[0,1,2]", "$[-99:99]"), "0|1|2", "clamped")
+                spec.assert_str_eq(all_json_of("[0,1,2]", "$[5:9]"), "", "wholly past the end")
+            }
+            spec.it("handles negative bounds") callback {
+                spec.assert_str_eq(all_json_of("[0,1,2,3,4]", "$[-2:]"), "3|4", "last two")
+            }
+        }
+
+        spec.describe("union of selectors") {
+            spec.it("concatenates each selector's matches in order") callback {
+                spec.assert_str_eq(all_json_of("[0,1,2,3]", "$[0,2]"), "0|2", "two indices")
+                spec.assert_str_eq(all_json_of("[0,1,2,3]", "$[2,0]"), "2|0", "selector order wins")
+            }
+            spec.it("allows a repeated selector to match twice") callback {
+                spec.assert_str_eq(all_json_of("[0,1,2]", "$[1,1]"), "1|1", "duplicates kept")
+            }
+            spec.it("mixes selector kinds") callback {
+                spec.assert_str_eq(all_json_of("{\"a\":1,\"b\":2,\"c\":3}", "$['a','c']"),
+                    "1|3", "two names")
+            }
+        }
+
+        spec.describe("descendant segment") {
+            spec.it("finds a member at any depth") callback {
+                spec.assert_eq(count_of("$..price"), 5, "four books plus the bicycle")
+            }
+            spec.it("visits in document order, self first") callback {
+                spec.assert_str_eq(all_json_of("{\"a\":{\"b\":{\"c\":1}}}", "$..b"),
+                    "{\"c\":1}", "nested match")
+                spec.assert_str_eq(all_json_of("[[1,2],[3]]", "$..[0]"), "[1,2]|1|3", "pre-order")
+            }
+            spec.it("combines with a wildcard") callback {
+                // Every node in the document except the root itself:
+                // 2 store members + 4 books + 1 bicycle + 22 leaf
+                // members within them.
+                spec.assert_eq(count_of("$..*"), 28, "all descendants")
+            }
+            spec.it("combines with a filter") callback {
+                spec.assert_eq(count_of("$..book[?@.isbn]"), 2, "books with an isbn")
+            }
+        }
+
+        spec.describe("filter selector") {
+            spec.it("tests for existence") callback {
+                spec.assert_eq(count_of("$.store.book[?@.isbn]"), 2, "has isbn")
+                spec.assert_eq(count_of("$.store.book[?!@.isbn]"), 2, "lacks isbn")
+            }
+            spec.it("compares against literals") callback {
+                spec.assert_eq(count_of("$.store.book[?@.price < 10]"), 2, "cheap books")
+                spec.assert_eq(count_of("$.store.book[?@.category == 'fiction']"), 3, "fiction")
+                spec.assert_eq(count_of("$.store.book[?@.category != 'fiction']"), 1, "not fiction")
+                spec.assert_eq(count_of("$.store.book[?@.price >= 8.99]"), 3, "at least 8.99")
+            }
+            spec.it("compares int and float spellings numerically") callback {
+                // RFC 9535 §2.3.5.2.2 — 1 and 1.0 denote the same value.
+                spec.assert_str_eq(all_json_of("[1, 1.0, 2]", "$[?@ == 1]"), "1|1", "1 == 1.0")
+            }
+            spec.it("references the root from inside a filter") callback {
+                spec.assert_eq(count_of("$.store.book[?@.price < $.expensive]"), 2, "cheaper than $.expensive")
+            }
+            spec.it("combines conditions with && and ||") callback {
+                spec.assert_eq(count_of("$.store.book[?@.category == 'fiction' && @.price < 10]"), 1, "and")
+                spec.assert_eq(count_of("$.store.book[?@.price < 9 || @.price > 20]"), 3, "or")
+                spec.assert_eq(count_of("$.store.book[?(@.price < 9 || @.price > 20) && @.isbn]"), 2, "grouped")
+            }
+            spec.it("filters object members as well as array elements") callback {
+                spec.assert_str_eq(all_json_of("{\"a\":{\"v\":1},\"b\":{\"v\":9}}", "$[?@.v > 5]"),
+                    "{\"v\":9}", "object members filtered")
+            }
+            spec.it("treats a missing operand as Nothing") callback {
+                // Nothing is unordered against every real value, so the
+                // relational operators are all false; only == / != see it.
+                spec.assert_str_eq(all_json_of("[{\"a\":1},{\"b\":2}]", "$[?@.a > 0]"),
+                    "{\"a\":1}", "missing operand drops out")
+                spec.assert_eq(count_of("$.store.book[?@.nosuch == 'x']"), 0, "Nothing never equals a value")
+            }
+            spec.it("orders strings and leaves other types unordered") callback {
+                spec.assert_str_eq(all_json_of("[\"a\",\"b\",\"c\"]", "$[?@ > 'a']"), "\"b\"|\"c\"", "string ordering")
+                // null/true/false have no ordering, but <= and >= still
+                // hold via their equality half.
+                spec.assert_str_eq(all_json_of("[null]", "$[?@ <= null]"), "null", "null <= null")
+                spec.assert_str_eq(all_json_of("[null]", "$[?@ < null]"), "", "null < null is false")
+            }
+            spec.it("compares whole structures for equality") callback {
+                // Structural equality is available by comparing two
+                // QUERIES — RFC 9535 has no array/object literals, so
+                // `[1,2]` on the right of == is a syntax error, not an
+                // empty result.
+                spec.assert_eq(parses("$[?@ == [1,2]]"), 0, "no array literals in filters")
+                spec.assert_eq(count_of("$.store.book[?@ == @]"), 4, "a node equals itself")
+                spec.assert_str_eq(all_json_of("[{\"a\":[1,2],\"b\":[1,2]},{\"a\":[1,2],\"b\":[9]}]", "$[?@.a == @.b]"),
+                    "{\"a\":[1,2],\"b\":[1,2]}", "two queries compared structurally")
+            }
+        }
+
+        spec.describe("function extensions") {
+            spec.it("length() measures strings, arrays and objects") callback {
+                spec.assert_str_eq(all_json_of("[\"abc\", [1,2], {\"a\":1,\"b\":2}, 5]", "$[?length(@) == 3]"),
+                    "\"abc\"", "string length")
+                spec.assert_str_eq(all_json_of("[\"ab\", [1,2], {\"a\":1}]", "$[?length(@) == 2]"),
+                    "\"ab\"|[1,2]", "string and array")
+            }
+            spec.it("length() counts codepoints, not bytes") callback {
+                // "é" is one codepoint but two UTF-8 bytes.
+                spec.assert_str_eq(all_json_of("[\"\\u00e9\"]", "$[?length(@) == 1]"),
+                    "\"é\"", "one codepoint")
+            }
+            spec.it("count() counts a nodelist") callback {
+                // A filter tests the CHILDREN of the node it is applied
+                // to, so `@` here is the `store` object (and then the
+                // `expensive` number), not the root.
+                spec.assert_eq(count_of("$[?count(@.book[*]) == 4]"), 1, "store has four books")
+                // count() of a nodelist that matched nothing is 0, so
+                // both root members satisfy this.
+                spec.assert_eq(count_of("$[?count(@.nosuch[*]) == 0]"), 2, "empty nodelist counts zero")
+            }
+            spec.it("value() unwraps a single-node nodelist") callback {
+                spec.assert_eq(count_of("$.store.book[?value(@.price) < 10]"), 2, "value of a price")
+            }
+            spec.it("match() anchors to the whole string") callback {
+                spec.assert_str_eq(all_json_of("[\"abc\",\"abcd\",\"xabc\"]", "$[?match(@, 'abc')]"),
+                    "\"abc\"", "whole-string match")
+                spec.assert_str_eq(all_json_of("[\"abc\",\"abd\"]", "$[?match(@, 'ab[cd]')]"),
+                    "\"abc\"|\"abd\"", "character class")
+            }
+            spec.it("search() matches anywhere in the string") callback {
+                spec.assert_str_eq(all_json_of("[\"abc\",\"xabcx\",\"xyz\"]", "$[?search(@, 'abc')]"),
+                    "\"abc\"|\"xabcx\"", "substring match")
+            }
+            spec.it("takes a non-string argument to mean no match") callback {
+                spec.assert_str_eq(all_json_of("[1, true, null, [], \"a\"]", "$[?match(@, 'a')]"),
+                    "\"a\"", "non-strings never match")
+            }
+            spec.it("gives . the I-Regexp meaning") callback {
+                // RFC 9485 §3: `.` is [^\n\r] — it matches U+2028 but
+                // not a carriage return or newline.
+                spec.assert_str_eq(all_json_of("[\"\\r\", \"\\n\", \"a\"]", "$[?match(@, '.')]"),
+                    "\"a\"", "CR and LF excluded")
+            }
+        }
+
+        spec.describe("normalized paths") {
+            spec.it("escapes quotes and backslashes in names") callback {
+                d2, e2 = json.parse("{\"it's\":1,\"a\\\\b\":2}")
+                spec.assert_str_eq(e2, "", "fixture parses")
+                cur, err = query.query(d2, "$[*]")
+                spec.assert_str_eq(err, "", "query runs")
+                spec.assert_str_eq(query.result_path(cur, 0), "$['it\\'s']", "escaped quote")
+                spec.assert_str_eq(query.result_path(cur, 1), "$['a\\\\b']", "escaped backslash")
+                query.free_result(cur)
+                json.json_free(d2)
+            }
+            spec.it("indexes array positions numerically") callback {
+                spec.assert_str_eq(nth_path("$.store.book[*].title", 2),
+                    "$['store']['book'][2]['title']", "third title's path")
+            }
+        }
+
+        spec.describe("API surface") {
+            spec.it("returns values only via query_values") callback {
+                vals, err = query.query_values(doc, "$.store.book[*].price")
+                spec.assert_str_eq(err, "", "no error")
+                spec.assert_eq(list.size(vals), 4, "four prices")
+                spec.assert_str_eq(json.json_stringify_raw(list.get_raw(vals, 0)), "8.95", "first price")
+                list.free(vals)
+            }
+            spec.it("returns paths only via query_paths") callback {
+                paths, err = query.query_paths(doc, "$.store.book[*]")
+                spec.assert_str_eq(err, "", "no error")
+                spec.assert_eq(list.size(paths), 4, "four paths")
+                spec.assert_str_eq(list.get_raw(paths, 0), "$['store']['book'][0]", "first path")
+                list.free(paths)
+            }
+            spec.it("copies paths while values remain borrowed from the document") callback {
+                cur, err = query.query(doc, "$.store.book[0].title")
+                spec.assert_str_eq(err, "", "query runs")
+                saved_path = string.copy(query.result_path(cur, 0))
+                borrowed = query.result_value(cur, 0)
+                query.free_result(cur)
+
+                // The copied path survives the result set; the JSON pointer
+                // remains valid because `doc` is still alive.
+                spec.assert_str_eq(saved_path, "$['store']['book'][0]['title']", "copied path survives")
+                spec.assert_str_eq(json.json_stringify_raw(borrowed), "\"Sayings of the Century\"",
+                    "borrowed value survives result cleanup")
+                string.free(saved_path)
+            }
+            spec.it("reports a bad path as an error, not a crash") callback {
+                cur, err = query.query(doc, "$.foo[")
+                spec.assert_not_eq(string.length(err), 0, "error is non-empty")
+                spec.assert_null(cur, "no result on error")
+            }
+            spec.it("reuses a pre-parsed query across documents") callback {
+                ast, _aerr = parser.parse("$[*].n")
+                spec.assert_not_null(ast, "path parsed")
+
+                d1, _e1 = json.parse("[{\"n\":1},{\"n\":2}]")
+                r1 = query.query_ast(d1, ast)
+                spec.assert_eq(query.result_size(r1), 2, "two from the first document")
+                query.free_result(r1)
+                json.json_free(d1)
+
+                d2, _e2 = json.parse("[{\"n\":9}]")
+                r2 = query.query_ast(d2, ast)
+                spec.assert_eq(query.result_size(r2), 1, "one from the second document")
+                query.free_result(r2)
+                json.json_free(d2)
+
+                parser.free_query(ast)
+            }
+        }
+    }
+
+    json.json_free(doc)
+    doc = null
+    spec.run_summary(fw)
+}

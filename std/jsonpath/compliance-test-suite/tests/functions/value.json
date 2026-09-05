@@ -1,0 +1,86 @@
+{
+  "tests": [
+    {
+      "name": "single-value nodelist",
+      "selector": "$[?value(@.*)==4]",
+      "document": [
+        [
+          4
+        ],
+        {
+          "foo": 4
+        },
+        [
+          5
+        ],
+        {
+          "foo": 5
+        },
+        4
+      ],
+      "result": [
+        [
+          4
+        ],
+        {
+          "foo": 4
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "function",
+        "value"
+      ]
+    },
+    {
+      "name": "multi-value nodelist",
+      "selector": "$[?value(@.*)==4]",
+      "document": [
+        [
+          4,
+          4
+        ],
+        {
+          "foo": 4,
+          "bar": 4
+        }
+      ],
+      "result": [],
+      "result_paths": [],
+      "tags": [
+        "function",
+        "value"
+      ]
+    },
+    {
+      "name": "too few params",
+      "selector": "$[?value()==4]",
+      "invalid_selector": true,
+      "tags": [
+        "function",
+        "value"
+      ]
+    },
+    {
+      "name": "too many params",
+      "selector": "$[?value(@.a,@.b)==4]",
+      "invalid_selector": true,
+      "tags": [
+        "function",
+        "value"
+      ]
+    },
+    {
+      "name": "result must be compared",
+      "selector": "$[?value(@.a)]",
+      "invalid_selector": true,
+      "tags": [
+        "function",
+        "value"
+      ]
+    }
+  ]
+}

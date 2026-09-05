@@ -1360,6 +1360,22 @@ static int orchestrate_module(const char* module_name, const char* file_path,
     // Add node to dependency graph
     dependency_graph_add_node(graph, module_name);
 
+    /* Resolve THIS module's imports relative to THIS module's directory,
+     * not the entry program's. Without this, `source_dir` stays pinned to
+     * the top-level file for the whole compile, so a by-name module whose
+     * facade imports its own submodules (e.g. std.jsonpath's module.ae
+     * doing `import parser` -> std/jsonpath/src/parser.ae) resolves those
+     * submodules against the CONSUMER's directory and fails. The Try-6b
+     * "relative to source file directory" branch in module_resolve_local_path
+     * only works if source_dir names the importing module. Save and restore
+     * around the import loop so sibling modules at the same level still see
+     * the parent's source_dir. */
+    char saved_source_dir[2048];
+    strncpy(saved_source_dir, global_module_registry->source_dir,
+            sizeof(saved_source_dir) - 1);
+    saved_source_dir[sizeof(saved_source_dir) - 1] = '\0';
+    module_set_source_dir(file_path);
+
     // Recursively process this module's imports
     for (int i = 0; i < ast->child_count; i++) {
         ASTNode* child = ast->children[i];
@@ -1375,6 +1391,7 @@ static int orchestrate_module(const char* module_name, const char* file_path,
         if (sub_file) {
             if (!orchestrate_module(sub_path, sub_file, graph)) {
                 free(sub_file);
+                module_set_source_dir(saved_source_dir);
                 return 0;
             }
             free(sub_file);
@@ -1383,6 +1400,7 @@ static int orchestrate_module(const char* module_name, const char* file_path,
         }
     }
 
+    module_set_source_dir(saved_source_dir);
     return 1;
 }
 

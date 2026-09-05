@@ -1,0 +1,224 @@
+{
+  "tests": [
+    {
+      "name": "first element",
+      "selector": "$[0]",
+      "document": [
+        "first",
+        "second"
+      ],
+      "result": [
+        "first"
+      ],
+      "result_paths": [
+        "$[0]"
+      ],
+      "tags": [
+        "index"
+      ]
+    },
+    {
+      "name": "second element",
+      "selector": "$[1]",
+      "document": [
+        "first",
+        "second"
+      ],
+      "result": [
+        "second"
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "index"
+      ]
+    },
+    {
+      "name": "out of bound",
+      "selector": "$[2]",
+      "document": [
+        "first",
+        "second"
+      ],
+      "result": [],
+      "result_paths": [],
+      "tags": [
+        "index",
+        "boundary"
+      ]
+    },
+    {
+      "name": "min exact index",
+      "selector": "$[-9007199254740991]",
+      "document": [
+        "first",
+        "second"
+      ],
+      "result": [],
+      "result_paths": [],
+      "tags": [
+        "index",
+        "boundary"
+      ]
+    },
+    {
+      "name": "max exact index",
+      "selector": "$[9007199254740991]",
+      "document": [
+        "first",
+        "second"
+      ],
+      "result": [],
+      "result_paths": [],
+      "tags": [
+        "index",
+        "boundary"
+      ]
+    },
+    {
+      "name": "min exact index - 1",
+      "selector": "$[-9007199254740992]",
+      "invalid_selector": true,
+      "tags": [
+        "index",
+        "boundary"
+      ]
+    },
+    {
+      "name": "max exact index + 1",
+      "selector": "$[9007199254740992]",
+      "invalid_selector": true,
+      "tags": [
+        "index",
+        "boundary"
+      ]
+    },
+    {
+      "name": "overflowing index",
+      "selector": "$[231584178474632390847141970017375815706539969331281128078915168015826259279872]",
+      "invalid_selector": true,
+      "tags": [
+        "index",
+        "boundary"
+      ]
+    },
+    {
+      "name": "not actually an index, overflowing index leads into general text",
+      "selector": "$[231584178474632390847141970017375815706539969331281128078915168SomeRandomText]",
+      "invalid_selector": true,
+      "tags": [
+        "index"
+      ]
+    },
+    {
+      "name": "negative",
+      "selector": "$[-1]",
+      "document": [
+        "first",
+        "second"
+      ],
+      "result": [
+        "second"
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "index"
+      ]
+    },
+    {
+      "name": "more negative",
+      "selector": "$[-2]",
+      "document": [
+        "first",
+        "second"
+      ],
+      "result": [
+        "first"
+      ],
+      "result_paths": [
+        "$[0]"
+      ],
+      "tags": [
+        "index"
+      ]
+    },
+    {
+      "name": "negative out of bound",
+      "selector": "$[-3]",
+      "document": [
+        "first",
+        "second"
+      ],
+      "result": [],
+      "result_paths": [],
+      "tags": [
+        "index",
+        "boundary"
+      ]
+    },
+    {
+      "name": "on object",
+      "selector": "$[0]",
+      "document": {
+        "foo": 1
+      },
+      "result": [],
+      "result_paths": [],
+      "tags": [
+        "index"
+      ]
+    },
+    {
+      "name": "leading 0",
+      "selector": "$[01]",
+      "invalid_selector": true,
+      "tags": [
+        "index"
+      ]
+    },
+    {
+      "name": "decimal",
+      "selector": "$[1.0]",
+      "invalid_selector": true,
+      "tags": [
+        "index"
+      ]
+    },
+    {
+      "name": "plus",
+      "selector": "$[+1]",
+      "invalid_selector": true,
+      "tags": [
+        "index"
+      ]
+    },
+    {
+      "name": "minus space",
+      "selector": "$[- 1]",
+      "invalid_selector": true,
+      "tags": [
+        "index",
+        "whitespace"
+      ]
+    },
+    {
+      "name": "-0",
+      "selector": "$[-0]",
+      "invalid_selector": true,
+      "tags": [
+        "index"
+      ]
+    },
+    {
+      "name": "leading -0",
+      "selector": "$[-01]",
+      "invalid_selector": true,
+      "tags": [
+        "index"
+      ]
+    }
+  ]
+}
