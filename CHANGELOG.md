@@ -11,6 +11,8 @@ version number before tagging the release.
 
 ## [current]
 
+## [0.641.0]
+
 ### Added
 
 - **`std.jsonpath` — RFC 9535 JSONPath.** A parser with a reusable compiled
