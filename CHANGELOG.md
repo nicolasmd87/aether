@@ -11,6 +11,42 @@ version number before tagging the release.
 
 ## [current]
 
+### Fixed
+
+- **The documentation gate now compiles the blocks it says it compiles**
+  (#1878). `tests/scripts/check_doc_blocks.py` describes a bare ```` ```aether ````
+  block as "a complete program. Must compile. CHECKED HERE." It ran `ae check`,
+  which is the front end only, so any example that type-checked but could not
+  be code-generated passed. Fourteen blocks it reported as compiling did not
+  build, and one of them had already cost time in #1851 as a suspected
+  regression precisely because the gate could not see it.
+
+  The gate now runs `ae build`. All fourteen are addressed rather than
+  excused: the `strtold` example declared a signature libc contradicts, so it
+  uses `powl`, which Aether can declare exactly as C does; `hide-and-seal`
+  claimed a function could read a caller's local through its own lexical
+  chain, which a function body cannot do and that example never compiled;
+  `std/tcp`'s example bound a two-value return to one name; `isolated`'s
+  example used a type it never defined; and the two tutorial exercise stubs
+  whose body is `// Your code here` are marked `fragment`, since a program the
+  reader completes does not compile as written.
+
+  Eight blocks in `c-interop` and `liveview-lite-roadmap` call C the reader
+  supplies, and are marked with a new `nolink` label: they are built like any
+  other block, and the ONLY failure allowed is unresolved symbols at the link.
+  Anything earlier, an Aether diagnostic or an error against the generated C,
+  still fails the gate, so those blocks are now checked further than the old
+  `ae check` checked anything.
+
+- **Comparing a multi-value return with a scalar is rejected by the front end**
+  (#1878). Binding a two-value return to one name is legal and binds the tuple,
+  but comparing that tuple with a string is not a comparison at all. The
+  typechecker waved it through and the only symptom was clang's `invalid
+  operands to binary expression ('_tuple_int_string' and 'char[1]')`, reported
+  against generated C the reader never wrote. That is the shape of report that
+  made #1855 expensive to track down, and it is reachable from a four-line
+  program. It is now `error[E0200]` with a caret on the operator.
+
 ## [0.639.0]
 
 ### Fixed
@@ -139,34 +175,6 @@ version number before tagging the release.
   a merge whose result is worth recording even if another lands seconds later.
 
 ## [0.636.0]
-
-### Fixed
-
-- **The documentation gate now compiles the blocks it says it compiles**
-  (#1878). `tests/scripts/check_doc_blocks.py` describes a bare ```` ```aether ````
-  block as "a complete program. Must compile. CHECKED HERE." It ran `ae check`,
-  which is the front end only, so any example that type-checked but could not
-  be code-generated passed. Fourteen blocks it reported as compiling did not
-  build, and one of them had already cost time in #1851 as a suspected
-  regression precisely because the gate could not see it.
-
-  The gate now runs `ae build`. All fourteen are addressed rather than
-  excused: the `strtold` example declared a signature libc contradicts, so it
-  uses `powl`, which Aether can declare exactly as C does; `hide-and-seal`
-  claimed a function could read a caller's local through its own lexical
-  chain, which a function body cannot do and that example never compiled;
-  `std/tcp`'s example bound a two-value return to one name; `isolated`'s
-  example used a type it never defined; and the two tutorial exercise stubs
-  whose body is `// Your code here` are marked `fragment`, since a program the
-  reader completes does not compile as written.
-
-  Eight blocks in `c-interop` and `liveview-lite-roadmap` call C the reader
-  supplies, and are marked with a new `nolink` label: they are built like any
-  other block, and the ONLY failure allowed is unresolved symbols at the link.
-  Anything earlier, an Aether diagnostic or an error against the generated C,
-  still fails the gate, so those blocks are now checked further than the old
-  `ae check` checked anything.
-
 
 ### Fixed
 

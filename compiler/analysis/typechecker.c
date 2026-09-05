@@ -2175,6 +2175,18 @@ Type* infer_binary_type(ASTNode* left, ASTNode* right, AeTokenType operator) {
         }
     }
 
+    /* #1878: a multi-value return bound to ONE name is a TUPLE, and an
+     * operator with a tuple on exactly one side is not an operation at all.
+     * The front end waved it through and the only symptom was clang's
+     * `invalid operands to binary expression ('_tuple_int_string' and
+     * 'char[1]')`, reported against generated C the reader never wrote. That
+     * is the same shape of report that made #1855 expensive to track down,
+     * and it is reachable from a four-line program. */
+    if (left_type && right_type &&
+        ((left_type->kind == TYPE_TUPLE) != (right_type->kind == TYPE_TUPLE))) {
+        return create_type(TYPE_UNKNOWN);
+    }
+
     // Comparison and logical operators always produce bool, even with unknown operands
     switch (operator) {
         case TOKEN_EQUALS:
