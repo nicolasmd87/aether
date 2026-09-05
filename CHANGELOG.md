@@ -11,6 +11,8 @@ version number before tagging the release.
 
 ## [current]
 
+## [0.642.0]
+
 ### Fixed
 
 - **The documentation gate now compiles the blocks it says it compiles**
