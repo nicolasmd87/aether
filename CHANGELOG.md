@@ -11,6 +11,19 @@ version number before tagging the release.
 
 ## [current]
 
+### Fixed
+
+- **Heap-string trackers corrupted structs that share a punned field prefix.**
+  The nested-path leak fix (#1879) appended a hidden `int _heap_<field>` after
+  each struct's declared fields; when a wide struct was allocated and written
+  through a pointer to a narrower struct that shares its leading fields, the two
+  placed the tracker at different offsets, so a string write through the narrow
+  view stamped a real data field of the wide object — silent corruption, no
+  diagnostic. Pure-Aether structs now emit each `_heap_<field>` immediately
+  after its string field, making the narrow struct a true memory prefix of the
+  wide one; extern structs keep their trailing layout. Found via a shared
+  options-struct prefix in the datastar SDK.
+
 ## [0.642.0]
 
 ### Fixed

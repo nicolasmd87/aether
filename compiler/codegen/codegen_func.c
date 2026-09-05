@@ -2049,6 +2049,24 @@ void generate_struct_definition(CodeGenerator* gen, ASTNode* struct_def) {
      * fields as `ptr` instead of `string` (no tracker emitted). */
     int has_string_field = 0;
     int first_string_idx = -1;
+    /* #1879-regression: for a pure-Aether struct, place each `_heap_<field>`
+     * tracker IMMEDIATELY AFTER its string field rather than appending all
+     * trackers at the end. Trailing placement kept the NAMED fields' offsets
+     * stable, but it moved the trackers to a different offset in two structs
+     * that share a named-field prefix — the deliberate punning idiom of
+     * allocating a wide struct and writing it through a narrow prefix type
+     * (`heap.new(SignalOptions)` written via `*CommonOptions`). A tracker
+     * store through the narrow view then landed on a real data field of the
+     * wide object: silent corruption. Inline placement makes the narrow
+     * struct a true MEMORY prefix of the wide one — its tracker sits at the
+     * same offset in both — so the pun is sound again.
+     *
+     * Extern structs keep the trailing layout: a hand-declared C counterpart
+     * has no trackers, and trailing placement keeps the declared fields at
+     * their C offsets up to the last one. An extern struct that needs strict
+     * binary layout still opts out entirely by declaring `ptr` not `string`
+     * (no tracker emitted at all). */
+    int inline_trackers = !is_extern;
     for (int i = 0; i < struct_def->child_count; i++) {
         ASTNode* field = struct_def->children[i];
         int is_last = (i == struct_def->child_count - 1);
@@ -2061,14 +2079,17 @@ void generate_struct_definition(CodeGenerator* gen, ASTNode* struct_def) {
                 field->node_type && field->node_type->kind == TYPE_STRING) {
                 has_string_field = 1;
                 if (first_string_idx < 0) first_string_idx = i;
+                if (inline_trackers) {
+                    print_indent(gen);
+                    fprintf(gen->output, "int _heap_%s;\n", field->value);
+                }
             }
         }
     }
 
-    /* Append the heap-tracker fields AFTER all user-declared fields
-     * so the struct's user-visible layout (offsets of the named
-     * fields) stays stable. */
-    if (has_string_field) {
+    /* Extern structs still append trackers after all declared fields, to keep
+     * the declared-field offsets matching a hand-written C struct. */
+    if (has_string_field && !inline_trackers) {
         for (int i = 0; i < struct_def->child_count; i++) {
             ASTNode* field = struct_def->children[i];
             if (field->type == AST_STRUCT_FIELD &&

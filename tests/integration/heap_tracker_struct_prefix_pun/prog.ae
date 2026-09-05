@@ -1,0 +1,56 @@
+// A wide struct written through a narrow PREFIX-view pointer keeps its own
+// fields intact (#1879-regression).
+//
+// `CommonOptions` holds the first two fields of `SignalOptions`; the setter
+// casts to `*CommonOptions` and the caller allocates a `SignalOptions` -- a
+// deliberate punning idiom (one setter serves every option struct sharing the
+// prefix). #1879 appended a hidden `_heap_<field>` tracker AFTER a struct's
+// declared fields, so the tracker sat at a different offset in the two
+// structs; writing the string field through the narrow view stamped a real
+// data field of the wide object. Placing each tracker immediately after its
+// string field makes the narrow struct a true memory prefix of the wide one,
+// so the punned write lands where it should.
+import std.heap
+import std.string
+
+struct CommonOptions { event_id: string, retry_ms: int }
+struct SignalOptions { event_id: string, retry_ms: int, only_if_missing: int }
+
+new_signal() -> ptr {
+    o = heap.new(SignalOptions)
+    o.event_id = ""
+    o.retry_ms = 0
+    o.only_if_missing = 0
+    return o as ptr
+}
+
+// Sets an int field of the wide struct.
+set_only_if_missing(ctx: ptr, v: int) {
+    o = ctx as *SignalOptions
+    o.only_if_missing = v
+}
+
+// Sets the string field through the NARROW prefix view -- the pun.
+set_event_id(ctx: ptr, id: string) {
+    o = ctx as *CommonOptions
+    o.event_id = id
+}
+
+read_only_if_missing(ctx: ptr) -> int {
+    o = ctx as *SignalOptions
+    return o.only_if_missing
+}
+
+main() {
+    o = new_signal()
+    set_only_if_missing(o, 1) // wide field := 1
+    set_event_id(o, "evt") // string set through *CommonOptions
+    got = read_only_if_missing(o) // must still be 1, not clobbered to 0
+    if got == 1 {
+        println("ok: only_if_missing survived the prefix-view string write")
+    } else {
+        println("CLOBBERED: only_if_missing = ${got}, expected 1")
+    }
+    heap.free(o)
+    return 0
+}
