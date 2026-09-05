@@ -22,10 +22,15 @@ The convention is the fence's info string:
                           completes, so it does not compile as written.
     ```aether,fails       a deliberate counter-example. Must NOT compile, and
                           this fails if it starts compiling.
-    ```aether,nolink      a complete program that calls C the reader supplies.
-                          Built like any other block; the ONLY failure allowed
-                          is unresolved symbols at the link, since those are
-                          the definitions living outside the block.
+    ```aether,nolink      a complete unit that cannot link BY ITSELF: it calls
+                          C the reader supplies, or it is a library whose
+                          `main` lives in the host app. Built like any other
+                          block; the ONLY failure allowed is unresolved symbols
+                          at the link, since that is precisely what lives
+                          outside the block. Prefer this to `fragment` for
+                          anything that really does compile: a fragment is
+                          skipped, this is checked through codegen and the C
+                          compiler.
 
 A `run` block is followed by its expected output:
 
