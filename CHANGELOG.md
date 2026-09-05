@@ -11,6 +11,135 @@ version number before tagging the release.
 
 ## [current]
 
+## [0.639.0]
+
+### Fixed
+
+- **`heap.free` leaked a string field assigned through a nested path (#1879).**
+  Follow-up to #1866. `o.inner.name = ...` emitted a bare store with no
+  `_heap_<field>` tracker, so the inner struct's destructor believed it owned
+  nothing and the string leaked — while the identical write spelled on the
+  inner pointer, `i.name = ...`, released correctly. Ownership followed how the
+  assignment was *spelled* rather than the type, and nothing warned. The
+  ownership wrapper only recognised an object that was a bare identifier; a
+  nested path presents a member access instead, so it fell through to the plain
+  assignment.
+
+  Reaching a field through an owned sub-object is ordinary — a model holds a
+  material, the material holds a texture path — so `model_set_texture(m, path)`
+  writing `m.material.texture_path` silently leaked.
+
+  A **local alias** leaked for the same reason: `p = o.inner; p.name = ...` is
+  a bare identifier but neither a `heap.new` box nor a pointer parameter, so it
+  missed the wrapper too. The wrapper now accepts any struct pointer — safe
+  because whether the *previous* value may be freed is decided separately, and
+  that check is unchanged.
+
+  One limit remains, deliberately: the previous value is not freed when a
+  nested field is *re-assigned*, so `o.inner.name = a` followed by
+  `o.inner.name = b` still drops `a`. Freeing it means reading the existing
+  `_heap_<field>`, which is only sound on a box the compiler can see was
+  zero-initialised by `heap.new`; an inner struct reached through a pointer
+  field is not visible that way and may have come from `malloc(n) as *T`, whose
+  tracker is garbage. Acting on that frees a garbage pointer, so this matches
+  what a pointer parameter already does (#1873): claim ownership, do not
+  release the old value.
+
+## [0.638.0]
+
+### Fixed
+
+- **A single-file module could not be declared in `[package] modules`.** The
+  check accepted only a directory, while `--lib D` has always resolved both
+  `D/<name>/module.ae` and `D/<name>.ae`. So a package exporting
+  `aether/webdriver.ae` was told the module "does not exist" and could export
+  nothing. Found against the real installed `selaenium` package — the one the
+  dependency-resolution issue was reported from — which is exactly that shape,
+  so the first cut rejected the very package it was written for.
+
+## [0.637.0]
+
+### Added
+
+- **`[dependencies]` resolve onto the module search path.** `ae add` installed
+  packages that nothing read back: `ae lib-path` printed `lib`, and
+  `[dependencies]` appeared in the tree only where it was *written*, never
+  parsed for a build. Every consumer therefore hand-wrote a shell script to
+  guess the cache layout and spell out each importable subdirectory as
+  `--lib`. `ae run`, `ae build` and `ae lib-path` now read the section and join
+  the dependency's modules themselves — importing from a declared dependency
+  needs no `--lib` at all.
+
+  The publishing package declares what it exports, in its own `aether.toml`
+  (`[package] modules = "aether, selenium_core, selenium_core/drivermgr"`), so
+  a package can rearrange its directories in a patch release without any
+  consumer changing a path — the consumer names the dependency and nothing
+  else. Entries name importable modules, and each module's *parent* joins the
+  path, matching what `--lib` has always meant. A package root is never joined
+  speculatively: a real package is a whole repository whose root holds docs and
+  scripts too.
+
+  A declared-but-missing dependency now fails as `dependency 'X' is not
+  installed. Run: ae add X` rather than as an unresolved-import error naming a
+  module the user never typed.
+
+  This was reported from the datastar-aether line, where a hand-written
+  resolver globbed two path levels instead of three, silently fell through to a
+  sibling checkout that happened to exist locally, and stayed green for weeks
+  while the package path had never once worked.
+
+- **`--override` and `[patch]` for redirecting a dependency.**
+  `ae run x.ae --override <dep>=<path>` overrides per invocation, leaving no
+  trace in the manifest; `[patch]` does the same from the manifest in a stanza
+  separate from `[dependencies]`, so an override cannot ship by accident inside
+  a dependency line, in either a bare-path or Cargo's `{ path = "..." }` form.
+  `--override` wins where both name a dependency. Both
+  print `Overriding <dep> -> <path>`: an override that applied silently means a
+  green local build against a working copy CI does not have.
+
+### Fixed
+
+- **The `aether.toml` walk-up did nothing on native Windows.** `ae build` from
+  a subdirectory is supposed to find the project's manifest in an ancestor
+  directory and chdir there. The walk stepped up by scanning for `/` only,
+  while `_getcwd()` on native Windows returns backslashes, so the loop broke on
+  its first pass and the walk-up silently did nothing — a build that behaved as
+  though the project had no manifest, with no error, so `extra_sources` and
+  `cflags` were dropped for anyone building from a subdirectory on Windows.
+  Both separators are now handled, including the `C:\` root case.
+
+  (Separately and still open: `ae build <bin-name>` from a subdirectory fails
+  on every platform, because the positional argument is rebased onto the
+  subdirectory as though it were a file path — `sub/widget` — when it is a
+  `[[bin]]` name. Pre-existing, unrelated to the separator bug, and not fixed
+  here.)
+
+- **MinGW: `cannot find -lfyaml` and `__imp_nghttp2_*` link failures (#1896).**
+  Building `ae` on MSYS2/MinGW failed at link, which made a real Windows box
+  unusable as a proving ground. Both errors came from the same cause: the
+  Windows link line carries `-static` (to avoid libwinpthread/libgcc DLL
+  dependencies in release binaries) and two dependencies were not told about
+  it. `-static` is not positional for library *resolution*, so `ld` demanded
+  `libfyaml.a` while MSYS2 ships only `libfyaml.dll.a` — the library was
+  installed and `pkg-config` correct, which is why it looked like a missing
+  package and was not. fyaml is the only dependency with no static archive
+  there, so it now links dynamically inside `-Wl,-Bdynamic` / `-Wl,-Bstatic`
+  rather than `-static` being dropped for everything. Separately, `nghttp2.h`
+  declares its API `__declspec(dllimport)` unless `NGHTTP2_STATICLIB` is
+  defined, so every call compiled to an `__imp_` reference the static archive
+  could not satisfy; the headers are now told what the linker was told.
+
+- **CI runs were never cancelled when superseded.** Neither `ci.yml` nor
+  `windows.yml` carried a `concurrency:` block — only `release.yml` did — so
+  every push left the previous run's jobs racing to completion. Two branches
+  accumulated 12 and 18 concurrent runs during one day's work, and a stale run
+  kept reporting failure against a commit nobody was on any more, one of them
+  sitting open for six hours after its last job had finished. Superseded runs
+  on a branch are now cancelled. `main` is deliberately exempt: a push there is
+  a merge whose result is worth recording even if another lands seconds later.
+
+## [0.636.0]
+
 ### Fixed
 
 - **The documentation gate now compiles the blocks it says it compiles**
