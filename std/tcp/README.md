@@ -20,7 +20,7 @@ main() {
         return
     }
 
-    werr = tcp.write(conn, "GET / HTTP/1.0\r\n\r\n")
+    _n, werr = tcp.write(conn, "GET / HTTP/1.0\r\n\r\n")
     if werr != "" {
         println("write failed: ${werr}")
         tcp.tcp_close(conn)
