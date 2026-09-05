@@ -1,0 +1,324 @@
+// Parser specs — the JSONPath grammar (RFC 9535 §2.1-§2.5).
+//
+// Ported from zig-jsonpath's `test/parser_test.zig` and
+// jsonpath-rust's `src/parser/tests.rs`, restated as std.spec
+// describe/it blocks.
+//
+// These assert the SHAPE of the parse: how many segments, which
+// selector kind, which literal value — plus the negative cases, where
+// the point is that a malformed query is rejected rather than silently
+// accepted. The end-to-end semantics live in query_test.ae, and the
+// authoritative conformance gate is tools/cts_runner.ae.
+//
+// Run with:  ae run std/jsonpath/test_parser.ae
+
+import std.spec
+import std.list
+import std.string
+import parser
+import model
+
+// --- helpers -------------------------------------------------------
+
+// Parse and return the query, or null. Used by the "accepts" specs.
+_parse(path: string) -> ptr {
+    q, _err = parser.parse(path)
+    return q
+}
+
+// 1 when the path parses, 0 otherwise. Frees whatever it built.
+accepts(path: string) -> int {
+    q, _err = parser.parse(path)
+    if q == null { return 0 }
+    parser.free_query(q)
+    return 1
+}
+
+// How many segments the parsed query has (-1 when it did not parse).
+seg_count(path: string) -> int {
+    q, _err = parser.parse(path)
+    if q == null { return -1 }
+    n = list.size((q as *Query).segments)
+    parser.free_query(q)
+    return n
+}
+
+// The kind of the i-th selector of the first segment (-1 on any miss).
+first_selector_kind(path: string) -> int {
+    q, _err = parser.parse(path)
+    if q == null { return -1 }
+    segs = (q as *Query).segments
+    k = -1
+    if list.size(segs) > 0 {
+        sels = (list.get_raw(segs, 0) as *Segment).selectors
+        if list.size(sels) > 0 {
+            k = (list.get_raw(sels, 0) as *Selector).kind
+        }
+    }
+    parser.free_query(q)
+    return k
+}
+
+// The kind of the first segment (child vs descendant).
+first_segment_kind(path: string) -> int {
+    q, _err = parser.parse(path)
+    if q == null { return -1 }
+    segs = (q as *Query).segments
+    k = -1
+    if list.size(segs) > 0 { k = (list.get_raw(segs, 0) as *Segment).kind }
+    parser.free_query(q)
+    return k
+}
+
+// The name carried by the first segment's first selector.
+first_name(path: string) -> string {
+    q, _err = parser.parse(path)
+    if q == null { return "" }
+    segs = (q as *Query).segments
+    out = ""
+    if list.size(segs) > 0 {
+        sels = (list.get_raw(segs, 0) as *Segment).selectors
+        if list.size(sels) > 0 {
+            out = string.copy((list.get_raw(sels, 0) as *Selector).name)
+        }
+    }
+    parser.free_query(q)
+    return out
+}
+
+// How many selectors the first segment carries (for union specs).
+first_segment_selector_count(path: string) -> int {
+    q, _err = parser.parse(path)
+    if q == null { return -1 }
+    segs = (q as *Query).segments
+    n = -1
+    if list.size(segs) > 0 { n = list.size((list.get_raw(segs, 0) as *Segment).selectors) }
+    parser.free_query(q)
+    return n
+}
+
+main() {
+    fw = spec.init()
+
+    spec.describe(fw, "parser") {
+        spec.describe("root and segments") {
+            spec.it("accepts a bare root") callback {
+                spec.assert_eq(seg_count("$"), 0, "root has no segments")
+            }
+            spec.it("counts dot segments") callback {
+                spec.assert_eq(seg_count("$.a.b.c"), 3, "three dot segments")
+            }
+            spec.it("counts bracket segments") callback {
+                spec.assert_eq(seg_count("$['a']['b']"), 2, "two bracket segments")
+            }
+            spec.it("mixes dot and bracket notation") callback {
+                spec.assert_eq(seg_count("$.store.book[0].title"), 4, "four segments")
+            }
+            spec.it("requires a leading $") callback {
+                spec.assert_eq(accepts("a.b"), 0, "no root")
+                spec.assert_eq(accepts(".a"), 0, "leading dot only")
+            }
+            spec.it("rejects surrounding whitespace") callback {
+                // RFC 9535 §2.1: whitespace is allowed BETWEEN elements
+                // but not around the whole query.
+                spec.assert_eq(accepts(" $.a"), 0, "leading space")
+                spec.assert_eq(accepts("$.a "), 0, "trailing space")
+                spec.assert_eq(accepts("$ .a"), 1, "interior space is fine")
+            }
+        }
+
+        spec.describe("name selectors") {
+            spec.it("parses shorthand names") callback {
+                spec.assert_eq(first_selector_kind("$.abc"), model.SEL_NAME, "name kind")
+                spec.assert_str_eq(first_name("$.abc"), "abc", "shorthand name")
+            }
+            spec.it("parses quoted names in both quote styles") callback {
+                spec.assert_str_eq(first_name("$['abc']"), "abc", "single quotes")
+                spec.assert_str_eq(first_name("$[\"abc\"]"), "abc", "double quotes")
+            }
+            spec.it("decodes escape sequences in quoted names") callback {
+                // The parser resolves escapes, so the query engine can
+                // compare against raw member names.
+                spec.assert_str_eq(first_name("$['a\\nb']"), "a\nb", "newline escape")
+                spec.assert_str_eq(first_name("$['a\\\\b']"), "a\\b", "backslash escape")
+                spec.assert_str_eq(first_name("$['it\\'s']"), "it's", "escaped single quote")
+            }
+            spec.it("decodes \\u escapes and surrogate pairs") callback {
+                // U+00E9 is two UTF-8 bytes; U+1D11E (via a surrogate
+                // pair) is four.
+                spec.assert_eq(string.length(first_name("$['\\u00e9']")), 2, "e-acute is 2 bytes")
+                spec.assert_eq(string.length(first_name("$['\\ud834\\udd1e']")), 4, "astral char is 4 bytes")
+            }
+            spec.it("rejects invalid escapes and unterminated strings") callback {
+                spec.assert_eq(accepts("$['a\\xb']"), 0, "unknown escape")
+                spec.assert_eq(accepts("$['abc"), 0, "unterminated")
+                spec.assert_eq(accepts("$['a\\u00']"), 0, "short unicode escape")
+                // A single-quoted string may not contain a bare ' and a
+                // double-quoted one may not contain a bare ".
+                spec.assert_eq(accepts("$['a'b']"), 0, "unescaped quote in single-quoted")
+            }
+            spec.it("rejects a bare name inside brackets") callback {
+                // The shorthand form is dot-only; `$[a]` is not RFC 9535.
+                spec.assert_eq(accepts("$[a]"), 0, "bare bracket name")
+            }
+        }
+
+        spec.describe("wildcard selectors") {
+            spec.it("parses both spellings") callback {
+                spec.assert_eq(first_selector_kind("$.*"), model.SEL_WILDCARD, "dot star")
+                spec.assert_eq(first_selector_kind("$[*]"), model.SEL_WILDCARD, "bracket star")
+            }
+        }
+
+        spec.describe("index selectors") {
+            spec.it("parses positive and negative indices") callback {
+                spec.assert_eq(first_selector_kind("$[0]"), model.SEL_INDEX, "zero")
+                spec.assert_eq(first_selector_kind("$[42]"), model.SEL_INDEX, "positive")
+                spec.assert_eq(first_selector_kind("$[-1]"), model.SEL_INDEX, "negative")
+            }
+            spec.it("rejects leading zeros and negative zero") callback {
+                // RFC 9535 §2.3.3 — both are invalid, and the CTS tests
+                // them explicitly.
+                spec.assert_eq(accepts("$[01]"), 0, "leading zero")
+                spec.assert_eq(accepts("$[-0]"), 0, "negative zero")
+            }
+            spec.it("rejects integers outside the I-JSON safe range") callback {
+                spec.assert_eq(accepts("$[9007199254740991]"), 1, "max safe int")
+                spec.assert_eq(accepts("$[9007199254740992]"), 0, "one past max")
+            }
+        }
+
+        spec.describe("slice selectors") {
+            spec.it("parses each component combination") callback {
+                spec.assert_eq(first_selector_kind("$[1:3]"), model.SEL_SLICE, "start:end")
+                spec.assert_eq(first_selector_kind("$[:3]"), model.SEL_SLICE, "end only")
+                spec.assert_eq(first_selector_kind("$[1:]"), model.SEL_SLICE, "start only")
+                spec.assert_eq(first_selector_kind("$[:]"), model.SEL_SLICE, "bare colon")
+                spec.assert_eq(first_selector_kind("$[::2]"), model.SEL_SLICE, "step only")
+                spec.assert_eq(first_selector_kind("$[1:5:2]"), model.SEL_SLICE, "all three")
+                spec.assert_eq(first_selector_kind("$[::-1]"), model.SEL_SLICE, "negative step")
+            }
+            spec.it("allows whitespace around the colons") callback {
+                spec.assert_eq(accepts("$[1 : 3 : 2]"), 1, "spaced slice")
+            }
+        }
+
+        spec.describe("union (multiple selectors)") {
+            spec.it("groups comma-separated selectors into one segment") callback {
+                spec.assert_eq(first_segment_selector_count("$[0,1]"), 2, "two indices")
+                spec.assert_eq(first_segment_selector_count("$['a','b','c']"), 3, "three names")
+                spec.assert_eq(first_segment_selector_count("$[0,'a',*]"), 3, "mixed kinds")
+            }
+            spec.it("rejects a trailing or empty comma") callback {
+                spec.assert_eq(accepts("$[0,]"), 0, "trailing comma")
+                spec.assert_eq(accepts("$[,0]"), 0, "leading comma")
+                spec.assert_eq(accepts("$[]"), 0, "empty brackets")
+            }
+        }
+
+        spec.describe("descendant segments") {
+            spec.it("parses the descendant forms") callback {
+                spec.assert_eq(first_segment_kind("$..a"), model.SEG_DESCENDANT, "..name")
+                spec.assert_eq(first_segment_kind("$..*"), model.SEG_DESCENDANT, "..*")
+                spec.assert_eq(first_segment_kind("$..[0]"), model.SEG_DESCENDANT, "..[0]")
+            }
+            spec.it("rejects a bare or dangling descendant") callback {
+                spec.assert_eq(accepts("$.."), 0, "nothing after ..")
+                spec.assert_eq(accepts("$..."), 0, "three dots")
+            }
+        }
+
+        spec.describe("filter selectors") {
+            spec.it("parses existence tests") callback {
+                spec.assert_eq(first_selector_kind("$[?@.a]"), model.SEL_FILTER, "relative test")
+                spec.assert_eq(accepts("$[?$.a]"), 1, "absolute test")
+            }
+            spec.it("parses every comparison operator") callback {
+                spec.assert_eq(accepts("$[?@.a == 1]"), 1, "==")
+                spec.assert_eq(accepts("$[?@.a != 1]"), 1, "!=")
+                spec.assert_eq(accepts("$[?@.a < 1]"), 1, "<")
+                spec.assert_eq(accepts("$[?@.a <= 1]"), 1, "<=")
+                spec.assert_eq(accepts("$[?@.a > 1]"), 1, ">")
+                spec.assert_eq(accepts("$[?@.a >= 1]"), 1, ">=")
+            }
+            spec.it("parses the logical connectives") callback {
+                spec.assert_eq(accepts("$[?@.a && @.b]"), 1, "and")
+                spec.assert_eq(accepts("$[?@.a || @.b]"), 1, "or")
+                spec.assert_eq(accepts("$[?!@.a]"), 1, "not")
+                spec.assert_eq(accepts("$[?(@.a || @.b) && @.c]"), 1, "grouped")
+                spec.assert_eq(accepts("$[?!(@.a && @.b)]"), 1, "negated group")
+            }
+            spec.it("parses literal operands of every type") callback {
+                spec.assert_eq(accepts("$[?@.a == 'str']"), 1, "string")
+                spec.assert_eq(accepts("$[?@.a == 1]"), 1, "int")
+                spec.assert_eq(accepts("$[?@.a == 1.5]"), 1, "float")
+                spec.assert_eq(accepts("$[?@.a == 1e3]"), 1, "exponent")
+                spec.assert_eq(accepts("$[?@.a == -1.5e-3]"), 1, "signed float with exponent")
+                spec.assert_eq(accepts("$[?@.a == true]"), 1, "true")
+                spec.assert_eq(accepts("$[?@.a == false]"), 1, "false")
+                spec.assert_eq(accepts("$[?@.a == null]"), 1, "null")
+            }
+            spec.it("rejects malformed filters") callback {
+                spec.assert_eq(accepts("$[?]"), 0, "empty filter")
+                spec.assert_eq(accepts("$[?@.a ==]"), 0, "missing rhs")
+                spec.assert_eq(accepts("$[?== 1]"), 0, "missing lhs")
+                spec.assert_eq(accepts("$[?@.a && ]"), 0, "dangling &&")
+                spec.assert_eq(accepts("$[?(@.a]"), 0, "unclosed group")
+                spec.assert_eq(accepts("$[?@.a = 1]"), 0, "single equals is not an operator")
+            }
+            spec.it("rejects a non-singular query in a comparison") callback {
+                // RFC 9535 §2.3.5.1: a comparison operand must denote at
+                // most one value, so wildcards and slices are out.
+                spec.assert_eq(accepts("$[?@.* == 1]"), 0, "wildcard operand")
+                spec.assert_eq(accepts("$[?@[0:2] == 1]"), 0, "slice operand")
+            }
+        }
+
+        spec.describe("function extensions") {
+            spec.it("parses the five registered functions") callback {
+                spec.assert_eq(accepts("$[?length(@.a) == 1]"), 1, "length")
+                spec.assert_eq(accepts("$[?count(@.a) == 1]"), 1, "count")
+                spec.assert_eq(accepts("$[?value(@.a) == 1]"), 1, "value")
+                spec.assert_eq(accepts("$[?match(@.a, 'x')]"), 1, "match")
+                spec.assert_eq(accepts("$[?search(@.a, 'x')]"), 1, "search")
+            }
+            spec.it("rejects an unregistered function name") callback {
+                spec.assert_eq(accepts("$[?unknown(@.a)]"), 0, "no such function")
+            }
+            spec.it("enforces arity") callback {
+                spec.assert_eq(accepts("$[?length()]"), 0, "length needs one arg")
+                spec.assert_eq(accepts("$[?length(@.a, @.b) == 1]"), 0, "length takes one arg")
+                spec.assert_eq(accepts("$[?match(@.a)]"), 0, "match needs two args")
+            }
+            spec.it("enforces the well-typedness rules") callback {
+                // RFC 9535 §2.4.3. These are PARSE errors, not empty
+                // results — the distinction the CTS records as
+                // invalid_selector.
+                spec.assert_eq(accepts("$[?count(1) > 2]"), 0, "count needs a nodelist")
+                spec.assert_eq(accepts("$[?length(@.*) < 3]"), 0, "length needs a singular query")
+                spec.assert_eq(accepts("$[?match(@.a, 'x') == true]"), 0, "match is not ValueType")
+                spec.assert_eq(accepts("$[?length(@.a)]"), 0, "length is not LogicalType")
+                spec.assert_eq(accepts("$[?count(@.a)]"), 0, "count is not LogicalType")
+                spec.assert_eq(accepts("$[?value(@.a)]"), 0, "value is not LogicalType")
+            }
+        }
+
+        spec.describe("error reporting") {
+            spec.it("reports the failing position with a caret") callback {
+                q, err = parser.parse("$.foo[")
+                spec.assert_null(q, "did not parse")
+                msg = err
+                spec.assert_contains(msg, "position = 6", "position is reported")
+                spec.assert_contains(msg, "^", "caret is drawn")
+                spec.assert_contains(msg, "$.foo[", "the query is echoed")
+            }
+            spec.it("names the reason") callback {
+                q, err = parser.parse(" $")
+                spec.assert_null(q, "did not parse")
+                spec.assert_contains(err, "whitespace", "reason mentions whitespace")
+            }
+        }
+    }
+
+    spec.run_summary(fw)
+}

@@ -1,0 +1,55 @@
+// std.jsonpath — RFC 9535 JSONPath for Aether.
+//
+// The implementation is split into parser/model/query files so it can be
+// tested in isolation. This small facade is the module boundary installed as
+// `std.jsonpath`; callers should use these wrappers rather than importing the
+// implementation modules directly.
+
+import parser
+import query
+
+exports(
+    parse, free_query,
+    query, query_values, query_paths, query_ast,
+    result_size, result_value, result_path, free_result
+)
+
+parse(path: string) -> ptr! {
+    return parser.parse(path)
+}
+
+free_query(ast: ptr) {
+    parser.free_query(ast)
+}
+
+query(root: ptr, path: string) -> ptr! {
+    return query.query(root, path)
+}
+
+query_values(root: ptr, path: string) -> ptr! {
+    return query.query_values(root, path)
+}
+
+query_paths(root: ptr, path: string) -> ptr! {
+    return query.query_paths(root, path)
+}
+
+query_ast(root: ptr, ast: ptr) -> ptr {
+    return query.query_ast(root, ast)
+}
+
+result_size(results: ptr) -> int {
+    return query.result_size(results)
+}
+
+result_value(results: ptr, i: int) -> ptr {
+    return query.result_value(results, i)
+}
+
+result_path(results: ptr, i: int) -> string {
+    return query.result_path(results, i)
+}
+
+free_result(results: ptr) {
+    query.free_result(results)
+}

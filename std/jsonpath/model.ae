@@ -1,0 +1,480 @@
+// jsonpath.model — the JSONPath AST (RFC 9535)
+//
+// Ported from besok's jsonpath-rust (`src/parser/model.rs`) and
+// zig-jsonpath (`src/model.zig`), which are the same grammar expressed
+// twice. Both sources model the AST as tagged unions; Aether has no
+// sum types, so every node here is a heap-boxed struct carrying an
+// integer `kind` tag plus the union of the payload fields. The tag
+// constants below are the discriminants — read them as the union's
+// variant list.
+//
+// Ownership: every node is `heap.new`-boxed and owned by its parent.
+// `free_query` walks the tree once and releases it; nothing is shared,
+// so there is no refcount. Child lists are `std.list` of raw node
+// pointers, freed by the same walk.
+
+import std.list
+import std.string
+import std.mem
+
+// AST names are plain libc-freeable char* buffers from strbuilder.finish (no
+// AetherString header), so string.release/free would no-op and leak them — a
+// raw libc free is required. Bound as `ptr`, not `string`: a string param lowers
+// to `free(const char*)`, which warns under -Wdiscarded-qualifiers on Linux and
+// is a hard error under macOS clang -Werror. `_free_cstr` puns the string to a
+// bare ptr (mem round-trip) so the emitted free takes a void*.
+@extern("free") _free_model_string_memory(p: ptr)
+
+_free_cstr(s: string) {
+    _free_model_string_memory(mem.long_to_ptr(mem.ptr_to_long(s)))
+}
+
+exports(
+    // Node kinds
+    SEG_CHILD, SEG_DESCENDANT,
+    SEL_NAME, SEL_WILDCARD, SEL_INDEX, SEL_SLICE, SEL_FILTER,
+    F_OR, F_AND, F_NOT, F_PAREN, F_COMPARE, F_TEST,
+    T_REL_QUERY, T_ABS_QUERY, T_FUNCTION,
+    C_LITERAL, C_SINGULAR, C_FUNCTION,
+    L_INT, L_FLOAT, L_STRING, L_BOOL, L_NULL,
+    OP_EQ, OP_NE, OP_LT, OP_LTE, OP_GT, OP_GTE,
+    FN_LENGTH, FN_COUNT, FN_VALUE, FN_MATCH, FN_SEARCH,
+    SQ_CURRENT, SQ_ROOT,
+    // Structs
+    Query, Segment, Selector, Slice, Filter, Test, TestFn, FnArg,
+    Literal, Comparison, Comparable, SingularQuery, SingularSeg,
+    // Constructors
+    new_query, new_segment, new_selector, new_slice, new_filter,
+    new_test, new_testfn, new_fnarg, new_literal, new_comparison,
+    new_comparable, new_singular, new_singular_seg,
+    // Teardown
+    free_query, free_segment, free_selector, free_filter, free_test,
+    free_testfn, free_fnarg, free_literal, free_comparison,
+    free_comparable, free_singular,
+    // Limits (RFC 9535 §2.1: I-JSON safe integer range)
+    MAX_SAFE_INT, MIN_SAFE_INT, is_valid_int
+)
+
+// --- Segment kinds -------------------------------------------------
+// A segment is one `.name` / `[...]` / `..` step of the query.
+const SEG_CHILD = 0 // `.name`, `[...]` — applies selectors to children
+const SEG_DESCENDANT = 1 // `..` — applies selectors to self and all descendants
+
+// --- Selector kinds ------------------------------------------------
+const SEL_NAME = 0 // `'name'` / `.name`
+const SEL_WILDCARD = 1 // `*`
+const SEL_INDEX = 2 // `[3]`, `[-1]`
+const SEL_SLICE = 3 // `[1:5:2]`
+const SEL_FILTER = 4 // `[?<expr>]`
+
+// --- Filter expression kinds ---------------------------------------
+const F_OR = 0 // `a || b` (children list)
+const F_AND = 1 // `a && b` (children list)
+const F_NOT = 2 // `!a`     (single child in `left`)
+const F_PAREN = 3 // `(a)`    (single child in `left`)
+const F_COMPARE = 4 // `a == b` (carries `cmp`)
+const F_TEST = 5 // existence test (carries `test`)
+
+// --- Test kinds ----------------------------------------------------
+const T_REL_QUERY = 0 // `@.a.b`
+const T_ABS_QUERY = 1 // `$.a.b`
+const T_FUNCTION = 2 // `match(@.a, 'x')`
+
+// --- Comparable kinds ----------------------------------------------
+const C_LITERAL = 0
+const C_SINGULAR = 1
+const C_FUNCTION = 2
+
+// --- Literal kinds -------------------------------------------------
+const L_INT = 0
+const L_FLOAT = 1
+const L_STRING = 2
+const L_BOOL = 3
+const L_NULL = 4
+
+// --- Comparison operators ------------------------------------------
+const OP_EQ = 0
+const OP_NE = 1
+const OP_LT = 2
+const OP_LTE = 3
+const OP_GT = 4
+const OP_GTE = 5
+
+// --- Function extensions (RFC 9535 §2.4) ---------------------------
+const FN_LENGTH = 0
+const FN_COUNT = 1
+const FN_VALUE = 2
+const FN_MATCH = 3
+const FN_SEARCH = 4
+
+// --- Singular query roots ------------------------------------------
+const SQ_CURRENT = 0 // `@`
+const SQ_ROOT = 1 // `$`
+
+// RFC 9535 §2.1 constrains integers to the I-JSON safe range. Both
+// source implementations reject anything outside it at PARSE time
+// (zig: `isValidInt`, rust: `Literal::Int` bounds check), which is what
+// makes `$[9007199254740992]` an invalid-selector case in the CTS
+// rather than a silently-wrapping index.
+const MAX_SAFE_INT: long = 9007199254740991
+const MIN_SAFE_INT: long = -9007199254740991
+
+is_valid_int(v: long) -> int {
+    if v > MAX_SAFE_INT { return 0 }
+    if v < MIN_SAFE_INT { return 0 }
+    return 1
+}
+
+// ---------------------------------------------------------------------------
+// Node structs
+//
+// Aether has no tagged unions, so each struct is the union of its
+// variants' fields with a `kind` discriminant. Unused fields for a given
+// kind are null/0. This is the same shape the C backend would emit for a
+// Zig `union(enum)` anyway, minus the compiler-checked access.
+// ---------------------------------------------------------------------------
+
+// A whole query: `$` followed by zero or more segments.
+struct Query {
+    segments: ptr // list of *Segment
+}
+
+// One segment. `selectors` is the list applied at this step; a
+// descendant segment (`..`) applies them to every descendant.
+struct Segment {
+    kind: int,
+    selectors: ptr // list of *Selector
+}
+
+struct Selector {
+    kind: int,
+    name: string, // SEL_NAME; parser-owned plain heap string when owned
+    name_owned: int,
+    index: long, // SEL_INDEX
+    slice: ptr, // *Slice — SEL_SLICE
+    filter: ptr // *Filter — SEL_FILTER
+}
+
+// A slice's three components are each independently optional
+// (`[:2]`, `[1:]`, `[::2]`), so each carries a has_* presence flag
+// rather than a sentinel — 0 is a legitimate value for all three.
+struct Slice {
+    has_start: int, start: long,
+    has_end: int, end: long,
+    has_step: int, step: long
+}
+
+struct Filter {
+    kind: int,
+    children: ptr, // list of *Filter — F_OR / F_AND
+    left: ptr, // *Filter — F_NOT / F_PAREN
+    cmp: ptr, // *Comparison — F_COMPARE
+    test: ptr // *Test — F_TEST
+}
+
+struct Test {
+    kind: int,
+    segments: ptr, // list of *Segment — T_REL_QUERY / T_ABS_QUERY
+    func: ptr // *TestFn — T_FUNCTION
+}
+
+struct TestFn {
+    kind: int,
+    args: ptr // list of *FnArg
+}
+
+struct FnArg {
+    kind: int, // C_LITERAL / C_SINGULAR / C_FUNCTION, plus T_* for query args
+    lit: ptr, // *Literal
+    test: ptr, // *Test
+    filter: ptr // *Filter
+}
+
+struct Literal {
+    kind: int,
+    ival: long,
+    fval: float,
+    sval: string, // L_STRING; parser-owned plain heap string when owned
+    sval_owned: int,
+    bval: int
+}
+
+struct Comparison {
+    op: int,
+    left: ptr, // *Comparable
+    right: ptr // *Comparable
+}
+
+struct Comparable {
+    kind: int,
+    lit: ptr, // *Literal
+    singular: ptr, // *SingularQuery
+    func: ptr // *TestFn
+}
+
+// A singular query (`@.a[0]`, `$.b`) is the only query shape allowed on
+// either side of a comparison, because a comparison needs exactly one
+// value. RFC 9535 §2.3.5.1 restricts it to name and index segments.
+struct SingularQuery {
+    kind: int, // SQ_CURRENT / SQ_ROOT
+    segments: ptr // list of *SingularSeg
+}
+
+struct SingularSeg {
+    is_name: int,
+    name: string, // parser-owned plain heap string when owned
+    name_owned: int,
+    index: long
+}
+
+// ---------------------------------------------------------------------------
+// Constructors — each returns a heap-boxed node the caller owns.
+// ---------------------------------------------------------------------------
+
+new_query() -> ptr {
+    q = heap.new(Query)
+    q.segments = list.new()
+    return q
+}
+
+new_segment(kind: int) -> ptr {
+    s = heap.new(Segment)
+    s.kind = kind
+    s.selectors = list.new()
+    return s
+}
+
+new_selector(kind: int) -> ptr {
+    s = heap.new(Selector)
+    s.kind = kind
+    s.name = ""
+    s.name_owned = 0
+    s.index = 0
+    s.slice = null
+    s.filter = null
+    return s
+}
+
+new_slice() -> ptr {
+    s = heap.new(Slice)
+    s.has_start = 0
+    s.has_end = 0
+    s.has_step = 0
+    s.start = 0
+    s.end = 0
+    s.step = 0
+    return s
+}
+
+new_filter(kind: int) -> ptr {
+    f = heap.new(Filter)
+    f.kind = kind
+    f.children = null
+    f.left = null
+    f.cmp = null
+    f.test = null
+    if kind == F_OR { f.children = list.new() }
+    if kind == F_AND { f.children = list.new() }
+    return f
+}
+
+new_test(kind: int) -> ptr {
+    t = heap.new(Test)
+    t.kind = kind
+    t.segments = null
+    t.func = null
+    if kind != T_FUNCTION { t.segments = list.new() }
+    return t
+}
+
+new_testfn(kind: int) -> ptr {
+    f = heap.new(TestFn)
+    f.kind = kind
+    f.args = list.new()
+    return f
+}
+
+new_fnarg(kind: int) -> ptr {
+    a = heap.new(FnArg)
+    a.kind = kind
+    a.lit = null
+    a.test = null
+    a.filter = null
+    return a
+}
+
+new_literal(kind: int) -> ptr {
+    l = heap.new(Literal)
+    l.kind = kind
+    l.ival = 0
+    l.fval = 0.0
+    l.sval = ""
+    l.sval_owned = 0
+    l.bval = 0
+    return l
+}
+
+new_comparison(op: int, left: ptr, right: ptr) -> ptr {
+    c = heap.new(Comparison)
+    c.op = op
+    c.left = left
+    c.right = right
+    return c
+}
+
+new_comparable(kind: int) -> ptr {
+    c = heap.new(Comparable)
+    c.kind = kind
+    c.lit = null
+    c.singular = null
+    c.func = null
+    return c
+}
+
+new_singular(kind: int) -> ptr {
+    s = heap.new(SingularQuery)
+    s.kind = kind
+    s.segments = list.new()
+    return s
+}
+
+new_singular_seg() -> ptr {
+    s = heap.new(SingularSeg)
+    s.is_name = 0
+    s.name = ""
+    s.name_owned = 0
+    s.index = 0
+    return s
+}
+
+// ---------------------------------------------------------------------------
+// Teardown — a single ownership walk. Each free_* releases its children
+// then itself, so freeing the root Query reclaims the whole tree.
+//
+// Every list slot is nulled before the list is freed: std.list's free
+// sniffs elements for refcounted strings, and would otherwise read the
+// node memory we just released (the same rule std.spec's _teardown
+// documents).
+// ---------------------------------------------------------------------------
+
+_free_list(l: ptr, kind: int) {
+    if l == null { return }
+    n = list.size(l)
+    i = 0
+    while i < n {
+        item = list.get_raw(l, i)
+        if item != null {
+            if kind == 0 { free_segment(item) }
+            if kind == 1 { free_selector(item) }
+            if kind == 2 { free_filter(item) }
+            if kind == 3 { free_fnarg(item) }
+            if kind == 4 { _free_singular_seg(item) }
+        }
+        list.set(l, i, null)
+        i = i + 1
+    }
+    list.free(l)
+}
+
+free_query(q: ptr) {
+    if q == null { return }
+    p = q as *Query
+    _free_list(p.segments, 0)
+    heap.free(q)
+}
+
+free_segment(s: ptr) {
+    if s == null { return }
+    p = s as *Segment
+    _free_list(p.selectors, 1)
+    heap.free(s)
+}
+
+// Node teardown releases owned STRING fields explicitly.
+//
+// Parser strings are deliberately plain libc-owned buffers: this keeps
+// ownership independent of the compiler's hidden per-field string tracker,
+// because AST nodes are handed around through raw pointers. The parser uses
+// strbuilder.finish for these values, so they must be returned to libc with
+// the raw free rather than string.release (which is for AetherString headers).
+free_selector(s: ptr) {
+    if s == null { return }
+    p = s as *Selector
+    if p.name_owned == 1 { _free_cstr(p.name) }
+    if p.slice != null { heap.free(p.slice) }
+    if p.filter != null { free_filter(p.filter) }
+    heap.free(s)
+}
+
+free_filter(f: ptr) {
+    if f == null { return }
+    p = f as *Filter
+    _free_list(p.children, 2)
+    if p.left != null { free_filter(p.left) }
+    if p.cmp != null { free_comparison(p.cmp) }
+    if p.test != null { free_test(p.test) }
+    heap.free(f)
+}
+
+free_test(t: ptr) {
+    if t == null { return }
+    p = t as *Test
+    _free_list(p.segments, 0)
+    if p.func != null { free_testfn(p.func) }
+    heap.free(t)
+}
+
+free_testfn(f: ptr) {
+    if f == null { return }
+    p = f as *TestFn
+    _free_list(p.args, 3)
+    heap.free(f)
+}
+
+free_fnarg(a: ptr) {
+    if a == null { return }
+    p = a as *FnArg
+    if p.lit != null { free_literal(p.lit) }
+    if p.test != null { free_test(p.test) }
+    if p.filter != null { free_filter(p.filter) }
+    heap.free(a)
+}
+
+// A string literal's value is a parser-owned plain heap string.
+free_literal(l: ptr) {
+    if l == null { return }
+    p = l as *Literal
+    if p.sval_owned == 1 { _free_cstr(p.sval) }
+    heap.free(l)
+}
+
+free_comparison(c: ptr) {
+    if c == null { return }
+    p = c as *Comparison
+    if p.left != null { free_comparable(p.left) }
+    if p.right != null { free_comparable(p.right) }
+    heap.free(c)
+}
+
+free_comparable(c: ptr) {
+    if c == null { return }
+    p = c as *Comparable
+    if p.lit != null { free_literal(p.lit) }
+    if p.singular != null { free_singular(p.singular) }
+    if p.func != null { free_testfn(p.func) }
+    heap.free(c)
+}
+
+free_singular(s: ptr) {
+    if s == null { return }
+    p = s as *SingularQuery
+    _free_list(p.segments, 4)
+    heap.free(s)
+}
+
+_free_singular_seg(s: ptr) {
+    if s == null { return }
+    p = s as *SingularSeg
+    if p.name_owned == 1 { _free_cstr(p.name) }
+    heap.free(s)
+}

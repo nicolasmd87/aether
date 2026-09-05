@@ -1,0 +1,85 @@
+// Reentrancy regression: independent parser calls may run on multiple actor
+// workers without sharing mutable parser state or diagnostics.
+//
+// Run with: ae run std/jsonpath/test_concurrency.ae
+
+import std.jsonpath
+import std.string
+
+message ParseJob { case_id: int, expected: int, reply_to: ptr }
+message ParseDone { ok: int, expected: int }
+
+actor ParseWorker {
+    receive {
+        ParseJob(case_id, expected, reply_to) -> {
+            path = "$"
+            if case_id == 1 { path = "$.store.book[*].title" }
+            if case_id == 2 { path = "$.foo[" }
+            if case_id == 3 { path = "$..price" }
+            if case_id == 4 { path = "$[01]" }
+            if case_id == 5 { path = "$['store']['book'][0]" }
+            if case_id == 6 { path = "$['unterminated" }
+            if case_id == 7 { path = "$[?@.price < 10]" }
+            if case_id == 8 { path = "$.items[" }
+            if case_id == 9 { path = "$..*" }
+            if case_id == 10 { path = "$[-01]" }
+            if case_id == 11 { path = "root" }
+            ast, err = jsonpath.parse(path)
+            ok = 0
+            if ast != null {
+                ok = 1
+                jsonpath.free_query(ast)
+            }
+            string.free(err)
+            reply_to ! ParseDone { ok: ok, expected: expected }
+        }
+    }
+}
+
+actor Collector {
+    state remaining = 12
+    state failures = 0
+
+    receive {
+        ParseDone(ok, expected) -> {
+            if ok != expected { failures = failures + 1 }
+            remaining = remaining - 1
+            if remaining == 0 {
+                if failures != 0 {
+                    println("FAIL: parser concurrency (${failures} mismatch(es))")
+                    exit(1)
+                }
+                println("PASS: test_concurrency")
+                exit(0)
+            }
+        }
+    }
+}
+
+main() {
+    collector = spawn(Collector())
+    w1 = spawn(ParseWorker())
+    w2 = spawn(ParseWorker())
+
+    // Valid and invalid paths are deliberately interleaved on two workers.
+    // In particular, a failure in one parser must not overwrite another
+    // parser's input position or diagnostic.
+    w1 ! ParseJob { case_id: 1, expected: 1, reply_to: collector }
+    w2 ! ParseJob { case_id: 2, expected: 0, reply_to: collector }
+    w1 ! ParseJob { case_id: 3, expected: 1, reply_to: collector }
+    w2 ! ParseJob { case_id: 4, expected: 0, reply_to: collector }
+    w1 ! ParseJob { case_id: 5, expected: 1, reply_to: collector }
+    w2 ! ParseJob { case_id: 6, expected: 0, reply_to: collector }
+    w1 ! ParseJob { case_id: 7, expected: 1, reply_to: collector }
+    w2 ! ParseJob { case_id: 8, expected: 0, reply_to: collector }
+    w1 ! ParseJob { case_id: 9, expected: 1, reply_to: collector }
+    w2 ! ParseJob { case_id: 10, expected: 0, reply_to: collector }
+    w1 ! ParseJob { case_id: 0, expected: 1, reply_to: collector }
+    w2 ! ParseJob { case_id: 11, expected: 0, reply_to: collector }
+
+    // Collector exits successfully when all replies arrive. This is only a
+    // guard for a dead mailbox or a broken actor hand-off.
+    sleep(1000)
+    println("FAIL: parser concurrency timed out")
+    exit(1)
+}

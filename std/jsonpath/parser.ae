@@ -1,0 +1,1453 @@
+// jsonpath.parser — recursive-descent parser for RFC 9535 JSONPath
+//
+// Ported from zig-jsonpath's `src/parser.zig` (whose structure this
+// follows closely — same function decomposition, same backtrack points)
+// with the stricter grammar checks from jsonpath-rust's pest grammar
+// (`src/parser/grammar/json_path_9535.pest`) folded in where the Zig
+// version was lenient.
+//
+// Error reporting: the parser carries `pos` and an error description, and
+// `error_message()` renders a caret-annotated window around the failure
+// the way zig-jsonpath's `errorMsg` does. The public `parse` function returns
+// that diagnostic as its second tuple value. Failure is signalled by a
+// sentinel: parse functions return null (or -1 / 0) and set `p.failed`.
+// Aether has no exceptions and no `?T` on `ptr`-returning recursive
+// descent here, so the flag is checked after each call — the same shape
+// C parsers use.
+//
+// State lives in a per-call `Parser` struct, so independent parses do not share cursor or error state.
+
+import std.string
+import std.strbuilder
+import std.list
+import std.mem
+import model
+
+@extern("free") _free_parser_memory(p: ptr)
+// Plain char* buffer (strbuilder.finish); raw libc free. Bound as `ptr` and
+// punned from string via `_free_pstr` so the emitted free takes void*, not
+// const char* — see model.ae for why binding it as `string` warns/errors.
+@extern("free") _free_parser_string_memory(s: ptr)
+@extern("string_free") _release_parser_error_string(s: string)
+
+_free_pstr(s: string) {
+    _free_parser_string_memory(mem.long_to_ptr(mem.ptr_to_long(s)))
+}
+
+exports(
+    parse, free_query
+)
+
+// --- parser state --------------------------------------------------
+// State is per parse call. Keeping it in a heap-owned struct makes the
+// recursive descent reentrant and safe when independent actors parse paths
+// concurrently; no cursor or diagnostic is shared between callers.
+struct Parser {
+    input: string
+    len: int
+    pos: int
+    failed: int
+    err: string
+}
+
+// `heap.free` runs generated field destructors. That is normally useful, but
+// `err` is deliberately a borrowed diagnostic (often a literal), while the
+// input is the only string this context owns. Release the input explicitly
+// and then release the allocation without asking the generated destructor to
+// infer ownership of the diagnostic.
+_dispose_parser(p: *Parser) {
+    string.release(p.input)
+    _free_parser_memory(p as ptr)
+}
+
+// Re-export so callers need only import the parser for the common path.
+free_query(q: ptr) {
+    model.free_query(q)
+}
+
+// ---------------------------------------------------------------------------
+// Character-class predicates (RFC 9535 §2.3.1.1 name-first / name-char,
+// §2.3.1.2 string literals).
+//
+// Bytes >= 0x80 are accepted wholesale as name characters: the RFC
+// permits U+0080..U+D7FF and U+E000..U+10FFFF, and since UTF-8
+// continuation and lead bytes are all >= 0x80, a byte-level accept is
+// equivalent for well-formed input. zig-jsonpath takes the same
+// shortcut and says so.
+// ---------------------------------------------------------------------------
+
+_is_digit(c: int) -> int {
+    if c >= 48 { if c <= 57 { return 1 } }
+    return 0
+}
+
+_is_alpha(c: int) -> int {
+    if c >= 65 { if c <= 90 { return 1 } }
+    if c >= 97 { if c <= 122 { return 1 } }
+    return 0
+}
+
+_is_name_first(c: int) -> int {
+    if _is_alpha(c) == 1 { return 1 }
+    if c == 95 { return 1 } // '_'
+    if c >= 128 { return 1 }
+    return 0
+}
+
+_is_name_char(c: int) -> int {
+    if _is_name_first(c) == 1 { return 1 }
+    return _is_digit(c)
+}
+
+_is_ws(c: int) -> int {
+    if c == 32 { return 1 } // space
+    if c == 9 { return 1 } // tab
+    if c == 10 { return 1 } // LF
+    if c == 13 { return 1 } // CR
+    return 0
+}
+
+// ---------------------------------------------------------------------------
+// Cursor primitives
+// ---------------------------------------------------------------------------
+
+// -1 at end of input, so callers can compare without a separate
+// has-more check.
+_peek(p: *Parser) -> int {
+    if p.pos >= p.len { return -1 }
+    return string.char_at_n(p.input, p.len, p.pos)
+}
+
+_peek_at(p: *Parser, off: int) -> int {
+    at = p.pos + off
+    if at >= p.len { return -1 }
+    return string.char_at_n(p.input, p.len, at)
+}
+
+_at_end(p: *Parser) -> int {
+    if p.pos >= p.len { return 1 }
+    return 0
+}
+
+// Consume `c` if it is next. Returns 1 on consume, 0 otherwise.
+_accept(p: *Parser, c: int) -> int {
+    if _peek(p) == c {
+        p.pos = p.pos + 1
+        return 1
+    }
+    return 0
+}
+
+// Consume `c` or fail with `desc`.
+_expect(p: *Parser, c: int, desc: string) -> int {
+    if _accept(p, c) == 1 { return 1 }
+    return _fail(p, desc)
+}
+
+// Record a failure. Always returns 0 so callers can `return _fail(...)`.
+// The FIRST failure wins: a backtracking caller restores p.failed to 0
+// explicitly, so a surviving flag means nobody recovered.
+_fail(p: *Parser, desc: string) -> int {
+    if p.failed == 0 {
+        p.failed = 1
+        p.err = desc
+    }
+    return 0
+}
+
+// Does the input at the cursor start with `s`? Does not consume.
+_starts_with(p: *Parser, s: string) -> int {
+    n = string.length(s)
+    if p.pos + n > p.len { return 0 }
+    i = 0
+    while i < n {
+        if string.char_at_n(p.input, p.len, p.pos + i) != string.char_at(s, i) { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+// Consume `s` if present.
+_match_str(p: *Parser, s: string) -> int {
+    if _starts_with(p, s) == 1 {
+        p.pos = p.pos + string.length(s)
+        return 1
+    }
+    return 0
+}
+
+_skip_ws(p: *Parser) {
+    while _at_end(p) == 0 {
+        if _is_ws(_peek(p)) == 0 { return }
+        p.pos = p.pos + 1
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Public entry point
+// ---------------------------------------------------------------------------
+
+// Parse a JSONPath query string into an AST.
+// Returns (query, "") on success or (null, diagnostic) on a syntax error.
+// The diagnostic is returned with the failed parse, so callers never need
+// to consult shared module-level error state.
+//
+// RFC 9535 §2.1: a query is $ followed by segments, with no leading
+// or trailing whitespace permitted around the whole query. The CTS has
+// dedicated cases for both (" $" and "$ " are invalid selectors), which
+// is why the check is here rather than folded into _skip_ws.
+parse(path: string) -> ptr! {
+    p = heap.new(Parser)
+    p.input = string.copy(path)
+    p.len = string.length(path)
+    p.pos = 0
+    p.failed = 0
+    p.err = "Unexpected error"
+
+    if p.len == 0 {
+        _fail(p, "Empty query")
+        err = error_message(p)
+        _dispose_parser(p)
+        return null, err
+    }
+    if _is_ws(string.char_at_n(p.input, p.len, 0)) == 1 {
+        _fail(p, "Unexpected leading whitespace")
+        err = error_message(p)
+        _dispose_parser(p)
+        return null, err
+    }
+    if _is_ws(string.char_at_n(p.input, p.len, p.len - 1)) == 1 {
+        _fail(p, "Unexpected trailing whitespace")
+        err = error_message(p)
+        _dispose_parser(p)
+        return null, err
+    }
+
+    if _expect(p, 36, "Expected '$' at start of JSONPath query") == 0 {
+        err = error_message(p)
+        _dispose_parser(p)
+        return null, err
+    }
+
+    segs = _parse_segments(p)
+    if p.failed == 1 {
+        _free_seg_list(segs)
+        err = error_message(p)
+        _dispose_parser(p)
+        return null, err
+    }
+
+    if _at_end(p) == 0 {
+        _fail(p, "Unexpected input after query")
+        _free_seg_list(segs)
+        err = error_message(p)
+        _dispose_parser(p)
+        return null, err
+    }
+
+    q = model.new_query()
+    qp = q as *Query
+    // new_query() made an empty list; swap in the parsed one.
+    list.free(qp.segments)
+    qp.segments = segs
+    _dispose_parser(p)
+    return q, ""
+}
+
+// Render a failure with a caret under the offending position, in the
+// style of zig-jsonpath's errorMsg: a 20-character window either side,
+// ellipsis-marked when the query extends past it.
+error_message(p: *Parser) -> string {
+    window = 20
+    pos = p.pos
+    if pos > p.len { pos = p.len }
+
+    start = 0
+    if pos > window { start = pos - window }
+    end = pos + window
+    if end > p.len { end = p.len }
+
+    before = string.substring_n(p.input, p.len, start, pos)
+    after = string.substring_n(p.input, p.len, pos, end)
+
+    left_ell = ""
+    if start > 0 { left_ell = "..." }
+    right_ell = ""
+    if end < p.len { right_ell = "..." }
+
+    pad = string.length(left_ell) + string.length(before)
+    caret = string.pad_start("^", pad + 1, 32)
+
+    return "${p.err}, position = ${pos}\n${left_ell}${before}${after}${right_ell}\n${caret}"
+}
+
+// Free a raw list of segments (used on the error paths, where no Query
+// node owns them yet).
+_free_seg_list(l: ptr) {
+    if l == null { return }
+    n = list.size(l)
+    i = 0
+    while i < n {
+        item = list.get_raw(l, i)
+        if item != null { model.free_segment(item) }
+        list.set(l, i, null)
+        i = i + 1
+    }
+    list.free(l)
+}
+
+// ---------------------------------------------------------------------------
+// Segments
+// ---------------------------------------------------------------------------
+
+// segments = *(S (child-segment / descendant-segment))
+_parse_segments(p: *Parser) -> ptr {
+    segs = list.new()
+    // Whitespace BEFORE a segment is allowed (`$ .a` is valid per the
+    // CTS whitespace cases); the outer parse() already rejected leading
+    // whitespace before `$`.
+    while 1 == 1 {
+        save = p.pos
+        _skip_ws(p)
+        c = _peek(p)
+        if c != 46 { // '.'
+            if c != 91 { // '['
+                p.pos = save
+                return segs
+            }
+        }
+        seg = _parse_segment(p)
+        if p.failed == 1 {
+            list.list_add_raw(segs, seg)
+            return segs
+        }
+        list.list_add_raw(segs, seg)
+    }
+    return segs
+}
+
+_parse_segment(p: *Parser) -> ptr {
+    if _starts_with(p, "..") == 1 {
+        p.pos = p.pos + 2
+        return _parse_descendant_inner(p)
+    }
+    if _peek(p) == 46 { // '.'
+        p.pos = p.pos + 1
+        return _parse_child_dot(p)
+    }
+    if _peek(p) == 91 { // '['
+        seg = model.new_segment(model.SEG_CHILD)
+        _parse_bracketed_into(p, seg)
+        return seg
+    }
+    _fail(p, "Expected segment")
+    return null
+}
+
+// `..` may be followed by a bracketed selection, `*`, or a member name.
+// Note there is NO whitespace allowed between `..` and what follows.
+_parse_descendant_inner(p: *Parser) -> ptr {
+    seg = model.new_segment(model.SEG_DESCENDANT)
+    if _peek(p) == 91 { // '['
+        _parse_bracketed_into(p, seg)
+        return seg
+    }
+    if _peek(p) == 42 { // '*'
+        p.pos = p.pos + 1
+        list.list_add_raw((seg as *Segment).selectors, model.new_selector(model.SEL_WILDCARD))
+        return seg
+    }
+    name = _parse_member_name(p)
+    if p.failed == 1 {
+        _release_parser_error_string(name)
+        return seg
+    }
+    sel = model.new_selector(model.SEL_NAME)
+    (sel as *Selector).name = name
+    (sel as *Selector).name_owned = 1
+    list.list_add_raw((seg as *Segment).selectors, sel)
+    return seg
+}
+
+// `.name` or `.*` — a shorthand child segment carrying exactly one
+// selector. No whitespace between the dot and the name.
+_parse_child_dot(p: *Parser) -> ptr {
+    seg = model.new_segment(model.SEG_CHILD)
+    if _peek(p) == 42 { // '*'
+        p.pos = p.pos + 1
+        list.list_add_raw((seg as *Segment).selectors, model.new_selector(model.SEL_WILDCARD))
+        return seg
+    }
+    name = _parse_member_name(p)
+    if p.failed == 1 {
+        _release_parser_error_string(name)
+        return seg
+    }
+    sel = model.new_selector(model.SEL_NAME)
+    (sel as *Selector).name = name
+    (sel as *Selector).name_owned = 1
+    list.list_add_raw((seg as *Segment).selectors, sel)
+    return seg
+}
+
+// `[ sel (, sel)* ]` — fills `seg`'s selector list in place.
+_parse_bracketed_into(p: *Parser, seg: ptr) {
+    sp = seg as *Segment
+    if _expect(p, 91, "Expected '['") == 0 { return }
+    _skip_ws(p)
+
+    first = _parse_selector(p)
+    if p.failed == 1 {
+        if first != null { list.list_add_raw(sp.selectors, first) }
+        return
+    }
+    list.list_add_raw(sp.selectors, first)
+    _skip_ws(p)
+
+    while _accept(p, 44) == 1 { // ','
+        _skip_ws(p)
+        s = _parse_selector(p)
+        if p.failed == 1 {
+            if s != null { list.list_add_raw(sp.selectors, s) }
+            return
+        }
+        list.list_add_raw(sp.selectors, s)
+        _skip_ws(p)
+    }
+
+    _expect(p, 93, "Expected ']'")
+}
+
+// ---------------------------------------------------------------------------
+// Selectors
+// ---------------------------------------------------------------------------
+
+_parse_selector(p: *Parser) -> ptr {
+    c = _peek(p)
+    if c == -1 {
+        _fail(p, "Expected selector")
+        return null
+    }
+
+    if c == 42 { // '*'
+        p.pos = p.pos + 1
+        return model.new_selector(model.SEL_WILDCARD)
+    }
+
+    if c == 63 { // '?' — filter
+        p.pos = p.pos + 1
+        _skip_ws(p)
+        f = _parse_filter(p)
+        if p.failed == 1 {
+            if f != null { model.free_filter(f) }
+            return null
+        }
+        sel = model.new_selector(model.SEL_FILTER)
+        (sel as *Selector).filter = f
+        return sel
+    }
+
+    if c == 34 { return _parse_quoted_name_selector(p) } // '"'
+    if c == 39 { return _parse_quoted_name_selector(p) } // '\''
+
+    // '-' or digit or ':' — index or slice
+    if c == 45 { return _parse_index_or_slice(p) }
+    if c == 58 { return _parse_index_or_slice(p) }
+    if _is_digit(c) == 1 { return _parse_index_or_slice(p) }
+
+    // A bare name inside brackets (`$[a]`) is NOT valid RFC 9535 — the
+    // shorthand form is dot-only. jsonpath-rust's grammar rejects it and
+    // the CTS agrees, so we do too rather than following zig-jsonpath's
+    // lenient branch here.
+    _fail(p, "Unexpected selector")
+    return null
+}
+
+_parse_quoted_name_selector(p: *Parser) -> ptr {
+    s = _parse_string(p)
+    if p.failed == 1 {
+        _release_parser_error_string(s)
+        return null
+    }
+    sel = model.new_selector(model.SEL_NAME)
+    (sel as *Selector).name = s
+    (sel as *Selector).name_owned = 1
+    return sel
+}
+
+// index-selector / slice-selector. A leading ':' means the start is
+// omitted; otherwise parse an int and see whether a ':' follows.
+_parse_index_or_slice(p: *Parser) -> ptr {
+    if _peek(p) == 58 { // ':'
+        p.pos = p.pos + 1
+        return _parse_slice_tail(p, 0, 0)
+    }
+
+    v = _parse_slice_int(p)
+    if p.failed == 1 { return null }
+
+    _skip_ws(p)
+    if _accept(p, 58) == 1 { // ':'
+        return _parse_slice_tail(p, 1, v)
+    }
+
+    sel = model.new_selector(model.SEL_INDEX)
+    (sel as *Selector).index = v
+    return sel
+}
+
+// Everything after the first ':' of a slice.
+_parse_slice_tail(p: *Parser, has_start: int, start: long) -> ptr {
+    sl = model.new_slice()
+    slp = sl as *Slice
+    slp.has_start = has_start
+    slp.start = start
+
+    _skip_ws(p)
+    c = _peek(p)
+    if c == 45 { // '-'
+        e = _parse_slice_int(p)
+        if p.failed == 1 { heap.free(sl); return null }
+        slp.has_end = 1
+        slp.end = e
+        _skip_ws(p)
+    } else {
+        if _is_digit(c) == 1 {
+            e = _parse_slice_int(p)
+            if p.failed == 1 { heap.free(sl); return null }
+            slp.has_end = 1
+            slp.end = e
+            _skip_ws(p)
+        }
+    }
+
+    if _accept(p, 58) == 1 { // ':'
+        _skip_ws(p)
+        c2 = _peek(p)
+        if c2 == 45 {
+            st = _parse_slice_int(p)
+            if p.failed == 1 { heap.free(sl); return null }
+            slp.has_step = 1
+            slp.step = st
+        } else {
+            if _is_digit(c2) == 1 {
+                st = _parse_slice_int(p)
+                if p.failed == 1 { heap.free(sl); return null }
+                slp.has_step = 1
+                slp.step = st
+            }
+        }
+    }
+
+    sel = model.new_selector(model.SEL_SLICE)
+    (sel as *Selector).slice = sl
+    return sel
+}
+
+// An integer in index/slice position. RFC 9535 §2.3.3 forbids leading
+// zeros and "-0"; both source implementations enforce it and the CTS
+// tests both, so a plain string.get_long won't do.
+_parse_slice_int(p: *Parser) -> long {
+    start = p.pos
+    is_neg = _accept(p, 45) // '-'
+
+    if _is_digit(_peek(p)) == 0 {
+        p.pos = start
+        _fail(p, "Expected integer")
+        return 0
+    }
+    if is_neg == 1 {
+        if _peek(p) == 48 { // '-0' is never valid
+            p.pos = start
+            _fail(p, "Negative zero is not valid in slice/index")
+            return 0
+        }
+    }
+
+    while _at_end(p) == 0 {
+        if _is_digit(_peek(p)) == 0 { break }
+        p.pos = p.pos + 1
+    }
+
+    s = string.substring_n(p.input, p.len, start, p.pos)
+    // Leading zero on a multi-digit literal ("01") is invalid.
+    digits_start = start
+    if is_neg == 1 { digits_start = start + 1 }
+    if p.pos - digits_start > 1 {
+        if string.char_at_n(p.input, p.len, digits_start) == 48 {
+            p.pos = start
+            _fail(p, "Leading zero is not valid in slice/index")
+            return 0
+        }
+    }
+
+    // Reject on DIGIT COUNT before converting: string.get_long
+    // saturates rather than reporting overflow, so a 78-digit literal
+    // would otherwise come back as a clamped-but-in-range value and
+    // sail past is_valid_int. MAX_SAFE_INT has 16 digits, so anything
+    // longer than 16 is definitely out of range and anything shorter is
+    // definitely in; only the boundary width needs the value check.
+    ndigits = p.pos - digits_start
+    if ndigits > 16 {
+        _fail(p, "Integer exceeds safe range")
+        return 0
+    }
+
+    v = string.get_long(s)
+    if model.is_valid_int(v) == 0 {
+        _fail(p, "Integer exceeds safe range")
+        return 0
+    }
+    return v
+}
+
+// ---------------------------------------------------------------------------
+// Member names and string literals
+// ---------------------------------------------------------------------------
+
+// Shorthand member name: name-first *name-char, unquoted.
+_parse_member_name(p: *Parser) -> string {
+    start = p.pos
+    c = _peek(p)
+    if c == -1 {
+        _fail(p, "Expected identifier")
+        return ""
+    }
+    if _is_name_first(c) == 0 {
+        _fail(p, "Invalid identifier")
+        return ""
+    }
+    p.pos = p.pos + 1
+    while _at_end(p) == 0 {
+        if _is_name_char(_peek(p)) == 0 { break }
+        p.pos = p.pos + 1
+    }
+    // Keep AST-owned names in the same plain-buffer representation as
+    // decoded quoted strings. This is important because AST nodes cross
+    // helper boundaries through raw pointers and are torn down explicitly.
+    piece = string.substring_n(p.input, p.len, start, p.pos)
+    b = strbuilder.new(p.pos - start)
+    strbuilder.append(b, piece)
+    return strbuilder.finish(b)
+}
+
+// A quoted string literal, with the RFC 9535 §2.3.1.2 escape set. The
+// returned string is the DECODED value — the parser resolves escapes so
+// the query engine compares against raw member names, exactly as the
+// Rust doc-comment on `Queryable::get` requires.
+_parse_string(p: *Parser) -> string {
+    quote = _peek(p)
+    if quote != 34 {
+        if quote != 39 {
+            _fail(p, "The quote is expected")
+            return ""
+        }
+    }
+    p.pos = p.pos + 1
+
+    b = strbuilder.new(32)
+    while _at_end(p) == 0 {
+        ch = _peek(p)
+
+        if ch == quote {
+            p.pos = p.pos + 1
+            return strbuilder.finish(b)
+        }
+
+        if ch == 92 { // backslash
+            p.pos = p.pos + 1
+            esc = _peek(p)
+            if esc == -1 {
+                strbuilder.free(b)
+                _fail(p, "The string ends unexpectedly")
+                return ""
+            }
+            p.pos = p.pos + 1
+
+            if esc == 98 { strbuilder.append_byte(b, 8) } // \b
+            else { if esc == 102 { strbuilder.append_byte(b, 12) } // \f
+                else { if esc == 110 { strbuilder.append_byte(b, 10) } // \n
+                    else { if esc == 114 { strbuilder.append_byte(b, 13) } // \r
+                        else { if esc == 116 { strbuilder.append_byte(b, 9) } // \t
+                            else { if esc == 47 { strbuilder.append_byte(b, 47) } // \/
+                                else { if esc == 92 { strbuilder.append_byte(b, 92) } // backslash
+                                    else { if esc == 34 {
+                                            // \" is only legal inside a double-quoted string
+                                            if quote != 34 { strbuilder.free(b); _fail(p, "Invalid escape sequence"); return "" }
+                                            strbuilder.append_byte(b, 34)
+                                        }
+                                        else { if esc == 39 {
+                                                // \' is only legal inside a single-quoted string
+                                                if quote != 39 { strbuilder.free(b); _fail(p, "Invalid escape sequence"); return "" }
+                                                strbuilder.append_byte(b, 39)
+                                            }
+                                            else { if esc == 117 { // \uXXXX
+                                                    cp = _parse_hex_char(p)
+                                                    if p.failed == 1 { strbuilder.free(b); return "" }
+                                                    _append_utf8(b, cp)
+                                                }
+                                                else {
+                                                    strbuilder.free(b)
+                                                    _fail(p, "Invalid escape sequence")
+                                                    return ""
+                                                } } } } } } } } } }
+        } else {
+            if _is_unescaped(ch, quote) == 1 {
+                strbuilder.append_byte(b, ch)
+                p.pos = p.pos + 1
+            } else {
+                strbuilder.free(b)
+                _fail(p, "Invalid character")
+                return ""
+            }
+        }
+    }
+
+    strbuilder.free(b)
+    _fail(p, "Unterminated string")
+    return ""
+}
+
+// Which raw bytes may appear unescaped inside a quoted name.
+// Control characters (0x00-0x1F) and the matching quote are excluded;
+// the opposite quote is fine, and everything >= 0x80 passes through.
+_is_unescaped(c: int, quote: int) -> int {
+    if c < 32 { return 0 }
+    if c == 92 { return 0 } // backslash always escaped
+    if c == 34 { if quote == 34 { return 0 } return 1 }
+    if c == 39 { if quote == 39 { return 0 } return 1 }
+    if c == 127 { return 1 }
+    return 1
+}
+
+// \uXXXX, including surrogate pairs. Returns the codepoint.
+_parse_hex_char(p: *Parser) -> int {
+    cp = 0
+    i = 0
+    while i < 4 {
+        c = _peek(p)
+        if c == -1 { _fail(p, "Incomplete unicode escape"); return 0 }
+        d = _hex_digit(c)
+        if d < 0 { _fail(p, "Invalid hex digit"); return 0 }
+        p.pos = p.pos + 1
+        cp = cp * 16 + d
+        i = i + 1
+    }
+
+    // High surrogate — must be followed by \uDC00-\uDFFF.
+    if cp >= 55296 {
+        if cp <= 56319 {
+            if _accept(p, 92) == 0 { _fail(p, "Incomplete surrogate pair"); return 0 }
+            if _accept(p, 117) == 0 { _fail(p, "Expected \\u after high surrogate"); return 0 }
+            low = 0
+            i = 0
+            while i < 4 {
+                c = _peek(p)
+                if c == -1 { _fail(p, "Incomplete unicode escape"); return 0 }
+                d = _hex_digit(c)
+                if d < 0 { _fail(p, "Invalid hex digit"); return 0 }
+                p.pos = p.pos + 1
+                low = low * 16 + d
+                i = i + 1
+            }
+            if low < 56320 { _fail(p, "Invalid low surrogate"); return 0 }
+            if low > 57343 { _fail(p, "Invalid low surrogate"); return 0 }
+            cp = 65536 + (cp - 55296) * 1024 + (low - 56320)
+            return cp
+        }
+    }
+    // A lone low surrogate is not a valid codepoint.
+    if cp >= 56320 {
+        if cp <= 57343 {
+            _fail(p, "Unpaired low surrogate")
+            return 0
+        }
+    }
+    return cp
+}
+
+_hex_digit(c: int) -> int {
+    if c >= 48 { if c <= 57 { return c - 48 } }
+    if c >= 97 { if c <= 102 { return c - 97 + 10 } }
+    if c >= 65 { if c <= 70 { return c - 65 + 10 } }
+    return -1
+}
+
+// Encode a codepoint as UTF-8 into the builder.
+_append_utf8(b: ptr, cp: int) {
+    if cp < 128 {
+        strbuilder.append_byte(b, cp)
+        return
+    }
+    if cp < 2048 {
+        strbuilder.append_byte(b, 192 + cp / 64)
+        strbuilder.append_byte(b, 128 + cp % 64)
+        return
+    }
+    if cp < 65536 {
+        strbuilder.append_byte(b, 224 + cp / 4096)
+        strbuilder.append_byte(b, 128 + (cp / 64) % 64)
+        strbuilder.append_byte(b, 128 + cp % 64)
+        return
+    }
+    strbuilder.append_byte(b, 240 + cp / 262144)
+    strbuilder.append_byte(b, 128 + (cp / 4096) % 64)
+    strbuilder.append_byte(b, 128 + (cp / 64) % 64)
+    strbuilder.append_byte(b, 128 + cp % 64)
+}
+
+// ---------------------------------------------------------------------------
+// Filter expressions
+//
+// Precedence, loosest first: || then && then a unit (a parenthesised
+// group, a comparison, or an existence test). `!` binds to a unit.
+// ---------------------------------------------------------------------------
+
+_parse_filter(p: *Parser) -> ptr {
+    return _parse_logical_or(p)
+}
+
+_parse_logical_or(p: *Parser) -> ptr {
+    first = _parse_logical_and(p)
+    if p.failed == 1 { return first }
+
+    _skip_ws(p)
+    if _starts_with(p, "||") == 0 { return first }
+
+    f = model.new_filter(model.F_OR)
+    list.list_add_raw((f as *Filter).children, first)
+    while _starts_with(p, "||") == 1 {
+        p.pos = p.pos + 2
+        _skip_ws(p)
+        next = _parse_logical_and(p)
+        list.list_add_raw((f as *Filter).children, next)
+        if p.failed == 1 { return f }
+        _skip_ws(p)
+    }
+    return f
+}
+
+_parse_logical_and(p: *Parser) -> ptr {
+    first = _parse_filter_unit(p)
+    if p.failed == 1 { return first }
+
+    _skip_ws(p)
+    if _starts_with(p, "&&") == 0 { return first }
+
+    f = model.new_filter(model.F_AND)
+    list.list_add_raw((f as *Filter).children, first)
+    while _starts_with(p, "&&") == 1 {
+        p.pos = p.pos + 2
+        _skip_ws(p)
+        next = _parse_filter_unit(p)
+        list.list_add_raw((f as *Filter).children, next)
+        if p.failed == 1 { return f }
+        _skip_ws(p)
+    }
+    return f
+}
+
+// A single filter operand, with optional leading `!`.
+_parse_filter_unit(p: *Parser) -> ptr {
+    negate = _accept(p, 33) // '!'
+    _skip_ws(p)
+
+    inner = _parse_filter_atom(p)
+    if negate == 0 { return inner }
+
+    n = model.new_filter(model.F_NOT)
+    (n as *Filter).left = inner
+    return n
+}
+
+_parse_filter_atom(p: *Parser) -> ptr {
+    // Parenthesised group.
+    if _peek(p) == 40 { // '('
+        p.pos = p.pos + 1
+        _skip_ws(p)
+        inner = _parse_logical_or(p)
+        if p.failed == 1 {
+            p = model.new_filter(model.F_PAREN)
+            (p as *Filter).left = inner
+            return p
+        }
+        _skip_ws(p)
+        _expect(p, 41, "Expected ')'")
+        p = model.new_filter(model.F_PAREN)
+        (p as *Filter).left = inner
+        return p
+    }
+
+    // Try a comparison first; if the operand isn't followed by a
+    // comparison operator, rewind and read it as an existence test.
+    // This is the one backtrack point in the grammar (both source
+    // implementations have it in the same place).
+    save_pos = p.pos
+    save_err = p.err
+    cmp = _try_comparison(p)
+    if cmp != null { return cmp }
+    p.pos = save_pos
+    p.failed = 0
+    p.err = save_err
+
+    return _parse_test_expr(p)
+}
+
+// Returns an F_COMPARE filter, or null (WITHOUT setting p.failed) when
+// the input at the cursor is not a comparison.
+_try_comparison(p: *Parser) -> ptr {
+    lhs = _parse_comparable(p)
+    if p.failed == 1 {
+        if lhs != null { model.free_comparable(lhs) }
+        return null
+    }
+
+    _skip_ws(p)
+    op = _parse_comp_op(p)
+    if op < 0 {
+        model.free_comparable(lhs)
+        return null
+    }
+
+    _skip_ws(p)
+    rhs = _parse_comparable(p)
+    if p.failed == 1 {
+        model.free_comparable(lhs)
+        if rhs != null { model.free_comparable(rhs) }
+        return null
+    }
+
+    f = model.new_filter(model.F_COMPARE)
+    (f as *Filter).cmp = model.new_comparison(op, lhs, rhs)
+    return f
+}
+
+// -1 when the cursor is not on a comparison operator.
+// Two-character operators are tested before their one-character
+// prefixes so `<=` never reads as `<`.
+_parse_comp_op(p: *Parser) -> int {
+    if _match_str(p, "==") == 1 { return model.OP_EQ }
+    if _match_str(p, "!=") == 1 { return model.OP_NE }
+    if _match_str(p, "<=") == 1 { return model.OP_LTE }
+    if _match_str(p, ">=") == 1 { return model.OP_GTE }
+    if _match_str(p, "<") == 1 { return model.OP_LT }
+    if _match_str(p, ">") == 1 { return model.OP_GT }
+    return -1
+}
+
+// An operand of a comparison: a literal, a singular query, or a
+// function call. RFC 9535 §2.4.3 forbids match()/search() here (they
+// yield LogicalType, not ValueType).
+_parse_comparable(p: *Parser) -> ptr {
+    save_pos = p.pos
+    save_err = p.err
+
+    lit = _try_literal(p)
+    if lit != null {
+        c = model.new_comparable(model.C_LITERAL)
+        (c as *Comparable).lit = lit
+        return c
+    }
+    p.pos = save_pos
+    p.failed = 0
+    p.err = save_err
+
+    ch = _peek(p)
+    if ch == 64 { // '@'
+        sq = _parse_singular_query(p)
+        c = model.new_comparable(model.C_SINGULAR)
+        (c as *Comparable).singular = sq
+        return c
+    }
+    if ch == 36 { // '$'
+        sq = _parse_singular_query(p)
+        c = model.new_comparable(model.C_SINGULAR)
+        (c as *Comparable).singular = sq
+        return c
+    }
+
+    fnp = _parse_function_expr(p)
+    if p.failed == 1 {
+        if fnp != null { model.free_testfn(fnp) }
+        return null
+    }
+    fk = (fnp as *TestFn).kind
+    if fk == model.FN_MATCH {
+        model.free_testfn(fnp)
+        _fail(p, "match() cannot be used in a comparison")
+        return null
+    }
+    if fk == model.FN_SEARCH {
+        model.free_testfn(fnp)
+        _fail(p, "search() cannot be used in a comparison")
+        return null
+    }
+    c = model.new_comparable(model.C_FUNCTION)
+    (c as *Comparable).func = fnp
+    return c
+}
+
+// An existence test: `@.a`, `$.b`, or a LogicalType function call.
+// RFC 9535 §2.4.3: length/count/value yield ValueType and so may NOT
+// stand alone as a test.
+_parse_test_expr(p: *Parser) -> ptr {
+    t = _parse_test(p)
+    if p.failed == 1 {
+        if t != null { model.free_test(t) }
+        return null
+    }
+
+    tp = t as *Test
+    if tp.kind == model.T_FUNCTION {
+        fk = (tp.func as *TestFn).kind
+        if fk == model.FN_LENGTH { model.free_test(t); _fail(p, "length() must be used in a comparison"); return null }
+        if fk == model.FN_COUNT { model.free_test(t); _fail(p, "count() must be used in a comparison"); return null }
+        if fk == model.FN_VALUE { model.free_test(t); _fail(p, "value() must be used in a comparison"); return null }
+    }
+
+    f = model.new_filter(model.F_TEST)
+    (f as *Filter).test = t
+    return f
+}
+
+_parse_test(p: *Parser) -> ptr {
+    ch = _peek(p)
+    if ch == -1 {
+        _fail(p, "Expected test expression")
+        return null
+    }
+
+    if ch == 64 { // '@'
+        p.pos = p.pos + 1
+        t = model.new_test(model.T_REL_QUERY)
+        segs = _parse_segments(p)
+        tp = t as *Test
+        list.free(tp.segments)
+        tp.segments = segs
+        return t
+    }
+
+    if ch == 36 { // '$'
+        p.pos = p.pos + 1
+        t = model.new_test(model.T_ABS_QUERY)
+        segs = _parse_segments(p)
+        tp = t as *Test
+        list.free(tp.segments)
+        tp.segments = segs
+        return t
+    }
+
+    fnp = _parse_function_expr(p)
+    if p.failed == 1 {
+        if fnp != null { model.free_testfn(fnp) }
+        return null
+    }
+    t = model.new_test(model.T_FUNCTION)
+    (t as *Test).func = fnp
+    return t
+}
+
+// ---------------------------------------------------------------------------
+// Function extensions (RFC 9535 §2.4)
+//
+// Only the five registered functions are accepted. jsonpath-rust also
+// carries user-defined extensions; the RFC's registry is closed for the
+// CTS, and an unknown name is an invalid selector there, so this
+// rejects rather than building a `custom` node.
+// ---------------------------------------------------------------------------
+
+_parse_function_expr(p: *Parser) -> ptr {
+    if _match_str(p, "length") == 1 { return _parse_fn_args(p, model.FN_LENGTH, 1) }
+    if _match_str(p, "count") == 1 { return _parse_fn_args(p, model.FN_COUNT, 1) }
+    if _match_str(p, "value") == 1 { return _parse_fn_args(p, model.FN_VALUE, 1) }
+    if _match_str(p, "match") == 1 { return _parse_fn_args(p, model.FN_MATCH, 2) }
+    if _match_str(p, "search") == 1 { return _parse_fn_args(p, model.FN_SEARCH, 2) }
+    _fail(p, "Unknown function")
+    return null
+}
+
+// Parse `( arg (, arg)* )` and check the arity.
+_parse_fn_args(p: *Parser, kind: int, arity: int) -> ptr {
+    f = model.new_testfn(kind)
+    fp = f as *TestFn
+
+    if _expect(p, 40, "Expected '(' after function name") == 0 { return f }
+    _skip_ws(p)
+
+    if _accept(p, 41) == 1 { // immediate ')'
+        if arity != 0 { _fail(p, "Wrong number of arguments") }
+        return f
+    }
+
+    a = _parse_fn_arg(p)
+    list.list_add_raw(fp.args, a)
+    if p.failed == 1 { return f }
+    _skip_ws(p)
+
+    while _accept(p, 44) == 1 { // ','
+        _skip_ws(p)
+        a2 = _parse_fn_arg(p)
+        list.list_add_raw(fp.args, a2)
+        if p.failed == 1 { return f }
+        _skip_ws(p)
+    }
+
+    if _expect(p, 41, "Expected ')' to close function arguments") == 0 { return f }
+
+    if list.size(fp.args) != arity {
+        _fail(p, "Wrong number of arguments")
+        return f
+    }
+
+    _check_arg_types(p, kind, fp)
+    return f
+}
+
+// RFC 9535 §2.4.3 well-typedness rules, enforced at PARSE time (the CTS
+// records violations as invalid_selector, not as empty results).
+//
+//   count(x)  — x must be a NodesType, i.e. a query. A literal is a
+//               type error, not a zero count.
+//   length(x) — x must be a ValueType: a literal, or a query that is
+//               SINGULAR. `length(@.*)` is ill-typed because a wildcard
+//               query yields a nodelist, not one value.
+//   value(x)  — x must be a NodesType (a query).
+_check_arg_types(p: *Parser, kind: int, fp: *TestFn) {
+    a0 = list.get_raw(fp.args, 0)
+    if a0 == null { return }
+    ap = a0 as *FnArg
+
+    if kind == model.FN_COUNT {
+        if ap.test == null {
+            _fail(p, "count() requires a query argument")
+            return
+        }
+        if (ap.test as *Test).kind == model.T_FUNCTION {
+            _fail(p, "count() requires a query argument")
+        }
+        return
+    }
+
+    if kind == model.FN_VALUE {
+        if ap.test == null {
+            _fail(p, "value() requires a query argument")
+            return
+        }
+        if (ap.test as *Test).kind == model.T_FUNCTION {
+            _fail(p, "value() requires a query argument")
+        }
+        return
+    }
+
+    if kind == model.FN_LENGTH {
+        if ap.test == null { return } // a literal is fine
+        tp = ap.test as *Test
+        if tp.kind == model.T_FUNCTION { return }
+        if _is_singular_segments(tp.segments) == 0 {
+            _fail(p, "length() requires a singular query argument")
+        }
+    }
+}
+
+// A query is singular when every segment is a child segment carrying
+// exactly one name-or-index selector (RFC 9535 §2.3.5.1).
+_is_singular_segments(segs: ptr) -> int {
+    if segs == null { return 1 }
+    n = list.size(segs)
+    i = 0
+    while i < n {
+        sp = list.get_raw(segs, i) as *Segment
+        if sp.kind != model.SEG_CHILD { return 0 }
+        if list.size(sp.selectors) != 1 { return 0 }
+        k = (list.get_raw(sp.selectors, 0) as *Selector).kind
+        if k != model.SEL_NAME {
+            if k != model.SEL_INDEX { return 0 }
+        }
+        i = i + 1
+    }
+    return 1
+}
+
+// A function argument is a literal, a filter expression, or a query.
+_parse_fn_arg(p: *Parser) -> ptr {
+    save_pos = p.pos
+    save_err = p.err
+
+    lit = _try_literal(p)
+    if lit != null {
+        a = model.new_fnarg(model.C_LITERAL)
+        (a as *FnArg).lit = lit
+        return a
+    }
+    p.pos = save_pos
+    p.failed = 0
+    p.err = save_err
+
+    ch = _peek(p)
+    if ch == 40 { // '(' — a parenthesised logical expression
+        a = model.new_fnarg(model.C_FUNCTION)
+        (a as *FnArg).filter = _parse_filter(p)
+        return a
+    }
+    if ch == 33 { // '!'
+        a = model.new_fnarg(model.C_FUNCTION)
+        (a as *FnArg).filter = _parse_filter(p)
+        return a
+    }
+
+    a = model.new_fnarg(model.C_SINGULAR)
+    (a as *FnArg).test = _parse_test(p)
+    return a
+}
+
+// ---------------------------------------------------------------------------
+// Literals
+// ---------------------------------------------------------------------------
+
+// Returns null WITHOUT setting p.failed when the cursor is not on a
+// literal — callers use it as a speculative parse.
+_try_literal(p: *Parser) -> ptr {
+    ch = _peek(p)
+    if ch == -1 { return null }
+
+    if ch == 34 { return _literal_string(p) } // '"'
+    if ch == 39 { return _literal_string(p) } // '\''
+
+    if ch == 45 { return _parse_number(p) } // '-'
+    if _is_digit(ch) == 1 { return _parse_number(p) }
+
+    if _match_str(p, "true") == 1 {
+        l = model.new_literal(model.L_BOOL)
+        (l as *Literal).bval = 1
+        return l
+    }
+    if _match_str(p, "false") == 1 {
+        l = model.new_literal(model.L_BOOL)
+        (l as *Literal).bval = 0
+        return l
+    }
+    if _match_str(p, "null") == 1 {
+        return model.new_literal(model.L_NULL)
+    }
+    return null
+}
+
+_literal_string(p: *Parser) -> ptr {
+    s = _parse_string(p)
+    if p.failed == 1 {
+        _release_parser_error_string(s)
+        return null
+    }
+    l = model.new_literal(model.L_STRING)
+    (l as *Literal).sval = s
+    (l as *Literal).sval_owned = 1
+    return l
+}
+
+// JSON number grammar (RFC 9535 defers to RFC 8259 §6): an optional
+// '-', an int part with no leading zeros, an optional fraction, an
+// optional exponent. A fraction or exponent makes it a float.
+_parse_number(p: *Parser) -> ptr {
+    start = p.pos
+    is_float = 0
+
+    neg = _accept(p, 45) // '-'
+
+    // int part
+    if _accept(p, 48) == 1 { // '0'
+        // A leading '0' must not be followed by another digit.
+        if _is_digit(_peek(p)) == 1 {
+            p.pos = start
+            _fail(p, "Leading zero is not valid")
+            return null
+        }
+    } else {
+        if _is_digit(_peek(p)) == 0 {
+            p.pos = start
+            _fail(p, "Expected digit")
+            return null
+        }
+        while _at_end(p) == 0 {
+            if _is_digit(_peek(p)) == 0 { break }
+            p.pos = p.pos + 1
+        }
+    }
+
+    // fraction
+    if _peek(p) == 46 { // '.'
+        p.pos = p.pos + 1
+        if _is_digit(_peek(p)) == 0 {
+            p.pos = start
+            _fail(p, "Expected digit after decimal point")
+            return null
+        }
+        is_float = 1
+        while _at_end(p) == 0 {
+            if _is_digit(_peek(p)) == 0 { break }
+            p.pos = p.pos + 1
+        }
+    }
+
+    // exponent
+    c = _peek(p)
+    if c == 101 { is_float = 1 } // 'e'
+    if c == 69 { is_float = 1 } // 'E'
+    if is_float == 1 {
+        if c == 101 { p.pos = p.pos + 1 }
+        if c == 69 { p.pos = p.pos + 1 }
+        if c == 101 {
+            if _accept(p, 43) == 0 { _accept(p, 45) }
+            if _is_digit(_peek(p)) == 0 {
+                p.pos = start
+                _fail(p, "Expected digit in exponent")
+                return null
+            }
+            while _at_end(p) == 0 {
+                if _is_digit(_peek(p)) == 0 { break }
+                p.pos = p.pos + 1
+            }
+        }
+        if c == 69 {
+            if _accept(p, 43) == 0 { _accept(p, 45) }
+            if _is_digit(_peek(p)) == 0 {
+                p.pos = start
+                _fail(p, "Expected digit in exponent")
+                return null
+            }
+            while _at_end(p) == 0 {
+                if _is_digit(_peek(p)) == 0 { break }
+                p.pos = p.pos + 1
+            }
+        }
+    }
+
+    num_str = string.substring_n(p.input, p.len, start, p.pos)
+
+    if is_float == 1 {
+        l = model.new_literal(model.L_FLOAT)
+        (l as *Literal).fval = string.get_double(num_str)
+        return l
+    }
+
+    // Digit-count guard first — see _parse_slice_int for why the value
+    // check alone is not enough (string.get_long saturates).
+    int_digits = p.pos - start
+    if neg == 1 { int_digits = int_digits - 1 }
+    if int_digits > 16 {
+        _fail(p, "Integer exceeds safe range")
+        return null
+    }
+
+    v = string.get_long(num_str)
+    if model.is_valid_int(v) == 0 {
+        _fail(p, "Integer exceeds safe range")
+        return null
+    }
+    l = model.new_literal(model.L_INT)
+    (l as *Literal).ival = v
+    return l
+}
+
+// ---------------------------------------------------------------------------
+// Singular queries (RFC 9535 §2.3.5.1)
+//
+// Only name and index segments — no wildcards, slices, filters or
+// descendants — because a comparison operand must denote at most one
+// value.
+// ---------------------------------------------------------------------------
+
+_parse_singular_query(p: *Parser) -> ptr {
+    ch = _peek(p)
+    kind = model.SQ_CURRENT
+    if ch == 64 { kind = model.SQ_CURRENT } // '@'
+    else { if ch == 36 { kind = model.SQ_ROOT } // '$'
+        else {
+            _fail(p, "Expected '@' or '$'")
+            return null
+        } }
+    p.pos = p.pos + 1
+
+    sq = model.new_singular(kind)
+    sqp = sq as *SingularQuery
+
+    while 1 == 1 {
+        c = _peek(p)
+        if c == 91 { // '['
+            seg = _parse_bracketed_singular_seg(p)
+            if p.failed == 1 {
+                if seg != null { list.list_add_raw(sqp.segments, seg) }
+                return sq
+            }
+            list.list_add_raw(sqp.segments, seg)
+        } else {
+            if c == 46 { // '.'
+                p.pos = p.pos + 1
+                name = _parse_member_name(p)
+                if p.failed == 1 {
+                    _release_parser_error_string(name)
+                    return sq
+                }
+                seg = model.new_singular_seg()
+                sp = seg as *SingularSeg
+                sp.is_name = 1
+                sp.name = name
+                sp.name_owned = 1
+                list.list_add_raw(sqp.segments, seg)
+            } else {
+                break
+            }
+        }
+    }
+    return sq
+}
+
+_parse_bracketed_singular_seg(p: *Parser) -> ptr {
+    if _expect(p, 91, "Expected '['") == 0 { return null }
+    _skip_ws(p)
+
+    ch = _peek(p)
+    if ch == -1 {
+        _fail(p, "Expected name or index")
+        return null
+    }
+
+    if ch == 34 { return _singular_name_seg(p) } // '"'
+    if ch == 39 { return _singular_name_seg(p) } // '\''
+
+    if ch == 45 { return _singular_index_seg(p) } // '-'
+    if _is_digit(ch) == 1 { return _singular_index_seg(p) }
+
+    _fail(p, "Expected name or index in singular query segment")
+    return null
+}
+
+_singular_name_seg(p: *Parser) -> ptr {
+    name = _parse_string(p)
+    if p.failed == 1 {
+        _release_parser_error_string(name)
+        return null
+    }
+    _skip_ws(p)
+    if _expect(p, 93, "Expected ']'") == 0 {
+        _free_pstr(name)
+        return null
+    }
+    seg = model.new_singular_seg()
+    sp = seg as *SingularSeg
+    sp.is_name = 1
+    sp.name = name
+    sp.name_owned = 1
+    return seg
+}
+
+_singular_index_seg(p: *Parser) -> ptr {
+    v = _parse_slice_int(p)
+    if p.failed == 1 { return null }
+    _skip_ws(p)
+    if _expect(p, 93, "Expected ']'") == 0 { return null }
+    seg = model.new_singular_seg()
+    sp = seg as *SingularSeg
+    sp.is_name = 0
+    sp.index = v
+    return seg
+}
