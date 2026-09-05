@@ -47,6 +47,53 @@ version number before tagging the release.
   made #1855 expensive to track down, and it is reachable from a four-line
   program. It is now `error[E0200]` with a caret on the operator.
 
+## [0.641.0]
+
+### Added
+
+- **`std.jsonpath` — RFC 9535 JSONPath.** A parser with a reusable compiled
+  AST and `query` / `query_values` / `query_paths`, result accessors, and
+  ownership-safe teardown, over parsed `std.json` documents. 703/703 on the
+  JSONPath compliance test suite; parser and query suites and a reentrancy
+  test ship with the module.
+
+### Fixed
+
+- **A by-name module could not have submodules: its own imports resolved
+  against the consumer's directory, not its own.** The import search directory
+  was pinned once to the entry program's file and never updated when the
+  compiler descended into an imported module, so a module facade that imports
+  its own implementation files (e.g. `std.jsonpath`'s `module.ae` doing
+  `import parser`) failed with "unresolved import" for every external caller —
+  it only compiled when run from inside the module's own directory.
+  `orchestrate_module` now sets the source directory to each module's own
+  location while resolving that module's imports, and restores it afterwards.
+- **`std.jsonpath` freed plain string buffers through a `free(const char*)`
+  extern**, which warns under `-Wdiscarded-qualifiers` on Linux and is a hard
+  error under macOS clang `-Werror`. The frees are now bound as `free(ptr)` and
+  the owned buffers punned to a bare pointer at the call site.
+
+## [0.640.0]
+
+### Fixed
+
+- **`ae add <pkg>@<tag>` never pinned the tag, and left an unpinned clone
+  behind on failure.** The checkout ran through the argv-spawning `run_cmd`,
+  which uses no shell, so `cd "dir" && git checkout ... 2>/dev/null || ...` was
+  handed to a program literally named `cd` and failed every time — the version
+  pin has never worked. The clone (a lone `git clone`, no shell metacharacters)
+  succeeded, so `ae add @tag` exited 1 having left a clone of the *default
+  branch* in the package cache; a later `ae run` / `ae lib-path` then resolved
+  the dependency to that unpinned tree and went green against the wrong code —
+  the exact reproducibility hole the dependency-resolution work set out to
+  close. The checkout now uses `git -C` (no shell), both `@v1.2.3` and `@1.2.3`
+  resolve, a failed pin removes the partial clone so nothing half-installed is
+  resolvable, and the "Available versions:" list — empty before, since it ran in
+  the wrong place — now names the tags. `AE_RELEASE_BASE_URL` additionally
+  redirects the git origin, mirroring the release-artifact path, so the clone is
+  testable without the public internet. Reported from the datastar-aether line
+  while pinning selaenium 0.2.1.
+
 ## [0.639.0]
 
 ### Fixed

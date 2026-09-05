@@ -1,0 +1,1276 @@
+{
+  "tests": [
+    {
+      "name": "double quotes",
+      "selector": "$[\"a\"]",
+      "document": {
+        "a": "A",
+        "b": "B"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['a']"
+      ]
+    },
+    {
+      "name": "double quotes, absent data",
+      "selector": "$[\"c\"]",
+      "document": {
+        "a": "A",
+        "b": "B"
+      },
+      "result": [],
+      "result_paths": []
+    },
+    {
+      "name": "double quotes, array data",
+      "selector": "$[\"a\"]",
+      "document": [
+        "first",
+        "second"
+      ],
+      "result": [],
+      "result_paths": []
+    },
+    {
+      "name": "name, double quotes, contains single quote",
+      "selector": "$[\"a'\"]",
+      "document": {
+        "a'": "A",
+        "b": "B"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['a\\'']"
+      ]
+    },
+    {
+      "name": "name, double quotes, nested",
+      "selector": "$[\"a\"][\"b\"][\"c\"]",
+      "document": {
+        "a": {
+          "b": {
+            "c": "C"
+          }
+        }
+      },
+      "result": [
+        "C"
+      ],
+      "result_paths": [
+        "$['a']['b']['c']"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+0000",
+      "selector": "$[\"\u0000\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+0001",
+      "selector": "$[\"\u0001\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+0002",
+      "selector": "$[\"\u0002\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+0003",
+      "selector": "$[\"\u0003\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+0004",
+      "selector": "$[\"\u0004\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+0005",
+      "selector": "$[\"\u0005\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+0006",
+      "selector": "$[\"\u0006\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+0007",
+      "selector": "$[\"\u0007\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+0008",
+      "selector": "$[\"\b\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+0009",
+      "selector": "$[\"\t\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+000A",
+      "selector": "$[\"\n\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+000B",
+      "selector": "$[\"\u000b\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+000C",
+      "selector": "$[\"\f\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+000D",
+      "selector": "$[\"\r\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+000E",
+      "selector": "$[\"\u000e\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+000F",
+      "selector": "$[\"\u000f\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+0010",
+      "selector": "$[\"\u0010\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+0011",
+      "selector": "$[\"\u0011\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+0012",
+      "selector": "$[\"\u0012\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+0013",
+      "selector": "$[\"\u0013\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+0014",
+      "selector": "$[\"\u0014\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+0015",
+      "selector": "$[\"\u0015\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+0016",
+      "selector": "$[\"\u0016\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+0017",
+      "selector": "$[\"\u0017\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+0018",
+      "selector": "$[\"\u0018\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+0019",
+      "selector": "$[\"\u0019\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+001A",
+      "selector": "$[\"\u001a\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+001B",
+      "selector": "$[\"\u001b\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+001C",
+      "selector": "$[\"\u001c\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+001D",
+      "selector": "$[\"\u001d\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+001E",
+      "selector": "$[\"\u001e\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+001F",
+      "selector": "$[\"\u001f\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+0020",
+      "selector": "$[\" \"]",
+      "document": {
+        " ": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$[' ']"
+      ],
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, embedded U+007F",
+      "selector": "$[\"\"]",
+      "document": {
+        "": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['']"
+      ],
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, supplementary plane character",
+      "selector": "$[\"𝄞\"]",
+      "document": {
+        "𝄞": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['𝄞']"
+      ],
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, escaped double quote",
+      "selector": "$[\"\\\"\"]",
+      "document": {
+        "\"": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['\"']"
+      ]
+    },
+    {
+      "name": "double quotes, escaped reverse solidus",
+      "selector": "$[\"\\\\\"]",
+      "document": {
+        "\\": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['\\\\']"
+      ]
+    },
+    {
+      "name": "double quotes, escaped solidus",
+      "selector": "$[\"\\/\"]",
+      "document": {
+        "/": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['/']"
+      ]
+    },
+    {
+      "name": "double quotes, escaped backspace",
+      "selector": "$[\"\\b\"]",
+      "document": {
+        "\b": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['\\b']"
+      ]
+    },
+    {
+      "name": "double quotes, escaped form feed",
+      "selector": "$[\"\\f\"]",
+      "document": {
+        "\f": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['\\f']"
+      ]
+    },
+    {
+      "name": "double quotes, escaped line feed",
+      "selector": "$[\"\\n\"]",
+      "document": {
+        "\n": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['\\n']"
+      ]
+    },
+    {
+      "name": "double quotes, escaped carriage return",
+      "selector": "$[\"\\r\"]",
+      "document": {
+        "\r": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['\\r']"
+      ]
+    },
+    {
+      "name": "double quotes, escaped tab",
+      "selector": "$[\"\\t\"]",
+      "document": {
+        "\t": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['\\t']"
+      ]
+    },
+    {
+      "name": "double quotes, escaped ☺, upper case hex",
+      "selector": "$[\"\\u263A\"]",
+      "document": {
+        "☺": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['☺']"
+      ],
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, escaped ☺, lower case hex",
+      "selector": "$[\"\\u263a\"]",
+      "document": {
+        "☺": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['☺']"
+      ],
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, surrogate pair 𝄞",
+      "selector": "$[\"\\uD834\\uDD1E\"]",
+      "document": {
+        "𝄞": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['𝄞']"
+      ],
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, surrogate pair 😀",
+      "selector": "$[\"\\uD83D\\uDE00\"]",
+      "document": {
+        "😀": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['😀']"
+      ],
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, before high surrogates",
+      "selector": "$[\"\\uD7FF\\uD7FF\"]",
+      "document": {
+        "퟿퟿": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['퟿퟿']"
+      ],
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, after low surrogates",
+      "selector": "$[\"\\uE000\\uE000\"]",
+      "document": {
+        "": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['']"
+      ],
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, invalid escaped single quote",
+      "selector": "$[\"\\'\"]",
+      "invalid_selector": true
+    },
+    {
+      "name": "double quotes, embedded double quote",
+      "selector": "$[\"\"\"]",
+      "invalid_selector": true
+    },
+    {
+      "name": "double quotes, incomplete escape",
+      "selector": "$[\"\\\"]",
+      "invalid_selector": true
+    },
+    {
+      "name": "double quotes, escape at end of line",
+      "selector": "$[\"\\\n\"]",
+      "invalid_selector": true
+    },
+    {
+      "name": "double quotes, question mark escape",
+      "selector": "$[\"\\?\"]",
+      "invalid_selector": true
+    },
+    {
+      "name": "double quotes, bell escape",
+      "selector": "$[\"\\a\"]",
+      "invalid_selector": true
+    },
+    {
+      "name": "double quotes, vertical tab escape",
+      "selector": "$[\"\\v\"]",
+      "invalid_selector": true
+    },
+    {
+      "name": "double quotes, 0 escape",
+      "selector": "$[\"\\0\"]",
+      "invalid_selector": true
+    },
+    {
+      "name": "double quotes, x escape",
+      "selector": "$[\"\\x12\"]",
+      "invalid_selector": true
+    },
+    {
+      "name": "double quotes, n escape",
+      "selector": "$[\"\\N{LATIN CAPITAL LETTER A}\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, unicode escape no hex",
+      "selector": "$[\"\\u\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, unicode escape too few hex",
+      "selector": "$[\"\\u123\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, unicode escape upper u",
+      "selector": "$[\"\\U1234\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, unicode escape upper u long",
+      "selector": "$[\"\\U0010FFFF\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, unicode escape plus",
+      "selector": "$[\"\\u+1234\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, unicode escape brackets",
+      "selector": "$[\"\\u{1234}\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, unicode escape brackets long",
+      "selector": "$[\"\\u{10ffff}\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, single high surrogate",
+      "selector": "$[\"\\uD800\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, single low surrogate",
+      "selector": "$[\"\\uDC00\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, high high surrogate",
+      "selector": "$[\"\\uD800\\uD800\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, low low surrogate",
+      "selector": "$[\"\\uDC00\\uDC00\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, surrogate non-surrogate",
+      "selector": "$[\"\\uD800\\u1234\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, non-surrogate surrogate",
+      "selector": "$[\"\\u1234\\uDC00\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, surrogate supplementary",
+      "selector": "$[\"\\uD800𝄞\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, supplementary surrogate",
+      "selector": "$[\"𝄞\\uDC00\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "double quotes, surrogate incomplete low",
+      "selector": "$[\"\\uD800\\uDC0\"]",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes",
+      "selector": "$['a']",
+      "document": {
+        "a": "A",
+        "b": "B"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['a']"
+      ]
+    },
+    {
+      "name": "single quotes, absent data",
+      "selector": "$['c']",
+      "document": {
+        "a": "A",
+        "b": "B"
+      },
+      "result": [],
+      "result_paths": []
+    },
+    {
+      "name": "single quotes, array data",
+      "selector": "$['a']",
+      "document": [
+        "first",
+        "second"
+      ],
+      "result": [],
+      "result_paths": []
+    },
+    {
+      "name": "single quotes, embedded U+0000",
+      "selector": "$['\u0000']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+0001",
+      "selector": "$['\u0001']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+0002",
+      "selector": "$['\u0002']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+0003",
+      "selector": "$['\u0003']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+0004",
+      "selector": "$['\u0004']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+0005",
+      "selector": "$['\u0005']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+0006",
+      "selector": "$['\u0006']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+0007",
+      "selector": "$['\u0007']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+0008",
+      "selector": "$['\b']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+0009",
+      "selector": "$['\t']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+000A",
+      "selector": "$['\n']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+000B",
+      "selector": "$['\u000b']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+000C",
+      "selector": "$['\f']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+000D",
+      "selector": "$['\r']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+000E",
+      "selector": "$['\u000e']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+000F",
+      "selector": "$['\u000f']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+0010",
+      "selector": "$['\u0010']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+0011",
+      "selector": "$['\u0011']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+0012",
+      "selector": "$['\u0012']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+0013",
+      "selector": "$['\u0013']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+0014",
+      "selector": "$['\u0014']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+0015",
+      "selector": "$['\u0015']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+0016",
+      "selector": "$['\u0016']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+0017",
+      "selector": "$['\u0017']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+0018",
+      "selector": "$['\u0018']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+0019",
+      "selector": "$['\u0019']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+001A",
+      "selector": "$['\u001a']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+001B",
+      "selector": "$['\u001b']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+001C",
+      "selector": "$['\u001c']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+001D",
+      "selector": "$['\u001d']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+001E",
+      "selector": "$['\u001e']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+001F",
+      "selector": "$['\u001f']",
+      "invalid_selector": true,
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, embedded U+0020",
+      "selector": "$[' ']",
+      "document": {
+        " ": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$[' ']"
+      ],
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, escaped single quote",
+      "selector": "$['\\'']",
+      "document": {
+        "'": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['\\'']"
+      ]
+    },
+    {
+      "name": "single quotes, escaped reverse solidus",
+      "selector": "$['\\\\']",
+      "document": {
+        "\\": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['\\\\']"
+      ]
+    },
+    {
+      "name": "single quotes, escaped solidus",
+      "selector": "$['\\/']",
+      "document": {
+        "/": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['/']"
+      ],
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, escaped backspace",
+      "selector": "$['\\b']",
+      "document": {
+        "\b": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['\\b']"
+      ]
+    },
+    {
+      "name": "single quotes, escaped form feed",
+      "selector": "$['\\f']",
+      "document": {
+        "\f": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['\\f']"
+      ]
+    },
+    {
+      "name": "single quotes, escaped line feed",
+      "selector": "$['\\n']",
+      "document": {
+        "\n": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['\\n']"
+      ]
+    },
+    {
+      "name": "single quotes, escaped carriage return",
+      "selector": "$['\\r']",
+      "document": {
+        "\r": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['\\r']"
+      ]
+    },
+    {
+      "name": "single quotes, escaped tab",
+      "selector": "$['\\t']",
+      "document": {
+        "\t": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['\\t']"
+      ]
+    },
+    {
+      "name": "single quotes, escaped ☺, upper case hex",
+      "selector": "$['\\u263A']",
+      "document": {
+        "☺": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['☺']"
+      ],
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, escaped ☺, lower case hex",
+      "selector": "$['\\u263a']",
+      "document": {
+        "☺": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['☺']"
+      ],
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, surrogate pair 𝄞",
+      "selector": "$['\\uD834\\uDD1E']",
+      "document": {
+        "𝄞": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['𝄞']"
+      ],
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, surrogate pair 😀",
+      "selector": "$['\\uD83D\\uDE00']",
+      "document": {
+        "😀": "A"
+      },
+      "result": [
+        "A"
+      ],
+      "result_paths": [
+        "$['😀']"
+      ],
+      "tags": [
+        "unicode"
+      ]
+    },
+    {
+      "name": "single quotes, invalid escaped double quote",
+      "selector": "$['\\\"']",
+      "invalid_selector": true
+    },
+    {
+      "name": "single quotes, embedded single quote",
+      "selector": "$[''']",
+      "invalid_selector": true
+    },
+    {
+      "name": "single quotes, incomplete escape",
+      "selector": "$['\\']",
+      "invalid_selector": true
+    },
+    {
+      "name": "double quotes, empty",
+      "selector": "$[\"\"]",
+      "document": {
+        "a": "A",
+        "b": "B",
+        "": "C"
+      },
+      "result": [
+        "C"
+      ],
+      "result_paths": [
+        "$['']"
+      ]
+    },
+    {
+      "name": "single quotes, empty",
+      "selector": "$['']",
+      "document": {
+        "a": "A",
+        "b": "B",
+        "": "C"
+      },
+      "result": [
+        "C"
+      ],
+      "result_paths": [
+        "$['']"
+      ]
+    }
+  ]
+}

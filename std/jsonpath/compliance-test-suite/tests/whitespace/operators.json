@@ -1,0 +1,2112 @@
+{
+  "tests": [
+    {
+      "name": "space before ||",
+      "selector": "$[?@.a ||@.b]",
+      "document": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        },
+        {
+          "c": 3
+        }
+      ],
+      "result": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "newline before ||",
+      "selector": "$[?@.a\n||@.b]",
+      "document": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        },
+        {
+          "c": 3
+        }
+      ],
+      "result": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "tab before ||",
+      "selector": "$[?@.a\t||@.b]",
+      "document": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        },
+        {
+          "c": 3
+        }
+      ],
+      "result": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "return before ||",
+      "selector": "$[?@.a\r||@.b]",
+      "document": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        },
+        {
+          "c": 3
+        }
+      ],
+      "result": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "space after ||",
+      "selector": "$[?@.a|| @.b]",
+      "document": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        },
+        {
+          "c": 3
+        }
+      ],
+      "result": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "newline after ||",
+      "selector": "$[?@.a||\n@.b]",
+      "document": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        },
+        {
+          "c": 3
+        }
+      ],
+      "result": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "tab after ||",
+      "selector": "$[?@.a||\t@.b]",
+      "document": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        },
+        {
+          "c": 3
+        }
+      ],
+      "result": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "return after ||",
+      "selector": "$[?@.a||\r@.b]",
+      "document": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        },
+        {
+          "c": 3
+        }
+      ],
+      "result": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "space before &&",
+      "selector": "$[?@.a &&@.b]",
+      "document": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[2]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "newline before &&",
+      "selector": "$[?@.a\n&&@.b]",
+      "document": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[2]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "tab before &&",
+      "selector": "$[?@.a\t&&@.b]",
+      "document": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[2]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "return before &&",
+      "selector": "$[?@.a\r&&@.b]",
+      "document": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[2]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "space after &&",
+      "selector": "$[?@.a&& @.b]",
+      "document": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[2]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "newline after &&",
+      "selector": "$[?@.a&& @.b]",
+      "document": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[2]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "tab after &&",
+      "selector": "$[?@.a&& @.b]",
+      "document": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[2]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "return after &&",
+      "selector": "$[?@.a&& @.b]",
+      "document": [
+        {
+          "a": 1
+        },
+        {
+          "b": 2
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[2]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "space before ==",
+      "selector": "$[?@.a ==@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 1
+        }
+      ],
+      "result_paths": [
+        "$[0]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "newline before ==",
+      "selector": "$[?@.a\n==@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 1
+        }
+      ],
+      "result_paths": [
+        "$[0]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "tab before ==",
+      "selector": "$[?@.a\t==@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 1
+        }
+      ],
+      "result_paths": [
+        "$[0]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "return before ==",
+      "selector": "$[?@.a\r==@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 1
+        }
+      ],
+      "result_paths": [
+        "$[0]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "space after ==",
+      "selector": "$[?@.a== @.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 1
+        }
+      ],
+      "result_paths": [
+        "$[0]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "newline after ==",
+      "selector": "$[?@.a==\n@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 1
+        }
+      ],
+      "result_paths": [
+        "$[0]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "tab after ==",
+      "selector": "$[?@.a==\t@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 1
+        }
+      ],
+      "result_paths": [
+        "$[0]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "return after ==",
+      "selector": "$[?@.a==\r@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 1
+        }
+      ],
+      "result_paths": [
+        "$[0]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "space before !=",
+      "selector": "$[?@.a !=@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "newline before !=",
+      "selector": "$[?@.a\n!=@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "tab before !=",
+      "selector": "$[?@.a\t!=@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "return before !=",
+      "selector": "$[?@.a\r!=@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "space after !=",
+      "selector": "$[?@.a!= @.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "newline after !=",
+      "selector": "$[?@.a!=\n@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "tab after !=",
+      "selector": "$[?@.a!=\t@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "return after !=",
+      "selector": "$[?@.a!=\r@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "space before <",
+      "selector": "$[?@.a <@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "newline before <",
+      "selector": "$[?@.a\n<@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "tab before <",
+      "selector": "$[?@.a\t<@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "return before <",
+      "selector": "$[?@.a\r<@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "space after <",
+      "selector": "$[?@.a< @.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "newline after <",
+      "selector": "$[?@.a<\n@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "tab after <",
+      "selector": "$[?@.a<\t@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "return after <",
+      "selector": "$[?@.a<\r@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "space before >",
+      "selector": "$[?@.b >@.a]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "newline before >",
+      "selector": "$[?@.b\n>@.a]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "tab before >",
+      "selector": "$[?@.b\t>@.a]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "return before >",
+      "selector": "$[?@.b\r>@.a]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "space after >",
+      "selector": "$[?@.b> @.a]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "newline after >",
+      "selector": "$[?@.b>\n@.a]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "tab after >",
+      "selector": "$[?@.b>\t@.a]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "return after >",
+      "selector": "$[?@.b>\r@.a]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "space before <=",
+      "selector": "$[?@.a <=@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        },
+        {
+          "a": 2,
+          "b": 1
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "newline before <=",
+      "selector": "$[?@.a\n<=@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        },
+        {
+          "a": 2,
+          "b": 1
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "tab before <=",
+      "selector": "$[?@.a\t<=@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        },
+        {
+          "a": 2,
+          "b": 1
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "return before <=",
+      "selector": "$[?@.a\r<=@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        },
+        {
+          "a": 2,
+          "b": 1
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "space after <=",
+      "selector": "$[?@.a<= @.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        },
+        {
+          "a": 2,
+          "b": 1
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "newline after <=",
+      "selector": "$[?@.a<=\n@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        },
+        {
+          "a": 2,
+          "b": 1
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "tab after <=",
+      "selector": "$[?@.a<=\t@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        },
+        {
+          "a": 2,
+          "b": 1
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "return after <=",
+      "selector": "$[?@.a<=\r@.b]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        },
+        {
+          "a": 2,
+          "b": 1
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "space before >=",
+      "selector": "$[?@.b >=@.a]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        },
+        {
+          "a": 2,
+          "b": 1
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "newline before >=",
+      "selector": "$[?@.b\n>=@.a]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        },
+        {
+          "a": 2,
+          "b": 1
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "tab before >=",
+      "selector": "$[?@.b\t>=@.a]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        },
+        {
+          "a": 2,
+          "b": 1
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "return before >=",
+      "selector": "$[?@.b\r>=@.a]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        },
+        {
+          "a": 2,
+          "b": 1
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "space after >=",
+      "selector": "$[?@.b>= @.a]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        },
+        {
+          "a": 2,
+          "b": 1
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "newline after >=",
+      "selector": "$[?@.b>=\n@.a]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        },
+        {
+          "a": 2,
+          "b": 1
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "tab after >=",
+      "selector": "$[?@.b>=\t@.a]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        },
+        {
+          "a": 2,
+          "b": 1
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "return after >=",
+      "selector": "$[?@.b>=\r@.a]",
+      "document": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        },
+        {
+          "a": 2,
+          "b": 1
+        }
+      ],
+      "result": [
+        {
+          "a": 1,
+          "b": 1
+        },
+        {
+          "a": 1,
+          "b": 2
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "space between logical not and test expression",
+      "selector": "$[?! @.a]",
+      "document": [
+        {
+          "a": "a",
+          "d": "e"
+        },
+        {
+          "d": "f"
+        },
+        {
+          "a": "d",
+          "d": "f"
+        }
+      ],
+      "result": [
+        {
+          "d": "f"
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "newline between logical not and test expression",
+      "selector": "$[?!\n@.a]",
+      "document": [
+        {
+          "a": "a",
+          "d": "e"
+        },
+        {
+          "d": "f"
+        },
+        {
+          "a": "d",
+          "d": "f"
+        }
+      ],
+      "result": [
+        {
+          "d": "f"
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "tab between logical not and test expression",
+      "selector": "$[?!\t@.a]",
+      "document": [
+        {
+          "a": "a",
+          "d": "e"
+        },
+        {
+          "d": "f"
+        },
+        {
+          "a": "d",
+          "d": "f"
+        }
+      ],
+      "result": [
+        {
+          "d": "f"
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "return between logical not and test expression",
+      "selector": "$[?!\r@.a]",
+      "document": [
+        {
+          "a": "a",
+          "d": "e"
+        },
+        {
+          "d": "f"
+        },
+        {
+          "a": "d",
+          "d": "f"
+        }
+      ],
+      "result": [
+        {
+          "d": "f"
+        }
+      ],
+      "result_paths": [
+        "$[1]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "space between logical not and parenthesized expression",
+      "selector": "$[?! (@.a=='b')]",
+      "document": [
+        {
+          "a": "a",
+          "d": "e"
+        },
+        {
+          "a": "b",
+          "d": "f"
+        },
+        {
+          "a": "d",
+          "d": "f"
+        }
+      ],
+      "result": [
+        {
+          "a": "a",
+          "d": "e"
+        },
+        {
+          "a": "d",
+          "d": "f"
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[2]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "newline between logical not and parenthesized expression",
+      "selector": "$[?!\n(@.a=='b')]",
+      "document": [
+        {
+          "a": "a",
+          "d": "e"
+        },
+        {
+          "a": "b",
+          "d": "f"
+        },
+        {
+          "a": "d",
+          "d": "f"
+        }
+      ],
+      "result": [
+        {
+          "a": "a",
+          "d": "e"
+        },
+        {
+          "a": "d",
+          "d": "f"
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[2]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "tab between logical not and parenthesized expression",
+      "selector": "$[?!\t(@.a=='b')]",
+      "document": [
+        {
+          "a": "a",
+          "d": "e"
+        },
+        {
+          "a": "b",
+          "d": "f"
+        },
+        {
+          "a": "d",
+          "d": "f"
+        }
+      ],
+      "result": [
+        {
+          "a": "a",
+          "d": "e"
+        },
+        {
+          "a": "d",
+          "d": "f"
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[2]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    },
+    {
+      "name": "return between logical not and parenthesized expression",
+      "selector": "$[?!\r(@.a=='b')]",
+      "document": [
+        {
+          "a": "a",
+          "d": "e"
+        },
+        {
+          "a": "b",
+          "d": "f"
+        },
+        {
+          "a": "d",
+          "d": "f"
+        }
+      ],
+      "result": [
+        {
+          "a": "a",
+          "d": "e"
+        },
+        {
+          "a": "d",
+          "d": "f"
+        }
+      ],
+      "result_paths": [
+        "$[0]",
+        "$[2]"
+      ],
+      "tags": [
+        "whitespace"
+      ]
+    }
+  ]
+}
