@@ -120,14 +120,14 @@ main() {
 
 #### `longdouble` C `long double`
 
-The `longdouble` type maps to C `long double`, the widest floating type, for exact-decimal numeric paths a C interop layer expects it (libc `strtold`, `INCRBYFLOAT`-style score conversion). It supports arithmetic (`+ - * /`), comparison, and conversion to/from `int` and `float`; as the widest numeric it wins promotion (`longdouble op int` / `longdouble op float` → `longdouble`). It's usable in locals, function params/returns, struct fields, and `extern` signatures. There is no `longdouble` literal, values arrive from an extern (`extern strtold(s: cstring_const, end: ptr) -> longdouble`) or by widening an `int`/`float`. Interpolation and `print` format it with `%Lg`/`%Lf`.
+The `longdouble` type maps to C `long double`, the widest floating type, for exact-decimal numeric paths a C interop layer expects it (libc `strtold`, `INCRBYFLOAT`-style score conversion). It supports arithmetic (`+ - * /`), comparison, and conversion to/from `int` and `float`; as the widest numeric it wins promotion (`longdouble op int` / `longdouble op float` → `longdouble`). It's usable in locals, function params/returns, struct fields, and `extern` signatures. There is no `longdouble` literal, values arrive from an extern (`extern powl(x: longdouble, y: longdouble) -> longdouble`) or by widening an `int`/`float`. Declare a libc function with the signature libc actually has: `strtold`'s second parameter is `char **restrict`, which `ptr` lowers to `void*`, and the C compiler rejects the redeclaration. Interpolation and `print` format it with `%Lg`/`%Lf`.
 
 ```aether
-extern strtold(s: cstring_const, end: ptr) -> longdouble
+extern powl(x: longdouble, y: longdouble) -> longdouble
 incr(cur: longdouble, by: longdouble) -> longdouble { return cur + by }
 
 main() {
-    base = strtold("3.14159265358979323846", null)
+    base = powl(2, 64)             // libc, exactly as C declares it
     next = incr(base, base)        // long double arithmetic, full precision
     println("v=${next}")           // %Lg
 }

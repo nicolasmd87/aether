@@ -496,7 +496,7 @@ blocker). This is the A0 baseline the tiers build on. Build:
 Note it uses the *pre-A3* bare-string protocol (`"mount"`, and JSON that
 `string_contains` sniffs) — A3 replaces that with the wire envelope above.
 
-```aether
+```aether,nolink
 import contrib.tinyweb
 import std.tcp
 import std.list

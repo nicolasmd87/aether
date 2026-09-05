@@ -79,7 +79,7 @@ void my_greet(const char* name) {
 ```
 
 **main.ae:**
-```aether
+```aether,nolink
 // Declare our C functions
 extern my_add(a: int, b: int) -> int
 extern my_power(base: float, exp: float) -> float
@@ -121,7 +121,7 @@ gcc main.c my_math.o $(ae cflags) -o myapp
 
 C functions that return more than one logical value typically pack the results into a struct returned by value. Aether mirrors this on the FFI side: declare the extern with a parenthesised tuple return type, and the codegen synthesises the matching C struct typedef so the call site can destructure the result like any Aether-side tuple-returning function:
 
-```aether
+```aether,nolink
 extern parse_int_safe(s: string) -> (int, string)
 
 main() {
@@ -189,7 +189,7 @@ struct whose layout matches the synthesized typedef, not just for
 "multiple logical values". raylib's `Image LoadImage(const char*)`
 layout `{void*, int, int, int, int}`, binds with zero glue:
 
-```aether
+```aether,nolink
 @extern("LoadImage") load_image(path: string) -> (ptr, int, int, int, int)
 
 main() {
@@ -448,7 +448,7 @@ link_flags = ["-lsqlite3", "-lcurl", "-lm"]
 ### Example: Using SQLite
 
 **database.ae:**
-```aether
+```aether,nolink
 // SQLite C API
 extern sqlite3_open(path: string, db: ptr) -> int
 extern sqlite3_close(db: ptr) -> int
@@ -517,7 +517,7 @@ When you write a C shim or third-party binding, you can follow the same conventi
 
 The `ptr` type maps to `void*` in C, useful for opaque handles and callbacks:
 
-```aether
+```aether,nolink
 extern create_handle() -> ptr
 extern use_handle(h: ptr) -> int
 extern destroy_handle(h: ptr)
@@ -596,7 +596,7 @@ Both helpers accept either an `AetherString*` (the common case) or a raw `char*`
 
 The symmetric direction, Aether code passing a `string` value to a C extern declared `const char*` is handled by the codegen automatically. When the call site has the form:
 
-```aether
+```aether,nolink
 import std.encoding
 import std.string
 
@@ -1059,7 +1059,7 @@ When an Aether function takes the result of a C extern `-> string` call and assi
 - **A user-defined Aether `-> string` function** is heap-returning iff the codegen's recursive structural-escape-analysis pass can prove every return statement yields a heap-string-expression (chain into another heap-returning function counts).
 - **A C extern `-> string`** is NOT analysed structurally, the codegen has no body to walk. It's treated as **non-heap** by default (literal-shape contract). If your C extern returns malloc'd memory that the caller is expected to free, capture its result via `ptr` and free it explicitly:
 
-```aether
+```aether,nolink
 // Heap-returning C extern, declare result as ptr, free explicitly.
 extern my_strdup_raw(s: string) -> ptr
 

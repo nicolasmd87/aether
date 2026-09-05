@@ -79,22 +79,28 @@ in a child scope, not a re-exposure of the parent's hidden binding.
 
 ### Does NOT reach through call boundaries
 
-A visible function defined in an outer scope can still use the hidden
-name via its own lexical chain:
+`hide` removes a name from THIS scope's resolution. A function you call
+has a scope of its own and never resolved that name to begin with, so
+hiding changes nothing about what it can do:
 
 ```aether
-log_secret() { println(secret_token) }   // sees secret_token
+log_secret(token: string) { println(token) }
 
 main() {
     secret_token = "abc"
+    log_secret(secret_token)              // fine: read before the hide
     {
         hide secret_token
-        log_secret()                      // OK, log_secret is visible,
-                                          //      and reads secret_token
-                                          //      via its OWN lexical scope
+        // log_secret(secret_token) here is an error: the NAME is hidden
+        log_secret("something else")      // the callee is unaffected
     }
 }
 ```
+
+An earlier version of this page claimed a function could read
+`secret_token` through its own lexical chain, without the value being
+passed. It cannot: a function body does not see a caller's locals, and
+that example never compiled. Only the `main` above is a real program.
 
 This is deliberate. `hide` is about *your scope's name resolution*, not
 about *information flow* through your callees. If you wanted to deny

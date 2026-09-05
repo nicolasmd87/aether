@@ -17,8 +17,20 @@ The convention is the fence's info string:
                           Use for anything whose value is what it prints.
     ```aether,fragment    an excerpt: no main, or it references names the page
                           established earlier, or it contains a literal `...`.
+                          An exercise stub whose body is `// Your code here`
+                          is one of these: it is a program the READER
+                          completes, so it does not compile as written.
     ```aether,fails       a deliberate counter-example. Must NOT compile, and
                           this fails if it starts compiling.
+    ```aether,nolink      a complete unit that cannot link BY ITSELF: it calls
+                          C the reader supplies, or it is a library whose
+                          `main` lives in the host app. Built like any other
+                          block; the ONLY failure allowed is unresolved symbols
+                          at the link, since that is precisely what lives
+                          outside the block. Prefer this to `fragment` for
+                          anything that really does compile: a fragment is
+                          skipped, this is checked through codegen and the C
+                          compiler.
 
 A `run` block is followed by its expected output:
 
@@ -47,7 +59,7 @@ import sys
 import tempfile
 
 FENCE = re.compile(r"^```(aether[^\n]*)\n(.*?)^```", re.S | re.M)
-KNOWN = {"", "run", "fragment", "fails"}
+KNOWN = {"", "run", "fragment", "fails", "nolink"}
 OUTPUT_FENCE = re.compile(r"\A\s*```output\n(.*?)^```", re.S | re.M)
 
 
@@ -98,17 +110,61 @@ def blocks_in(path):
         yield line, label, m.group(2), expected
 
 
-def compiles(ae, code, workdir):
+LINK_ONLY_MARKERS = (
+    "Undefined symbols",           # Apple ld
+    "undefined reference to",      # GNU ld / lld
+    "unresolved external symbol",  # MSVC link
+)
+
+
+def link_only_failure(out):
+    """True when a build got all the way to the link and only symbols were missing.
+
+    That is the whole of what a `nolink` block is allowed to fail on: the
+    reader supplies the C definitions, so codegen ran, clang compiled the
+    generated C, and only the linker had nothing to resolve against. Any
+    Aether diagnostic, or any error reported against a .c file, means it fell
+    over EARLIER than the link, which is exactly what this gate exists to
+    catch.
+    """
+    if not any(m in out for m in LINK_ONLY_MARKERS):
+        return False
+    if "error[E" in out:
+        return False
+    for line in out.split("\n"):
+        if ".c:" in line and ": error:" in line:
+            return False
+    return True
+
+
+def compiles(ae, code, workdir, allow_unresolved=False):
+    """Build `code`, all the way to an executable.
+
+    This used to run `ae check`, which is the FRONT END ONLY, while the
+    convention above promised the block compiles. Anything that type-checked
+    but could not be code-generated therefore passed the gate: 14 of the 187
+    blocks it called compiled did not build (#1878), including one that had
+    been mistaken for a regression because the gate could not see it.
+
+    `allow_unresolved` accepts a failure that is provably nothing but missing
+    symbols at the link, for a block calling C the reader supplies.
+    """
     path = os.path.join(workdir, "block.ae")
     with open(path, "w", encoding="utf-8") as f:
         f.write(code)
+    out_bin = os.path.join(workdir, "block_out")
     try:
-        r = subprocess.run([ae, "check", path], capture_output=True, timeout=120)
+        r = subprocess.run([ae, "build", path, "-o", out_bin],
+                           capture_output=True, timeout=180)
     except subprocess.TimeoutExpired:
         return False, "timed out"
+    if r.returncode == 0:
+        return True, ""
     out = (r.stdout + r.stderr).decode("utf-8", "replace")
+    if allow_unresolved and link_only_failure(out):
+        return True, ""
     first = next((l for l in out.split("\n") if "error" in l), "")
-    return r.returncode == 0, first
+    return False, first or "does not build"
 
 
 def runs(ae, code, expected, workdir):
@@ -180,7 +236,8 @@ def main():
                     if not ok:
                         failures.append((rel, line, err))
                     continue
-                ok, err = compiles(ae, code, workdir)
+                ok, err = compiles(ae, code, workdir,
+                                   allow_unresolved=(label == "nolink"))
                 if label == "fails":
                     counter += 1
                     if ok:
@@ -195,7 +252,7 @@ def main():
 
     for rel, line, label in unknown:
         print(f"  {rel}:{line}: unknown block label `{label}` "
-              f"(use nothing, `fragment`, or `fails`)")
+              f"(use nothing, `run`, `nolink`, `fragment`, or `fails`)")
 
     for rel, line, msg in failures:
         print(f"  {rel}:{line}: {msg}")

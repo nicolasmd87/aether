@@ -14,6 +14,8 @@ compile-time discipline only: it lowers to the wrapped type's C type with no
 runtime structure and no overhead.
 
 ```aether
+struct Payload { n: int, tag: string }
+
 process(iso: Isolated[Payload]) -> int {
     let p = consume(iso)     // unwrap once
     return p.n

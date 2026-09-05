@@ -33,7 +33,7 @@ UIKit backend for aether-ui, which does not exist yet.
 Everything you `export` becomes a C entry point. Keep the surface small and
 scalar where you can; it is the seam you have to marshal across.
 
-```aether
+```aether,nolink
 // fibcore.ae — the whole computation lives here.
 export fib(n: int) -> long {
     if n < 2 {

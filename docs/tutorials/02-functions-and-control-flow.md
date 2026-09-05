@@ -452,7 +452,7 @@ main() {
 
 Write a function that returns the absolute value of a number:
 
-```aether
+```aether,fragment
 abs(n) {
     // Your code here
 }
@@ -482,7 +482,7 @@ abs(n) {
 
 Implement x^n (x to the power of n):
 
-```aether
+```aether,fragment
 power(x, n) {
     // Your code here
 }
