@@ -25,6 +25,21 @@ version number before tagging the release.
   `malloc(sizeof(T))`, which is layout-exact and immune. `@c_struct` overlays
   (C-defined size) and raw uncast buffers are not flagged.
 
+- **Wycheproof wave 6: ECDSA secp256k1, Ed448, and AES-CMAC.** More adversarial
+  vector coverage over implemented primitives that had none:
+  - **ECDSA secp256k1** (the Bitcoin/Ethereum curve), DER (via the real
+    `tls13_cert.split_ecdsa_sig` parser) and P1363 raw-r||s forms.
+  - **Ed448** signature verify — the decode/verify surface (non-canonical point
+    encodings, small-order points, s-range, wrong lengths) that the ed25519
+    driver's tc151 forgery lived in, now covered for the larger curve.
+  - **AES-CMAC** (RFC 4493) tag verification, including forged/truncated tags
+    and illegal key lengths.
+
+  All pass with no accepted forgeries. AES-CMAC sweeps all 311 cases by default
+  (symmetric-fast); the ECDSA/Ed448 drivers stride-sample under the 180s harness
+  budget with `WYCHEPROOF_FULL=1` sweeping everything. Vectors vendored from
+  C2SP/wycheproof.
+
 ### Changed
 
 - **`std` now allocates its context structs with `malloc(sizeof(T))`.** Swept 65
