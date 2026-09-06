@@ -158,7 +158,7 @@ new(algo: string, entropy: ptr, entropy_len: int, nonce: ptr, nonce_len: int, pe
     if ms == 0 {
         return null, "unknown algorithm"
     }
-    ctx = malloc(48) as *DrbgCtx
+    ctx = malloc(sizeof(DrbgCtx)) as *DrbgCtx
     if ctx == null {
         return null, "allocation failed"
     }

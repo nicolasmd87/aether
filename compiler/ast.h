@@ -496,6 +496,12 @@ typedef struct ASTNode {
      * merely forces the next add_child to regrow. The invariant that
      * matters is capacity <= slots actually allocated. */
     int child_capacity;
+
+    /* Set once a per-node analysis warning has been emitted for this node, so
+     * a lint living in `infer_type` (which runs whenever a node's type is
+     * queried, i.e. more than once) reports at most once. Zero-initialized by
+     * create_ast_node. */
+    int warned;
 } ASTNode;
 
 // Type functions

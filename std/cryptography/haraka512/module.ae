@@ -281,7 +281,7 @@ reset_ctx(c: *Haraka512Ctx) {
 }
 
 new() -> {
-    c = malloc(96) as *Haraka512Ctx
+    c = malloc(sizeof(Haraka512Ctx)) as *Haraka512Ctx
     if c == null {
         return null, "allocation failed"
     }

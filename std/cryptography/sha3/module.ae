@@ -251,7 +251,7 @@ config_variant(c: *Sha3Ctx, variant: string) -> int {
 }
 
 new(variant: string) -> {
-    ctx = malloc(96) as *Sha3Ctx
+    ctx = malloc(sizeof(Sha3Ctx)) as *Sha3Ctx
     if ctx == null {
         return null, "allocation failed"
     }

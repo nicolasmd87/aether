@@ -191,7 +191,7 @@ process_block(c: *Sm3Ctx) {
 }
 
 new() -> {
-    ctx = malloc(128) as *Sm3Ctx
+    ctx = malloc(sizeof(Sm3Ctx)) as *Sm3Ctx
     if ctx == null {
         return null, "allocation failed"
     }

@@ -155,7 +155,7 @@ new_ctx(key: ptr, keylen: int, encrypt: int) -> ptr {
     }
     intarr_free(enc_rk)
 
-    c = malloc(16) as *Sm4Ctx
+    c = malloc(sizeof(Sm4Ctx)) as *Sm4Ctx
     c.rk = rk
     c.encrypt = encrypt
     return c

@@ -698,7 +698,7 @@ reset_ctx(c: *GostCtx) {
 }
 
 new(variant: string) -> {
-    c = malloc(96) as *GostCtx
+    c = malloc(sizeof(GostCtx)) as *GostCtx
     if c == null {
         return null, "allocation failed"
     }

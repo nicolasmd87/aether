@@ -135,7 +135,7 @@ extern malloc(size: int) -> ptr
 @extern("free") libc_free(p: ptr)
 
 pt_new(x: ptr, y: ptr, z: ptr, t: ptr) -> *EdPt {
-    q = malloc(32) as *EdPt
+    q = malloc(sizeof(EdPt)) as *EdPt
     q.x = x; q.y = y; q.z = z; q.t = t
     return q
 }

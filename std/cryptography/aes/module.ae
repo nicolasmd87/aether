@@ -80,14 +80,14 @@ struct AesCtx {
 // tests/regression/test_aes.ae.
 
 new_encryptor(key: ptr, keylen: int) -> ptr {
-    c = malloc(16) as *AesCtx
+    c = malloc(sizeof(AesCtx)) as *AesCtx
     c.native = aether_aes_new(bytes.data(key), keylen, 1)
     c.encrypt = 1
     return c
 }
 
 new_decryptor(key: ptr, keylen: int) -> ptr {
-    c = malloc(16) as *AesCtx
+    c = malloc(sizeof(AesCtx)) as *AesCtx
     c.native = aether_aes_new(bytes.data(key), keylen, 0)
     c.encrypt = 0
     return c

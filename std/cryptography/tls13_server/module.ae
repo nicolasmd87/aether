@@ -66,7 +66,7 @@ struct RecordIO {
 }
 
 fn recio_new(sock: ptr) -> *RecordIO {
-    r = malloc(32) as *RecordIO
+    r = malloc(sizeof(RecordIO)) as *RecordIO
     r.sock = sock
     r.buf = bytes.new(4096)
     bytes.set(r.buf, 0, 0)
@@ -229,7 +229,7 @@ fn derive_handshake_keys_algo(ecdhe: ptr, ec_len: int, th: ptr, th_len: int, key
     sk = tls13_ks.write_key(hash_algo, s_hs, key_len)
     siv = tls13_ks.write_iv(hash_algo, s_hs)
 
-    k = malloc(56) as *HsKeys
+    k = malloc(sizeof(HsKeys)) as *HsKeys
     k.client_hs_secret = c_hs
     k.server_hs_secret = s_hs
     k.client_key = ck
@@ -429,7 +429,7 @@ accept(sock: ptr, cert_chain: ptr, cert_lens: ptr, priv_key: ptr, x25519_priv: p
     tls13_record.free_ctx(srv_hs_ctx); tls13_record.free_ctx(cli_hs_ctx)
     tls13_client.free_hs_keys(keys); bytes.free(th_chsh)
 
-    conn = malloc(32) as *ServerConn
+    conn = malloc(sizeof(ServerConn)) as *ServerConn
     conn.sock = sock
     conn.rio = rio as ptr
     conn.app_send = app_send as ptr

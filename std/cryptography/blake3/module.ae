@@ -106,7 +106,7 @@ ptr_add(p: ptr, off: int) -> ptr {
 
 new() -> *Blake3Ctx {
     // Allocate 256 bytes to prevent any struct size / alignment overflow
-    ctx = malloc(256) as *Blake3Ctx
+    ctx = malloc(sizeof(Blake3Ctx)) as *Blake3Ctx
     if ctx == null {
         return null
     }
@@ -727,7 +727,7 @@ copy(ctx: ptr) -> *Blake3Ctx {
         return null
     }
     src = ctx as *Blake3Ctx
-    dst = malloc(256) as *Blake3Ctx
+    dst = malloc(sizeof(Blake3Ctx)) as *Blake3Ctx
 
     dst.digest_len = src.digest_len
     dst.theBuffer = malloc(BLOCKLEN)

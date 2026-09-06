@@ -418,6 +418,7 @@ ASTNode* create_ast_node(ASTNodeType type, const char* value, int line, int colu
     node->bit_hi = 0;
     node->source_file = NULL;
     node->type_inferred = 0;
+    node->warned = 0;
     return node;
 }
 

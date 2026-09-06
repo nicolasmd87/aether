@@ -262,7 +262,7 @@ process_block(ctx: *Rmd128Ctx) {
 }
 
 new() -> {
-    ctx = malloc(80) as *Rmd128Ctx
+    ctx = malloc(sizeof(Rmd128Ctx)) as *Rmd128Ctx
     if ctx == null {
         return null, "allocation failed"
     }

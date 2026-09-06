@@ -460,7 +460,7 @@ process_block(c: *DstuCtx, input: ptr, inOff: int) {
 }
 
 new(algo: string) -> {
-    ctx = malloc(96) as *DstuCtx
+    ctx = malloc(sizeof(DstuCtx)) as *DstuCtx
     if ctx == null {
         return null, "allocation failed"
     }

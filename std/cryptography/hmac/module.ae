@@ -115,7 +115,7 @@ new(algo: string, key: ptr, key_len: int) -> {
     if bs == 0 {
         return null, "unknown algorithm"
     }
-    ctx = malloc(48) as *HmacCtx
+    ctx = malloc(sizeof(HmacCtx)) as *HmacCtx
     if ctx == null {
         return null, "allocation failed"
     }

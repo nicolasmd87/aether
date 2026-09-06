@@ -89,7 +89,7 @@ new(key: ptr, key_len: int, iv12: ptr) -> ptr {
 // ctx owns its copies). For AES-128-GCM the key_len is 16 and an AES encryptor
 // is built once here (GCM only runs the cipher forward, for seal AND open).
 new_aead(aead_id: int, key: ptr, key_len: int, iv12: ptr) -> ptr {
-    ctx = malloc(48) as *RecordCtx
+    ctx = malloc(sizeof(RecordCtx)) as *RecordCtx
     k = bytes.new(key_len)
     if key_len > 0 { bytes.set(k, key_len - 1, 0) }
     bytes.copy_from_bytes(k, 0, key, 0, key_len)

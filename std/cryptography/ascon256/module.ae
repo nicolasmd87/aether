@@ -61,7 +61,7 @@ p12(c: *Ascon256Ctx) {
 
 // Create a streaming Ascon-Hash256 context.
 new() -> {
-    ctx = malloc(128) as *Ascon256Ctx
+    ctx = malloc(sizeof(Ascon256Ctx)) as *Ascon256Ctx
     if ctx == null {
         return null, "allocation failed"
     }

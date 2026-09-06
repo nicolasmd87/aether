@@ -105,7 +105,7 @@ struct Params {
 
 // Allocate + populate a Params on the heap. Caller frees with free_params.
 mk_params(k: int) -> *Params {
-    p = malloc(96) as *Params
+    p = malloc(sizeof(Params)) as *Params
     p.k = k
     if k == 2 {
         p.eta1 = 3

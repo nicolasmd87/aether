@@ -1,0 +1,12 @@
+// Should be SILENT: a literal malloc with NO struct-pointer cast is a raw
+// byte buffer, not a struct allocation — the layout footgun does not apply.
+import std.io
+
+extern malloc(n: int) -> ptr
+extern free(p: ptr)
+
+main() {
+    buf = malloc(64)
+    free(buf)
+    println("built")
+}

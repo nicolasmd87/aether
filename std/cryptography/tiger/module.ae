@@ -451,7 +451,7 @@ feed_byte(t: *TigerCtx, b: int) {
 }
 
 new() -> {
-    ctx = malloc(96) as *TigerCtx
+    ctx = malloc(sizeof(TigerCtx)) as *TigerCtx
     if ctx == null {
         return null, "allocation failed"
     }

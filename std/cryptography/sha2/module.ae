@@ -307,7 +307,7 @@ process_block(ctx: *Sha2Ctx) {
 // Returns (ctx, "") on success, (null, error) for an unknown algorithm
 // or allocation failure. Thread the handle through update / final_*.
 new(algo: string) -> {
-    ctx = malloc(160) as *Sha2Ctx
+    ctx = malloc(sizeof(Sha2Ctx)) as *Sha2Ctx
     if ctx == null {
         return null, "allocation failed"
     }

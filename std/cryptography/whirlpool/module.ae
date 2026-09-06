@@ -255,7 +255,7 @@ push_byte(c: *WpCtx, b: int) {
 }
 
 new() -> {
-    ctx = malloc(96) as *WpCtx
+    ctx = malloc(sizeof(WpCtx)) as *WpCtx
     if ctx == null {
         return null, "allocation failed"
     }
