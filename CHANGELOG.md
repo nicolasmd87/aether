@@ -11,6 +11,8 @@ version number before tagging the release.
 
 ## [current]
 
+## [0.644.0]
+
 ### Added
 
 - **Wycheproof wave 5: ECDSA P-384/P-521 and ML-KEM decapsulation.** New
