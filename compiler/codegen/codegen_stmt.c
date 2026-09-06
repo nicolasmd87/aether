@@ -1491,6 +1491,9 @@ static int is_ptr_struct_param(CodeGenerator* gen, const char* name) {
  * is safe regardless and is what stops the leak; a repeated assignment
  * through a nested path can still drop the earlier value, which is strictly
  * better than a segfault and matches what a pointer parameter already does. */
+static int emit_field_tracker_from_rhs(CodeGenerator* gen, ASTNode* rhs,
+                                       const char* tracker_lvalue);
+
 static int emit_nested_field_heap_assign(CodeGenerator* gen, ASTNode* lhs,
                                          ASTNode* rhs, ASTNode* obj) {
     Type* obj_type = obj->node_type;
@@ -1525,14 +1528,43 @@ static int emit_nested_field_heap_assign(CodeGenerator* gen, ASTNode* lhs,
     char tgt[32];
     snprintf(tgt, sizeof(tgt), "_ae_ntgt%d", nested_tgt_seq++);
 
+    char tracker_lv[256];
+    snprintf(tracker_lv, sizeof(tracker_lv), "%s->_heap_%s", tgt, lhs->value);
     print_indent(gen);
     fprintf(gen->output, "{ %s* %s = ",
             obj_type->element_type->struct_name, tgt);
     generate_expression(gen, obj);
     fprintf(gen->output, "; %s->%s = ", tgt, lhs->value);
     generate_expression(gen, rhs);
-    fprintf(gen->output, "; %s->_heap_%s = %d; }\n",
-            tgt, lhs->value, rhs_is_heap ? 1 : 0);
+    /* Move the source var's runtime ownership when the RHS is a heap-var
+     * identifier (it may hold a borrow); otherwise the static classification. */
+    if (!emit_field_tracker_from_rhs(gen, rhs, tracker_lv)) {
+        fprintf(gen->output, "; %s = %d;", tracker_lv, rhs_is_heap ? 1 : 0);
+    }
+    fprintf(gen->output, " }\n");
+    return 1;
+}
+
+/* When a heap-string struct field is assigned from a bare heap-tracked-var
+ * identifier, the field's `_heap_<field>` tracker must take that variable's
+ * RUNTIME ownership, not a static 1. A local classified as a heap-string var
+ * can still hold a BORROWED value at runtime (e.g. it was assigned from a
+ * function that returns a borrowed/literal pass-through, leaving `_heap_<var>
+ * == 0`). Hard-coding the field tracker to 1 then makes the struct destructor
+ * free a pointer the program never owned — a literal (free of rodata) or a
+ * value still owned elsewhere (double free). This is the field-store analogue
+ * of the `_heap_dest = _heap_src` ownership move used for `dest = src` aliases.
+ *
+ * Writes `<field-tracker-lvalue> = _heap_<var>;` then disowns the source
+ * (`_heap_<var> = 0;`) so the freeing duty transfers to the field and the
+ * source is not also freed at scope exit. Returns 1 if it handled the RHS
+ * (a bare heap-var identifier); 0 to fall back to the static rhs_is_heap. */
+static int emit_field_tracker_from_rhs(CodeGenerator* gen, ASTNode* rhs,
+                                       const char* tracker_lvalue) {
+    if (!gen || !rhs || rhs->type != AST_IDENTIFIER || !rhs->value) return 0;
+    if (!is_heap_string_var(gen, rhs->value)) return 0;
+    fprintf(gen->output, "; %s = _heap_%s; _heap_%s = 0;",
+            tracker_lvalue, rhs->value, rhs->value);
     return 1;
 }
 
@@ -1610,6 +1642,9 @@ static int emit_struct_field_heap_assign(CodeGenerator* gen, ASTNode* lhs, ASTNo
         matching_field->node_type->kind != TYPE_STRING) return 0;
 
     int rhs_is_heap = is_heap_string_expr(gen, rhs);
+    char tracker_lv[256];
+    snprintf(tracker_lv, sizeof(tracker_lv), "%s%s_heap_%s",
+             obj->value, acc, lhs->value);
     print_indent(gen);
     if (!tracker_is_trustworthy) {
         /* #1873: store and SET the tracker (so the destructor still reclaims
@@ -1621,8 +1656,12 @@ static int emit_struct_field_heap_assign(CodeGenerator* gen, ASTNode* lhs, ASTNo
          * the caller can use heap.new to get the releasing behaviour. */
         fprintf(gen->output, "{ %s%s%s = ", obj->value, acc, lhs->value);
         generate_expression(gen, rhs);
-        fprintf(gen->output, "; %s%s_heap_%s = %d; }\n",
-                obj->value, acc, lhs->value, rhs_is_heap ? 1 : 0);
+        /* Move the source var's runtime ownership when the RHS is a heap-var
+         * identifier (it may hold a borrow); otherwise the static class. */
+        if (!emit_field_tracker_from_rhs(gen, rhs, tracker_lv)) {
+            fprintf(gen->output, "; %s = %d;", tracker_lv, rhs_is_heap ? 1 : 0);
+        }
+        fprintf(gen->output, " }\n");
         return 1;
     }
     fprintf(gen->output,
@@ -1630,12 +1669,11 @@ static int emit_struct_field_heap_assign(CodeGenerator* gen, ASTNode* lhs, ASTNo
             obj->value, acc, lhs->value,
             obj->value, acc, lhs->value);
     generate_expression(gen, rhs);
-    fprintf(gen->output,
-            "; if (%s%s_heap_%s) aether_heap_str_free(_tmp_old); "
-            "%s%s_heap_%s = %d; }\n",
-            obj->value, acc, lhs->value,
-            obj->value, acc, lhs->value,
-            rhs_is_heap ? 1 : 0);
+    fprintf(gen->output, "; if (%s) aether_heap_str_free(_tmp_old);", tracker_lv);
+    if (!emit_field_tracker_from_rhs(gen, rhs, tracker_lv)) {
+        fprintf(gen->output, " %s = %d;", tracker_lv, rhs_is_heap ? 1 : 0);
+    }
+    fprintf(gen->output, " }\n");
     return 1;
 }
 

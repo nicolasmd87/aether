@@ -11,6 +11,24 @@ version number before tagging the release.
 
 ## [current]
 
+### Fixed
+
+- **A heap-string struct field assigned from a borrowed value was freed at
+  teardown — double free / free of rodata.** When a heap-string field is
+  assigned from a bare heap-tracked local (`a.value = v`), the field's
+  `_heap_<field>` tracker was hard-coded to 1. But a local classified as a
+  heap-string var can hold a *borrowed* value at runtime — e.g. one returned by
+  a function that passes a parameter or a literal straight through, leaving its
+  `_heap_<var>` at 0. The struct destructor then freed a pointer the program
+  never owned: a literal (free of read-only data) or a value still owned
+  elsewhere. It surfaced downstream as a callback/FFI crash — a hook returns a
+  literal `string`, the engine threads it through `-> string` helpers into a
+  heap-boxed struct field, and teardown aborted with `invalid pointer` /
+  SIGSEGV. The field store now *moves* the source var's runtime ownership
+  (`_heap_<field> = _heap_<var>; _heap_<var> = 0`) instead of asserting 1, so a
+  borrowed value is not freed and a genuinely-owned one is still freed exactly
+  once. Regression follow-up to #1866/#1879.
+
 ## [0.645.0]
 
 ### Added

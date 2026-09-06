@@ -1,0 +1,52 @@
+// A heap-string struct field assigned from a heap-tracked LOCAL that at
+// runtime holds a BORROWED value must not be freed by the struct destructor.
+//
+// `passthru` returns its parameter straight through, so it is classified
+// non-heap: `borrowed` is a heap-string var (it is reassignable to owned
+// strings elsewhere in a real program) but its runtime `_heap_borrowed` is 0.
+// Before the fix, `a.value = borrowed` hard-coded `_heap_value = 1`, so
+// `heap.free(a)` freed a value the program never owned — a literal string
+// (free of rodata) — aborting with SIGSEGV / "invalid pointer" at teardown.
+// The store must instead MOVE the source's runtime ownership:
+//   a->value = borrowed; a->_heap_value = _heap_borrowed; _heap_borrowed = 0;
+//
+// This is the FFI/closure-callback shape a downstream sanitizer hit: a hook
+// returns a literal, the engine threads it through `-> string` helpers into a
+// heap-boxed attr's string field, and teardown double-freed it.
+//
+// The `owned` half proves the fix does not regress the leak it protects:
+// a genuinely-heap value (string.concat) is still freed exactly once.
+
+import std.io
+import std.string
+
+struct Attr {
+    name: string
+    value: string
+}
+
+fn passthru(u: string) -> string {
+    return u
+}
+
+main() {
+    // Borrowed: value the program does not own. Must NOT be freed at teardown.
+    a = heap.new(Attr)
+    a.name = "src"
+    borrowed = passthru("https://cdn.example/logo.png")
+    ap = a as *Attr
+    ap.value = borrowed
+    println("borrowed: ${a.value}")
+    heap.free(a)
+
+    // Owned: genuinely-heap value. Must be freed exactly once (no leak).
+    b = heap.new(Attr)
+    b.name = "href"
+    owned = string.concat("https://", "cdn.example/style.css")
+    bp = b as *Attr
+    bp.value = owned
+    println("owned: ${b.value}")
+    heap.free(b)
+
+    println("done")
+}
