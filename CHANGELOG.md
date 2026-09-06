@@ -11,6 +11,8 @@ version number before tagging the release.
 
 ## [current]
 
+## [0.643.0]
+
 ### Fixed
 
 - **Heap-string trackers corrupted structs that share a punned field prefix.**
