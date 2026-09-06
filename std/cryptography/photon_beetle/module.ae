@@ -57,7 +57,7 @@ struct PhotonBeetleCtx {
 }
 
 new() -> {
-    ctx = malloc(64) as *PhotonBeetleCtx
+    ctx = malloc(sizeof(PhotonBeetleCtx)) as *PhotonBeetleCtx
     if ctx == null {
         return null, "allocation failed"
     }

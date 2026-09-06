@@ -156,7 +156,7 @@ process_block(c: *Md5Ctx) {
 }
 
 new() -> {
-    ctx = malloc(128) as *Md5Ctx
+    ctx = malloc(sizeof(Md5Ctx)) as *Md5Ctx
     if ctx == null {
         return null, "allocation failed"
     }

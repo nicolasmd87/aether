@@ -246,7 +246,7 @@ process_block(c: *SparkleCtx, buf: ptr, off: int, steps: int) {
 }
 
 new(algo: string) -> {
-    ctx = malloc(64) as *SparkleCtx
+    ctx = malloc(sizeof(SparkleCtx)) as *SparkleCtx
     if ctx == null {
         return null, "allocation failed"
     }

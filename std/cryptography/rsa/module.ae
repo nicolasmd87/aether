@@ -60,7 +60,7 @@ struct RsaKey {
 // Build a key from already-parsed bignums. The key TAKES OWNERSHIP of n,
 // e, d (frees them in key_free) — pass clones if you need to keep them.
 key_from_components(n: ptr, e: ptr, d: ptr) -> ptr {
-    k = malloc(24) as *RsaKey
+    k = malloc(sizeof(RsaKey)) as *RsaKey
     k.n = n
     k.e = e
     k.d = d

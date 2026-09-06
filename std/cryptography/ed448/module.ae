@@ -131,7 +131,7 @@ to_le57(nn: ptr) -> ptr {
 // ---- projective-coordinate point (X:Y:Z), each a *BN. affine = (X/Z, Y/Z) ----
 struct Pt { x: ptr y: ptr z: ptr }
 pt_new(x: ptr, y: ptr, z: ptr) -> *Pt {
-    q = malloc(24) as *Pt
+    q = malloc(sizeof(Pt)) as *Pt
     q.x = x; q.y = y; q.z = z
     return q
 }

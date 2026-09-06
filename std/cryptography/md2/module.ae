@@ -108,7 +108,7 @@ transform(c: *Md2Ctx, block: ptr) {
 // Create a new MD2 streaming context. Returns (ctx, "") on success, or
 // (null, error) on allocation failure.
 new() -> {
-    ctx = malloc(64) as *Md2Ctx
+    ctx = malloc(sizeof(Md2Ctx)) as *Md2Ctx
     if ctx == null {
         return null, "allocation failed"
     }

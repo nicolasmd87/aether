@@ -181,7 +181,7 @@ process_block(c: *Sha1Ctx) {
 }
 
 new() -> {
-    ctx = malloc(128) as *Sha1Ctx
+    ctx = malloc(sizeof(Sha1Ctx)) as *Sha1Ctx
     if ctx == null {
         return null, "allocation failed"
     }

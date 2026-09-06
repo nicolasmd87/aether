@@ -443,7 +443,7 @@ new_ctx(key: ptr, keylen: int, encrypt: int) -> ptr {
         s3 = generate_working_key(fe, key, 0)
     }
 
-    c = malloc(24) as *Des3Ctx
+    c = malloc(sizeof(Des3Ctx)) as *Des3Ctx
     if encrypt == 1 {
         // E_K1 then E(dir K2) then E_K3  → DesFunc(k1), DesFunc(k2), DesFunc(k3)
         c.wk1 = s1

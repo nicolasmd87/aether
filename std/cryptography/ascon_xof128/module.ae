@@ -61,7 +61,7 @@ p12(c: *AsconXofCtx) {
 }
 
 new() -> {
-    ctx = malloc(64) as *AsconXofCtx
+    ctx = malloc(sizeof(AsconXofCtx)) as *AsconXofCtx
     if ctx == null {
         return null, "allocation failed"
     }

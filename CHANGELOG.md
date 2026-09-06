@@ -11,6 +11,26 @@ version number before tagging the release.
 
 ## [current]
 
+### Added
+
+- **Warn on `malloc(<literal>) as *T`.** A hand-computed byte count cast to a
+  struct pointer is sized to the struct's *current* layout, so any layout change
+  silently under-allocates it and the overflow surfaces only as runtime heap
+  corruption — which is exactly what the v0.643.0 inline heap-string trackers
+  (#1879) did to a downstream repo's hand-sized allocations. The compiler cannot
+  know a pure-Aether struct's `sizeof` (that is the C compiler's job), so it does
+  not check the number; instead it flags the pattern and points at
+  `malloc(sizeof(T))`, which is layout-exact and immune. `@c_struct` overlays
+  (C-defined size) and raw uncast buffers are not flagged.
+
+### Changed
+
+- **`std` now allocates its context structs with `malloc(sizeof(T))`.** Swept 65
+  `malloc(<literal>) as *T` sites (the crypto hash/cipher/KDF contexts, EC
+  points, TLS handshake state) to the layout-exact idiom, clearing the warning
+  above fleet-wide and removing the latent under-allocation footgun. No behaviour
+  change — `sizeof(T)` is by construction sufficient.
+
 ## [0.644.0]
 
 ### Added

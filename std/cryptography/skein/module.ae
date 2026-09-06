@@ -322,7 +322,7 @@ new(out_bits: int) -> {
     if (out_bits % 8) != 0 {
         return null, "output size must be a multiple of 8 bits"
     }
-    ctx = malloc(128) as *SkeinCtx
+    ctx = malloc(sizeof(SkeinCtx)) as *SkeinCtx
     if ctx == null {
         return null, "allocation failed"
     }

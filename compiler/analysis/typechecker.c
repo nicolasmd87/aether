@@ -761,6 +761,17 @@ void type_warning(const char* message, int line, int column) {
     warning_count++;
 }
 
+/* True iff s is non-empty and every character is an ASCII digit — i.e. a bare
+ * decimal integer literal (no sign, no suffix, no 0x). Used to spot a literal
+ * byte count fed to `malloc(...) as *T`. */
+static int is_all_digits(const char* s) {
+    if (!s || !*s) return 0;
+    for (const char* p = s; *p; p++) {
+        if (*p < '0' || *p > '9') return 0;
+    }
+    return 1;
+}
+
 // Return a human-readable type name (static buffer — for error messages only)
 static const char* type_name(Type* t) {
     if (!t) return "unknown";
@@ -1702,6 +1713,35 @@ Type* infer_type(ASTNode* expr, SymbolTable* table) {
                         "`as *%s`, '%s' is not a struct type", expr->value, expr->value);
                     type_error(msg, expr->line, expr->column);
                     return create_type(TYPE_UNKNOWN);
+                }
+
+                /* Warn on `malloc(<integer-literal>) as *T` — a hand-computed
+                 * byte count sized to the struct's current layout. The
+                 * compiler does not know a pure-Aether struct's `sizeof` (C
+                 * does), so it cannot check the number itself; but the pattern
+                 * is the footgun: any layout change (e.g. the inline heap-
+                 * string trackers added in v0.643.0, #1879) silently makes the
+                 * literal under-allocate, and the overflow only shows up as
+                 * heap corruption at runtime. `malloc(sizeof(T))` is layout-
+                 * exact and immune. Only for real Aether structs — a @c_struct
+                 * overlay has a C-defined size a literal can legitimately match.
+                 * Skips `heap.new(T)`, which is the sized-allocation blessed path. */
+                ASTNode* op = expr->children[0];
+                if (!expr->warned &&
+                    op && op->type == AST_FUNCTION_CALL && op->value &&
+                    strcmp(op->value, "malloc") == 0 &&
+                    op->child_count == 1 && op->children[0] &&
+                    op->children[0]->type == AST_LITERAL &&
+                    op->children[0]->value &&
+                    is_all_digits(op->children[0]->value)) {
+                    expr->warned = 1;
+                    char wmsg[256];
+                    snprintf(wmsg, sizeof(wmsg),
+                        "`malloc(%s) as *%s` sizes the allocation by a literal "
+                        "byte count; use `malloc(sizeof(%s))` so a struct-layout "
+                        "change cannot silently under-allocate",
+                        op->children[0]->value, expr->value, expr->value);
+                    type_warning(wmsg, expr->line, expr->column);
                 }
             }
             Type* inner = create_type(TYPE_STRUCT);

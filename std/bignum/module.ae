@@ -74,7 +74,7 @@ struct BN {
 
 // Allocate a BN. `mag` may be null (only valid with len 0 / sign 0).
 bn_alloc(s: int, mag: ptr, len: int) -> *BN {
-    n = malloc(24) as *BN
+    n = malloc(sizeof(BN)) as *BN
     n.sign = s
     n.mag = mag
     n.len = len

@@ -233,7 +233,7 @@ reset_ctx(c: *Haraka256Ctx) {
 }
 
 new() -> {
-    c = malloc(64) as *Haraka256Ctx
+    c = malloc(sizeof(Haraka256Ctx)) as *Haraka256Ctx
     if c == null {
         return null, "allocation failed"
     }

@@ -590,7 +590,7 @@ extern malloc(n: int) -> ptr
 // Caller-owns; caller must `free()` when done (LocalTime is a
 // plain struct, no nested heap allocations to release).
 now_local() -> *LocalTime {
-    t = malloc(32) as *LocalTime
+    t = malloc(sizeof(LocalTime)) as *LocalTime
     os_now_local_fill_raw(t)
     return t
 }

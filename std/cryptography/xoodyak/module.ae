@@ -177,7 +177,7 @@ reset_ctx(c: *XoodyakCtx) {
 }
 
 new() -> {
-    c = malloc(64) as *XoodyakCtx
+    c = malloc(sizeof(XoodyakCtx)) as *XoodyakCtx
     if c == null {
         return null, "allocation failed"
     }

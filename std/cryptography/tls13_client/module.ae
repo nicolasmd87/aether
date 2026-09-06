@@ -184,7 +184,7 @@ struct Transcript {
 }
 
 transcript_new() -> ptr {
-    t = malloc(16) as *Transcript
+    t = malloc(sizeof(Transcript)) as *Transcript
     t.buf = bytes.new(512)
     // Force the backing buffer to exist; length grows as messages are added.
     bytes.set(t.buf, 0, 0)
@@ -262,7 +262,7 @@ derive_handshake_keys_algo(ecdhe: ptr, ec_len: int, th: ptr, th_len: int, key_le
     sk = tls13_ks.write_key(hash_algo, s_hs, key_len)
     siv = tls13_ks.write_iv(hash_algo, s_hs)
 
-    k = malloc(56) as *HsKeys
+    k = malloc(sizeof(HsKeys)) as *HsKeys
     k.client_hs_secret = c_hs
     k.server_hs_secret = s_hs
     k.client_key = ck
@@ -289,7 +289,7 @@ fn derive_handshake_keys_psk(psk: ptr, psk_len: int, ecdhe: ptr, ec_len: int, th
     sk = tls13_ks.write_key(hash_algo, s_hs, key_len)
     siv = tls13_ks.write_iv(hash_algo, s_hs)
 
-    k = malloc(56) as *HsKeys
+    k = malloc(sizeof(HsKeys)) as *HsKeys
     k.client_hs_secret = c_hs
     k.server_hs_secret = s_hs
     k.client_key = ck
@@ -397,7 +397,7 @@ struct RecordIO {
 }
 
 fn recio_new(sock: ptr) -> *RecordIO {
-    r = malloc(32) as *RecordIO
+    r = malloc(sizeof(RecordIO)) as *RecordIO
     r.sock = sock
     r.buf = bytes.new(4096)
     bytes.set(r.buf, 0, 0)
@@ -1104,7 +1104,7 @@ fn run_handshake_tail(sock: ptr, rio: ptr, tr: ptr, host: string,
                 civ = tls13_ks.write_iv(hash_algo, c_ap)
                 sk = tls13_ks.write_key(hash_algo, s_ap, rec_key_len)
                 siv = tls13_ks.write_iv(hash_algo, s_ap)
-                conn = malloc(56) as *ClientConn
+                conn = malloc(sizeof(ClientConn)) as *ClientConn
                 conn.sock = sock
                 conn.rio = rio as ptr
                 conn.app_send = tls13_record.new_aead(rec_aead, ck, rec_key_len, civ) as ptr
@@ -1637,7 +1637,7 @@ fn parse_nst_body(buf: ptr, off: int, body_len: int, c: *ClientConn) -> ptr {
         }
     }
 
-    st = malloc(80) as *SessionTicket
+    st = malloc(sizeof(SessionTicket)) as *SessionTicket
     st.ticket = ticket
     st.ticket_len = tk_len
     st.nonce = nonce
@@ -1894,7 +1894,7 @@ fn connect_resume_ed(host: string, port: int, x25519_priv: ptr, ticket: ptr, ear
             civ = tls13_ks.write_iv(hash_algo, c_ap)
             sk = tls13_ks.write_key(hash_algo, s_ap, rec_key_len)
             siv = tls13_ks.write_iv(hash_algo, s_ap)
-            conn = malloc(56) as *ClientConn
+            conn = malloc(sizeof(ClientConn)) as *ClientConn
             conn.sock = sock
             conn.rio = rio as ptr
             conn.app_send = tls13_record.new_aead(rec_aead, ck, rec_key_len, civ) as ptr
@@ -2411,7 +2411,7 @@ pure_tls_client_connect(fd: int, host: string, verify_mode: int, cafile: string)
     if string.equals(err, "") != 1 { return null }
     if conn == null { return null }
 
-    pc = malloc(32) as *PureClientConn
+    pc = malloc(sizeof(PureClientConn)) as *PureClientConn
     if pc == null { close_conn(conn); return null }
     pc.conn = conn
     pc.pending = null

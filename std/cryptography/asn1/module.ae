@@ -123,7 +123,7 @@ struct Reader {
 }
 
 reader_new(b: ptr) -> ptr {
-    r = malloc(56) as *Reader
+    r = malloc(sizeof(Reader)) as *Reader
     r.buf = b
     r.pos = 0
     r.len = bytes.length(b)

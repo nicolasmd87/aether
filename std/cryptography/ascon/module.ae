@@ -67,7 +67,7 @@ p_perm(c: *AsconCtx, nr: int) {
 // Create a streaming ASCON context. `algo` is "ascon" (Ascon-Hash) or
 // "ascon-a" (Ascon-HashA).
 new(algo: string) -> {
-    ctx = malloc(128) as *AsconCtx
+    ctx = malloc(sizeof(AsconCtx)) as *AsconCtx
     if ctx == null {
         return null, "allocation failed"
     }

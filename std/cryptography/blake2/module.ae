@@ -276,7 +276,7 @@ inc_counter(c: *Blake2Ctx, n: int) {
 
 // ---- Context construction ----
 mk_ctx(out_len: int, is_b: int) -> *Blake2Ctx {
-    ctx = malloc(96) as *Blake2Ctx
+    ctx = malloc(sizeof(Blake2Ctx)) as *Blake2Ctx
     if ctx == null {
         return null
     }

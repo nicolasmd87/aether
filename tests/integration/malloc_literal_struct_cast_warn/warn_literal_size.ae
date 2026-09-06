@@ -1,0 +1,17 @@
+// Should WARN: a literal byte count feeding a struct-pointer cast. Sized to
+// the struct's current layout, it silently under-allocates the moment the
+// layout changes (e.g. the v0.643.0 inline heap-string trackers, #1879).
+import std.io
+
+extern malloc(n: int) -> ptr
+
+struct Node {
+    name: string
+    next: ptr
+}
+
+main() {
+    n = malloc(16) as *Node
+    n.name = "x"
+    println("built")
+}
