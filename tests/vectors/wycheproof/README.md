@@ -3,7 +3,9 @@
 Byte-identical vector files from **Project Wycheproof**
 (<https://github.com/C2SP/wycheproof>, Apache-2.0 — full licence text in
 `THIRD_PARTY_LICENSES.md`), `testvectors_v1/`, pinned at upstream commit
-`5722833ca004983abd1a91bcb6c24596d50ac0f9`.
+`3fa63dd0344abb611f1fb1d77e119938603ea230`. (Every file already present at
+the previous pin `5722833ca004983abd1a91bcb6c24596d50ac0f9` was verified
+byte-identical at this commit when the pin was advanced for wave 5.)
 
 Wycheproof is the adversarial complement to the RFC/NIST known-answer
 tests the crypto suites already carry: each file probes a primitive with

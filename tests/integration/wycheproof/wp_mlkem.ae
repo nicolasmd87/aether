@@ -1,0 +1,188 @@
+// Wycheproof adversarial vectors — ML-KEM (FIPS 203) decapsulation, wave 5.
+//
+// Covers ML-KEM-512, -768, -1024. Each case gives a 64-byte seed (d||z),
+// the encapsulation key ek, a ciphertext c, and the expected shared secret
+// K. We derive the decaps key dk via keygen(d,z), run decaps(dk, c), and
+// compare to K.
+//
+// ML-KEM never "fails to decapsulate" — the FO transform's implicit
+// rejection returns a pseudo-random secret on a malformed/modified
+// ciphertext. So the two results mean:
+//   "valid"   -> decaps(c) MUST equal K.
+//   "invalid" -> decaps(c) MUST NOT equal K (implicit rejection fired).
+// A driver that accepts a modified ciphertext (returns K anyway) would be a
+// real forgery/malleability hole — exactly what this catches. On the PQ-TLS
+// path via GROUP_X25519MLKEM768.
+//
+// ML-KEM keygen+decaps is symmetric-crypto-fast (all ~600 cases in ~2s), so
+// the default is a FULL sweep (stride 1). WYCHEPROOF_STRIDE=N can still thin
+// it if ever needed.
+
+import std.cryptography.mlkem
+import std.os
+import std.fs
+import std.json
+import std.bytes
+import std.string
+import std.io
+
+extern exit(code: int)
+extern atoi(s: string) -> int
+extern string_char_at_n(str: string, known_length: int, index: int) -> int
+extern string_length(s: string) -> int
+
+fn hexval(h: int) -> int {
+    if h >= 48 && h <= 57 { return h - 48 }
+    if h >= 97 && h <= 102 { return h - 87 }
+    if h >= 65 && h <= 70 { return h - 55 }
+    return 0
+}
+
+fn from_hex(s: string) -> ptr {
+    slen = string_length(s)
+    n = slen / 2
+    b = bytes.new(n)
+    if n == 0 { return b }
+    i = 0
+    while i < n {
+        hi = hexval(string_char_at_n(s, slen, i * 2))
+        lo = hexval(string_char_at_n(s, slen, i * 2 + 1))
+        bytes.set(b, i, (hi << 4) | lo)
+        i = i + 1
+    }
+    return b
+}
+
+fn slicen(src: ptr, off: int, width: int) -> ptr {
+    out = bytes.new(width)
+    i = 0
+    while i < width { bytes.set(out, i, bytes.get(src, off + i)) i = i + 1 }
+    return out
+}
+
+fn eq32(a: ptr, b: ptr) -> int {
+    i = 0
+    while i < 32 {
+        if bytes.get(a, i) != bytes.get(b, i) { return 0 }
+        i = i + 1
+    }
+    return 1
+}
+
+// Derive dk and decapsulate at the parameter set k (2/3/4 = 512/768/1024).
+fn decaps_k(k: int, dk: ptr, c: ptr) -> ptr {
+    if k == 2 { return mlkem.mlkem512_decaps(dk, c) }
+    if k == 4 { return mlkem.mlkem1024_decaps(dk, c) }
+    return mlkem.mlkem768_decaps(dk, c)
+}
+
+fn keygen_k(k: int, d: ptr, z: ptr) -> (ptr, ptr) {
+    if k == 2 { ek, dk = mlkem.mlkem512_keygen(d, z) return ek, dk }
+    if k == 4 { ek, dk = mlkem.mlkem1024_keygen(d, z) return ek, dk }
+    ek, dk = mlkem.mlkem768_keygen(d, z)
+    return ek, dk
+}
+
+// Run one vector file at the given parameter set k. Returns [ok, rej, fail].
+fn run_file(path: string, k: int, stride: int) -> (int, int, int) {
+    doc, ferr = fs.read(path)
+    if ferr != "" {
+        println("FAIL: cannot read ${path}: ${ferr}")
+        return 0, 0, 1
+    }
+    root, jerr = json.parse(doc)
+    if jerr != "" {
+        println("FAIL: JSON parse ${path}: ${jerr}")
+        return 0, 0, 1
+    }
+
+    groups = json.json_object_get_raw(root, "testGroups")
+    ngroups = json.array_size(groups)
+
+    passed = 0
+    rejected_invalid = 0
+    failed = 0
+    gi = 0
+    while gi < ngroups {
+        g = json.array_get_raw(groups, gi)
+        tests = json.json_object_get_raw(g, "tests")
+        nt = json.array_size(tests)
+        ti = 0
+        while ti < nt {
+            t = json.array_get_raw(tests, ti)
+            tc_id = json.json_get_int(json.json_object_get_raw(t, "tcId"))
+            if (tc_id % stride) != 0 && stride > 1 {
+                ti = ti + 1
+                continue
+            }
+            res = json.json_get_string_raw(json.json_object_get_raw(t, "result"))
+            seed_hex = json.json_get_string_raw(json.json_object_get_raw(t, "seed"))
+            c_hex = json.json_get_string_raw(json.json_object_get_raw(t, "c"))
+            k_hex = json.json_get_string_raw(json.json_object_get_raw(t, "K"))
+
+            seed = from_hex(seed_hex) // 64 bytes = d || z
+            d = slicen(seed, 0, 32)
+            z = slicen(seed, 32, 32)
+            ek, dk = keygen_k(k, d, z)
+
+            c = from_hex(c_hex)
+            want = from_hex(k_hex) // 32 bytes
+            got = decaps_k(k, dk, c)
+            same = eq32(got, want)
+
+            if res == "valid" {
+                if same == 1 { passed = passed + 1 } else {
+                    println("FAIL tcId=${tc_id} (valid): decaps != K")
+                    failed = failed + 1
+                }
+            } else {
+                if res == "invalid" {
+                    // Implicit rejection: a modified ciphertext must yield a
+                    // DIFFERENT secret, never the real K.
+                    if same == 0 { rejected_invalid = rejected_invalid + 1 } else {
+                        println("FAIL tcId=${tc_id} (invalid): decaps ACCEPTED, returned K")
+                        failed = failed + 1
+                    }
+                } else {
+                    passed = passed + 1
+                }
+            }
+
+            bytes.free(seed)
+            bytes.free(d)
+            bytes.free(z)
+            bytes.free(ek)
+            bytes.free(dk)
+            bytes.free(c)
+            bytes.free(want)
+            bytes.free(got)
+            ti = ti + 1
+        }
+        gi = gi + 1
+    }
+    return passed, rejected_invalid, failed
+}
+
+main() {
+    stride = 1
+    sv = os.os_getenv("WYCHEPROOF_STRIDE")
+    if sv != 0 { stride = atoi(sv) }
+    if stride < 1 { stride = 1 }
+
+    total_fail = 0
+
+    p2, r2, f2 = run_file("tests/vectors/wycheproof/mlkem_512_test.json", 2, stride)
+    println("wycheproof mlkem_512: ${p2} ok, ${r2} invalid rejected, ${f2} failed (stride ${stride})")
+    total_fail = total_fail + f2
+
+    p3, r3, f3 = run_file("tests/vectors/wycheproof/mlkem_768_test.json", 3, stride)
+    println("wycheproof mlkem_768: ${p3} ok, ${r3} invalid rejected, ${f3} failed (stride ${stride})")
+    total_fail = total_fail + f3
+
+    p4, r4, f4 = run_file("tests/vectors/wycheproof/mlkem_1024_test.json", 4, stride)
+    println("wycheproof mlkem_1024: ${p4} ok, ${r4} invalid rejected, ${f4} failed (stride ${stride})")
+    total_fail = total_fail + f4
+
+    if total_fail > 0 { exit(1) }
+    println("ALL PASS")
+}
