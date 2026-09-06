@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# Aether remote installer — fetch a pinned source tarball and `make install`.
+# Aether remote installer — install a prebuilt release binary, or build from source.
 #
 # The one-command, no-clone path (mirrors aeb's install.sh). For the full
 # clone-time installer (editor extension, `ae version` management, shell-rc
@@ -8,23 +8,43 @@
 #
 # Usage:
 #   curl -sSL https://raw.githubusercontent.com/aether-lang-dev/aether/main/get.sh | sh
-#   AETHER_REF=v0.184.0 sh get.sh
-#   AETHER_REF=v0.184.0 PREFIX=/usr/local sh get.sh   # system-wide (needs sudo)
+#   curl -sSL .../get.sh | sh -s -- v0.184.0            # a specific release (piped)
+#   sh get.sh v0.184.0                                 # a specific release (downloaded)
+#   AETHER_REF=v0.184.0 sh get.sh                       # same, via env var
+#   PREFIX=/usr/local sh get.sh v0.184.0               # system-wide (needs sudo)
+#   AETHER_FROM_SOURCE=1 sh get.sh                     # force a source build
+#
+# The version to install may be given as the FIRST POSITIONAL ARGUMENT
+# (`sh get.sh v0.184.0`, or piped as `| sh -s -- v0.184.0`) or via the
+# AETHER_REF env var. The argument wins if both are set. With neither, the
+# latest release is used.
 #
 # Env knobs:
-#   AETHER_REF  tag (vX.Y.Z), branch, or commit SHA to install.
-#               Default: the latest vX.Y.Z tag (falls back to `main`).
-#   PREFIX      install prefix. Default: $HOME/.local  (no sudo).
-#   CC          C compiler to build with. Default: cc (gcc/clang).
+#   AETHER_REF          release tag (vX.Y.Z) to install (same as the positional
+#                       argument; the argument takes precedence). Default: the
+#                       latest release. A branch or commit SHA is also accepted,
+#                       but forces a source build (no prebuilt exists for those).
+#   AETHER_FROM_SOURCE  set to 1 to skip the prebuilt binary and build from the
+#                       source tarball even when a prebuilt exists.
+#   PREFIX              install prefix. Default: $HOME/.local  (no sudo).
+#   CC                  C compiler for a source build. Default: cc (gcc/clang).
 #
-# Aether compiles to C, so the only build prerequisites are a C compiler
-# and GNU make — there is no chicken-and-egg toolchain dependency. Tests
-# are NOT run (building + installing is enough to use Aether).
+# How this resolves the latest version WITHOUT tripping GitHub's anti-bot /
+# rate limits: it reads the `Location:` header of the plain web redirect at
+# /releases/latest (a normal 302, not the 60-req/hr api.github.com JSON API).
+# Release ASSET downloads at /releases/download/<tag>/<file> are likewise
+# unauthenticated and un-throttled (they 302 to a signed CDN URL curl follows).
+#
+# Prebuilt binaries need only a libc at runtime — no C compiler, no make. A
+# source build (fallback / forced / non-release ref) needs a C compiler and
+# GNU make; Aether compiles to C, so there is no toolchain chicken-and-egg.
+# Tests are NOT run either way.
 set -eu
 
 REPO="aether-lang-dev/aether"
 PREFIX="${PREFIX:-$HOME/.local}"
 CC="${CC:-cc}"
+FROM_SOURCE="${AETHER_FROM_SOURCE:-0}"
 
 say()  { printf 'aether-install: %s\n' "$*"; }
 die()  { printf 'aether-install: %s\n' "$*" >&2; exit 1; }
@@ -32,41 +52,116 @@ have() { command -v "$1" >/dev/null 2>&1; }
 
 have curl || die "curl is required."
 have tar  || die "tar is required."
-have make || die "GNU make is required."
-have "$CC" || die "a C compiler ('$CC') is required — install gcc or clang, or set CC."
 
-# Resolve the ref to install. Default: highest vX.Y.Z tag on the remote.
-REF="${AETHER_REF:-}"
+# --- resolve the release tag to install ------------------------------------
+# Precedence: first positional argument, then AETHER_REF, then latest. The ref
+# may be a tag (vX.Y.Z), a branch, or a SHA. Only a vX.Y.Z tag has a prebuilt;
+# branches/SHAs fall through to a source build.
+REF="${1:-${AETHER_REF:-}}"
 if [ -z "$REF" ]; then
-    latest=$(curl -fsSL "https://api.github.com/repos/$REPO/tags?per_page=100" 2>/dev/null \
-        | grep -o '"name"[[:space:]]*:[[:space:]]*"v[0-9][0-9.]*"' \
-        | sed -n 's/.*"\(v[0-9][0-9.]*\)".*/\1/p' \
-        | sort -t. -k1.2,1n -k2,2n -k3,3n | tail -1)
-    if [ -n "$latest" ]; then
-        REF="$latest"
+    # The redirect at /releases/latest names the newest release tag in its
+    # Location header. No JSON API, no auth, no rate limit.
+    loc=$(curl -fsSI "https://github.com/$REPO/releases/latest" 2>/dev/null \
+        | tr -d '\r' \
+        | sed -n 's#^[Ll]ocation:[[:space:]]*.*/releases/tag/\(.*\)$#\1#p' \
+        | tail -1)
+    if [ -n "$loc" ]; then
+        REF="$loc"
+        say "latest release is $REF"
     else
-        REF="main"
-        say "no vX.Y.Z tag found; falling back to 'main' (not pinned)."
+        # No release yet (or the redirect was unreachable): fall back to the
+        # highest vX.Y.Z tag via the tags API, then to 'main'.
+        say "could not read /releases/latest; trying the tags API"
+        REF=$(curl -fsSL "https://api.github.com/repos/$REPO/tags?per_page=100" 2>/dev/null \
+            | grep -o '"name"[[:space:]]*:[[:space:]]*"v[0-9][0-9.]*"' \
+            | sed -n 's/.*"\(v[0-9][0-9.]*\)".*/\1/p' \
+            | sort -t. -k1.2,1n -k2,2n -k3,3n | tail -1)
+        if [ -z "$REF" ]; then
+            REF="main"
+            say "no vX.Y.Z tag found; falling back to 'main' (source build, not pinned)."
+        fi
     fi
 fi
 
-say "installing aether @ $REF  ->  PREFIX=$PREFIX  (CC=$CC)"
+# Is this ref a release tag (vX.Y.Z, prebuilt candidate) or not?
+is_release_tag=0
+case "$REF" in
+    v[0-9]*.[0-9]*.[0-9]*) is_release_tag=1 ;;
+esac
+# Version string without the leading 'v' (asset filenames use it).
+VER="${REF#v}"
+
+# --- detect the platform slug used in asset names --------------------------
+# Assets are named: aether-<ver>-<os>-<arch>{.tar.gz|.zip}
+# e.g. aether-0.645.0-linux-x86_64.tar.gz, aether-0.645.0-macos-arm64.tar.gz
+detect_slug() {
+    os_raw=$(uname -s 2>/dev/null || echo unknown)
+    arch_raw=$(uname -m 2>/dev/null || echo unknown)
+    case "$os_raw" in
+        Linux)   os=linux ;;
+        Darwin)  os=macos ;;
+        FreeBSD) os=freebsd ;;
+        *)       os="" ;;   # Windows here means MSYS/Cygwin — the .zip path;
+    esac                    # unsupported for the shell installer's binary path.
+    case "$arch_raw" in
+        x86_64|amd64)  arch=x86_64 ;;
+        arm64|aarch64) arch=arm64 ;;
+        *)             arch="" ;;
+    esac
+    [ -n "$os" ] && [ -n "$arch" ] && printf '%s-%s' "$os" "$arch"
+}
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
-# GitHub serves a source tarball for any ref (tag/branch/sha) at this URL.
-url="https://github.com/$REPO/archive/$REF.tar.gz"
-say "fetching $url"
-curl -fSL "$url" -o "$tmp/aether.tar.gz" || die "download failed for ref '$REF'."
-tar -xzf "$tmp/aether.tar.gz" -C "$tmp" || die "extract failed."
+install_prebuilt=0
+if [ "$FROM_SOURCE" != "1" ] && [ "$is_release_tag" = "1" ]; then
+    slug=$(detect_slug || true)
+    if [ -n "${slug:-}" ]; then
+        asset="aether-$VER-$slug.tar.gz"
+        aurl="https://github.com/$REPO/releases/download/$REF/$asset"
+        say "trying prebuilt binary: $asset"
+        if curl -fSL "$aurl" -o "$tmp/aether-bin.tar.gz" 2>/dev/null; then
+            install_prebuilt=1
+        else
+            say "no prebuilt for $slug at $REF — will build from source."
+        fi
+    else
+        say "no prebuilt for this platform ($(uname -s)/$(uname -m)) — building from source."
+    fi
+fi
 
-# GitHub names the top dir <repo>-<ref> (leading 'v' stripped for tags).
-src=$(find "$tmp" -mindepth 1 -maxdepth 1 -type d -name 'aether-*' | head -1)
-[ -n "$src" ] && [ -d "$src" ] || die "could not locate extracted source dir."
+# --- prebuilt path: extract the prefix-shaped tree straight into PREFIX -----
+if [ "$install_prebuilt" = "1" ]; then
+    tar -xzf "$tmp/aether-bin.tar.gz" -C "$tmp" || die "extract failed (prebuilt)."
+    # The tarball is flat: bin/ lib/ include/ share/ VERSION LICENSE at top.
+    [ -x "$tmp/bin/ae" ] || die "prebuilt archive missing bin/ae — is the asset correct?"
+    mkdir -p "$PREFIX" || die "cannot create PREFIX ($PREFIX)."
+    say "installing prebuilt @ $REF  ->  PREFIX=$PREFIX"
+    # Copy the four prefix trees; -R preserves the layout `make install` uses.
+    for d in bin lib include share; do
+        [ -d "$tmp/$d" ] && cp -R "$tmp/$d" "$PREFIX/"
+    done
+    chmod 755 "$PREFIX/bin/ae" "$PREFIX/bin/aetherc" 2>/dev/null || true
+else
+    # --- source path: fetch the source tarball and `make install` ----------
+    have make || die "GNU make is required for a source build."
+    have "$CC" || die "a C compiler ('$CC') is required — install gcc or clang, or set CC."
+    say "installing aether @ $REF from source  ->  PREFIX=$PREFIX  (CC=$CC)"
 
-say "building + installing (no tests run) — this compiles the toolchain, ~1-2 min"
-make -C "$src" install PREFIX="$PREFIX" CC="$CC"
+    # GitHub serves a source tarball for any ref (tag/branch/sha) at this URL.
+    surl="https://github.com/$REPO/archive/$REF.tar.gz"
+    say "fetching $surl"
+    curl -fSL "$surl" -o "$tmp/aether-src.tar.gz" || die "download failed for ref '$REF'."
+    tar -xzf "$tmp/aether-src.tar.gz" -C "$tmp" || die "extract failed (source)."
+
+    # GitHub names the top dir <repo>-<ref> (leading 'v' stripped for tags).
+    src=$(find "$tmp" -mindepth 1 -maxdepth 1 -type d -name 'aether-*' | head -1)
+    [ -n "$src" ] && [ -d "$src" ] || die "could not locate extracted source dir."
+
+    say "building + installing (no tests run) — this compiles the toolchain, ~1-2 min"
+    make -C "$src" install PREFIX="$PREFIX" CC="$CC"
+fi
 
 bin="$PREFIX/bin/ae"
 [ -x "$bin" ] || die "install finished but $bin is missing."
