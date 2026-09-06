@@ -11,6 +11,26 @@ version number before tagging the release.
 
 ## [current]
 
+### Added
+
+- **Wycheproof wave 5: ECDSA P-384/P-521 and ML-KEM decapsulation.** New
+  adversarial vector drivers over primitives that were on the TLS path but had
+  no Wycheproof coverage:
+  - **ECDSA P-384 & P-521**, both DER (via the real `tls13_cert.split_ecdsa_sig`
+    parser, as used for `SCHEME_ECDSA_P384_SHA384`) and P1363 raw-r||s forms —
+    the same DER-malleability and verifier surface wave 3 hardened for P-256,
+    now locked in for the larger curves.
+  - **ML-KEM-512/-768/-1024 decapsulation** (`GROUP_X25519MLKEM768` on the
+    PQ-TLS handshake): every case checks that a valid ciphertext decapsulates
+    to the expected shared secret and that a modified one triggers FIPS 203
+    implicit rejection (a *different* secret), i.e. no ciphertext-malleability
+    hole.
+
+  All families pass with no accepted forgeries. ECDSA drivers stride-sample
+  under the 180s harness budget (P-521 verify is ~6s each) with
+  `WYCHEPROOF_FULL=1` sweeping everything; ML-KEM is fast enough to sweep all
+  ~600 cases by default. Vectors vendored from C2SP/wycheproof.
+
 ## [0.643.0]
 
 ### Fixed
