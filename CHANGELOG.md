@@ -11,6 +11,8 @@ version number before tagging the release.
 
 ## [current]
 
+## [0.645.0]
+
 ### Added
 
 - **Warn on `malloc(<literal>) as *T`.** A hand-computed byte count cast to a
