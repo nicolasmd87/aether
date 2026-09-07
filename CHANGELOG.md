@@ -11,6 +11,8 @@ version number before tagging the release.
 
 ## [current]
 
+## [0.646.0]
+
 ### Fixed
 
 - **FreeBSD cross-linking failed `error: libc not available` under Zig 0.13.**
