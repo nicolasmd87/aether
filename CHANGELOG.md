@@ -11,6 +11,8 @@ version number before tagging the release.
 
 ## [current]
 
+## [0.647.0]
+
 ### Fixed
 
 - **`ae build <bin-name>` works from a subdirectory** (#1905). The walk-up to
