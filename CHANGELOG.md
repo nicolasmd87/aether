@@ -11,6 +11,23 @@ version number before tagging the release.
 
 ## [current]
 
+### Fixed
+
+- **FreeBSD cross-linking failed `error: libc not available` under Zig 0.13.**
+  `tools/ae_cross.c`'s FreeBSD/tier-2 wiring is written for Zig 0.16 (it relies
+  on 0.16 supplying the CRT/libc from `--sysroot` and resolving `-L` beneath
+  it); on 0.13 any FreeBSD cross-link died with `cannot find entry symbol
+  _start` / `libc not available` (reported downstream as an OpenSSL-specific
+  failure, but it hit any program that reached the final link). The toolchain
+  pin is bumped to 0.16 in aether-crossbuild and `windows.yml`, and two tier-2
+  bugs the bump exposed are fixed: (1) the CROSSBUILD_SYSROOT probe over-linked
+  every *staged* archive — even ones the program never imports — which 0.16
+  hard-errors on (`unable to find dynamic system library 'pcre2-8'`); it now
+  gates each lib on the program's resolved import closure (staged AND
+  requested). (2) Tier-2 libs were linked via `-L$CROSSBUILD_SYSROOT/lib -lNAME`,
+  but 0.16 rewrites an absolute `-L` beneath `--sysroot` so the libs were never
+  found; they are now linked by absolute archive path.
+
 ## [0.645.0]
 
 ### Added
