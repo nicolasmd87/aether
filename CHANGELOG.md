@@ -11,6 +11,22 @@ version number before tagging the release.
 
 ## [current]
 
+### Fixed
+
+- **`ae build <bin-name>` works from a subdirectory** (#1905). The walk-up to
+  `aether.toml` rebases a relative positional argument so a file path still
+  resolves after the chdir, and it did that to a `[[bin]]` NAME as well:
+  `widget` became `sub/widget`, which is not a file, so the build failed with
+  "File not found: sub/widget" while the identical command from the project
+  root worked. The name is now resolved against the manifest first, in the
+  directory the walk-up just moved to, and only a non-bin argument is rebased.
+
+  An argument that is neither a bin name nor a file is also reported as what
+  the user typed rather than as a path they never mentioned: a typo said
+  "File not found: sub/widgett", naming a directory the user was not thinking
+  about.
+
+
 ## [0.646.0]
 
 ### Fixed
