@@ -35,6 +35,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+. "$ROOT/tests/lib/wait_port.sh"
 AE="$ROOT/build/ae"
 
 if ! command -v curl >/dev/null 2>&1; then
@@ -76,7 +77,7 @@ done
     echo "  [FAIL] no READY within timeout"; head -20 "$TMPDIR/srv.log"; exit 1
 }
 case "$ready" in READY-NOH2*) echo "  [SKIP] $ready"; exit 0;; esac
-sleep 0.3
+wait_port 18280 || exit 1
 
 URL="http://127.0.0.1:18280"
 

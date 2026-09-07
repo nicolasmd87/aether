@@ -13,6 +13,28 @@ version number before tagging the release.
 
 ### Fixed
 
+- **Server tests wait for the port, not for a guess** (part of #1920). Every
+  HTTP server test greps its log for `READY` and then slept a fixed 0.3s,
+  which proves the server PRINTED the line and nothing more: the listen socket
+  can still be a moment behind. That guess is wrong in both directions at
+  once. It waits 0.3s on a server that was ready immediately, and it gives up
+  after 0.3s on a loaded machine, which is the port-not-yet-listening flake
+  the sweep sees under load.
+
+  `tests/lib/wait_port.sh` probes the actual port instead: curl exits 7, and
+  only 7, when the connection could not be made, so any other exit proves
+  something is listening, whatever protocol runs on top (a TLS or HTTP/2 port
+  answers a plain probe with a handshake failure, which still counts). It uses
+  curl because every one of these tests already does, so there is no new
+  dependency on any platform.
+
+  Measured: the probe returns in 0.036s against a live port where the sleep
+  took 0.300s, so about 5.8s across the 22 tests converted. The correctness is
+  the point; the time is a side effect.
+
+
+### Fixed
+
 - **`ae build <bin-name>` works from a subdirectory** (#1905). The walk-up to
   `aether.toml` rebases a relative positional argument so a file path still
   resolves after the chdir, and it did that to a `[[bin]]` NAME as well:

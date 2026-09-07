@@ -20,6 +20,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+. "$ROOT/tests/lib/wait_port.sh"
 AE="$ROOT/build/ae"
 
 if ! command -v openssl >/dev/null 2>&1; then
@@ -108,7 +109,7 @@ if ! grep -q READY "$TMPDIR/srv.log" 2>/dev/null; then
     exit 1
 fi
 
-sleep 0.3
+wait_port 18119 || exit 1
 
 OUT="$TMPDIR/client.out"
 # GOOD_CA is the ROOT CA (not the leaf): the client pins the CA and the server

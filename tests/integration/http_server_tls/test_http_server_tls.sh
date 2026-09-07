@@ -27,6 +27,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+. "$ROOT/tests/lib/wait_port.sh"
 AE="$ROOT/build/ae"
 
 if ! command -v openssl >/dev/null 2>&1; then
@@ -96,7 +97,7 @@ if ! grep -q READY "$TMPDIR/srv.log" 2>/dev/null; then
 fi
 
 # Brief settle for the actor to bind the listen socket.
-sleep 0.3
+wait_port 18102 || exit 1
 
 # Drive the HTTPS request. --cacert points curl at our self-signed
 # cert so verification succeeds; --resolve isn't needed because the

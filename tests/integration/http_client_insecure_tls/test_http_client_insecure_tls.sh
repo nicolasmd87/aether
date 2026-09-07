@@ -21,6 +21,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+. "$ROOT/tests/lib/wait_port.sh"
 AE="$ROOT/build/ae"
 
 if ! command -v openssl >/dev/null 2>&1; then
@@ -88,7 +89,7 @@ if ! grep -q READY "$TMPDIR/srv.log" 2>/dev/null; then
 fi
 
 # Settle for the actor to bind the listen socket.
-sleep 0.3
+wait_port 18118 || exit 1
 
 OUT="$TMPDIR/client.out"
 if ! AETHER_HOME="$ROOT" "$AE" run "$SCRIPT_DIR/client.ae" >"$OUT" 2>&1; then
