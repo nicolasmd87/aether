@@ -31,6 +31,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+. "$ROOT/tests/lib/wait_port.sh"
 AE="$ROOT/build/ae"
 
 if ! command -v curl >/dev/null 2>&1; then
@@ -61,7 +62,7 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     fi
     sleep 0.1
 done
-sleep 0.3
+wait_port 18103 || exit 1
 
 # Three URLs in one curl invocation re-uses a single TCP connection.
 # Use distinct -o files per URL so we can verify each response

@@ -20,6 +20,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+. "$ROOT/tests/lib/wait_port.sh"
 AE="$ROOT/build/ae"
 
 if ! command -v python3 >/dev/null 2>&1; then
@@ -52,7 +53,7 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     sleep 0.1
 done
 grep -q READY "$TMPDIR/origin.log" 2>/dev/null || { echo "  [FAIL] origin never READY"; head -20 "$TMPDIR/origin.log"; exit 1; }
-sleep 0.3
+wait_port 18120 || exit 1
 
 # Run the client with a loopback-IP HTTP_PROXY so case 3 can exercise the SSRF
 # guard. Cases 1 and 2 pin/ignore the proxy explicitly and don't consult env.

@@ -25,6 +25,7 @@ esac
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+. "$ROOT/tests/lib/wait_port.sh"
 AE="$ROOT/build/ae"
 
 command -v curl >/dev/null 2>&1 || { echo "  [SKIP] curl not on PATH"; exit 0; }
@@ -60,7 +61,7 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     kill -0 "$SRV_PID" 2>/dev/null || { echo "  [FAIL] server died:"; head -30 "$TMPDIR/srv.log"; exit 1; }
     sleep 0.1
 done
-sleep 0.3
+wait_port 19250 || exit 1
 
 # Single curl invocation: PUT the big body, then GET /ping on the SAME
 # connection (curl reuses the keep-alive socket for sequential URLs).

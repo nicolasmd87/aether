@@ -33,6 +33,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+. "$ROOT/tests/lib/wait_port.sh"
 AE="$ROOT/build/ae"
 
 if ! command -v curl >/dev/null 2>&1; then
@@ -65,7 +66,7 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     fi
     sleep 0.1
 done
-sleep 0.3
+wait_port 18107 || exit 1
 
 # --- on_start hook fired ---
 if ! [ -f "$MARKER" ] || ! grep -q STARTED "$MARKER"; then

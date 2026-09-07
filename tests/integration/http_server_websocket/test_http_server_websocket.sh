@@ -33,6 +33,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+. "$ROOT/tests/lib/wait_port.sh"
 AE="$ROOT/build/ae"
 
 if ! command -v python3 >/dev/null 2>&1; then
@@ -87,7 +88,7 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     fi
     sleep 0.1
 done
-sleep 0.3
+wait_port 18110 || exit 1
 
 # Python client sends 3 text messages and prints each echo on its
 # own line; non-zero exit on any failure.
