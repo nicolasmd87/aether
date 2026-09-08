@@ -22,14 +22,14 @@ version number before tagging the release.
   at cloning the repository. (#1934)
 
 - **A heap-string struct field assigned from a borrowed value was freed at
-  teardown — double free / free of rodata.** When a heap-string field is
+  teardown, a double free / free of rodata.** When a heap-string field is
   assigned from a bare heap-tracked local (`a.value = v`), the field's
   `_heap_<field>` tracker was hard-coded to 1. But a local classified as a
-  heap-string var can hold a *borrowed* value at runtime — e.g. one returned by
+  heap-string var can hold a *borrowed* value at runtime, e.g. one returned by
   a function that passes a parameter or a literal straight through, leaving its
   `_heap_<var>` at 0. The struct destructor then freed a pointer the program
   never owned: a literal (free of read-only data) or a value still owned
-  elsewhere. It surfaced downstream as a callback/FFI crash — a hook returns a
+  elsewhere. It surfaced downstream as a callback/FFI crash: a hook returns a
   literal `string`, the engine threads it through `-> string` helpers into a
   heap-boxed struct field, and teardown aborted with `invalid pointer` /
   SIGSEGV. The field store now *moves* the source var's runtime ownership
@@ -48,6 +48,11 @@ version number before tagging the release.
   leaks gate. The flag is the ownership token, so it is now recorded whether or
   not this scope is the one that acts on it; the escape-suppressed frees are
   unchanged.
+
+## [0.648.0]
+
+### Fixed
+
 - **Three more server fixtures bind an ephemeral port** (part of #1920):
   `http_auth`, which runs two servers from one binary, and the two websocket
   fixtures, including the python peer `ws_client_conformance` dials. Their
