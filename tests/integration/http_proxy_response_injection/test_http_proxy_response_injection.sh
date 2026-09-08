@@ -19,13 +19,18 @@ if ! command -v python3 >/dev/null 2>&1; then
     exit 0
 fi
 
+. "$ROOT/tests/lib/wait_port.sh"
+
 TMPDIR="$(mktemp -d)"
 PX_PID=""
+UP_PID=""
 cleanup() {
-    if [ -n "$PX_PID" ]; then
-        kill "$PX_PID" 2>/dev/null || true
-        wait "$PX_PID" 2>/dev/null || true
-    fi
+    for pid in "$PX_PID" "$UP_PID"; do
+        if [ -n "$pid" ]; then
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+        fi
+    done
     rm -rf "$TMPDIR"
 }
 trap cleanup EXIT
@@ -48,10 +53,24 @@ fi
 # served by one or the other: the pass-through checks the value and drops that
 # header, while the copying path stops parsing the block at the malformed line.
 # Testing only whichever happens to be active would leave the other unguarded.
+# The hostile upstream, once: it binds port 0 and names the port it landed on,
+# which is what the proxy has to be told.
+python3 "$SCRIPT_DIR/injection_probe.py" upstream "$TMPDIR/up.port" \
+    >"$TMPDIR/up.log" 2>&1 &
+UP_PID=$!
+deadline=$(($(date +%s) + 15))
+while [ ! -f "$TMPDIR/up.port" ]; do
+    kill -0 "$UP_PID" 2>/dev/null || {
+        echo "  [FAIL] hostile upstream died:"; head -20 "$TMPDIR/up.log"; exit 1; }
+    [ "$(date +%s)" -lt "$deadline" ] || {
+        echo "  [FAIL] hostile upstream never bound"; exit 1; }
+    sleep 0.05
+done
+UP_PORT=$(cat "$TMPDIR/up.port")
+
 run_one() {
     label="$1"; direct="$2"
-    # Only the proxy: the probe binds 19001 itself and answers as the upstream.
-    AETHER_PROXY_DIRECT="$direct" AETHER_HOME="$ROOT" "$TMPDIR/server" proxy \
+    AETHER_PROXY_DIRECT="$direct" AETHER_HOME="$ROOT" "$TMPDIR/server" proxy "$UP_PORT" \
         >"$TMPDIR/px.$label.log" 2>&1 &
     PX_PID=$!
 
@@ -60,22 +79,19 @@ run_one() {
         if ! kill -0 "$PX_PID" 2>/dev/null; then
             echo "  [FAIL] proxy died ($label):"; head -30 "$TMPDIR/px.$label.log"; exit 1
         fi
-        # 502 is expected: nothing answers upstream yet. Any reply at all means
-        # the proxy is accepting.
-        if curl -s -o /dev/null --max-time 1 "http://127.0.0.1:19000/echo" 2>/dev/null; then
-            break
-        fi
-        sleep 0.1
+        if grep -q '^READY ' "$TMPDIR/px.$label.log" 2>/dev/null; then break; fi
+        sleep 0.05
     done
+    PX_PORT=$(read_ready_port "$TMPDIR/px.$label.log") || exit 1
+    wait_port "$PX_PORT" || exit 1
 
-    if ! OUT=$(python3 "$SCRIPT_DIR/injection_probe.py" 2>&1); then
+    if ! OUT=$(python3 "$SCRIPT_DIR/injection_probe.py" client "$PX_PORT" 2>&1); then
         echo "  [FAIL] http_proxy_response_injection ($label): $OUT"; exit 1
     fi
 
     kill "$PX_PID" 2>/dev/null || true
     wait "$PX_PID" 2>/dev/null || true
     PX_PID=""
-    sleep 0.3
 }
 
 run_one pass-through 1

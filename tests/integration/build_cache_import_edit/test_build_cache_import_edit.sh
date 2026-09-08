@@ -26,6 +26,12 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# Asserts a cache hit, so it needs a cache no other test is writing to: the key
+# is content-derived, and a sibling test building the same source would answer
+# "hit" for the wrong reason.
+AETHER_CACHE_DIR="$TMP/cache"
+export AETHER_CACHE_DIR
+
 mkdir -p "$TMP/proj/src"
 cd "$TMP/proj" || exit 1
 printf '[[bin]]\nname = "app"\npath = "src/main.ae"\n' > aether.toml

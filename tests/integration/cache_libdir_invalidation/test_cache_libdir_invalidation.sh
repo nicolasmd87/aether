@@ -18,6 +18,12 @@ AE="$ROOT/build/ae"
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
+# Its own cache: the test decides whether an edit invalidated the key, which is
+# only meaningful when nothing else is publishing entries into the same
+# directory.
+AETHER_CACHE_DIR="$TMPDIR/cache"
+export AETHER_CACHE_DIR
+
 mkdir -p "$TMPDIR/proj/lib/greet"
 cd "$TMPDIR/proj"
 

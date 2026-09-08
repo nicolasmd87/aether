@@ -2,9 +2,13 @@
 //
 // Runs as one of three roles, selected by argv[1]:
 //
-//   upstream      — bind :19001, serve /echo + /slow
-//   proxy         — bind :19000, simple proxy → http://localhost:19001 (30s timeout)
-//   proxy_timeout — bind :19000, simple proxy → http://localhost:19001 (1s timeout)
+//   upstream                — serve /echo + /slow
+//   proxy <up_port>         — simple proxy to http://localhost:<up_port> (30s timeout)
+//   proxy_timeout <up_port> — the same with a 1s timeout
+//
+// Every role binds port 0 and prints "READY <port>", so two runs of the sweep
+// can never collide on a port number nobody chose. A proxy role is told its
+// upstream's port because the upstream picked it at bind time.
 //
 // The shell driver boots two of these processes (upstream + proxy)
 // because Aether's actor scheduler can't run two blocking accept
@@ -18,10 +22,9 @@ import std.os
 // Use raw form: actor receive handlers can't cleanly discard the
 // wrapper's string return without an unused-result warning.
 extern http_server_start_raw(server: ptr) -> int
+extern http_server_bind_raw(server: ptr, host: string, port: int) -> int
+extern http_server_port(server: ptr) -> int
 extern exit(code: int)
-
-const UPSTREAM_PORT = 19001
-const PROXY_PORT = 19000
 
 // Upstream handlers ---------------------------------------------
 
@@ -125,7 +128,7 @@ run_server(srv: ptr) {
 }
 
 run_upstream() {
-    up = http.server_create(UPSTREAM_PORT)
+    up = http.server_create(0)
     if up == 0 {
         println("FAIL: upstream server_create")
         exit(1)
@@ -140,15 +143,19 @@ run_upstream() {
     http.server_get(up, "/longheader", handle_upstream_longheader, 0)
     http.server_get(up, "/bigbody", handle_upstream_bigbody, 0)
     http.server_get(up, "/slow", handle_upstream_slow, 0)
-    println("READY")
+    if http_server_bind_raw(up, "127.0.0.1", 0) < 0 {
+        println("FAIL: upstream bind")
+        exit(1)
+    }
+    println("READY ${http_server_port(up)}")
     run_server(up)
 }
 
 // A TLS-terminating proxy, so the event driver's TLS path is exercised: it
 // carries the handshake itself and reads and writes through the session,
 // where a TLS listener used to fall back to a thread per connection.
-run_proxy_tls(cert_path: string, key_path: string) {
-    p = http.server_create(PROXY_PORT)
+run_proxy_tls(cert_path: string, key_path: string, upstream_port: string) {
+    p = http.server_create(0)
     if p == 0 {
         println("FAIL: proxy server_create")
         exit(1)
@@ -158,14 +165,18 @@ run_proxy_tls(cert_path: string, key_path: string) {
     if terr != "" { println("FAIL: set_tls: ${terr}"); exit(1) }
     ka = http.server_set_keepalive(p, 1, 0, 5000ms)
     if ka != "" { println("FAIL: keepalive: ${ka}"); exit(1) }
-    err = proxy.mount_simple(p, "/", "http://localhost:19001", 30)
+    err = proxy.mount_simple(p, "/", "http://localhost:${upstream_port}", 30)
     if err != "" { println("FAIL: mount_simple: ${err}"); exit(1) }
-    println("READY")
+    if http_server_bind_raw(p, "127.0.0.1", 0) < 0 {
+        println("FAIL: proxy bind")
+        exit(1)
+    }
+    println("READY ${http_server_port(p)}")
     run_server(p)
 }
 
-run_proxy(timeout_sec: int) {
-    p = http.server_create(PROXY_PORT)
+run_proxy(timeout_sec: int, upstream_port: string) {
+    p = http.server_create(0)
     if p == 0 {
         println("FAIL: proxy server_create")
         exit(1)
@@ -173,16 +184,20 @@ run_proxy(timeout_sec: int) {
     http.server_set_host(p, "127.0.0.1")
     ka = http.server_set_keepalive(p, 1, 0, 5000ms)
     if ka != "" { println("FAIL: keepalive: ${ka}"); exit(1) }
-    err = proxy.mount_simple(p, "/", "http://localhost:19001", timeout_sec)
+    err = proxy.mount_simple(p, "/", "http://localhost:${upstream_port}", timeout_sec)
     if err != "" { println("FAIL: mount_simple: ${err}"); exit(1) }
-    println("READY")
+    if http_server_bind_raw(p, "127.0.0.1", 0) < 0 {
+        println("FAIL: proxy bind")
+        exit(1)
+    }
+    println("READY ${http_server_port(p)}")
     run_server(p)
 }
 
 main() {
     n = aether_args_count()
     if n < 2 {
-        println("FAIL: usage: server <upstream|proxy|proxy_timeout>")
+        println("FAIL: usage: server <upstream|proxy <port>|proxy_timeout <port>>")
         exit(1)
     }
     role = aether_args_get(1)
@@ -192,15 +207,15 @@ main() {
         return
     }
     if role == "proxy" {
-        run_proxy(30)
+        run_proxy(30, aether_args_get(2))
         return
     }
     if role == "proxy_timeout" {
-        run_proxy(1)
+        run_proxy(1, aether_args_get(2))
         return
     }
     if role == "proxy_tls" {
-        run_proxy_tls(aether_args_get(2), aether_args_get(3))
+        run_proxy_tls(aether_args_get(2), aether_args_get(3), aether_args_get(4))
         return
     }
     println("FAIL: unknown role: ${role}")

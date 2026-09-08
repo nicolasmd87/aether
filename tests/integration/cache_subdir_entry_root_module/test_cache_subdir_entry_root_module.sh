@@ -30,6 +30,13 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# Counts cache entries before and after a rebuild, which only answers the
+# question when this test is the only writer. Against the shared
+# ~/.aether/cache any other test compiling at the same moment adds entries and
+# an unchanged re-run looks like a miss.
+AETHER_CACHE_DIR="$TMP/cache"
+export AETHER_CACHE_DIR
+
 mkdir -p "$TMP/proj/greeter" "$TMP/proj/tests"
 cd "$TMP/proj" || exit 1
 

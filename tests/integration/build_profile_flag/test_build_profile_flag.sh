@@ -47,6 +47,13 @@ TMP="$(mktemp -d)"
 cleanup() { rm -rf "$TMP"; }
 trap cleanup EXIT INT TERM
 
+# This test clears the build cache between modes, so it must not be pointed at
+# the shared one: deleting ~/.aether/cache pulls the linker's output file out
+# from under any other `ae` running at that moment, which fails as
+# `ld: open() failed, errno=2` in a test that has nothing to do with caching.
+AETHER_CACHE_DIR="$TMP/cache"
+export AETHER_CACHE_DIR
+
 has_debug() {
     readelf -S "$1" 2>/dev/null | grep -c "debug_info" || true
 }
@@ -56,7 +63,7 @@ build() {   # build <out> [flags...]
     # Clear the module cache: it keys on source, not on build flags, so a
     # cached artifact from the previous mode would be handed back and the
     # comparison would measure nothing.
-    rm -rf "$HOME/.aether/cache" 2>/dev/null || true
+    rm -rf "$AETHER_CACHE_DIR" 2>/dev/null || true
     "$AE" build "$@" "$SRC" -o "$out" >"$TMP/build.log" 2>&1 || {
         echo "  [FAIL] build_profile_flag: 'ae build $* ' failed"
         sed 's/^/    /' "$TMP/build.log" | head -10

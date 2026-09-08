@@ -17,9 +17,11 @@ trap 'rm -rf "$TMPDIR"' EXIT
 
 pass=0; fail=0
 
-# Clear the build cache so we don't pick up a stale binary from a
-# pre-fix run.
-"$AE" cache clear >/dev/null 2>&1 || true
+# An empty cache of its own, so a stale binary from a pre-fix run cannot be
+# picked up. Clearing the shared ~/.aether/cache instead would delete the
+# linker's output file under any other `ae` running at that moment.
+AETHER_CACHE_DIR="$TMPDIR/cache"
+export AETHER_CACHE_DIR
 
 # Case 1: module shadow → build error with the diagnostic text.
 out=$("$AE" build "$SCRIPT_DIR/main_uses_shadow.ae" \

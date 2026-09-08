@@ -24,6 +24,12 @@ fi
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# This test asserts HIT and MISS, so it needs a cache no other test is writing
+# to: the shared ~/.aether/cache is keyed on content, and a sibling test
+# building the same trivial source would answer "hit" for the wrong reason.
+AETHER_CACHE_DIR="$TMP/cache"
+export AETHER_CACHE_DIR
+
 mkdir -p "$TMP/proj"
 cd "$TMP/proj" || exit 1
 
