@@ -48,6 +48,14 @@ version number before tagging the release.
   nobody exercised. A new `ci-no-openssl` job builds with `OPENSSL=0` and runs
   the digest suites against the pure path, because every other leg in the
   matrix installs OpenSSL and none of them covered it.
+- **`cache_dir_override` now covers the `cache` command, not only the build
+  path.** The #1032 override was fixed in `cmd_cache` without a test reaching
+  it, and that is how the bug lived: the existing case proved `ae build`
+  honours `AETHER_CACHE_DIR`, while `ae cache` composed `$HOME/.aether/cache`
+  by hand, so it reported on a directory the build was not using and
+  `ae cache clear` deleted the contents of the wrong one. Verified against a
+  binary without the fix, where clear prints "Cleared 85 cached build(s) from
+  <the default cache>" for a request to clear an override.
 
 ## [0.651.0]
 
@@ -144,7 +152,6 @@ version number before tagging the release.
   runners have no Vulkan device and MSYS2 packages no CPU driver; the leg says
   which entries ran and which skipped rather than leaving that to be found
   later. (#1511)
-
 
 ## [0.650.0]
 
