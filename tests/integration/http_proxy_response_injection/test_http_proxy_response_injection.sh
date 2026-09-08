@@ -14,8 +14,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 AE="$ROOT/build/ae"
 
-if ! command -v python3 >/dev/null 2>&1; then
-    echo "  [SKIP] http_proxy_response_injection: python3 not on PATH"
+PY="$(sh "$ROOT/tests/scripts/find_python.sh" 2>/dev/null)" || PY=""
+if [ -z "$PY" ]; then
+    echo "  [SKIP] http_proxy_response_injection: no working Python (a Windows Store alias is not one)"
     exit 0
 fi
 
@@ -55,7 +56,7 @@ fi
 # Testing only whichever happens to be active would leave the other unguarded.
 # The hostile upstream, once: it binds port 0 and names the port it landed on,
 # which is what the proxy has to be told.
-python3 "$SCRIPT_DIR/injection_probe.py" upstream "$TMPDIR/up.port" \
+$PY "$SCRIPT_DIR/injection_probe.py" upstream "$TMPDIR/up.port" \
     >"$TMPDIR/up.log" 2>&1 &
 UP_PID=$!
 deadline=$(($(date +%s) + 15))
@@ -85,7 +86,7 @@ run_one() {
     PX_PORT=$(read_ready_port "$TMPDIR/px.$label.log") || exit 1
     wait_port "$PX_PORT" || exit 1
 
-    if ! OUT=$(python3 "$SCRIPT_DIR/injection_probe.py" client "$PX_PORT" 2>&1); then
+    if ! OUT=$($PY "$SCRIPT_DIR/injection_probe.py" client "$PX_PORT" 2>&1); then
         echo "  [FAIL] http_proxy_response_injection ($label): $OUT"; exit 1
     fi
 

@@ -10,19 +10,34 @@
 // scope — see docs/stdlib-vs-contrib.md for the "one obvious shape"
 // criterion.
 //
-// When the Aether toolchain was built without OpenSSL, every wrapper
-// returns a non-empty error string ("openssl unavailable") rather
-// than crashing. Callers that need cryptographic functions should
-// check the error slot.
+// When the Aether toolchain was built without OpenSSL — the default for a
+// Windows source build — the ONE-SHOT digests (sha1/sha256/sha224/sha384/
+// sha512/md4/md5, hex and bytes, plus hash_hex/hash_bytes by name) fall back
+// to the pure-Aether implementations under std.cryptography.*, so they keep
+// working and hash_supported() answers for them either way.
+//
+// Still OpenSSL-only, and still returning a non-empty error rather than
+// crashing: the STREAMING context API (digest_new / digest_update /
+// digest_final_*) and any algorithm without a pure implementation. Callers
+// should check the error slot.
 
 import std.string
 import std.bytes
 import std.encoding
 import std.cryptography.hmac
+// Pure-Aether SHA-1/SHA-2, used as the fallback when the toolchain was built
+// without OpenSSL — the default for a Windows source build, where this
+// otherwise left sha256() (and therefore std.cas, and every caller that hashes)
+// permanently unavailable. Costs nothing to link: std.cryptography.hmac already
+// pulls in sha2, so only sha1 is new here.
+import std.cryptography.md4
+import std.cryptography.md5
+import std.cryptography.sha1
+import std.cryptography.sha2
 
 exports(
     cryptography_sha1_hex_raw, cryptography_sha256_hex_raw,
-    cryptography_hash_hex_raw, cryptography_hash_supported,
+    cryptography_hash_hex_raw, cryptography_hash_supported_raw,
     cryptography_md4_hex_raw, cryptography_md5_hex_raw,
     cryptography_hmac_sha256_hex_raw, cryptography_hmac_sha256_bytes_raw,
     cryptography_md4_bytes_raw, cryptography_md5_bytes_raw,
@@ -47,7 +62,13 @@ exports(
 extern cryptography_sha1_hex_raw(data: string, length: int) -> string
 extern cryptography_sha256_hex_raw(data: string, length: int) -> string
 extern cryptography_hash_hex_raw(algo: string, data: string, length: int) -> string
-extern cryptography_hash_supported(algo: string) -> int
+// Bound under a _raw name like its siblings. The module function below is
+// called `hash_supported`, which mangles to `cryptography_hash_supported` --
+// exactly this C symbol. The two collided, and the extern won, so every
+// addition to hash_supported() was silently discarded at the call site while
+// the source read as though it worked. Invisible until the body did more than
+// forward to the extern, which is why it survived this long.
+extern cryptography_hash_supported_raw(algo: string) -> int
 extern cryptography_md4_hex_raw(data: string, length: int) -> string
 extern cryptography_md5_hex_raw(data: string, length: int) -> string
 extern cryptography_hmac_sha256_hex_raw(key: string, key_len: int,
@@ -84,7 +105,15 @@ extern string_new_with_length(data: string, length: int) -> ptr
 sha1_hex(data: string, length: int) -> {
     out = cryptography_sha1_hex_raw(data, length)
     if out == 0 {
-        return "", "openssl unavailable"
+        // No OpenSSL in this build: compute it in Aether instead of failing.
+        // Binary-safe — sha1.update indexes through string_char_at_n(data,
+        // length, i), which is bounded by the explicit length and returns the
+        // raw byte, so embedded NULs hash correctly.
+        pure = sha1.sha1_hex(data, length)
+        if string.length(pure) == 0 {
+            return "", "sha1 unavailable"
+        }
+        return pure, ""
     }
     return out, ""
 }
@@ -94,7 +123,13 @@ sha1_hex(data: string, length: int) -> {
 sha256_hex(data: string, length: int) -> {
     out = cryptography_sha256_hex_raw(data, length)
     if out == 0 {
-        return "", "openssl unavailable"
+        // See sha1_hex above: pure fallback, binary-safe, so std.cas and
+        // every other sha256 caller keeps working without OpenSSL.
+        pure = sha2.sha256_hex(data, length)
+        if string.length(pure) == 0 {
+            return "", "sha256 unavailable"
+        }
+        return pure, ""
     }
     return out, ""
 }
@@ -111,10 +146,34 @@ sha256_hex(data: string, length: int) -> {
 // "sha512", "sha3-256", ...), but the supported set may vary by
 // OpenSSL build. Use hash_supported() to check before passing
 // user-supplied names.
+// Pure-Aether dispatch for the algorithms std.cryptography.sha1 / .sha2
+// implement. Returns "" for anything else, which the callers below read as
+// "no pure fallback for this name". Private: the public surface stays
+// hash_hex / hash_supported, which now answer the same way with or without
+// OpenSSL for these five.
+pure_hash_hex(algo: string, data: string, length: int) -> string {
+    if algo == "sha1" { return sha1.sha1_hex(data, length) }
+    if algo == "sha256" { return sha2.sha256_hex(data, length) }
+    if algo == "sha224" { return sha2.sha224_hex(data, length) }
+    if algo == "sha384" { return sha2.sha384_hex(data, length) }
+    if algo == "sha512" { return sha2.sha512_hex(data, length) }
+    if algo == "md4" { return md4.md4_hex(data, length) }
+    if algo == "md5" { return md5.md5_hex(data, length) }
+    return ""
+}
+
 hash_hex(algo: string, data: string, length: int) -> {
     out = cryptography_hash_hex_raw(algo, data, length)
     if out == 0 {
-        if cryptography_hash_supported(algo) == 0 {
+        // Try the pure implementation BEFORE consulting
+        // cryptography_hash_supported: without OpenSSL that probe answers 0
+        // for everything, so the old order reported a perfectly valid
+        // "sha256" as an *unknown algorithm* rather than an absent backend.
+        pure = pure_hash_hex(algo, data, length)
+        if string.length(pure) > 0 {
+            return pure, ""
+        }
+        if cryptography_hash_supported_raw(algo) == 0 {
             return "", "unknown algorithm"
         }
         return "", "openssl unavailable"
@@ -127,7 +186,22 @@ hash_hex(algo: string, data: string, length: int) -> {
 // validate user-supplied algorithm names before they get written
 // somewhere persistent.
 hash_supported(algo: string) -> int {
-    return cryptography_hash_supported(algo)
+    if cryptography_hash_supported_raw(algo) == 1 {
+        return 1
+    }
+    // The five with a pure implementation are supported whether or not
+    // OpenSSL is linked, and this must agree with hash_hex — a probe that
+    // says "no" for a name hash_hex then computes is worse than either
+    // answer alone, and callers are told to use this to validate names
+    // before persisting them.
+    if algo == "sha1" { return 1 }
+    if algo == "sha256" { return 1 }
+    if algo == "sha224" { return 1 }
+    if algo == "sha384" { return 1 }
+    if algo == "sha512" { return 1 }
+    if algo == "md4" { return 1 }
+    if algo == "md5" { return 1 }
+    return 0
 }
 
 // Base64 now lives in std.encoding (its correct home — it is an encoding,
@@ -145,7 +219,13 @@ hash_supported(algo: string) -> int {
 md4_hex(data: string, length: int) -> {
     out = cryptography_md4_hex_raw(data, length)
     if out == 0 {
-        return "", "md4 unavailable"
+        // MD4 is absent from OpenSSL 3 default providers as well as from a
+        // no-OpenSSL build, so the pure path is the usual one here.
+        pure = md4.md4_hex(data, length)
+        if string.length(pure) == 0 {
+            return "", "md4 unavailable"
+        }
+        return pure, ""
     }
     return out, ""
 }
@@ -155,7 +235,11 @@ md4_hex(data: string, length: int) -> {
 md5_hex(data: string, length: int) -> {
     out = cryptography_md5_hex_raw(data, length)
     if out == 0 {
-        return "", "openssl unavailable"
+        pure = md5.md5_hex(data, length)
+        if string.length(pure) == 0 {
+            return "", "md5 unavailable"
+        }
+        return pure, ""
     }
     return out, ""
 }
@@ -227,7 +311,11 @@ hmac_sha256_bytes(key: string, key_len: int, msg: string, msg_len: int) -> {
 md4_bytes(data: string, length: int) -> {
     ok = cryptography_md4_bytes_raw(data, length)
     if ok == 0 {
-        return "", 0, "md4 unavailable"
+        p = md4.md4_bytes(data, length)
+        if p == null {
+            return "", 0, "md4 unavailable"
+        }
+        return bytes.finish(p, 16), 16, ""
     }
     raw = cryptography_get_binary_digest()
     n = cryptography_get_binary_digest_length()
@@ -239,7 +327,11 @@ md4_bytes(data: string, length: int) -> {
 md5_bytes(data: string, length: int) -> {
     ok = cryptography_md5_bytes_raw(data, length)
     if ok == 0 {
-        return "", 0, "openssl unavailable"
+        p = md5.md5_bytes(data, length)
+        if p == null {
+            return "", 0, "md5 unavailable"
+        }
+        return bytes.finish(p, 16), 16, ""
     }
     raw = cryptography_get_binary_digest()
     n = cryptography_get_binary_digest_length()
@@ -251,7 +343,11 @@ md5_bytes(data: string, length: int) -> {
 sha1_bytes(data: string, length: int) -> {
     ok = cryptography_sha1_bytes_raw(data, length)
     if ok == 0 {
-        return "", 0, "openssl unavailable"
+        pure = sha1.sha1_bytes(data, length)
+        if pure == null {
+            return "", 0, "sha1 unavailable"
+        }
+        return bytes.finish(pure, 20), 20, ""
     }
     raw = cryptography_get_binary_digest()
     n = cryptography_get_binary_digest_length()
@@ -263,7 +359,15 @@ sha1_bytes(data: string, length: int) -> {
 sha256_bytes(data: string, length: int) -> {
     ok = cryptography_sha256_bytes_raw(data, length)
     if ok == 0 {
-        return "", 0, "openssl unavailable"
+        // Same pure fallback as sha256_hex. Both variants must agree: a build
+        // where sha256_hex() works and sha256_bytes() reports "unavailable"
+        // is a worse API than one where neither does, and callers reasonably
+        // assume the pair share a backend.
+        pure = sha2.sha256_bytes(data, length)
+        if pure == null {
+            return "", 0, "sha256 unavailable"
+        }
+        return bytes.finish(pure, 32), 32, ""
     }
     raw = cryptography_get_binary_digest()
     n = cryptography_get_binary_digest_length()
@@ -281,7 +385,38 @@ sha256_bytes(data: string, length: int) -> {
 hash_bytes(algo: string, data: string, length: int) -> {
     ok = cryptography_hash_bytes_raw(algo, data, length)
     if ok == 0 {
-        if cryptography_hash_supported(algo) == 0 {
+        // Pure fallback first, for the same reason as hash_hex: without
+        // OpenSSL the hash_supported probe answers 0 for everything, so
+        // checking it first mislabels a valid "sha256" as unknown.
+        if algo == "sha1" {
+            p1 = sha1.sha1_bytes(data, length)
+            if p1 != null { return bytes.finish(p1, 20), 20, "" }
+        }
+        if algo == "sha256" {
+            p2 = sha2.sha256_bytes(data, length)
+            if p2 != null { return bytes.finish(p2, 32), 32, "" }
+        }
+        if algo == "sha224" {
+            p3 = sha2.sha224_bytes(data, length)
+            if p3 != null { return bytes.finish(p3, 28), 28, "" }
+        }
+        if algo == "sha384" {
+            p4 = sha2.sha384_bytes(data, length)
+            if p4 != null { return bytes.finish(p4, 48), 48, "" }
+        }
+        if algo == "sha512" {
+            p5 = sha2.sha512_bytes(data, length)
+            if p5 != null { return bytes.finish(p5, 64), 64, "" }
+        }
+        if algo == "md4" {
+            p6 = md4.md4_bytes(data, length)
+            if p6 != null { return bytes.finish(p6, 16), 16, "" }
+        }
+        if algo == "md5" {
+            p7 = md5.md5_bytes(data, length)
+            if p7 != null { return bytes.finish(p7, 16), 16, "" }
+        }
+        if cryptography_hash_supported_raw(algo) == 0 {
             return "", 0, "unknown algorithm"
         }
         return "", 0, "openssl unavailable"
@@ -398,7 +533,7 @@ random_base64(n: int) -> {
 digest_new(algo: string) -> {
     ctx = cryptography_digest_new_raw(algo)
     if ctx == null {
-        if cryptography_hash_supported(algo) == 0 {
+        if cryptography_hash_supported_raw(algo) == 0 {
             return null, "unknown algorithm"
         }
         return null, "openssl unavailable"

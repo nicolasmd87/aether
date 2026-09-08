@@ -90,7 +90,7 @@ char* cryptography_hash_hex_raw(const char* algo, const char* data, int length) 
     return sha_hex(md, data, length);
 }
 
-int cryptography_hash_supported(const char* algo) {
+int cryptography_hash_supported_raw(const char* algo) {
     if (!algo) return 0;
     return EVP_get_digestbyname(algo) != NULL ? 1 : 0;
 }
@@ -367,7 +367,7 @@ char* cryptography_sha256_hex_raw(const char* data, int length) {
 char* cryptography_hash_hex_raw(const char* algo, const char* data, int length) {
     (void)algo; (void)data; (void)length; return NULL;
 }
-int cryptography_hash_supported(const char* algo) {
+int cryptography_hash_supported_raw(const char* algo) {
     (void)algo; return 0;
 }
 

@@ -13,8 +13,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 AE="$ROOT/build/ae"
 
-if ! command -v python3 >/dev/null 2>&1; then
-    echo "  [SKIP] http_proxy_stale_pooled_connection: python3 not on PATH"
+PY="$(sh "$ROOT/tests/scripts/find_python.sh" 2>/dev/null)" || PY=""
+if [ -z "$PY" ]; then
+    echo "  [SKIP] http_proxy_stale_pooled_connection: no working Python (a Windows Store alias is not one)"
     exit 0
 fi
 
@@ -48,7 +49,7 @@ fi
 
 # The probe is the upstream: it binds port 0 and names the port it landed on,
 # which is what the proxy has to be told.
-python3 "$SCRIPT_DIR/stale_probe.py" upstream "$TMPDIR/up.port" >"$TMPDIR/up.log" 2>&1 &
+$PY "$SCRIPT_DIR/stale_probe.py" upstream "$TMPDIR/up.port" >"$TMPDIR/up.log" 2>&1 &
 UP_PID=$!
 deadline=$(($(date +%s) + 15))
 while [ ! -f "$TMPDIR/up.port" ]; do
@@ -74,7 +75,7 @@ done
 PX_PORT=$(read_ready_port "$TMPDIR/px.log") || exit 1
 wait_port "$PX_PORT" || exit 1
 
-if ! OUT=$(python3 "$SCRIPT_DIR/stale_probe.py" client "$PX_PORT" 2>&1); then
+if ! OUT=$($PY "$SCRIPT_DIR/stale_probe.py" client "$PX_PORT" 2>&1); then
     echo "  [FAIL] http_proxy_stale_pooled_connection: $OUT"; exit 1
 fi
 

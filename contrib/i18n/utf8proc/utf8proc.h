@@ -120,6 +120,33 @@ typedef bool utf8proc_bool;
 #endif
 #include <limits.h>
 
+/* AETHER LOCAL PATCH (Windows).
+ *
+ * Aether compiles utf8proc.c straight into the binary; there is no utf8proc
+ * DLL anywhere in the tree. Upstream defaults to the DLL spelling on _WIN32,
+ * so without this every translation unit that includes this header gets
+ * __declspec(dllimport), and two things break in sequence:
+ *
+ *   utf8proc.c:56: error: variable 'utf8proc_utf8class' definition is marked
+ *                  dllimport                       (defining an imported symbol)
+ *   ld: undefined reference to `__imp_utf8proc_decompose'
+ *                                                  (callers look for an import stub)
+ *
+ * Every other platform takes the visibility("default") branch, where both are
+ * fine, so this only ever broke on Windows.
+ *
+ * Defaulted in the HEADER rather than as -D at the build sites because the
+ * consumers matter as much as utf8proc.c itself -- contrib/i18n/aether_i18n.c
+ * hits the second error above -- and because two independent drivers compile
+ * this tree (the Makefile's contrib-i18n-check and
+ * .github/scripts/contrib_check.sh, the latter building its flags purely from
+ * a source list with no per-entry place for a -D). Defining UTF8PROC_SHARED
+ * restores upstream behaviour if a DLL build is ever wanted. */
+#if defined(_WIN32) && !defined(UTF8PROC_STATIC) && !defined(UTF8PROC_SHARED) \
+    && !defined(UTF8PROC_EXPORTS)
+#  define UTF8PROC_STATIC
+#endif
+
 #ifdef UTF8PROC_STATIC
 #  define UTF8PROC_DLLEXPORT
 #else

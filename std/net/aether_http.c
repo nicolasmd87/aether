@@ -1945,7 +1945,18 @@ static int http_dial(HttpClientRequest* req, struct sockaddr_in* serv_addr_in,
                                                   req ? req->cafile : NULL);
         if (!pc) {
             close(sockfd);
-            ae_set_err(out_err, "pure TLS handshake failed");
+            /* The pure client has the real reason (connect_full returns an
+             * `err` string) but the callback ABI only hands back a pointer,
+             * so it is lost here. Until that grows a last-error channel, name
+             * the cause that actually bites: no trust store. Windows ships no
+             * system PEM bundle, so a build there finds one only via the
+             * fallbacks in trust_store_path() or SSL_CERT_FILE. */
+            ae_set_err(out_err,
+                "pure TLS handshake failed: the peer was unreachable, spoke a "
+                "protocol we do not, or presented a certificate that did not "
+                "verify. A verification failure is the usual cause and most "
+                "often means no CA bundle was found -- point SSL_CERT_FILE at "
+                "a PEM bundle to rule that out.");
             return -1;
         }
         /* The pure connection owns the socket from here; transport_close

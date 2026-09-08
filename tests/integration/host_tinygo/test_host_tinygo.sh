@@ -39,6 +39,19 @@ case "$(uname -s)" in
 esac
 
 LIB_PATH="$TMPDIR/libgreet.$LIB_EXT"
+# The bridge archive is built by `make contrib`, which neither `make test-ae`
+# nor `make ci` runs — so in a plain checkout it is simply absent, and `ae run`
+# below fails at LINK with `undefined reference to tinygo_call_*` rather than
+# anything to do with this test's subject. Skip on the missing prerequisite,
+# the same way the `go` check above does, instead of reporting a link error
+# that reads like a bug in the bridge. Both layouts, per tools/ae.c: install
+# puts it beside libaether.a, a dev tree under contrib/.
+if [ ! -f "$ROOT/build/libaether_host_tinygo.a" ] && \
+   [ ! -f "$ROOT/build/contrib/libaether_host_tinygo.a" ]; then
+    echo "  [SKIP] contrib.host.tinygo: bridge not built — run \`make contrib\` first"
+    exit 0
+fi
+
 GO_SRC="$ROOT/contrib/host/tinygo/examples/greet.go"
 
 # `go build -buildmode=c-shared` requires CGO (the source uses `import "C"`)

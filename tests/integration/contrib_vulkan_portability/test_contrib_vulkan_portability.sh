@@ -70,14 +70,29 @@ if ! $CC_WIN -std=c99 -O2 -Wall -Wextra -Werror $INC -Icontrib/vulkan \
     exit 1
 fi
 
+# Whichever nm can read the object that was just built. A cross toolchain ships
+# a prefixed one; on a MinGW host the compiler is x86_64-w64-mingw32-gcc but the
+# binutils are unprefixed, and reaching for the prefixed name there failed with
+# "command not found" -- which the pipeline turned into "the _WIN32 arm was
+# compiled out", a wrong answer to a question that was never asked.
+NM_WIN=""
+for cand in "${CC_WIN%gcc}nm" nm llvm-nm; do
+    command -v "$cand" >/dev/null 2>&1 || continue
+    if "$cand" -u "$TMP/win.o" >/dev/null 2>&1; then NM_WIN="$cand"; break; fi
+done
+if [ -z "$NM_WIN" ]; then
+    echo "  [SKIP] contrib_vulkan_portability: no nm reads the cross-built object"
+    exit 0
+fi
+
 # It must reach the Win32 loader API, not dlopen: a #ifdef that silently took
 # the POSIX arm would compile and then fail to find a loader on Windows.
-if ! x86_64-w64-mingw32-nm -u "$TMP/win.o" | grep -q 'LoadLibraryA'; then
+if ! "$NM_WIN" -u "$TMP/win.o" | grep -q 'LoadLibraryA'; then
     echo "  [FAIL] contrib_vulkan_portability: the object does not reference LoadLibraryA"
     echo "        the _WIN32 arm was compiled out"
     exit 1
 fi
-if x86_64-w64-mingw32-nm -u "$TMP/win.o" | grep -q '\bdlopen\b'; then
+if "$NM_WIN" -u "$TMP/win.o" | grep -q '\bdlopen\b'; then
     echo "  [FAIL] contrib_vulkan_portability: the Windows object references dlopen"
     exit 1
 fi

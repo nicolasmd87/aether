@@ -1227,7 +1227,7 @@ test-cross: ae stdlib
 test-windows-wine: ae stdlib
 	@bash tests/scripts/windows_wine_sweep.sh
 
-# Test .ae source files - compiles and runs each test file
+# Test .ae source files - compiles and runs each test file.
 #
 # The shell tests run $(NPROC) at a time (SH_NPROC overrides). They were serial
 # because they shared three things, all now fixed (#1920): the HTTP fixtures
@@ -1240,6 +1240,21 @@ test-windows-wine: ae stdlib
 # A parallel run makes an individual test slower without anything being wrong,
 # so the per-test timeout is generous enough not to fail a merely contended one
 # and still short enough to catch a hang (AE_SH_TEST_TIMEOUT below).
+#
+# The recipe exports CC because several integration tests compile a C host
+# against libaether.a, and they default to `cc`. MSYS2's mingw64 ships a cc,
+# but WinLibs does not -- and WinLibs is the toolchain `ae` itself downloads
+# on a Windows box with no compiler (ensure_gcc_windows), so the tests could
+# not build a C host on the toolchain Aether had just installed for them.
+# BASE_CC is the plain compiler the build already resolved (gcc, else cc,
+# else clang) WITHOUT the ccache prefix -- tests invoke it as "$CC", which a
+# two-word "ccache gcc" would break. An explicit CC from the environment
+# still wins.
+#
+# The helper scripts the sweep runs live in tests/scripts/ rather than being
+# printf'd into a temp dir: doing the latter pushed this recipe past the 8 KB
+# command line mingw32-make hands to sh -c, and the truncated tail broke
+# `make test-ae` outright on Windows. See tests/scripts/run_ae_test.sh.
 ifdef WINDOWS_NATIVE
 test-ae: compiler ae stdlib
 	@echo ===================================
@@ -1253,46 +1268,9 @@ test-ae: compiler ae stdlib
 	@echo "  Parallel: $(NPROC) jobs"
 	@echo "==================================="
 	@tmpdir=$$(mktemp -d); \
-	script="$$tmpdir/run_test.sh"; \
-	printf '#!/bin/sh\n'                                                                             > "$$script"; \
-	printf 'f="$$1"; tmpdir="$$2"; root="$$3"\n'                                                    >> "$$script"; \
-	printf '# Portable per-test timeout: GNU coreutils `timeout` on Linux/MSYS2,\n'                 >> "$$script"; \
-	printf '# `gtimeout` on macOS (coreutils via brew); empty when neither exists\n'                >> "$$script"; \
-	printf '# (macOS without coreutils) so the test still runs, just unbounded.\n'                  >> "$$script"; \
-	printf 'if command -v timeout >/dev/null 2>&1; then TO="timeout $${AE_TEST_TIMEOUT:-120}"; \\\n' >> "$$script"; \
-	printf 'elif command -v gtimeout >/dev/null 2>&1; then TO="gtimeout $${AE_TEST_TIMEOUT:-120}"; \\\n' >> "$$script"; \
-	printf 'else TO=""; fi\n'                                                                       >> "$$script"; \
-	printf 'name=$$(echo "$$f" | sed "s|tests/||;s|/|_|g;s|\\.ae$$||")\n'                         >> "$$script"; \
-	printf 'dir=$$(dirname "$$f")\n'                                                                >> "$$script"; \
-	printf 'base=$$(basename "$$f")\n'                                                              >> "$$script"; \
-	printf 'if [ -d "$$dir/lib" ]; then\n'                                                          >> "$$script"; \
-	printf '  cmd="cd $$dir && $$root/build/ae build $$base $${AE_BUILD_FLAGS:-} -o $$root/build/test_$$name"\n' >> "$$script"; \
-	printf 'else\n'                                                                                 >> "$$script"; \
-	printf '  cmd="$$root/build/ae build $$f $${AE_BUILD_FLAGS:-} -o $$root/build/test_$$name"\n'   >> "$$script"; \
-	printf 'fi\n'                                                                                   >> "$$script"; \
-	printf 'if eval "$$cmd" 2>"$$tmpdir/build_$$name.err"; then\n'                                  >> "$$script"; \
-	printf '  $$TO "$$root/build/test_$$name" >"$$tmpdir/run_$$name.out" 2>"$$tmpdir/run_$$name.err"\n'  >> "$$script"; \
-	printf '  rc=$$?\n'                                                                             >> "$$script"; \
-	printf '  if [ $$rc -eq 0 ]; then\n'                                                            >> "$$script"; \
-	printf '    echo "  [PASS] $$name"; touch "$$tmpdir/PASS_$$name"\n'                             >> "$$script"; \
-	printf '  elif [ $$rc -eq 124 ]; then\n'                                                        >> "$$script"; \
-	printf '    echo "  [TIMEOUT] $$name (exceeded $${AE_TEST_TIMEOUT:-120}s)"\n'                    >> "$$script"; \
-	printf '    printf timeout > "$$tmpdir/phase_$$name.txt"\n'                                      >> "$$script"; \
-	printf '    touch "$$tmpdir/FAIL_$$name"\n'                                                      >> "$$script"; \
-	printf '  else\n'                                                                               >> "$$script"; \
-	printf '    echo "  [FAIL] $$name (runtime error, exit $$rc)"\n'                                >> "$$script"; \
-	printf '    printf runtime > "$$tmpdir/phase_$$name.txt"\n'                                     >> "$$script"; \
-	printf '    printf %%s "$$rc" > "$$tmpdir/rc_$$name.txt"\n'                                     >> "$$script"; \
-	printf '    touch "$$tmpdir/FAIL_$$name"\n'                                                     >> "$$script"; \
-	printf '  fi\n'                                                                                 >> "$$script"; \
-	printf 'else\n'                                                                                 >> "$$script"; \
-	printf '  echo "  [FAIL] $$name (compile error)"\n'                                             >> "$$script"; \
-	printf '  printf compile > "$$tmpdir/phase_$$name.txt"\n'                                       >> "$$script"; \
-	printf '  touch "$$tmpdir/FAIL_$$name"\n'                                                       >> "$$script"; \
-	printf '  head -5 "$$tmpdir/build_$$name.err" 2>/dev/null\n'                                    >> "$$script"; \
-	printf 'fi\n'                                                                                   >> "$$script"; \
-	chmod +x "$$script"; \
 	root=$$(pwd); \
+	script="$$root/tests/scripts/run_ae_test.sh"; \
+	CC="$${CC:-$(BASE_CC)}"; export CC; \
 	sed '/^#/d' tests/ae_sweep_prune.txt > "$$tmpdir/prune.txt"; \
 	if [ -n "$(AE_SWEEP_EXTRA_PRUNE)" ]; then \
 	  sed '/^#/d;/^$$/d' "$(AE_SWEEP_EXTRA_PRUNE)" >> "$$tmpdir/prune.txt"; \
@@ -1300,47 +1278,8 @@ test-ae: compiler ae stdlib
 	fi; \
 	{ find tests/syntax tests/compiler tests/integration tests/regression -name '*.ae' -print 2>/dev/null; find std -name 'test_*.ae' -print 2>/dev/null; } \
 	    | grep -v -F -f "$$tmpdir/prune.txt" | sort | \
-	xargs -P $(NPROC) -I{} "$$script" "{}" "$$tmpdir" "$$root"; \
-	sh_script="$$tmpdir/run_sh_dir.sh"; \
-	printf '#!/bin/sh\n'                                                                                          > "$$sh_script"; \
-	printf 'dir="$$1"; tmpdir="$$2"; root="$$3"\n'                                                                >> "$$sh_script"; \
-	printf 'if command -v timeout >/dev/null 2>&1; then TO="timeout $${AE_SH_TEST_TIMEOUT:-420}"; \\\n'          >> "$$sh_script"; \
-	printf 'elif command -v gtimeout >/dev/null 2>&1; then TO="gtimeout $${AE_SH_TEST_TIMEOUT:-420}"; \\\n'      >> "$$sh_script"; \
-	printf 'else TO=""; fi\n'                                                                                     >> "$$sh_script"; \
-	printf 'for sh_test in $$(find "$$dir" -maxdepth 1 -name "test_*.sh" 2>/dev/null | sort); do\n'              >> "$$sh_script"; \
-	printf '  name=$$(echo "$$sh_test" | sed "s|tests/||;s|/|_|g;s|\\.sh$$||")\n'                              >> "$$sh_script"; \
-	printf '  sh "$$root/tests/scripts/sweep_resource_probe.sh" "$$name" 2>/dev/null\n'                           >> "$$sh_script"; \
-	printf '  $$TO bash "$$sh_test" >"$$tmpdir/run_$$name.out" 2>"$$tmpdir/run_$$name.err"; sh_rc=$$?\n'         >> "$$sh_script"; \
-	printf '  if [ $$sh_rc -eq 0 ]; then\n'                                                                       >> "$$sh_script"; \
-	printf '    if grep -q "\\[SKIP-WIN\\]" "$$tmpdir/run_$$name.out" 2>/dev/null; then\n'                        >> "$$sh_script"; \
-	printf '      reason=$$(grep "\\[SKIP-WIN\\]" "$$tmpdir/run_$$name.out" | head -1 | sed "s/^[[:space:]]*\\[SKIP-WIN\\][[:space:]]*//"); \n' >> "$$sh_script"; \
-	printf '      echo "  [SKIP] $$name — $$reason"; touch "$$tmpdir/PASS_$$name"\n'                              >> "$$sh_script"; \
-	printf '    else\n'                                                                                           >> "$$sh_script"; \
-	printf '      echo "  [PASS] $$name"; touch "$$tmpdir/PASS_$$name"\n'                                         >> "$$sh_script"; \
-	printf '    fi\n'                                                                                             >> "$$sh_script"; \
-	printf '  elif [ $$sh_rc -eq 124 ]; then\n'                                                                   >> "$$sh_script"; \
-	printf '    echo "  [TIMEOUT] $$name (shell test exceeded $${AE_SH_TEST_TIMEOUT:-420}s)"\n'                   >> "$$sh_script"; \
-	printf '    printf timeout > "$$tmpdir/phase_$$name.txt"\n'                                                   >> "$$sh_script"; \
-	printf '    touch "$$tmpdir/FAIL_$$name"\n'                                                                   >> "$$sh_script"; \
-	printf '  elif [ $$sh_rc -gt 128 ] && [ $$sh_rc -lt 160 ]; then\n'                                            >> "$$sh_script"; \
-	printf '    sig=$$((sh_rc - 128))\n'                                                                          >> "$$sh_script"; \
-	printf '    case $$sig in\n'                                                                                  >> "$$sh_script"; \
-	printf '      9)  what="SIGKILL - killed outright; on a CI runner this is normally the OOM/resource killer" ;;\n' >> "$$sh_script"; \
-	printf '      11) what="SIGSEGV - segfault" ;;\n'                                                             >> "$$sh_script"; \
-	printf '      6)  what="SIGABRT - abort()/assert" ;;\n'                                                        >> "$$sh_script"; \
-	printf '      15) what="SIGTERM - asked to stop" ;;\n'                                                         >> "$$sh_script"; \
-	printf '      *)  what="signal $$sig" ;;\n'                                                                   >> "$$sh_script"; \
-	printf '    esac\n'                                                                                           >> "$$sh_script"; \
-	printf '    echo "  [SIGNAL] $$name - $$what (rc=$$sh_rc)"\n'                                                 >> "$$sh_script"; \
-	printf '    printf signal > "$$tmpdir/phase_$$name.txt"\n'                                                    >> "$$sh_script"; \
-	printf '    touch "$$tmpdir/FAIL_$$name"\n'                                                                   >> "$$sh_script"; \
-	printf '  else\n'                                                                                             >> "$$sh_script"; \
-	printf '    echo "  [FAIL] $$name (shell test)"\n'                                                            >> "$$sh_script"; \
-	printf '    printf shell > "$$tmpdir/phase_$$name.txt"\n'                                                     >> "$$sh_script"; \
-	printf '    touch "$$tmpdir/FAIL_$$name"\n'                                                                   >> "$$sh_script"; \
-	printf '  fi\n'                                                                                               >> "$$sh_script"; \
-	printf 'done\n'                                                                                               >> "$$sh_script"; \
-	chmod +x "$$sh_script"; \
+	xargs -P $(NPROC) -I{} sh "$$script" "{}" "$$tmpdir" "$$root"; \
+	sh_script="$$root/tests/scripts/run_ae_sh_dir.sh"; \
 	sh_nproc=$${SH_NPROC:-$(NPROC)}; \
 	if [ -n "$(AE_SWEEP_EXTRA_PRUNE)" ]; then \
 	  sed '/^#/d;/^$$/d' "$(AE_SWEEP_EXTRA_PRUNE)" > "$$tmpdir/shprune.txt"; \
@@ -1349,7 +1288,7 @@ test-ae: compiler ae stdlib
 	fi; \
 	find tests/integration -name 'test_*.sh' 2>/dev/null | xargs -n1 dirname | sort -u \
 	    | { if [ -s "$$tmpdir/shprune.txt" ]; then grep -v -F -f "$$tmpdir/shprune.txt"; else cat; fi; } \
-	    | xargs -P $$sh_nproc -I{} "$$sh_script" "{}" "$$tmpdir" "$$root"; \
+	    | xargs -P $$sh_nproc -I{} sh "$$sh_script" "{}" "$$tmpdir" "$$root"; \
 	passed=$$(ls "$$tmpdir"/PASS_* 2>/dev/null | wc -l | tr -d ' '); \
 	failed=$$(ls "$$tmpdir"/FAIL_* 2>/dev/null | wc -l | tr -d ' '); \
 	total=$$((passed + failed)); \
@@ -2846,10 +2785,20 @@ check-docs: compiler ae stdlib
 	@echo "==================================="
 	@echo "  documentation examples"
 	@echo "==================================="
-	@# The two checkers are Python, and MSYS2 on the Windows runners has no
+	@# The checkers are Python, and MSYS2 on the Windows runners has no
 	@# python3 — `make ci` calls this target on every platform, so without a
 	@# guard the whole Windows build dies with "python3: No such file or
 	@# directory" (exit 127) before it reaches anything Aether.
+	@#
+	@# The guard RUNS a candidate rather than asking `command -v` whether it
+	@# exists, because on Windows existing and working are different things.
+	@# Windows 10/11 ship "app execution aliases" for python.exe/python3.exe,
+	@# on by default, that are NOT Python: they print an advert for the
+	@# Microsoft Store and exit 49. `command -v python3` finds one, the old
+	@# guard concluded Python was present, ran the stub, and `make ci` died at
+	@# check-docs — on a box with a perfectly good Python installed, just not
+	@# named python3 (C:\PythonXXX ships python.exe only). Hence also the
+	@# candidate list: python3, then python, then the `py -3` launcher.
 	@#
 	@# Skipping there costs nothing: what these check is whether a
 	@# documentation block still compiles, which does not vary by platform.
@@ -2857,13 +2806,17 @@ check-docs: compiler ae stdlib
 	@# and those legs run the same `make ci`. The skip is announced rather
 	@# than silent, so a box that has quietly lost python3 is visible in the
 	@# log instead of reading as a pass.
-	@if command -v python3 >/dev/null 2>&1; then \
-	    python3 tests/scripts/check_doc_examples.py && \
-	    python3 tests/scripts/check_stdlib_index.py && \
-	    python3 tests/scripts/check_module_readmes.py && \
-	    python3 tests/scripts/check_doc_blocks.py; \
+	@py=""; \
+	for cand in python3 python "py -3"; do \
+	    if $$cand -c "import sys" >/dev/null 2>&1; then py="$$cand"; break; fi; \
+	done; \
+	if [ -n "$$py" ]; then \
+	    $$py tests/scripts/check_doc_examples.py && \
+	    $$py tests/scripts/check_stdlib_index.py && \
+	    $$py tests/scripts/check_module_readmes.py && \
+	    $$py tests/scripts/check_doc_blocks.py; \
 	else \
-	    echo "  [SKIP] documentation examples — python3 not found"; \
+	    echo "  [SKIP] documentation examples — no working Python found"; \
 	    echo "         (checked on the Linux/macOS legs, which run the same target)"; \
 	fi
 
