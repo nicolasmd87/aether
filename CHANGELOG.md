@@ -13,6 +13,14 @@ version number before tagging the release.
 
 ### Fixed
 
+- **`install.sh` piped into a shell ran `make` in the caller's directory.** The
+  script begins by changing to `dirname "$0"`, and piped into a shell `$0` is
+  the shell's own name, so that is `.`: it went on to build in whatever
+  directory the caller happened to be standing in, against whatever it found
+  there, and said nothing about it. It now checks that the directory it landed
+  in is the tree it was meant to build, and where it is not, says so and points
+  at cloning the repository. (#1934)
+
 - **A heap-string struct field assigned from a borrowed value was freed at
   teardown — double free / free of rodata.** When a heap-string field is
   assigned from a bare heap-tracked local (`a.value = v`), the field's
