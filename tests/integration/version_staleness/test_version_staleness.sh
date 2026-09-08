@@ -35,7 +35,17 @@ cleanup() { rm -rf "$TMP" || :; return 0; }
 trap cleanup EXIT
 fail() { echo "  [FAIL] $1"; exit 1; }
 
+# USERPROFILE too: get_home_dir() (tools/ae_cache.c) prefers it on Windows and
+# only falls back to HOME, so HOME alone leaves a native ae.exe operating on
+# the developer's REAL ~/.aether — and this test drives the version manager,
+# which writes there. Mirrors dep_resolution / version_gc_dedupe.
 HOME="$TMP/home"; export HOME
+if command -v cygpath >/dev/null 2>&1; then
+    USERPROFILE="$(cygpath -m "$TMP/home")"
+else
+    USERPROFILE="$TMP/home"
+fi
+export USERPROFILE
 mkdir -p "$HOME/.aether/cache"
 CACHE="$HOME/.aether/cache/latest_release"
 

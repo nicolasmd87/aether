@@ -53,7 +53,19 @@ mkdir -p "$PROJ"
 ( cd "$PROJ" && "$AE" init consumer >/dev/null 2>&1 ) || {
     echo "  [FAIL] ae_add_tag_pin: ae init failed"; exit 1; }
 CONS="$PROJ/consumer"
+# get_home_dir() (tools/ae_cache.c) prefers USERPROFILE on Windows and only
+# falls back to HOME, so exporting HOME alone leaves a native ae.exe reading —
+# and WRITING — the REAL user profile: the assertion below then fails because
+# the package landed in the developer's own ~/.aether/packages instead of the
+# sandbox. Same shape dep_resolution and version_gc_dedupe already handle; a
+# native ae.exe also cannot resolve an MSYS /tmp/... path, hence cygpath.
 export HOME="$TMP/home"
+if command -v cygpath >/dev/null 2>&1; then
+    USERPROFILE="$(cygpath -m "$TMP/home")"
+else
+    USERPROFILE="$TMP/home"
+fi
+export USERPROFILE
 mkdir -p "$HOME"
 export AE_RELEASE_BASE_URL="file://$TMP/origin"
 CACHE="$HOME/.aether/packages/$PKG"

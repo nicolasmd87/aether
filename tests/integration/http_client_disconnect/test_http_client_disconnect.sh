@@ -13,7 +13,8 @@ ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 AE="$ROOT/build/ae"
 SRC="$ROOT/tests/integration/http_reverse_proxy/server.ae"
 
-command -v python3 >/dev/null 2>&1 || { echo "  [SKIP] python3 not on PATH"; exit 0; }
+PY="$(sh "$ROOT/tests/scripts/find_python.sh" 2>/dev/null)" || PY=""
+[ -n "$PY" ] || { echo "  [SKIP] no working Python (a Windows Store alias is not one)"; exit 0; }
 
 . "$ROOT/tests/lib/wait_port.sh"
 
@@ -55,7 +56,7 @@ wait_port "$PX_PORT" || exit 1
 curl -s -o /dev/null --max-time 3 "http://127.0.0.1:$PX_PORT/echo" || {
     echo "  [FAIL] proxy never answered"; head -20 "$TMPDIR/px.log"; exit 1; }
 
-if OUT=$(python3 "$SCRIPT_DIR/disconnect_probe.py" "$PX_PORT" 2>&1); then
+if OUT=$($PY "$SCRIPT_DIR/disconnect_probe.py" "$PX_PORT" 2>&1); then
     :
 else
     echo "  [FAIL] $OUT"

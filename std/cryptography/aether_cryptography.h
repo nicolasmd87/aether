@@ -47,7 +47,9 @@ char* cryptography_hash_hex_raw(const char* algo, const char* data, int length);
  * this at config time to validate user-supplied algorithm names
  * before they hit hash_hex_raw. Returns 0 when built without
  * OpenSSL. */
-int cryptography_hash_supported(const char* algo);
+/* _raw like its siblings: the Aether wrapper is `hash_supported`, which
+ * mangles to `cryptography_hash_supported` and would collide with this. */
+int cryptography_hash_supported_raw(const char* algo);
 
 /* MD4 — per-block strong checksum in the .zsync wire format (#637).
  * Bound to EVP_md4() directly rather than via EVP_get_digestbyname()

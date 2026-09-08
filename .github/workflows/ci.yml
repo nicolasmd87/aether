@@ -570,7 +570,10 @@ jobs:
         # ca-certificates ships /mingw64/etc/ssl/certs/ca-bundle.crt — required
         # for HTTPS in std.net (without it the OpenSSL handshake completes but
         # cert verification fails for lack of a trust anchor on Windows).
-        install: mingw-w64-x86_64-gcc mingw-w64-x86_64-zlib mingw-w64-x86_64-openssl mingw-w64-x86_64-ca-certificates pkg-config make bc
+        # sqlite3 and the Vulkan headers are what the contrib series needs to
+        # build here; without them contrib-check skips those entries and the
+        # coverage this leg exists for is silently absent.
+        install: mingw-w64-x86_64-gcc mingw-w64-x86_64-zlib mingw-w64-x86_64-openssl mingw-w64-x86_64-ca-certificates mingw-w64-x86_64-sqlite3 mingw-w64-x86_64-vulkan-headers mingw-w64-x86_64-vulkan-loader pkg-config make bc
 
     # Windows Defender real-time scanning of every compiler-produced
     # file is the dominant Windows-CI tax: `make ci` builds ~585 separate
@@ -616,6 +619,34 @@ jobs:
         echo "SSL_CERT_FILE=$SSL_CERT_FILE"
         ls -la "$(cygpath -u "$SSL_CERT_FILE")"
         make ci
+
+    # contrib on Windows. Every contrib module is built and run on the Linux
+    # legs and none of them were built here, which is how contrib/vulkan came to
+    # ship a `_WIN32` branch that had never been compiled anywhere: it opens the
+    # loader with LoadLibraryA where every other platform uses dlopen. The
+    # compiler this job already built is what type-checks and runs them, so this
+    # is a few minutes on top rather than another runner. (#1511)
+    - name: Type-check every contrib module
+      run: make check-contrib-modules
+
+    - name: Build and run the contrib series
+      # contrib_check.sh probes for each entry's libraries with pkg-config and
+      # skips the entries whose dependency is absent, so this reports what this
+      # runner can build rather than failing on what it cannot.
+      #
+      # The Linux leg installs lavapipe, Mesa's CPU driver, so the Vulkan
+      # entries run on a runner with no GPU. Windows has no equivalent in MSYS2
+      # (SwiftShader is not packaged) and these runners have no Vulkan device,
+      # so the loader branch is COMPILED here and not executed. That is said out
+      # loud below rather than left to be discovered later; if a CPU driver
+      # becomes available, install it above and this becomes real coverage with
+      # no other change.
+      run: |
+        make contrib-check 2>&1 | tee contrib-windows.log
+        echo ""
+        echo "contrib/vulkan on this runner:"
+        grep -E '^\s+(PASS|SKIP|FAIL)\s+vulkan/' contrib-windows.log || \
+          echo "  no vulkan entries reported"
 
   # ============================================================
   # Platform portability — cooperative scheduler, WASM, embedded

@@ -333,18 +333,19 @@ case "$XFF_SEEN" in
 esac
 
 FRAG_RAN=0
-if command -v python3 >/dev/null 2>&1; then
-    if FRAG=$(python3 "$SCRIPT_DIR/fragment_probe.py" "$PX_PORT" 2>&1); then
+PY="$(sh "$ROOT/tests/scripts/find_python.sh" 2>/dev/null)" || PY=""
+if [ -n "$PY" ]; then
+    if FRAG=$($PY "$SCRIPT_DIR/fragment_probe.py" "$PX_PORT" 2>&1); then
         FRAG_RAN=1
     else
         echo "  [FAIL] T11 fragmented request: $FRAG"; exit 1
     fi
-    if ! PIPE=$(python3 "$SCRIPT_DIR/pipeline_probe.py" "$PX_PORT" 2>&1); then
+    if ! PIPE=$($PY "$SCRIPT_DIR/pipeline_probe.py" "$PX_PORT" 2>&1); then
         echo "  [FAIL] T13 pipelined requests: $PIPE"; exit 1
     fi
 else
-    echo "  [SKIP] T11 fragmented request: python3 not on PATH"
-    echo "  [SKIP] T13 pipelined requests: python3 not on PATH"
+    echo "  [SKIP] T11 fragmented request: no working Python"
+    echo "  [SKIP] T13 pipelined requests: no working Python"
 fi
 
 stop_servers

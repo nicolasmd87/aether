@@ -11,6 +11,101 @@ version number before tagging the release.
 
 ## [current]
 
+### Fixed
+
+- **A constant named after a `windows.h` macro made the generated C
+  unparseable.** The prelude includes `<windows.h>` on `_WIN32`, and that header
+  squats on ordinary words as object-like macros. `contrib/tinyweb` declares the
+  HTTP verbs, so `const DELETE = 4` reached the compiler as
+  `static const int 0x00010000L = (4);` — `error: expected identifier or '('
+  before numeric constant`, naming a line the author never wrote. Codegen now
+  undefines the set that collides with plausible identifiers (`DELETE`, `ERROR`,
+  `IN`, `OUT`, `OPTIONAL`, `CONST`, `interface`, `small`, `near`, `far`), the
+  same treatment `NOMINMAX` already gives `min`/`max`.
+
+- **`contrib/i18n` did not build on Windows.** The vendored utf8proc defaults to
+  the DLL spelling on `_WIN32`, but Aether compiles `utf8proc.c` straight into
+  the binary and ships no utf8proc DLL — so every including translation unit saw
+  `__declspec(dllimport)`. `utf8proc.c` failed outright (`variable
+  'utf8proc_utf8class' definition is marked dllimport`), and its consumer failed
+  at link (`undefined reference to __imp_utf8proc_decompose`). The vendored
+  header now defaults to the static spelling on Windows; `UTF8PROC_SHARED`
+  restores upstream behaviour.
+
+- **A Windows source build could not run its own test suite, and several things
+  meant to notice failed quietly instead.** `make test-ae` never executed a
+  single test there: `mingw32-make` hands a recipe to `sh -c` over a command
+  line capped at 8 KB, and the recipe built its two helper scripts with ~75
+  `printf` calls, expanding to 11,679 bytes — so `sh` received exactly 8,191 of
+  them, cut mid-`printf`. The helpers now live in `tests/scripts/`. CI missed it
+  because the Windows job runs the MSYS2 `make`, which has no such cap, while
+  README tells users to install `mingw-w64-x86_64-make`, which *is*
+  `mingw32-make`. The `.ae` sweep on Windows goes from 0 tests executed to
+  1083/1083.
+
+- **`ae build -o foo.exe` wrote `foo.exe.exe` on Windows.** The native path
+  appended `EXE_EXT` unconditionally, directly under a comment promising the
+  path was used as-is; the Windows cross path has always guarded exactly this.
+
+- **`ae` adopted an `aether.toml` from outside the repository, and silently
+  moved build output with it.** Project-root discovery walked up past the
+  checkout, and it `chdir`s: imports then resolved against the wrong `src/`,
+  and a relative `-o build/foo` was written to that other directory while
+  `ae build` reported `Built: build/foo.exe`. The walk now stops at a `.git`
+  boundary (checked as both a directory and a file, so worktrees count).
+
+- **Every `contrib.host.*` bridge failed to link on Windows.** The auto-link was
+  compiled out there on the premise that the bridges are not built on that
+  matrix — they are, and `libaether_host_tinygo.a` carries every
+  `tinygo_call_*` symbol. `import contrib.host.tinygo` compiled and then failed
+  at link against an archive sitting a few directories away.
+
+- **Hashing was unavailable on any build without OpenSSL**, which is the default
+  for a Windows source build: `sha256()` returned `openssl unavailable`, taking
+  `std.cas` and every other hashing caller with it, while the pure-Aether
+  implementations sat unused in `std/cryptography/`. The one-shot digests
+  (sha1, sha256/224/384/512, md4, md5, hex and bytes, plus the by-name
+  dispatch) now fall back to them. The streaming digest context API remains
+  OpenSSL-only, and the module header now says so.
+
+- **WebSocket worked in neither direction without OpenSSL.** Both the client
+  dial and the server handshake were compiled out for one 20-byte SHA-1 — the
+  RFC 6455 §1.3 accept hash, which proves the peer understood the upgrade
+  rather than serving as a security primitive. Plain `ws://` now works on both
+  ends; `wss://` still requires OpenSSL and fails explicitly rather than
+  silently dialling in clear text.
+
+- **`hash_supported()` ignored its own body.** The wrapper mangles to
+  `cryptography_hash_supported`, byte-identical to the C symbol it calls; the
+  two collided and the module definition won. Invisible for as long as the body
+  merely forwarded to the extern. The C symbol is now
+  `cryptography_hash_supported_raw`, matching every other extern in that file.
+
+- **HTTPS could not verify a certificate on Windows.** `trust_store_path()`
+  fell back to Debian, Fedora and BSD paths only, so a source build had no
+  trust store at all and every request died at `pure TLS handshake failed` —
+  which named no cause. The Git-for-Windows and MSYS2 bundles are now among the
+  fallbacks, as native Win32 paths, and the error points at `SSL_CERT_FILE`.
+
+- **`fs.watch_wait` reported a single change twice on Windows.** Linux drains
+  the inotify fd and kqueue's `EV_CLEAR` resets on delivery, both so one burst
+  reports once; Windows only re-armed, and one write raises several change
+  records.
+
+### Changed
+
+- **The Windows leg builds and runs the contrib series.** `contrib-check` ran on
+  Linux only, so no CI leg built any contrib module on Windows: `contrib/vulkan`
+  shipped a `_WIN32` branch opening the loader with `LoadLibraryA`, where every
+  other platform uses `dlopen`, that had never been compiled anywhere. The
+  existing Windows job now type-checks every contrib module and runs the contrib
+  series, which costs minutes on a compiler it already built rather than another
+  runner. The Vulkan entries compile there and do not execute, because the
+  runners have no Vulkan device and MSYS2 packages no CPU driver; the leg says
+  which entries ran and which skipped rather than leaving that to be found
+  later. (#1511)
+
+
 ## [0.650.0]
 
 ### Fixed
