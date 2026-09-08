@@ -6,11 +6,14 @@
 
 import std.http
 import std.string
+import std.os
 
 extern exit(code: int)
 
 main() {
-    port = 18146
+    // The peer binds port 0 and reports the kernel's choice; the runner
+    // passes it here.
+    port, _perr = string.to_int(os_getenv("AE_TEST_PORT"))
     w = http.ws_connect("ws://127.0.0.1:${port}/")
     if w == null {
         println("FAIL: ws_connect returned null")
