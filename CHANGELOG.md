@@ -11,6 +11,29 @@ version number before tagging the release.
 
 ## [current]
 
+### Added
+
+- **The streaming digest API works without OpenSSL.** `digest_new` /
+  `digest_update` / `digest_final_*` were libcrypto-only, so on a build without
+  it -- the default for a Windows source build -- they returned "openssl
+  unavailable" while the one-shot digests had already grown a pure-Aether
+  fallback. The gap mattered most to the caller who cannot work around it: you
+  reach for a streaming context precisely when the object is too big to hold
+  whole, so "use the one-shot form instead" is not advice that applies.
+
+  A digest handle now carries its backend, and update / final dispatch on it.
+  The pure path reuses the streaming contexts already in
+  `std.cryptography.{sha1,sha2,md5,md4}` rather than adding a second
+  implementation of anything, and covers the same algorithm set as the one-shot
+  fallback: an algorithm you can one-shot without OpenSSL is one you can stream
+  without OpenSSL.
+
+  The regression test no longer accepts a skip. It used to pass by not running
+  when there was no backend, which would have been a green tick for a fallback
+  nobody exercised. A new `ci-no-openssl` job builds with `OPENSSL=0` and runs
+  the digest suites against the pure path, because every other leg in the
+  matrix installs OpenSSL and none of them covered it.
+
 ### Fixed
 
 - **A constant named after a `windows.h` macro made the generated C
