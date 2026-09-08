@@ -1,6 +1,6 @@
 // #260 Tier 0: server-side TLS termination test driver.
 //
-// Spins up an HTTP server on TLS-enabled port 18102 with a route
+// Spins up an HTTP server on a TLS-enabled ephemeral port with a route
 // that returns "ok-tls". The shell runner verifies handshake +
 // response with curl --cacert.
 

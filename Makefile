@@ -1052,7 +1052,15 @@ contrib-check-lsan: compiler ae stdlib
 	@EXE_EXT='$(EXE_EXT)' LSAN=1 bash .github/scripts/contrib_check.sh
 
 # Compiler target (incremental build with object files)
-compiler: $(COMPILER_OBJS) $(STD_OBJS) $(COLLECTIONS_OBJS) $(OBJ_DIR)/runtime/aether_sandbox.o $(OBJ_DIR)/runtime/aether_resource_caps.o $(OBJ_DIR)/runtime/aether_locale_num.o $(IO_POLLER_OBJS) | $(VERSION_HEADER) $(STDLIB_SYMS_HEADER)
+compiler: build/aetherc$(EXE_EXT)
+
+# A FILE target, so an already-current tree relinks nothing. As a phony
+# `compiler` it relinked build/aetherc on every `make`, and anything that runs
+# make in this tree (`make install` from two of the integration tests) rewrote
+# the binary other tests were executing at that moment: macOS kills a process
+# whose text file changed under it, which is a SIGKILL in a test that never
+# went near the build system.
+build/aetherc$(EXE_EXT): $(COMPILER_OBJS) $(STD_OBJS) $(COLLECTIONS_OBJS) $(OBJ_DIR)/runtime/aether_sandbox.o $(OBJ_DIR)/runtime/aether_resource_caps.o $(OBJ_DIR)/runtime/aether_locale_num.o $(IO_POLLER_OBJS) | $(VERSION_HEADER) $(STDLIB_SYMS_HEADER)
 	@echo "Linking compiler..."
 	@$(CC) $(COMPILER_OBJS) $(STD_OBJS) $(COLLECTIONS_OBJS) $(OBJ_DIR)/runtime/aether_sandbox.o $(OBJ_DIR)/runtime/aether_resource_caps.o $(OBJ_DIR)/runtime/aether_locale_num.o $(IO_POLLER_OBJS) -o build/aetherc$(EXE_EXT) $(AETHER_REQUIRED_LDFLAGS) $(LDFLAGS)
 	@echo "Compiler built successfully"
@@ -1221,14 +1229,17 @@ test-windows-wine: ae stdlib
 
 # Test .ae source files - compiles and runs each test file.
 #
-# The shell tests run SERIALLY (SH_NPROC defaults to 1 below). Hardcoded ports
-# used to be the reason, and the HTTP server fixtures now bind port 0 (#1920),
-# but ports are not the only shared resource: cache_build_flags,
-# cache_libdir_invalidation and cache_subdir_entry_root_module assert cache
-# HIT/MISS against the one shared build cache, so any other test compiling at
-# the same moment makes them non-deterministic. Raising SH_NPROC was measured
-# at 10+ failures and 630s against 312s serial. Per-test cache isolation is
-# the prerequisite, not more port work.
+# The shell tests run $(NPROC) at a time (SH_NPROC overrides). They were serial
+# because they shared three things, all now fixed (#1920): the HTTP fixtures
+# bound hardcoded ports, four tests cleared the one build cache while three
+# others asserted HIT/MISS against it, and two ran `make install` in this tree,
+# which cleaned build/ away from every other test. A test that needs a cache to
+# itself sets AETHER_CACHE_DIR; a server fixture binds port 0 and prints the
+# port it got.
+#
+# A parallel run makes an individual test slower without anything being wrong,
+# so the per-test timeout is generous enough not to fail a merely contended one
+# and still short enough to catch a hang (AE_SH_TEST_TIMEOUT below).
 #
 # The recipe exports CC because several integration tests compile a C host
 # against libaether.a, and they default to `cc`. MSYS2's mingw64 ships a cc,
@@ -1269,7 +1280,7 @@ test-ae: compiler ae stdlib
 	    | grep -v -F -f "$$tmpdir/prune.txt" | sort | \
 	xargs -P $(NPROC) -I{} sh "$$script" "{}" "$$tmpdir" "$$root"; \
 	sh_script="$$root/tests/scripts/run_ae_sh_dir.sh"; \
-	sh_nproc=$${SH_NPROC:-1}; \
+	sh_nproc=$${SH_NPROC:-$(NPROC)}; \
 	if [ -n "$(AE_SWEEP_EXTRA_PRUNE)" ]; then \
 	  sed '/^#/d;/^$$/d' "$(AE_SWEEP_EXTRA_PRUNE)" > "$$tmpdir/shprune.txt"; \
 	else \
@@ -1691,7 +1702,11 @@ $(TOOLS_OBJS): $(OBJ_DIR)/%.o: %.c $(BUILD_FLAGS_STAMP) | $(OBJ_DIR)/tools $(OBJ
 	@echo "Compiling $<..."
 	@$(CC) $(TOOLS_CFLAGS) -c $< -o $@
 
-ae: compiler $(TOOLS_OBJS)
+ae: build/ae$(EXE_EXT)
+
+# A file target for the same reason as build/aetherc: `ae` was phony, so every
+# `make` relinked the binary the rest of the test sweep is running.
+build/ae$(EXE_EXT): build/aetherc$(EXE_EXT) $(TOOLS_OBJS)
 	@echo "==================================="
 	@echo "Building ae command-line tool ($(DETECTED_OS)) v$(VERSION)"
 	@echo "==================================="
@@ -1752,9 +1767,24 @@ docs-serve: docs docs-server
 	./build/docs-server$(EXE_EXT)
 
 # Precompiled stdlib archive — runtime + std for user programs.
-stdlib: $(STD_OBJS) $(STD_REACTOR_OBJS) $(COLLECTIONS_OBJS) $(RUNTIME_OBJS) build/libaether_compiler.a build/MANIFEST | $(VERSION_HEADER)
+stdlib: build/libaether.a
+
+# The archive is a FILE target, not a phony one. As a phony `stdlib` it was
+# re-archived on every invocation, so anything that runs `make` in this tree
+# (`make install` from two of the integration tests, say) rewrote it under
+# whatever else was linking against it at that moment. A reader that catches
+# the write half way through fails with `ld: ... member not 8-byte aligned`,
+# in a test that has nothing to do with the one that ran make.
+#
+# Written to a temp name and renamed for the same reason: a rebuild that is
+# genuinely needed still must not be observable as a partial archive. `ar` is
+# also asked for a fresh archive rather than an update of the existing one, so
+# a removed object cannot survive as a stale member.
+build/libaether.a: $(STD_OBJS) $(STD_REACTOR_OBJS) $(COLLECTIONS_OBJS) $(RUNTIME_OBJS) build/libaether_compiler.a build/MANIFEST | $(VERSION_HEADER)
 	@echo "Creating precompiled stdlib archive..."
-	@ar rcs build/libaether.a $(STD_OBJS) $(STD_REACTOR_OBJS) $(COLLECTIONS_OBJS) $(RUNTIME_OBJS)
+	@rm -f build/libaether.a.tmp
+	@ar rcs build/libaether.a.tmp $(STD_OBJS) $(STD_REACTOR_OBJS) $(COLLECTIONS_OBJS) $(RUNTIME_OBJS)
+	@mv build/libaether.a.tmp build/libaether.a
 	@echo "✓ Stdlib archive created: build/libaether.a"
 
 # Authoritative MANIFEST — list of link-suitable runtime + stdlib
@@ -1973,8 +2003,27 @@ LTO_FLAG = $(shell \
 	elif [ "$$($(CC) -dumpversion 2>/dev/null | cut -d. -f1)" -ge 10 ] 2>/dev/null; then echo -flto=auto; \
 	else echo -flto; fi)
 
-# Release build with optimizations and warnings as errors
-release: clean $(STDLIB_SYMS_HEADER)
+# Release build with optimizations and warnings as errors.
+#
+# `release` wipes build/ first on purpose: what ships must not be assembled
+# beside objects from a differently-configured build. That wipe is why it is a
+# separate target from the compile below. `install` wants the optimized
+# compiler, not the wipe -- and it used to get both, so `make install
+# PREFIX=...` deleted build/ae out from under anything else using this tree,
+# which is exactly what two integration tests do to the rest of the sweep.
+#
+# Sequential sub-makes rather than two prerequisites: under -j they are
+# unordered, and `clean` racing $(STDLIB_SYMS_HEADER) deletes the header that
+# was just generated.
+release:
+	@$(MAKE) clean
+	@$(MAKE) release-build
+
+release-build: build/aetherc-release$(EXE_EXT)
+
+# A file target as well, so `make install` on a current tree does not spend a
+# minute recompiling the whole compiler in one LTO link before copying.
+build/aetherc-release$(EXE_EXT): $(COMPILER_SRC) $(STD_SRC) $(COLLECTIONS_SRC) runtime/aether_resource_caps.c runtime/aether_locale_num.c $(STDLIB_SYMS_HEADER) $(VERSION_HEADER) Makefile
 	@echo "==================================="
 	@echo "Building Optimized Release"
 	@echo "==================================="
@@ -2013,7 +2062,7 @@ endif
 
 # Install to system
 PREFIX ?= /usr/local
-install: $(VERSION_HEADER) release ae stdlib
+install: $(VERSION_HEADER) release-build ae stdlib
 	@echo "==================================="
 	@echo "Installing Aether to $(PREFIX)"
 	@echo "==================================="
@@ -2911,7 +2960,7 @@ asan-check: clean
 	  fi
 	@echo "✓ ASan clean — no memory errors detected"
 
-.PHONY: all compiler lsp apkg ae profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-macos-leaks test-memory test-manual-runtime test-cross test-install test-release-archive benchmark benchmark-ui examples run compile repl clean help self-test install stats stdlib stdlib-asan stdlib-memory stdlib-dbg ci ci-windows docker-ci docker-ci-windows docker-build-ci valgrind-check asan-check ci-coop ci-wasm ci-embedded ci-portability docker-ci-wasm docker-ci-embedded contrib-host-check contrib install-contrib stdlib-cov ci-coverage ci-coverage-clean ci-coverage-html
+.PHONY: all compiler lsp apkg ae release release-build profiler docgen docs-server docs docs-serve test test-build test-valgrind test-asan test-macos-leaks test-memory test-manual-runtime test-cross test-install test-release-archive benchmark benchmark-ui examples run compile repl clean help self-test install stats stdlib stdlib-asan stdlib-memory stdlib-dbg ci ci-windows docker-ci docker-ci-windows docker-build-ci valgrind-check asan-check ci-coop ci-wasm ci-embedded ci-portability docker-ci-wasm docker-ci-embedded contrib-host-check contrib install-contrib stdlib-cov ci-coverage ci-coverage-clean ci-coverage-html
 
 # Cross-language benchmark UI (alias for benchmark)
 benchmark-ui: benchmark

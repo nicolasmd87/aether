@@ -23,9 +23,9 @@ root="$3"
 # Portable per-test timeout, same shape as run_ae_test.sh. Shell tests get a
 # longer default than .ae tests: they drive whole toolchain round-trips.
 if command -v timeout >/dev/null 2>&1; then
-    TO="timeout ${AE_SH_TEST_TIMEOUT:-180}"
+    TO="timeout ${AE_SH_TEST_TIMEOUT:-420}"
 elif command -v gtimeout >/dev/null 2>&1; then
-    TO="gtimeout ${AE_SH_TEST_TIMEOUT:-180}"
+    TO="gtimeout ${AE_SH_TEST_TIMEOUT:-420}"
 else
     TO=""
 fi
@@ -47,7 +47,7 @@ for sh_test in $(find "$dir" -maxdepth 1 -name "test_*.sh" 2>/dev/null | sort); 
             touch "$tmpdir/PASS_$name"
         fi
     elif [ $sh_rc -eq 124 ]; then
-        echo "  [TIMEOUT] $name (shell test exceeded ${AE_SH_TEST_TIMEOUT:-180}s)"
+        echo "  [TIMEOUT] $name (shell test exceeded ${AE_SH_TEST_TIMEOUT:-420}s)"
         printf timeout > "$tmpdir/phase_$name.txt"
         touch "$tmpdir/FAIL_$name"
     elif [ $sh_rc -gt 128 ] && [ $sh_rc -lt 160 ]; then

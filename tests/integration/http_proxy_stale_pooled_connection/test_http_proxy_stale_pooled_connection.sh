@@ -19,13 +19,18 @@ if [ -z "$PY" ]; then
     exit 0
 fi
 
+. "$ROOT/tests/lib/wait_port.sh"
+
 TMPDIR="$(mktemp -d)"
 PX_PID=""
+UP_PID=""
 cleanup() {
-    if [ -n "$PX_PID" ]; then
-        kill "$PX_PID" 2>/dev/null || true
-        wait "$PX_PID" 2>/dev/null || true
-    fi
+    for pid in "$PX_PID" "$UP_PID"; do
+        if [ -n "$pid" ]; then
+            kill "$pid" 2>/dev/null || true
+            wait "$pid" 2>/dev/null || true
+        fi
+    done
     rm -rf "$TMPDIR"
 }
 trap cleanup EXIT
@@ -42,9 +47,21 @@ if ! AETHER_HOME="$ROOT" "$AE" build "$SERVER_SRC" \
     echo "  [FAIL] build:"; head -30 "$TMPDIR/build.log"; exit 1
 fi
 
-# The probe binds 19001 itself and answers as the upstream, so only the proxy
-# is started here.
-AETHER_HOME="$ROOT" "$TMPDIR/server" proxy >"$TMPDIR/px.log" 2>&1 &
+# The probe is the upstream: it binds port 0 and names the port it landed on,
+# which is what the proxy has to be told.
+python3 "$SCRIPT_DIR/stale_probe.py" upstream "$TMPDIR/up.port" >"$TMPDIR/up.log" 2>&1 &
+UP_PID=$!
+deadline=$(($(date +%s) + 15))
+while [ ! -f "$TMPDIR/up.port" ]; do
+    kill -0 "$UP_PID" 2>/dev/null || {
+        echo "  [FAIL] upstream died:"; head -20 "$TMPDIR/up.log"; exit 1; }
+    [ "$(date +%s)" -lt "$deadline" ] || {
+        echo "  [FAIL] upstream never bound"; exit 1; }
+    sleep 0.05
+done
+UP_PORT=$(cat "$TMPDIR/up.port")
+
+AETHER_HOME="$ROOT" "$TMPDIR/server" proxy "$UP_PORT" >"$TMPDIR/px.log" 2>&1 &
 PX_PID=$!
 
 deadline=$(($(date +%s) + 15))
@@ -52,13 +69,13 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     if ! kill -0 "$PX_PID" 2>/dev/null; then
         echo "  [FAIL] proxy died:"; head -30 "$TMPDIR/px.log"; exit 1
     fi
-    if curl -s -o /dev/null --max-time 1 "http://127.0.0.1:19000/echo" 2>/dev/null; then
-        break
-    fi
-    sleep 0.1
+    if grep -q '^READY ' "$TMPDIR/px.log" 2>/dev/null; then break; fi
+    sleep 0.05
 done
+PX_PORT=$(read_ready_port "$TMPDIR/px.log") || exit 1
+wait_port "$PX_PORT" || exit 1
 
-if ! OUT=$($PY "$SCRIPT_DIR/stale_probe.py" 2>&1); then
+if ! OUT=$($PY "$SCRIPT_DIR/stale_probe.py" client "$PX_PORT" 2>&1); then
     echo "  [FAIL] http_proxy_stale_pooled_connection: $OUT"; exit 1
 fi
 

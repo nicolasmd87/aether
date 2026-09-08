@@ -4412,6 +4412,33 @@ void generate_program(CodeGenerator* gen, ASTNode* program) {
     print_line(gen, "#include <windows.h>");
     print_line(gen, "#include <io.h>      // _setmode, _fileno");
     print_line(gen, "#include <fcntl.h>   // _O_BINARY");
+    /* windows.h squats on a handful of ordinary words as object-like macros,
+     * and an Aether program that names a constant after one of them emits C
+     * the preprocessor then mangles beyond recognition. contrib/tinyweb
+     * declares the HTTP verbs -- `const DELETE = 4` -- and winnt.h defines
+     * DELETE as 0x00010000L, so codegen produced
+     *
+     *     static const int 0x00010000L = (4);
+     *     error: expected identifier or '(' before numeric constant
+     *
+     * naming a line the author did not write. NOMINMAX above is the same
+     * problem already solved for min/max; these are the rest of the set that
+     * collides with plausible identifiers. Undef'd rather than renamed because
+     * the Aether name is legitimate -- DELETE is what the HTTP verb is called.
+     *
+     * Safe for the generated TU: it is program code, not a Win32 API consumer.
+     * Anything here that does call the API goes through the runtime, which is
+     * compiled separately with windows.h intact. */
+    print_line(gen, "#undef DELETE");
+    print_line(gen, "#undef ERROR");
+    print_line(gen, "#undef IN");
+    print_line(gen, "#undef OUT");
+    print_line(gen, "#undef OPTIONAL");
+    print_line(gen, "#undef CONST");
+    print_line(gen, "#undef interface");
+    print_line(gen, "#undef small");
+    print_line(gen, "#undef near");
+    print_line(gen, "#undef far");
     print_line(gen, "#elif defined(__EMSCRIPTEN__)");
     print_line(gen, "#include <emscripten.h>");
     print_line(gen, "#else");

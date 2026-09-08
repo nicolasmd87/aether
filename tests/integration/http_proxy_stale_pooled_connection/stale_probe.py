@@ -8,14 +8,18 @@
 # to go again down a fresh connection. Getting one of the three wrong shows up
 # here as an occasional failure among many successes, which is why this makes
 # a lot of requests rather than one.
+#
+# Two roles, because the proxy has to be told the port its upstream landed on
+# and the kernel only names that port once the upstream has bound it:
+#
+#   upstream <portfile>  bind port 0, write the port, close after each answer
+#   client <proxy_port>  make the requests and count what came back
 
+import os
 import socket
 import sys
-import threading
 import time
 
-UPSTREAM_PORT = 19001
-PROXY_PORT = 19000
 REQUESTS = 60
 
 RESPONSE = (b"HTTP/1.1 200 OK\r\n"
@@ -23,16 +27,19 @@ RESPONSE = (b"HTTP/1.1 200 OK\r\n"
             b"Content-Length: 2\r\n"
             b"\r\nok")
 
-ready = threading.Event()
 
-
-def upstream():
+def upstream(portfile):
     s = socket.socket()
     s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-    s.bind(("127.0.0.1", UPSTREAM_PORT))
+    s.bind(("127.0.0.1", 0))
     s.listen(128)
-    s.settimeout(90)
-    ready.set()
+    s.settimeout(300)
+    # Written whole and then renamed: the reader polls for this file, and a
+    # partial line would be read as a truncated port number.
+    tmp = portfile + ".tmp"
+    with open(tmp, "w") as f:
+        f.write("%d\n" % s.getsockname()[1])
+    os.rename(tmp, portfile)
     try:
         while True:
             c, _ = s.accept()
@@ -47,33 +54,45 @@ def upstream():
         s.close()
 
 
-threading.Thread(target=upstream, daemon=True).start()
-if not ready.wait(10):
-    print("upstream never bound")
-    sys.exit(1)
+def run_client(proxy_port):
+    failures = []
+    for i in range(REQUESTS):
+        try:
+            c = socket.create_connection(("127.0.0.1", proxy_port), timeout=8)
+            c.sendall(b"GET /echo HTTP/1.1\r\nHost: x\r\n\r\n")
+            c.settimeout(6)
+            buf = b""
+            while b"\r\n\r\n" not in buf:
+                d = c.recv(65536)
+                if not d:
+                    break
+                buf += d
+            c.close()
+            if b"200 OK" not in buf:
+                failures.append("request %d: %r"
+                                % (i + 1, buf[:60] if buf else b"<nothing>"))
+        except Exception as e:
+            failures.append("request %d: %s: %s" % (i + 1, type(e).__name__, e))
+        time.sleep(0.03)
 
-failures = []
-for i in range(REQUESTS):
-    try:
-        c = socket.create_connection(("127.0.0.1", PROXY_PORT), timeout=8)
-        c.sendall(b"GET /echo HTTP/1.1\r\nHost: x\r\n\r\n")
-        c.settimeout(6)
-        buf = b""
-        while b"\r\n\r\n" not in buf:
-            d = c.recv(65536)
-            if not d:
-                break
-            buf += d
-        c.close()
-        if b"200 OK" not in buf:
-            failures.append("request %d: %r" % (i + 1, buf[:60] if buf else b"<nothing>"))
-    except Exception as e:
-        failures.append("request %d: %s: %s" % (i + 1, type(e).__name__, e))
-    time.sleep(0.03)
+    if failures:
+        print("%d of %d requests did not get a 200: %s"
+              % (len(failures), REQUESTS, "; ".join(failures[:5])))
+        return 1
 
-if failures:
-    print("%d of %d requests did not get a 200: %s"
-          % (len(failures), REQUESTS, "; ".join(failures[:5])))
-    sys.exit(1)
+    print("ok")
+    return 0
 
-print("ok")
+
+if len(sys.argv) < 3:
+    print("usage: stale_probe.py <upstream PORTFILE | client PROXY_PORT>")
+    sys.exit(2)
+
+if sys.argv[1] == "upstream":
+    upstream(sys.argv[2])
+    sys.exit(0)
+if sys.argv[1] == "client":
+    sys.exit(run_client(int(sys.argv[2])))
+
+print("unknown role: %s" % sys.argv[1])
+sys.exit(2)
