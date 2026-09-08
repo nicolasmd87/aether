@@ -13,6 +13,15 @@ version number before tagging the release.
 
 ### Fixed
 
+- **`contrib/i18n` did not build on Windows.** The vendored utf8proc defaults to
+  the DLL spelling on `_WIN32`, but Aether compiles `utf8proc.c` straight into
+  the binary and ships no utf8proc DLL — so every including translation unit saw
+  `__declspec(dllimport)`. `utf8proc.c` failed outright (`variable
+  'utf8proc_utf8class' definition is marked dllimport`), and its consumer failed
+  at link (`undefined reference to __imp_utf8proc_decompose`). The vendored
+  header now defaults to the static spelling on Windows; `UTF8PROC_SHARED`
+  restores upstream behaviour.
+
 - **A Windows source build could not run its own test suite, and several things
   meant to notice failed quietly instead.** `make test-ae` never executed a
   single test there: `mingw32-make` hands a recipe to `sh -c` over a command
