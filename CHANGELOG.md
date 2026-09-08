@@ -31,6 +31,27 @@ version number before tagging the release.
   is every imported module after its parse, has that one line read from the
   file itself.
 
+- **The X.509 parser accepted certificates truncated mid-TBSCertificate**
+  (#1942). `parse_tbs_fields` in `std.cryptography.tls13_cert` read the
+  version, signature algId, issuer, validity, subject and subjectPublicKeyInfo
+  fields but discarded the error half of each read, so a malformed certificate
+  parsed "successfully" into a leaf whose issuer / subject / validity / SPKI
+  came from a read that had failed — the neighbouring reads in the same
+  function already checked their errors, leaving these six out of step with
+  their own peers. Each now returns the ASN.1 error the way the peers do. A
+  regression feeds a certificate whose TBS content stops after `serialNumber`
+  and asserts the parse is refused, not accepted with empty fields.
+
+### Changed
+
+- **The stdlib is warning-clean under `ae check`** (#1942). Sixty
+  unused-variable sites across the standard library — almost all unread
+  tuple-destructuring slots, plus a couple of error results from calls that
+  cannot fail on the path in question — are suppressed with the documented `_`
+  prefix, so a genuine future unused variable (or a dropped error) stands out
+  instead of hiding in the noise. These were only actionable once the #1946
+  attribution fix named the declaring module and line correctly.
+
 ## [0.653.0]
 
 ### Changed
