@@ -11,6 +11,8 @@ version number before tagging the release.
 
 ## [current]
 
+## [0.652.0]
+
 ### Fixed
 
 - **`cache_dir_override` now covers the `cache` command, not only the build
