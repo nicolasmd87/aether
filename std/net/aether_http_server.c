@@ -3131,8 +3131,95 @@ int http_ws_recv(HttpWsConn* ws) {
  * Base64 is fine as-is (raw bytes in, base64 string out). */
 #ifdef AETHER_HAS_OPENSSL
 #include <openssl/sha.h>
-extern char* cryptography_base64_encode_raw(const char* data, int length);
 #endif
+/* Base64 is a local implementation in std/cryptography, outside that file's
+ * OpenSSL block, so it is available in every build. */
+extern char* cryptography_base64_encode_raw(const char* data, int length);
+
+#ifndef AETHER_HAS_OPENSSL
+/* One SHA-1 compression round over a 64-byte block (FIPS 180-4 §6.1.2). */
+static void ws_sha1_block(uint32_t h[5], const unsigned char block[64]) {
+    uint32_t w[80];
+    for (int i = 0; i < 16; i++) {
+        w[i] = ((uint32_t)block[4 * i]     << 24) |
+               ((uint32_t)block[4 * i + 1] << 16) |
+               ((uint32_t)block[4 * i + 2] <<  8) |
+                (uint32_t)block[4 * i + 3];
+    }
+    for (int i = 16; i < 80; i++) {
+        uint32_t v = w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16];
+        w[i] = (v << 1) | (v >> 31);
+    }
+    uint32_t a = h[0], b = h[1], c = h[2], d = h[3], e = h[4];
+    for (int i = 0; i < 80; i++) {
+        uint32_t f, k;
+        if (i < 20)      { f = (b & c) | (~b & d);          k = 0x5A827999u; }
+        else if (i < 40) { f = b ^ c ^ d;                   k = 0x6ED9EBA1u; }
+        else if (i < 60) { f = (b & c) | (b & d) | (c & d); k = 0x8F1BBCDCu; }
+        else             { f = b ^ c ^ d;                   k = 0xCA62C1D6u; }
+        uint32_t t = ((a << 5) | (a >> 27)) + f + e + k + w[i];
+        e = d; d = c; c = (b << 30) | (b >> 2); b = a; a = t;
+    }
+    h[0] += a; h[1] += b; h[2] += c; h[3] += d; h[4] += e;
+}
+#endif
+
+/* Raw 20-byte SHA-1 of `msg`.
+ *
+ * RFC 6455's Sec-WebSocket-Accept is Base64(SHA-1(client_key + GUID)) and
+ * this used to call OpenSSL's SHA1() directly, with the whole WebSocket
+ * server AND client compiled out when OpenSSL was absent -- so a Windows
+ * source build, which has no OpenSSL by default, had no WebSocket support at
+ * all and `ws_connect` simply returned NULL.
+ *
+ * The handshake hash is a protocol handshake check, not a security primitive:
+ * RFC 6455 §1.3 uses it only to prove the peer understood the upgrade and to
+ * stop a cache or proxy replaying a plain HTTP response as a WebSocket one.
+ * SHA-1's collision weakness is irrelevant to that, which is why the RFC
+ * still specifies it. So a compact local implementation is appropriate here
+ * where it would not be for a signature.
+ *
+ * OpenSSL still does the work when it is linked. */
+static void ws_sha1(const unsigned char* msg, size_t len, unsigned char out[20]) {
+#ifdef AETHER_HAS_OPENSSL
+    SHA1(msg, len, out);
+#else
+    uint32_t h[5] = { 0x67452301u, 0xEFCDAB89u, 0x98BADCFEu,
+                      0x10325476u, 0xC3D2E1F0u };
+    uint64_t total_bits = (uint64_t)len * 8u;
+    unsigned char block[64];
+    size_t off = 0;
+
+    while (len - off >= 64) {
+        memcpy(block, msg + off, 64);
+        ws_sha1_block(h, block);
+        off += 64;
+    }
+    size_t rem = len - off;
+    memset(block, 0, sizeof(block));
+    if (rem > 0) memcpy(block, msg + off, rem);
+    block[rem] = 0x80;
+    if (rem >= 56) {                 /* no room for the length: flush first */
+        ws_sha1_block(h, block);
+        memset(block, 0, sizeof(block));
+    }
+    for (int i = 0; i < 8; i++) {
+        block[56 + i] = (unsigned char)(total_bits >> (56 - 8 * i));
+    }
+    ws_sha1_block(h, block);
+
+    for (int i = 0; i < 5; i++) {
+        out[4 * i]     = (unsigned char)(h[i] >> 24);
+        out[4 * i + 1] = (unsigned char)(h[i] >> 16);
+        out[4 * i + 2] = (unsigned char)(h[i] >>  8);
+        out[4 * i + 3] = (unsigned char)(h[i]);
+    }
+#endif
+}
+
+/* SHA-1 is 20 bytes wherever it comes from; OpenSSL spells this
+ * SHA_DIGEST_LENGTH, which does not exist without its headers. */
+#define WS_SHA1_LEN 20
 
 /* ---------------------------------------------------------------- *
  * WebSocket CLIENT (#1764 / asks/websocket-client-for-bidi.md)
@@ -3163,17 +3250,27 @@ extern char* cryptography_base64_encode_raw(const char* data, int length);
  * OpenSSL the type does not exist, so the signature itself would not compile.
  * The dial is unreachable in that build anyway -- http_ws_connect returns
  * early because the accept hash needs SHA-1. */
+/* `ssl` is void* rather than SSL* so these compile in a build with no OpenSSL
+ * headers, where it is always NULL and only the plain-socket path below is
+ * reachable. That is what lets plain ws:// work without OpenSSL; wss:// still
+ * requires it, and says so. */
+static int ws_dial_send(void* ssl, int fd, const char* buf, int len) {
 #ifdef AETHER_HAS_OPENSSL
-static int ws_dial_send(SSL* ssl, int fd, const char* buf, int len) {
-    if (ssl) return SSL_write(ssl, buf, len);
+    if (ssl) return SSL_write((SSL*)ssl, buf, len);
+#else
+    (void)ssl;
+#endif
     return (int)send(fd, buf, (size_t)len, 0);
 }
 
-static int ws_dial_recv(SSL* ssl, int fd, char* buf, int len) {
-    if (ssl) return SSL_read(ssl, buf, len);
+static int ws_dial_recv(void* ssl, int fd, char* buf, int len) {
+#ifdef AETHER_HAS_OPENSSL
+    if (ssl) return SSL_read((SSL*)ssl, buf, len);
+#else
+    (void)ssl;
+#endif
     return (int)recv(fd, buf, (size_t)len, 0);
 }
-#endif
 
 static int ws_parse_url(const char* url, char* host, size_t host_sz,
                         int* port, char* path, size_t path_sz, int* tls) {
@@ -3229,15 +3326,15 @@ static int ws_parse_url(const char* url, char* host, size_t host_sz,
  * computation exactly — including that the base64 wrapper is UNPADDED, so the
  * single '=' that pads 20 bytes to a multiple of 4 is appended here too. */
 static char* ws_expected_accept(const char* client_key) {
-#ifdef AETHER_HAS_OPENSSL
+
     static const char* GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
     char concat[256];
     int n = snprintf(concat, sizeof(concat), "%s%s", client_key, GUID);
     if (n <= 0 || n >= (int)sizeof(concat)) return NULL;
-    unsigned char digest[SHA_DIGEST_LENGTH];
-    SHA1((const unsigned char*)concat, (size_t)n, digest);
+    unsigned char digest[WS_SHA1_LEN];
+    ws_sha1((const unsigned char*)concat, (size_t)n, digest);
     char* b64 = cryptography_base64_encode_raw((const char*)digest,
-                                               SHA_DIGEST_LENGTH);
+                                               WS_SHA1_LEN);
     if (!b64) return NULL;
     size_t bl = strlen(b64);
     char* out = (char*)malloc(bl + 2);
@@ -3247,10 +3344,6 @@ static char* ws_expected_accept(const char* client_key) {
     out[bl + 1] = '\0';
     free(b64);
     return out;
-#else
-    (void)client_key;
-    return NULL;
-#endif
 }
 
 HttpWsConn* http_ws_connect(const char* url) {
@@ -3261,10 +3354,6 @@ HttpWsConn* http_ws_connect(const char* url) {
      * initialiser is guarded and idempotent. */
     http_server_init();
 
-#ifndef AETHER_HAS_OPENSSL
-    (void)url;
-    return NULL;   /* the accept hash needs SHA-1 */
-#else
     char host[256], path[1024];
     int  port = 80;
     int  tls  = 0;
@@ -3294,20 +3383,27 @@ HttpWsConn* http_ws_connect(const char* url) {
      * store, the same Windows CA probing and the same TLS floor as https;
      * there is no second policy to keep in step. Verification is left ON:
      * an opt-out belongs behind an explicit call, not implied by the URL. */
-    SSL* ssl = NULL;
+    void* ssl = NULL;
     if (tls) {
+#ifndef AETHER_HAS_OPENSSL
+        /* Plain ws:// works in this build; wss:// cannot, because the TLS
+         * client is OpenSSL's. Fail here rather than silently dialling in
+         * clear text -- a caller that asked for wss:// must not get ws://. */
+        close(fd);
+        return NULL;
+#else
         SSL_CTX* ctx = aether_http_client_ssl_ctx();
         if (!ctx) { close(fd); return NULL; }
-        ssl = SSL_new(ctx);
-        if (!ssl) { close(fd); return NULL; }
+        SSL* s = SSL_new(ctx);
+        if (!s) { close(fd); return NULL; }
 
         /* SNI, so a virtual-hosted endpoint returns the right certificate. */
-        SSL_set_tlsext_host_name(ssl, host);
+        SSL_set_tlsext_host_name(s, host);
 
         /* Pin the certificate to the host we asked for. An IP literal needs
          * set1_ip_asc: older OpenSSL's set1_host does not detect IPs, and
          * silently pinning nothing is exactly the failure this prevents. */
-        X509_VERIFY_PARAM* vpm = SSL_get0_param(ssl);
+        X509_VERIFY_PARAM* vpm = SSL_get0_param(s);
         X509_VERIFY_PARAM_set_hostflags(vpm, X509_CHECK_FLAG_NO_PARTIAL_WILDCARDS);
         struct in_addr  in4;
         struct in6_addr in6;
@@ -3318,12 +3414,14 @@ HttpWsConn* http_ws_connect(const char* url) {
             X509_VERIFY_PARAM_set1_host(vpm, host, 0);
         }
 
-        SSL_set_fd(ssl, fd);
-        if (SSL_connect(ssl) != 1) {
-            SSL_free(ssl);
+        SSL_set_fd(s, fd);
+        if (SSL_connect(s) != 1) {
+            SSL_free(s);
             close(fd);
             return NULL;
         }
+        ssl = s;
+#endif
     }
 
     /* Sec-WebSocket-Key: 16 random bytes, base64. Like the mask, this is a
@@ -3367,11 +3465,19 @@ HttpWsConn* http_ws_connect(const char* url) {
     /* From here every failure must drop the SSL as well as the socket, so
      * the bail-outs below go through one place rather than repeating the
      * pair and eventually forgetting one. */
+#ifdef AETHER_HAS_OPENSSL
 #define WS_DIAL_FAIL() do { \
-        if (ssl) { SSL_free(ssl); } \
+        if (ssl) { SSL_free((SSL*)ssl); } \
         close(fd); \
         return NULL; \
     } while (0)
+#else
+/* ssl is always NULL here: wss:// returned above, so there is nothing to free. */
+#define WS_DIAL_FAIL() do { \
+        close(fd); \
+        return NULL; \
+    } while (0)
+#endif
 
     if (rn <= 0 || rn >= (int)sizeof(req)) WS_DIAL_FAIL();
     if (ws_dial_send(ssl, fd, req, rn) != rn) WS_DIAL_FAIL();
@@ -3429,7 +3535,6 @@ HttpWsConn* http_ws_connect(const char* url) {
     ws->mask_tx   = 1;   /* we are the client: every frame we send is masked */
     ws->owns_conn = 1;   /* we dialled it, so we close and free it */
     return ws;
-#endif
 }
 
 /* Release a handle from http_ws_connect. A server-side handle must NOT be
@@ -3455,18 +3560,17 @@ void http_ws_client_free(HttpWsConn* ws) {
 }
 
 static int ws_send_handshake(HttpConn* conn, const char* client_key) {
-#ifdef AETHER_HAS_OPENSSL
     /* Magic GUID per RFC 6455 §1.3. */
     static const char* GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
     char concat[256];
     int n = snprintf(concat, sizeof(concat), "%s%s", client_key, GUID);
     if (n <= 0 || n >= (int)sizeof(concat)) return -1;
 
-    unsigned char digest[SHA_DIGEST_LENGTH];  /* 20 bytes */
-    SHA1((const unsigned char*)concat, (size_t)n, digest);
+    unsigned char digest[WS_SHA1_LEN];  /* 20 bytes */
+    ws_sha1((const unsigned char*)concat, (size_t)n, digest);
 
     char* accept_b64 = cryptography_base64_encode_raw((const char*)digest,
-                                                       SHA_DIGEST_LENGTH);
+                                                       WS_SHA1_LEN);
     if (!accept_b64) return -1;
 
     /* SHA-1 is 20 bytes -> 28 base64 chars + 1 padding '=' to reach
@@ -3484,10 +3588,6 @@ static int ws_send_handshake(HttpConn* conn, const char* client_key) {
     if (rn <= 0 || rn >= (int)sizeof(resp)) return -1;
     if (conn_send(conn, resp, rn) != rn) return -1;
     return 0;
-#else
-    (void)conn; (void)client_key;
-    return -1;
-#endif
 }
 
 void http_server_use_request_hook(HttpServer* server,

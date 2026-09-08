@@ -311,11 +311,10 @@ static char g_binimport_link[4096] = "";
 // so a pure-Aether program with no `contrib.host.*` imports does NOT
 // link any bridge .a (critical: blanket-linking would force a
 // hello-world binary to dlopen libpython at runtime). Empty unless
-// `prepare_host_bridge_imports` found a match. POSIX-only (the host
-// bridges aren't built / linked on Windows).
-#ifndef _WIN32
+// `prepare_host_bridge_imports` found a match. Not POSIX-only any more: the
+// bridges DO build on Windows, and this used to be guarded out there, which is
+// what left `import contrib.host.tinygo` linking against nothing.
 static char g_host_bridge_link[2048] = "";
-#endif
 
 // Mirror of runtime/aether_lib_meta.h's catalog structs, kept
 // layout-compatible so `ae` can dlopen a `--emit=lib` artifact and walk
@@ -2323,6 +2322,37 @@ static int find_and_chdir_to_aether_toml(const char** file_inout) {
             }
             return 1;
         }
+        /* Do not walk OUT of a repository.
+         *
+         * The probe above runs first, so a project whose aether.toml sits at
+         * its repository root still resolves, from any subdirectory. What
+         * this stops is the next step: a checkout with no manifest of its own
+         * adopting an unrelated one from an ancestor directory.
+         *
+         * That is not hypothetical. Building aether's own test suite from a
+         * checkout at D:\Git\aether, with an unrelated scratch project's
+         * aether.toml sitting at D:\Git, made `ae` chdir to D:\Git and treat
+         * it as the project root. Two consequences, both silent:
+         *
+         *   - imports resolved against D:\Git\src instead of the test's own
+         *     lib/, so tests failed with "unresolved import <name>" naming a
+         *     module that was right there beside them;
+         *   - a relative `-o build/foo` landed in D:\Git\build, so `ae build`
+         *     printed "Built: build/foo.exe" while writing somewhere else
+         *     entirely, and the caller then could not find its own output.
+         *
+         * A repository is the outermost thing that can sensibly be "the
+         * project", so the walk stops there.
+         *
+         * Both predicates, because `.git` is a DIRECTORY in an ordinary
+         * checkout and a FILE in a worktree or submodule one -- and
+         * path_exists() here is regular-files-only (it tests
+         * !FILE_ATTRIBUTE_DIRECTORY on Windows, S_ISREG on POSIX), so on its
+         * own it would miss every normal repository. */
+        char git_probe[1040];
+        snprintf(git_probe, sizeof(git_probe), "%s/.git", walk);
+        if (dir_exists(git_probe) || path_exists(git_probe)) break;
+
         /* Step up one directory by truncating at the last separator. Stop
          * when we hit the root marker (just "/" or empty). */
         char* slash = strrchr(walk, '/');
@@ -2839,18 +2869,25 @@ void build_gcc_cmd(char* cmd, size_t size,
             snprintf(contrib_L, sizeof(contrib_L), "-L\"%s\" ", contrib_dir);
         else
             contrib_L[0] = '\0';
+        /* g_host_bridge_link mirrors the POSIX branch below: without it the
+         * bridge archive was found, reported, and then never passed to the
+         * linker, so `import contrib.host.tinygo` failed with undefined
+         * tinygo_call_* while the .a sat in build/contrib. */
         int w = snprintf(cmd, size,
-            "\"%s\" %s %s \"%s\" %s -L\"%s\" %s-laether -o \"%s\" %s %s %s %s %s %s %s %s %s %s %s",
-            s_gcc_bin, opt, tc.include_flags, c_file, extra, lib_dir, contrib_L, out_file, openssl_libs, zlib_libs, nghttp2_libs, pcre2_libs, brotli_libs, zstd_libs, audio_libs, yaml_libs, win_link_libs, ae_link, link_flags);
+            "\"%s\" %s %s \"%s\" %s -L\"%s\" %s%s -laether -o \"%s\" %s %s %s %s %s %s %s %s %s %s %s",
+            s_gcc_bin, opt, tc.include_flags, c_file, extra, lib_dir, contrib_L, g_host_bridge_link, out_file, openssl_libs, zlib_libs, nghttp2_libs, pcre2_libs, brotli_libs, zstd_libs, audio_libs, yaml_libs, win_link_libs, ae_link, link_flags);
         if (w >= (int)size) {
             fprintf(stderr,
                 "Warning: gcc link command truncated at %d bytes (buffer %zu).\n",
                 w, size);
         }
     } else {
+        /* Order matters, same as the POSIX branch: the host-bridge .a
+         * references runtime symbols defined in tc.runtime_srcs, so it must
+         * come BEFORE that source list on the command line. */
         int w = snprintf(cmd, size,
-            "\"%s\" %s %s \"%s\" %s %s%s -o \"%s\" %s %s %s %s %s %s %s %s %s %s %s",
-            s_gcc_bin, opt, tc.include_flags, c_file, extra, pcre2_src_defs, tc.runtime_srcs, out_file, openssl_libs, zlib_libs, nghttp2_libs, pcre2_libs, brotli_libs, zstd_libs, audio_libs, yaml_libs, win_link_libs, ae_link, link_flags);
+            "\"%s\" %s %s \"%s\" %s %s %s%s -o \"%s\" %s %s %s %s %s %s %s %s %s %s %s",
+            s_gcc_bin, opt, tc.include_flags, c_file, extra, g_host_bridge_link, pcre2_src_defs, tc.runtime_srcs, out_file, openssl_libs, zlib_libs, nghttp2_libs, pcre2_libs, brotli_libs, zstd_libs, audio_libs, yaml_libs, win_link_libs, ae_link, link_flags);
         if (w >= (int)size) {
             fprintf(stderr,
                 "Warning: gcc link command truncated at %d bytes (buffer %zu).\n",
@@ -3572,8 +3609,18 @@ static void prepare_binary_imports(const char* main_file) { (void)main_file; }
 // where `lib_dir` is the directory containing libaether.a, same as
 // build_gcc_cmd derives it from `tc.lib`.
 //
-// POSIX-only — host bridges aren't compiled on the Windows matrix.
-#ifndef _WIN32
+// This used to be compiled out entirely on Windows, on the premise that "host
+// bridges aren't compiled on the Windows matrix". They are: `make contrib`
+// builds build/contrib/libaether_host_tinygo.a there like anywhere else, with
+// every tinygo_call_* symbol present. Only the AUTO-LINK was missing, so
+// `import contrib.host.tinygo` compiled and then failed at link with
+// `undefined reference to tinygo_call_int_int_int` — the archive sitting
+// unused a few directories away. That made every contrib host bridge
+// unusable on Windows for a reason that had nothing to do with the bridges.
+//
+// The machinery is path and string handling, portable as-is. The one genuinely
+// POSIX-bound part is the Racket branch's link flags (-rdynamic, -ldl,
+// -lncurses), which stays guarded below.
 // Back-compat aliases: some bridge directories were renamed for
 // clarity, but old import paths must keep resolving. `js` was
 // renamed to `duktape` (engine name; allows `--with=quickjs` etc.
@@ -3712,6 +3759,12 @@ static void prepare_host_bridge_imports(const char* main_file) {
         // bridges). Without it we leave the link as-is — the bridge .a's
         // unresolved racket_* symbols then produce a clear linker error naming
         // the missing libracketcs, and the README documents the env var.
+#ifndef _WIN32
+        /* POSIX-only: -rdynamic, -ldl and -lncurses have no MinGW equivalent,
+         * and Racket CS is not built for this matrix. A Windows importer of
+         * contrib.host.racket still gets the bridge .a on the link line above
+         * and a clear unresolved-racket_* error, which is the same diagnostic
+         * POSIX gives when AETHER_RACKET_LIB is unset. */
         if (strcmp(effective_alias, "racket") == 0) {
             const char* rkt_lib = getenv("AETHER_RACKET_LIB");
             if (rkt_lib && *rkt_lib) {
@@ -3726,6 +3779,7 @@ static void prepare_host_bridge_imports(const char* main_file) {
                          rkt_lib);
             }
         }
+#endif
 
         if (tc.verbose) {
             fprintf(stderr, "ae: host bridge 'contrib.host.%s' -> %s%s\n",
@@ -3734,9 +3788,6 @@ static void prepare_host_bridge_imports(const char* main_file) {
     }
     fclose(f);
 }
-#else
-static void prepare_host_bridge_imports(const char* main_file) { (void)main_file; }
-#endif
 
 // --------------------------------------------------------------------------
 // Commands

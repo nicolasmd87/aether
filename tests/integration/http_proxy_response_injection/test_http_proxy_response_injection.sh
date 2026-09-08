@@ -14,8 +14,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 AE="$ROOT/build/ae"
 
-if ! command -v python3 >/dev/null 2>&1; then
-    echo "  [SKIP] http_proxy_response_injection: python3 not on PATH"
+PY="$(sh "$ROOT/tests/scripts/find_python.sh" 2>/dev/null)" || PY=""
+if [ -z "$PY" ]; then
+    echo "  [SKIP] http_proxy_response_injection: no working Python (a Windows Store alias is not one)"
     exit 0
 fi
 
@@ -68,7 +69,7 @@ run_one() {
         sleep 0.1
     done
 
-    if ! OUT=$(python3 "$SCRIPT_DIR/injection_probe.py" 2>&1); then
+    if ! OUT=$($PY "$SCRIPT_DIR/injection_probe.py" 2>&1); then
         echo "  [FAIL] http_proxy_response_injection ($label): $OUT"; exit 1
     fi
 

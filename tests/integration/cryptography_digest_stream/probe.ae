@@ -20,14 +20,22 @@ extern exit(code: int)
 main() {
     print("=== std.cryptography streaming digest context ===\n\n")
 
-    // OpenSSL-skip probe — same as cryptography_sha. The context API is
-    // libcrypto-backed, so skip gracefully when it's absent (Windows CI).
-    _, probe_err = cryptography.sha256_hex("probe", 5)
+    // Skip probe. This asks the STREAMING api whether it works, rather than
+    // asking sha256_hex — which it used to, as a proxy for "is OpenSSL here".
+    // That proxy broke the moment sha256_hex grew a pure-Aether fallback: the
+    // one-shot hash started succeeding without OpenSSL while digest_new(),
+    // which is still libcrypto-only, did not, so the skip stopped firing and
+    // the test failed at the first context it opened.
+    //
+    // Probe the capability under test, not a neighbour that happens to share
+    // a backend today.
+    probe_ctx, probe_err = cryptography.digest_new("sha256")
     if probe_err != "" {
-        println("SKIP cryptography_digest_stream: ${probe_err} (likely Windows CI without OpenSSL)")
+        println("SKIP cryptography_digest_stream: ${probe_err} (streaming digests need OpenSSL)")
         print("\n=== streaming digest tests skipped (no backend) ===\n")
         return
     }
+    cryptography.digest_free(probe_ctx)
 
     // ---- Test 1: md5("abc") in two chunks == one-shot == vector ----
     print("Test 1: md5 streamed in two chunks\n")

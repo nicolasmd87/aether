@@ -13,8 +13,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
 AE="$ROOT/build/ae"
 
-if ! command -v python3 >/dev/null 2>&1; then
-    echo "  [SKIP] http_proxy_stale_pooled_connection: python3 not on PATH"
+PY="$(sh "$ROOT/tests/scripts/find_python.sh" 2>/dev/null)" || PY=""
+if [ -z "$PY" ]; then
+    echo "  [SKIP] http_proxy_stale_pooled_connection: no working Python (a Windows Store alias is not one)"
     exit 0
 fi
 
@@ -57,7 +58,7 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     sleep 0.1
 done
 
-if ! OUT=$(python3 "$SCRIPT_DIR/stale_probe.py" 2>&1); then
+if ! OUT=$($PY "$SCRIPT_DIR/stale_probe.py" 2>&1); then
     echo "  [FAIL] http_proxy_stale_pooled_connection: $OUT"; exit 1
 fi
 
