@@ -11,6 +11,49 @@ version number before tagging the release.
 
 ## [current]
 
+### Fixed
+
+- **`std.mutation` deleted the caller's build cache.** Its per-mutant oracle ran
+  `rm -rf ~/.aether/cache` before every sub-build, on the reasoning that an
+  imported-module edit did not invalidate the key. The key has folded in every
+  lib-dir source file since #623/#1025/#1235, so the wipe bought nothing, and it
+  cost: on a machine compiling anything else at that moment it removed the
+  output file a linker was part way through writing, which surfaced as
+  `ld: open() failed, errno=2` in whatever unrelated build happened to be in
+  flight. Each run now compiles against a cache of its own.
+
+- **`ae cache` read and cleared the wrong directory.** It composed
+  `$HOME/.aether/cache` itself instead of asking for the resolved cache
+  location, so with `AETHER_CACHE_DIR` set it reported a count for a directory
+  the build was not using, and `ae cache clear` left the real one untouched.
+
+- **`make` relinked the toolchain and re-archived the stdlib on every
+  invocation.** `compiler`, `ae` and `stdlib` were phony targets, so each one
+  ran its link or `ar` unconditionally even with nothing to do. Anything that
+  runs make in the tree therefore rewrote `build/ae`, `build/aetherc` and
+  `build/libaether.a` under whatever else was using them: a process whose
+  binary is replaced under it is killed by macOS, and a link that reads the
+  archive mid-write fails with `member not 8-byte aligned`. They are file
+  targets now, the archive is renamed into place rather than written in place,
+  and `make install` on a current tree copies without building (7s, from 50s).
+
+- **A build-cache publish rewrote a slot that was already there.** The key is
+  derived from the sources and the flags, so a slot that exists holds a binary
+  built from the same inputs, and every loser of a parallel race spent a
+  megabyte of I/O replacing it with the same thing. The publish now takes the
+  slot only when it is free.
+
+### Changed
+
+- **The shell-test sweep runs in parallel** (#1920). Four tests cleared the
+  shared build cache and three asserted cache hits and misses against it, so the
+  sweep was pinned at one test at a time; two more ran `make install` in the
+  repository root, which runs `make clean` and deleted `build/ae` out from under
+  everything else. Six tests shared ports 19000 and 19001. The cache-sensitive
+  tests now use `AETHER_CACHE_DIR`, `install` no longer cleans, and the
+  reverse-proxy fixture and its five consumers bind port 0 and pass the resolved
+  port along. Measured on an 8-core box: 2286s to 503s, and the run that was
+  serial because of ports and caches no longer is.
 ## [0.649.0]
 
 ### Fixed

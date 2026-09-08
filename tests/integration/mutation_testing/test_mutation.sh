@@ -49,6 +49,12 @@ cd "$ROOT" || exit 1
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
 
+# Own build cache. The mutation driver clears it so each mutant is really
+# rebuilt, and clearing the shared ~/.aether/cache would delete the linker
+# output of any other `ae` running at that moment.
+AETHER_CACHE_DIR="$TMPDIR/cache"
+export AETHER_CACHE_DIR
+
 fail() {
     echo "  [FAIL] mutation_testing — $1"
     [ -f "$TMPDIR/out.log" ] && tail -40 "$TMPDIR/out.log" | sed 's/^/    /'
@@ -58,7 +64,7 @@ fail() {
 # Hash the SUT before the run (property 4).
 SUT_BEFORE="$($MD5 "$SUT" | awk '{print $1}')"
 
-rm -rf "$HOME/.aether/cache"
+rm -rf "$AETHER_CACHE_DIR"
 # AE_BIN points the driver's per-mutant sub-builds at the in-tree ae;
 # AETHER_HOME resolves std.* (std.mutation, std.spec) from this tree.
 # The lib_dir arg (the fixture dir) is where `import sut` resolves.

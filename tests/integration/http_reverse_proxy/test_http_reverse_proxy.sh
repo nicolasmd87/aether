@@ -34,6 +34,8 @@ if ! command -v curl >/dev/null 2>&1; then
     exit 0
 fi
 
+. "$ROOT/tests/lib/wait_port.sh"
+
 TMPDIR="$(mktemp -d)"
 UP_PID=""
 PX_PID=""
@@ -59,31 +61,34 @@ if ! AETHER_HOME="$ROOT" "$AE" build "$SCRIPT_DIR/server.ae" \
     echo "  [FAIL] build:"; head -30 "$TMPDIR/build.log"; exit 1
 fi
 
-wait_for_port() {
-    pid="$1"; port="$2"; tag="$3"; log="$4"
+wait_ready() {
+    pid="$1"; log="$2"; tag="$3"
     deadline=$(($(date +%s) + 15))
     while [ "$(date +%s)" -lt "$deadline" ]; do
+        if grep -q '^READY ' "$log" 2>/dev/null; then return 0; fi
         if ! kill -0 "$pid" 2>/dev/null; then
             echo "  [FAIL] $tag died:"; head -30 "$log"; exit 1
         fi
-        if curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$port/" 2>/dev/null \
-           || curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$port/echo" 2>/dev/null; then
-            return 0
-        fi
-        sleep 0.1
+        sleep 0.05
     done
-    echo "  [FAIL] $tag never accepted on port $port"; head -30 "$log"; exit 1
+    echo "  [FAIL] $tag never READY:"; head -30 "$log"; exit 1
 }
 
 start_mode() {
     proxy_mode="$1"  # "proxy" or "proxy_timeout"
-    AETHER_HOME="$ROOT" "$TMPDIR/server" upstream     >"$TMPDIR/up.log" 2>&1 &
+    : > "$TMPDIR/up.log"; : > "$TMPDIR/px.log"
+    AETHER_HOME="$ROOT" "$TMPDIR/server" upstream >"$TMPDIR/up.log" 2>&1 &
     UP_PID=$!
-    AETHER_HOME="$ROOT" "$TMPDIR/server" "$proxy_mode" >"$TMPDIR/px.log" 2>&1 &
+    wait_ready "$UP_PID" "$TMPDIR/up.log" upstream
+    UP_PORT=$(read_ready_port "$TMPDIR/up.log") || exit 1
+    wait_port "$UP_PORT" || exit 1
+
+    AETHER_HOME="$ROOT" "$TMPDIR/server" "$proxy_mode" "$UP_PORT" >"$TMPDIR/px.log" 2>&1 &
     PX_PID=$!
-    wait_for_port "$UP_PID" 19001 upstream "$TMPDIR/up.log"
-    wait_for_port "$PX_PID" 19000 proxy    "$TMPDIR/px.log"
-    sleep 0.3
+    wait_ready "$PX_PID" "$TMPDIR/px.log" proxy
+    PX_PORT=$(read_ready_port "$TMPDIR/px.log") || exit 1
+    wait_port "$PX_PORT" || exit 1
+    PROXY="http://127.0.0.1:$PX_PORT"
 }
 
 stop_servers() {
@@ -96,10 +101,7 @@ stop_servers() {
         wait "$PX_PID" 2>/dev/null || true
     fi
     UP_PID=""; PX_PID=""
-    sleep 0.3
 }
-
-PROXY="http://127.0.0.1:19000"
 
 # Windows-reduced mode. Same rationale as the http_reverse_proxy_pool
 # tests: each curl under MSYS2 bash pays Cygwin-fork-emulation +
@@ -200,9 +202,9 @@ else
     }
 
     # Test 6 — Host: rewritten to upstream (default preserve_host=0).
-    # Upstream is on localhost:19001 so it should see "localhost:19001".
-    echo "$RESP" | grep -q '^host=localhost:19001$' || {
-        echo "  [FAIL] T6 Host rewrite: expected 'localhost:19001'"; echo "$RESP"; exit 1;
+    # The proxy rewrites Host to the upstream it dialled.
+    echo "$RESP" | grep -q "^host=localhost:$UP_PORT\$" || {
+        echo "  [FAIL] T6 Host rewrite: expected 'localhost:$UP_PORT'"; echo "$RESP"; exit 1;
     }
 fi
 
@@ -332,12 +334,12 @@ esac
 
 FRAG_RAN=0
 if command -v python3 >/dev/null 2>&1; then
-    if FRAG=$(python3 "$SCRIPT_DIR/fragment_probe.py" 19000 2>&1); then
+    if FRAG=$(python3 "$SCRIPT_DIR/fragment_probe.py" "$PX_PORT" 2>&1); then
         FRAG_RAN=1
     else
         echo "  [FAIL] T11 fragmented request: $FRAG"; exit 1
     fi
-    if ! PIPE=$(python3 "$SCRIPT_DIR/pipeline_probe.py" 19000 2>&1); then
+    if ! PIPE=$(python3 "$SCRIPT_DIR/pipeline_probe.py" "$PX_PORT" 2>&1); then
         echo "  [FAIL] T13 pipelined requests: $PIPE"; exit 1
     fi
 else

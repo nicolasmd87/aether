@@ -6,6 +6,7 @@
 
 #include "ae_internal.h"
 
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -43,16 +44,34 @@ const char* get_home_dir(void) {
 #endif
 }
 
-// Atomic cache publish (#1032). Writers produce `<slot>.tmp.<pid>` in
-// the cache directory and rename onto the slot, so a concurrent reader
-// only ever sees a complete file (old, new, or miss — never partial).
-// rename(2) within one directory is atomic on POSIX; Windows rename()
-// refuses to replace an existing destination, so MoveFileEx there.
+/* Atomic cache publish (#1032). Writers produce `<slot>.tmp.<pid>` in the
+ * cache directory and move it onto the slot, so a concurrent reader only ever
+ * sees a complete file: old, new, or a miss, never a partial one.
+ *
+ * A taken slot is LEFT ALONE rather than replaced. The key is derived from the
+ * sources and the flags, so a slot that already exists holds a binary built
+ * from the same inputs: rewriting it is a megabyte of I/O for a file that is
+ * already what the writer was about to put there. Under a parallel build every
+ * loser of the race did that write. link(2) is the primitive that says "only
+ * if absent" and is atomic; a filesystem without hard links (EPERM/EXDEV/
+ * ENOSYS: FAT, some network mounts) falls back to the rename this always did. */
 int cache_publish(const char* tmp_path, const char* final_path) {
 #ifdef _WIN32
-    return MoveFileExA(tmp_path, final_path, MOVEFILE_REPLACE_EXISTING) ? 0 : -1;
+    /* Without MOVEFILE_REPLACE_EXISTING this fails when the slot is taken. */
+    if (MoveFileExA(tmp_path, final_path, 0)) return 0;
+    DWORD e = GetLastError();
+    if (e == ERROR_ALREADY_EXISTS || e == ERROR_FILE_EXISTS) {
+        DeleteFileA(tmp_path);
+        return 0;
+    }
+    return -1;
 #else
-    return rename(tmp_path, final_path);
+    if (link(tmp_path, final_path) == 0) { unlink(tmp_path); return 0; }
+    if (errno == EEXIST) { unlink(tmp_path); return 0; }
+    if (errno == EPERM || errno == EXDEV || errno == ENOSYS) {
+        return rename(tmp_path, final_path);
+    }
+    return -1;
 #endif
 }
 
