@@ -11,6 +11,8 @@ version number before tagging the release.
 
 ## [current]
 
+## [0.651.0]
+
 ### Fixed
 
 - **A constant named after a `windows.h` macro made the generated C
