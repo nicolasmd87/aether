@@ -1,0 +1,83 @@
+// A heap-string struct field assigned from a heap-tracked LOCAL that at
+// runtime holds a BORROWED value must not be freed by the struct destructor.
+//
+// `passthru` returns its parameter straight through, so it is classified
+// non-heap: `borrowed` is a heap-string var (it is reassignable to owned
+// strings elsewhere in a real program) but its runtime `_heap_borrowed` is 0.
+// Before the fix, `a.value = borrowed` hard-coded `_heap_value = 1`, so
+// `heap.free(a)` freed a value the program never owned — a literal string
+// (free of rodata) — aborting with SIGSEGV / "invalid pointer" at teardown.
+// The store must instead MOVE the source's runtime ownership:
+//   a->value = borrowed; a->_heap_value = _heap_borrowed; _heap_borrowed = 0;
+//
+// This is the FFI/closure-callback shape a downstream sanitizer hit: a hook
+// returns a literal, the engine threads it through `-> string` helpers into a
+// heap-boxed attr's string field, and teardown double-freed it.
+//
+// The `owned` half proves the fix does not regress the leak it protects:
+// a genuinely-heap value is still freed exactly once.
+//
+// `owned` alone is not enough, and the reason is worth stating: the compiler
+// constant-folds `string.concat("https://", "cdn.example/style.css")` into a
+// literal, so that half runs with `_heap_owned == 0` and exercises the
+// borrowed path a second time rather than the owned one. `runtime_owned` is
+// built through a call the folder cannot see through, so it is genuinely heap
+// at runtime -- and it is the shape that leaked: for a var whose value escapes
+// into a struct field, the assignment used to leave `_heap_<var>` at its stale
+// 0, and moving that 0 into the field tracker told the destructor the buffer
+// was borrowed. std.message leaked 60 allocations exactly this way.
+
+import std.io
+import std.string
+import std.strbuilder
+
+struct Attr {
+    name: string
+    value: string
+}
+
+fn passthru(u: string) -> string {
+    return u
+}
+
+// Built through a call, so the constant folder cannot reduce it to a literal:
+// the result is genuinely heap-allocated at runtime.
+fn build_owned(n: int) -> string {
+    b = strbuilder.new(16)
+    strbuilder.append(b, "https://cdn.example/")
+    strbuilder.append_int(b, n)
+    return strbuilder.finish(b)
+}
+
+main() {
+    // Borrowed: value the program does not own. Must NOT be freed at teardown.
+    a = heap.new(Attr)
+    a.name = "src"
+    borrowed = passthru("https://cdn.example/logo.png")
+    ap = a as *Attr
+    ap.value = borrowed
+    println("borrowed: ${a.value}")
+    heap.free(a)
+
+    // Owned: genuinely-heap value. Must be freed exactly once (no leak).
+    b = heap.new(Attr)
+    b.name = "href"
+    owned = string.concat("https://", "cdn.example/style.css")
+    bp = b as *Attr
+    bp.value = owned
+    println("owned: ${b.value}")
+    heap.free(b)
+
+    // Genuinely heap at runtime, and escaping into a struct field. The field
+    // tracker must receive 1 so the destructor reclaims it exactly once:
+    // freeing nothing here is the leak, freeing twice is the crash above.
+    c = heap.new(Attr)
+    c.name = "src"
+    runtime_owned = build_owned(7)
+    cp = c as *Attr
+    cp.value = runtime_owned
+    println("runtime_owned: ${c.value}")
+    heap.free(c)
+
+    println("done")
+}

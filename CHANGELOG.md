@@ -42,6 +42,45 @@ version number before tagging the release.
   serial on an 8-core box either way. #1920's five strategies all treat ports
   as the throttle; they are not it.
 
+## [0.649.0]
+
+### Fixed
+
+- **`install.sh` piped into a shell ran `make` in the caller's directory.** The
+  script begins by changing to `dirname "$0"`, and piped into a shell `$0` is
+  the shell's own name, so that is `.`: it went on to build in whatever
+  directory the caller happened to be standing in, against whatever it found
+  there, and said nothing about it. It now checks that the directory it landed
+  in is the tree it was meant to build, and where it is not, says so and points
+  at cloning the repository. (#1934)
+
+- **A heap-string struct field assigned from a borrowed value was freed at
+  teardown, a double free / free of rodata.** When a heap-string field is
+  assigned from a bare heap-tracked local (`a.value = v`), the field's
+  `_heap_<field>` tracker was hard-coded to 1. But a local classified as a
+  heap-string var can hold a *borrowed* value at runtime, e.g. one returned by
+  a function that passes a parameter or a literal straight through, leaving its
+  `_heap_<var>` at 0. The struct destructor then freed a pointer the program
+  never owned: a literal (free of read-only data) or a value still owned
+  elsewhere. It surfaced downstream as a callback/FFI crash: a hook returns a
+  literal `string`, the engine threads it through `-> string` helpers into a
+  heap-boxed struct field, and teardown aborted with `invalid pointer` /
+  SIGSEGV. The field store now *moves* the source var's runtime ownership
+  (`_heap_<field> = _heap_<var>; _heap_<var> = 0`) instead of asserting 1, so a
+  borrowed value is not freed and a genuinely-owned one is still freed exactly
+  once. Regression follow-up to #1866/#1879.
+
+  Reading the tracker only works if the tracker is maintained, and for one
+  shape it was not. When a heap-string var's value escapes into a container or
+  a struct field, its own frees are suppressed (the recipient may have kept the
+  pointer), and on that path the assignment left `_heap_<var>` at its stale 0
+  on the reasoning that nothing would read it. The field store now reads it, so
+  a genuinely owned value (`s = strbuilder.finish(b)` then `n.text = s`) moved
+  a 0 into the field tracker and the destructor never reclaimed the buffer.
+  `std.message` leaked 60 allocations exactly this way, caught by the macOS
+  leaks gate. The flag is the ownership token, so it is now recorded whether or
+  not this scope is the one that acts on it; the escape-suppressed frees are
+  unchanged.
 
 ## [0.648.0]
 

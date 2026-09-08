@@ -5,8 +5,28 @@
 #        ./install.sh --editor-only (installs only editor extension)
 set -eo pipefail
 
-# Always run from the repository root (where this script lives)
-cd "$(dirname "$0")"
+# Always run from the repository root (where this script lives).
+#
+# Piped into a shell, `$0` is the shell's own name rather than a path, so
+# `dirname "$0"` is `.`: the script would change to whatever directory the
+# caller happened to be in and run `make` there, against whatever it found.
+# There is nothing to install from in that case, and saying so is the only
+# useful thing to do.
+script_dir="$(dirname "$0")"
+if [ ! -f "$script_dir/install.sh" ] || [ ! -f "$script_dir/Makefile" ]; then
+    cat >&2 <<'PIPED'
+install.sh builds the compiler from the tree around it, so it needs that tree.
+
+Piped into a shell it has no path to itself and would run make in whatever
+directory you are standing in. Clone the repository and run it from there:
+
+    git clone --depth 1 https://github.com/aether-lang-dev/aether.git
+    cd aether
+    ./install.sh
+PIPED
+    exit 1
+fi
+cd "$script_dir"
 
 # First line of a command's combined output.
 #
