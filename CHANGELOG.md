@@ -11,6 +11,8 @@ version number before tagging the release.
 
 ## [current]
 
+## [0.648.0]
+
 ### Fixed
 
 - **A heap-string struct field assigned from a borrowed value was freed at
