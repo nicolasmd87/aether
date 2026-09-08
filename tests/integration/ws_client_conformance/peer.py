@@ -13,9 +13,11 @@ async def echo(ws, path=None):
         pass
 
 async def main():
-    port = int(sys.argv[1])
-    async with websockets.serve(echo, "127.0.0.1", port):
-        print("READY", flush=True)
+    # Bind port 0 and report the kernel's choice, so parallel runs cannot
+    # collide on a number nobody chose.
+    async with websockets.serve(echo, "127.0.0.1", 0) as server:
+        port = server.sockets[0].getsockname()[1]
+        print("READY", port, flush=True)
         await asyncio.Future()
 
 asyncio.run(main())

@@ -9,8 +9,8 @@ import std.http
 
 extern exit(code: int)
 extern http_server_start_raw(server: ptr) -> int
-
-const PORT = 18142
+extern http_server_bind_raw(server: ptr, host: string, port: int) -> int
+extern http_server_port(server: ptr) -> int
 
 @c_callback echo_handler(req: ptr, ws: ptr, ud: ptr) {
     n = 0
@@ -39,12 +39,16 @@ actor SchedHelper {
 }
 
 main() {
-    raw = http.server_create(PORT)
+    raw = http.server_create(0)
     http.server_set_host(raw, "127.0.0.1")
     if raw == 0 { println("FAIL: server_create"); exit(1) }
 
     http.server_websocket(raw, "/echo", echo_handler, null)
-    println("READY")
+    if http_server_bind_raw(raw, "127.0.0.1", 0) < 0 {
+        println("FAIL: bind")
+        exit(1)
+    }
+    println("READY ${http_server_port(raw)}")
 
     spawn(SchedHelper())
     a = spawn(SrvActor())
