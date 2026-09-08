@@ -11,8 +11,6 @@ version number before tagging the release.
 
 ## [current]
 
-## [0.649.0]
-
 ### Fixed
 
 - **A Windows source build could not run its own test suite, and several things
