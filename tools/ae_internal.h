@@ -123,6 +123,10 @@ void init_cache_dir(void);
 void tc_lib_dir_append(const char* spec);
 unsigned long long compute_cache_key(const char* ae_file, const char* extra_files,
                                      const char* opt_level, const char* extra_salt);
+/* #1882: the stable depfile slot for an entry source, under the cache dir.
+ * ae asks aetherc to write it (--emit-deps) on a cached build; compute_cache_key
+ * folds it on the next run for exact, tree-walk-free invalidation. */
+void cache_depfile_path(const char* ae_file, char* out, size_t outsz);
 
 /* ae_cross.c — cross-compilation via the zig cc backend (#1105), plus the
  * Xcode/xcrun backend for Apple targets that zig cannot serve. */
