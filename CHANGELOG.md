@@ -13,6 +13,34 @@ version number before tagging the release.
 
 ### Fixed
 
+- **HTTP server tests bind an ephemeral port instead of a hardcoded one**
+  (part of #1920). Twenty-nine fixtures each owned a fixed port, which is what
+  forced the shell sweep to run serially: two of them even shared 18107, and
+  only serial execution kept that from mattering. A server left behind by an
+  earlier run also starved the next one, which is the "port already in use"
+  flake the sweep sees.
+
+  Each fixture now binds port 0, lets the kernel choose, and prints the
+  resolved port on its READY line for the runner to read. `server_start`
+  reuses a socket the caller already bound, so this also moves READY to
+  AFTER the listen socket exists rather than before it.
+
+  Demonstrated rather than argued: running the same test twice concurrently
+  used to fail one of the two on the bind, and all twenty-nine now run
+  concurrently with no failures.
+
+  Three fixtures whose companion client had the port baked in take it from
+  the environment instead, because `ae run script.ae <arg>` does not forward
+  arguments to the program. One server builds its own redirect targets from
+  its resolved port.
+
+  `SH_NPROC` is deliberately left at 1: nine server fixtures still hold fixed
+  ports, and flipping the switch while any remain would trade a slow suite
+  for a flaky one.
+
+
+### Fixed
+
 - **Server tests wait for the port, not for a guess** (part of #1920). Every
   HTTP server test greps its log for `READY` and then slept a fixed 0.3s,
   which proves the server PRINTED the line and nothing more: the listen socket

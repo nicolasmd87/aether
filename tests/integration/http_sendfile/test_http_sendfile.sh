@@ -78,9 +78,10 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     fi
     sleep 0.1
 done
-wait_port 19200 || exit 1
+PORT=$(read_ready_port "$TMPDIR/srv.log") || exit 1
+wait_port "$PORT" || exit 1
 
-URL="http://127.0.0.1:19200"
+URL="http://127.0.0.1:$PORT"
 
 # --- Test 1: byte-identical body over cleartext h1.1 ---
 RESP_BODY="$TMPDIR/got1.bin"

@@ -15,13 +15,18 @@ import std.http
 
 extern exit(code: int)
 extern http_server_start_raw(server: ptr) -> int
+extern http_server_bind_raw(server: ptr, host: string, port: int) -> int
+extern http_server_port(server: ptr) -> int
 
-const PORT = 18211
+// The redirect targets name this server's OWN port, and it now binds port 0,
+// so the port is only known after the bind. Held here so the handlers can
+// build the Location header from it.
+var g_port: int = 0
 
 redirect_handler(req: ptr, res: ptr, ud: ptr) {
     http.response_set_status(res, 302)
     http.response_set_header(res, "Location",
-        "http://localhost:18211/landing")
+        "http://localhost:${g_port}/landing")
     http.response_set_header(res, "Content-Type", "text/plain")
     http.response_set_body(res, "moved\n")
 }
@@ -30,7 +35,7 @@ redirect_handler(req: ptr, res: ptr, ud: ptr) {
 same_host_handler(req: ptr, res: ptr, ud: ptr) {
     http.response_set_status(res, 302)
     http.response_set_header(res, "Location",
-        "http://127.0.0.1:18211/landing")
+        "http://127.0.0.1:${g_port}/landing")
     http.response_set_header(res, "Content-Type", "text/plain")
     http.response_set_body(res, "moved\n")
 }
@@ -55,12 +60,21 @@ echo_handler(req: ptr, res: ptr, ud: ptr) {
 }
 
 main() {
-    s = http.server_create(PORT)
+    s = http.server_create(0)
     http.server_set_host(s, "0.0.0.0")
     http.server_get(s, "/start", redirect_handler, 0)
     http.server_get(s, "/same", same_host_handler, 0)
     http.server_get(s, "/landing", echo_handler, 0)
-    println("READY")
+    // #1920: bind on port 0 so the kernel picks a free one, and report it.
+    // server_start reuses a socket the caller already bound, so this also
+    // means READY is printed AFTER the listen socket exists rather than
+    // before it, which is what the fixed sleep in the runner was covering.
+    if http_server_bind_raw(s, "127.0.0.1", 0) < 0 {
+        println("FAIL: bind")
+        exit(1)
+    }
+    g_port = http_server_port(s)
+    println("READY ${g_port}")
     http_server_start_raw(s)
     exit(0)
 }

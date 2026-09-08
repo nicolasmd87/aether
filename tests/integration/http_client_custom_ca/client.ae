@@ -16,7 +16,13 @@ import std.os
 
 extern exit(code: int)
 
-const URL = "https://127.0.0.1:18119/"
+// The server binds port 0 and reports the kernel's choice, so the port
+// arrives in the environment rather than being baked in. It is an env var
+// and not an argument because `ae run script.ae <arg>` does not forward
+// extra arguments to the program.
+get_url() -> string {
+    return "https://127.0.0.1:${os_getenv("AE_TEST_PORT")}/"
+}
 
 fail(msg: string) {
     println("FAIL: ${msg}")
@@ -26,7 +32,7 @@ fail(msg: string) {
 // GET URL with an optional cafile pin (empty = none). insecure stays 0.
 // Returns (status, err).
 do_get(cafile: string) -> {
-    req = client.request("GET", URL)
+    req = client.request("GET", get_url())
     if req == null { fail("request() null") }
     client.set_timeout(req, 10s)
     if cafile != "" {

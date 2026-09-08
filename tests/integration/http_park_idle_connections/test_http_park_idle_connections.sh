@@ -23,8 +23,8 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+. "$ROOT/tests/lib/wait_port.sh"
 AE="$ROOT/build/ae"
-PORT=18137
 CONNECTIONS="${PARK_TEST_CONNECTIONS:-200}"
 
 if [ ! -x "$AE" ]; then
@@ -63,6 +63,13 @@ cc "$SCRIPT_DIR/park_client.c" -o "$TMP/client" 2>"$TMP/cc.log" \
     || { sed 's/^/        /' "$TMP/cc.log" | head -5; fail "could not compile park_client.c"; }
 
 AETHER_HOME="$ROOT" "$AE" run "$SCRIPT_DIR/server.ae" >"$TMP/srv.log" 2>&1 &
+
+# The server binds port 0 and prints the kernel's choice on its READY line.
+for _ in $(seq 1 300); do
+    grep -q "^READY " "$TMP/srv.log" 2>/dev/null && break
+    sleep 0.05
+done
+PORT=$(read_ready_port "$TMP/srv.log") || exit 1
 SRV_PID=$!
 
 deadline=$(($(date +%s) + 25))

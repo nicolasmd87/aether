@@ -62,7 +62,8 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     fi
     sleep 0.1
 done
-wait_port 18103 || exit 1
+PORT=$(read_ready_port "$TMPDIR/srv.log") || exit 1
+wait_port "$PORT" || exit 1
 
 # Three URLs in one curl invocation re-uses a single TCP connection.
 # Use distinct -o files per URL so we can verify each response
@@ -71,9 +72,9 @@ wait_port 18103 || exit 1
 # keep-alive header check below.
 ERR="$TMPDIR/curl.err"
 if ! curl --silent --show-error --max-time 5 -v \
-        http://127.0.0.1:18103/ -o "$TMPDIR/r1" \
-        http://127.0.0.1:18103/ -o "$TMPDIR/r2" \
-        http://127.0.0.1:18103/ -o "$TMPDIR/r3" \
+        http://127.0.0.1:$PORT/ -o "$TMPDIR/r1" \
+        http://127.0.0.1:$PORT/ -o "$TMPDIR/r2" \
+        http://127.0.0.1:$PORT/ -o "$TMPDIR/r3" \
         2>"$ERR"; then
     echo "  [FAIL] curl failed:"
     cat "$ERR"

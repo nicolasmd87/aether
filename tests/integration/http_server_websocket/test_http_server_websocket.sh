@@ -88,7 +88,8 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     fi
     sleep 0.1
 done
-wait_port 18110 || exit 1
+PORT=$(read_ready_port "$TMPDIR/srv.log") || exit 1
+wait_port "$PORT" || exit 1
 
 # Python client sends 3 text messages and prints each echo on its
 # own line; non-zero exit on any failure.
@@ -98,7 +99,7 @@ import sys
 import websockets
 
 async def main():
-    async with websockets.connect("ws://127.0.0.1:18110/echo") as ws:
+    async with websockets.connect("ws://127.0.0.1:$PORT/echo") as ws:
         for msg in ("hello", "world", "!"):
             await ws.send(msg)
             reply = await asyncio.wait_for(ws.recv(), timeout=2)
