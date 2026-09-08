@@ -28,6 +28,7 @@ set -u
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+. "$ROOT/tests/lib/wait_port.sh"
 AE="$ROOT/build/ae"
 
 if [ ! -x "$AE" ]; then
@@ -54,15 +55,22 @@ fail() { echo "  [FAIL] $1"; [ -f "$TMP/driver.out" ] && sed 's/^/        /' "$T
     || { sed 's/^/        /' "$TMP/build2.log" | head -8; fail "driver.ae did not build"; }
 
 "$TMP/server" >"$TMP/server.log" 2>&1 &
+
+# The server binds port 0 and prints the kernel's choice on its READY line.
+for _ in $(seq 1 300); do
+    grep -q "^READY " "$TMP/server.log" 2>/dev/null && break
+    sleep 0.05
+done
+PORT=$(read_ready_port "$TMP/server.log") || exit 1
 ORIGIN_PID=$!
 
 deadline=$(($(date +%s) + 15))
-until curl -s -o /dev/null --max-time 1 "http://127.0.0.1:18211/landing" 2>/dev/null; do
+until curl -s -o /dev/null --max-time 1 "http://127.0.0.1:$PORT/landing" 2>/dev/null; do
     [ "$(date +%s)" -ge "$deadline" ] && fail "server never accepted connections"
     sleep 0.1
 done
 
-"$TMP/driver" >"$TMP/driver.out" 2>&1 || fail "driver exited non-zero"
+AE_TEST_PORT="$PORT" "$TMP/driver" >"$TMP/driver.out" 2>&1 || fail "driver exited non-zero"
 if grep -q "^SKIP:" "$TMP/driver.out"; then
     echo "  [SKIP] http_redirect_cross_host: $(sed -n 's/^SKIP: //p' "$TMP/driver.out" | head -1)"
     exit 0

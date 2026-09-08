@@ -28,8 +28,8 @@ extern http_server_post(server: ptr, path: string, handler: ptr, user_data: ptr)
 // a raw extern (not callable via the fs. namespace), so bind it here.
 extern file_close(file: ptr) -> int
 extern exit(code: int)
-
-const PORT = 19250
+extern http_server_bind_raw(server: ptr, host: string, port: int) -> int
+extern http_server_port(server: ptr) -> int
 
 handle_upload(req: ptr, res: ptr, ud: ptr) {
     // #644: a streaming request is not complete at handler entry (the
@@ -37,7 +37,7 @@ handle_upload(req: ptr, res: ptr, ud: ptr) {
     // read loop drains the declared length. Reported to the driver.
     pre = http.request_body_complete(req)
     total = http.request_body_length(req)
-    root = aether_args_get(2)
+    root = aether_args_get(1)
     out_path = "${root}/uploaded.bin"
 
     // Stream chunks → temp file via positional writes. Peak RAM is one
@@ -119,21 +119,30 @@ actor SchedHelper {
 }
 
 main() {
+    // The port is no longer an argument: the server binds 0 and reports the
+    // kernel's choice on the READY line, so only the root remains.
     n = aether_args_count()
-    if n < 3 {
-        println("usage: server <port> <root>")
+    if n < 2 {
+        println("usage: server <root>")
         exit(1)
     }
 
-    s = http.server_create(PORT)
+    s = http.server_create(0)
     if s == 0 { println("FAIL: server_create"); exit(1) }
     http.server_set_host(s, "127.0.0.1")
     http.server_set_keepalive(s, 1, 0, 5000ms)
     http_server_post(s, "/upload", handle_upload, 0)
     http_server_post(s, "/v1body", handle_v1body, 0)
     http.server_get(s, "/ping", handle_ping, 0)
-
-    println("READY")
+    // #1920: bind on port 0 so the kernel picks a free one, and report it.
+    // server_start reuses a socket the caller already bound, so this also
+    // means READY is printed AFTER the listen socket exists rather than
+    // before it, which is what the fixed sleep in the runner was covering.
+    if http_server_bind_raw(s, "127.0.0.1", 0) < 0 {
+        println("FAIL: bind")
+        exit(1)
+    }
+    println("READY ${http_server_port(s)}")
 
     spawn(SchedHelper())
     a = spawn(SrvActor())

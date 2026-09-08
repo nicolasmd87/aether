@@ -53,9 +53,10 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     fi
     sleep 0.1
 done
-wait_port 18293 || exit 1
+PORT=$(read_ready_port "$TMPDIR/srv.log") || exit 1
+wait_port "$PORT" || exit 1
 
-URL="http://127.0.0.1:18293/whoami"
+URL="http://127.0.0.1:$PORT/whoami"
 
 # Test 1 — plain loopback request. peer should be 127.0.0.1; xff empty.
 RESP1=$(curl --silent --show-error --max-time 5 "$URL" 2>"$TMPDIR/c1.err") || {

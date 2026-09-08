@@ -32,3 +32,18 @@ wait_port() {
     echo "  [FAIL] nothing listening on $_wp_host:$_wp_port"
     return 1
 }
+
+# read_ready_port LOGFILE reads the port from a server's "READY <port>" line.
+#
+# Fixtures bind port 0 so the kernel picks a free port, which is what lets
+# these tests run in parallel and removes the port-squatting class entirely:
+# no two runs can collide on a number nobody chose. The server prints the
+# resolved port; this reads it back.
+read_ready_port() {
+    _rp_port=$(sed -n 's/^READY \([0-9][0-9]*\).*$/\1/p' "$1" 2>/dev/null | head -1)
+    if [ -z "$_rp_port" ]; then
+        echo "  [FAIL] no 'READY <port>' line in $1"
+        return 1
+    fi
+    echo "$_rp_port"
+}

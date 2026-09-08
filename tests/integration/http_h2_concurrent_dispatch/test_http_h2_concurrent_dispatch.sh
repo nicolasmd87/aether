@@ -77,9 +77,10 @@ done
     echo "  [FAIL] no READY within timeout"; head -20 "$TMPDIR/srv.log"; exit 1
 }
 case "$ready" in READY-NOH2*) echo "  [SKIP] $ready"; exit 0;; esac
-wait_port 18280 || exit 1
+PORT=$(read_ready_port "$TMPDIR/srv.log") || exit 1
+wait_port "$PORT" || exit 1
 
-URL="http://127.0.0.1:18280"
+URL="http://127.0.0.1:$PORT"
 
 # ------------------------------------------------------------------
 # Test 1 — sanity. /fast must respond over h2.

@@ -40,12 +40,12 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# NOTE: this test binds a UNIQUE port (18118) that no other integration test
+# NOTE: this test binds a UNIQUE port ($PORT) that no other integration test
 # uses. `ae run` forks the compiled server as a child, so the trap above can't
 # fully reap it (the fork outlives the wrapper) — every server test in this
 # suite has that limitation. A unique port is what keeps a lingering server
 # from starving the next test (the collision that surfaced this on macOS, where
-# reaping is slower). Keep 18118 distinct if you add a sibling test.
+# reaping is slower). Keep $PORT distinct if you add a sibling test.
 
 CERT="$TMPDIR/cert.pem"
 KEY="$TMPDIR/key.pem"
@@ -89,10 +89,11 @@ if ! grep -q READY "$TMPDIR/srv.log" 2>/dev/null; then
 fi
 
 # Settle for the actor to bind the listen socket.
-wait_port 18118 || exit 1
+PORT=$(read_ready_port "$TMPDIR/srv.log") || exit 1
+wait_port "$PORT" || exit 1
 
 OUT="$TMPDIR/client.out"
-if ! AETHER_HOME="$ROOT" "$AE" run "$SCRIPT_DIR/client.ae" >"$OUT" 2>&1; then
+if ! AETHER_HOME="$ROOT" AE_TEST_PORT="$PORT" "$AE" run "$SCRIPT_DIR/client.ae" >"$OUT" 2>&1; then
     echo "  [FAIL] client exited non-zero:"
     cat "$OUT" | head -10
     exit 1

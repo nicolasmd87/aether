@@ -64,9 +64,10 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     fi
     sleep 0.1
 done
-wait_port 18301 || exit 1
+PORT=$(read_ready_port "$TMPDIR/srv.log") || exit 1
+wait_port "$PORT" || exit 1
 
-URL="http://127.0.0.1:18301/data.bin"
+URL="http://127.0.0.1:$PORT/data.bin"
 
 # Test 1 — bytes=0-1023 should be 206 with 1024 bytes
 RESP_HEAD="$TMPDIR/h1.txt"

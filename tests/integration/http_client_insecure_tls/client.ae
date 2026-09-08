@@ -11,14 +11,20 @@
 // (verification never happened) or #2 would also fail (skip is a no-op).
 
 import std.http.client
+import std.os
 
 extern exit(code: int)
 
-const URL = "https://localhost:18118/"
+// The server binds port 0 and reports the kernel's choice, so the port
+// arrives in the environment. An env var and not an argument because
+// `ae run script.ae <arg>` does not forward extra arguments.
+get_url() -> string {
+    return "https://localhost:${os_getenv("AE_TEST_PORT")}/"
+}
 
 main() {
     // 1. Default: self-signed cert must be rejected.
-    r1 = client.request("GET", URL)
+    r1 = client.request("GET", get_url())
     client.set_timeout(r1, 5s)
     resp1, err1 = client.send_request(r1)
     client.request_free(r1)
@@ -30,7 +36,7 @@ main() {
     }
 
     // 2. Insecure: same host, verification skipped, must succeed.
-    r2 = client.request("GET", URL)
+    r2 = client.request("GET", get_url())
     client.set_timeout(r2, 5s)
     ierr = client.set_insecure(r2, 1)
     if ierr != "" {

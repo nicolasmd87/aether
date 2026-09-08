@@ -89,11 +89,13 @@ wait_ready() {
 }
 wait_ready "$SRV_BEARER_PID"  "$TMPDIR/bearer.log"  bearer
 wait_ready "$SRV_SESSION_PID" "$TMPDIR/session.log" session
-wait_port 18273 || exit 1
-wait_port 18274 || exit 1
+PORT_BEARER=$(read_ready_port "$TMPDIR/bearer.log")  || exit 1
+PORT_SESSION=$(read_ready_port "$TMPDIR/session.log") || exit 1
+wait_port "$PORT_BEARER"  || exit 1
+wait_port "$PORT_SESSION" || exit 1
 
-URL_BEARER="http://127.0.0.1:18273/api/whoami"
-URL_SESSION="http://127.0.0.1:18274/app/me"
+URL_BEARER="http://127.0.0.1:$PORT_BEARER/api/whoami"
+URL_SESSION="http://127.0.0.1:$PORT_SESSION/app/me"
 
 # Helper — fetch HTTP status + WWW-Authenticate header.
 status_and_auth() {

@@ -24,6 +24,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+. "$ROOT/tests/lib/wait_port.sh"
 AE="$ROOT/build/ae"
 
 if ! command -v curl >/dev/null 2>&1; then
@@ -43,9 +44,16 @@ trap cleanup EXIT
 fail() { echo "  [FAIL] $1"; [ -f "$TMPDIR/srv.log" ] && head -20 "$TMPDIR/srv.log"; exit 1; }
 
 AETHER_HOME="$ROOT" "$AE" run "$SCRIPT_DIR/server.ae" >"$TMPDIR/srv.log" 2>&1 &
+
+# The server binds port 0 and prints the kernel's choice on its READY line.
+for _ in $(seq 1 300); do
+    grep -q "^READY " "$TMPDIR/srv.log" 2>/dev/null && break
+    sleep 0.05
+done
+PORT=$(read_ready_port "$TMPDIR/srv.log") || exit 1
 SRV_PID=$!
 
-URL="http://127.0.0.1:18107"
+URL="http://127.0.0.1:$PORT"
 
 # Wait for the port to answer, not for a line in the log: the server prints
 # READY before it binds, so a port left busy by an earlier run would otherwise
@@ -53,7 +61,7 @@ URL="http://127.0.0.1:18107"
 deadline=$(($(date +%s) + 20))
 until curl --silent --max-time 2 -o /dev/null "$URL/" 2>/dev/null; do
     kill -0 "$SRV_PID" 2>/dev/null || fail "server exited before it served"
-    [ "$(date +%s)" -lt "$deadline" ] || fail "server never answered on 18107 (port already in use?)"
+    [ "$(date +%s)" -lt "$deadline" ] || fail "server never answered on $PORT (port already in use?)"
     sleep 0.1
 done
 
@@ -79,7 +87,7 @@ get_bytes="$(curl --silent --show-error --max-time 5 -o /dev/null \
 cc "$SCRIPT_DIR/pipeline_client.c" -o "$TMPDIR/pipeline" 2>"$TMPDIR/cc.log" \
     || { sed 's/^/        /' "$TMPDIR/cc.log" | head -5; fail "could not compile pipeline_client.c"; }
 
-if ! "$TMPDIR/pipeline" 127.0.0.1 18107 >"$TMPDIR/pipe.out" 2>"$TMPDIR/pipe.err"; then
+if ! "$TMPDIR/pipeline" 127.0.0.1 $PORT >"$TMPDIR/pipe.out" 2>"$TMPDIR/pipe.err"; then
     sed 's/^/        /' "$TMPDIR/pipe.err" | head -5
     fail "the three requests did not complete on one connection"
 fi

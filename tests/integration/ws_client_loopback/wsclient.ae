@@ -1,11 +1,12 @@
 // The client half: dial the echo peer, round-trip a message, close.
 import std.http
+import std.os
 import std.string
 
 extern exit(code: int)
 
 main() {
-    w = http.ws_connect("ws://127.0.0.1:18142/echo")
+    w = http.ws_connect("ws://127.0.0.1:${os_getenv("AE_TEST_PORT")}/echo")
     if w == null {
         println("FAIL: ws_connect returned null")
         exit(1)

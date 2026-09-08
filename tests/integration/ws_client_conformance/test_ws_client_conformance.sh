@@ -16,8 +16,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+. "$ROOT/tests/lib/wait_port.sh"
 AE="$ROOT/build/ae"
-PORT=18146
 
 [ -x "$AE" ] || { echo "  [SKIP] ws_client_conformance: ae not built"; exit 0; }
 
@@ -75,7 +75,7 @@ fi
 "$AE" build "$SCRIPT_DIR/ws_conformance.ae" -o "$TMP/wscli" >"$TMP/b.log" 2>&1 \
     || { sed -n '1,10p' "$TMP/b.log"; fail "client did not build"; }
 
-python3 "$SCRIPT_DIR/peer.py" "$PORT" > "$TMP/srv.log" 2>&1 &
+python3 "$SCRIPT_DIR/peer.py" > "$TMP/srv.log" 2>&1 &
 SRV_PID=$!
 
 i=0
@@ -88,8 +88,9 @@ grep -q READY "$TMP/srv.log" 2>/dev/null || {
     sed -n '1,10p' "$TMP/srv.log"
     fail "python websockets peer never became READY"
 }
+PORT=$(read_ready_port "$TMP/srv.log") || exit 1
 
-OUT=$($TIMEOUT "$TMP/wscli" 2>&1) || {
+OUT=$(AE_TEST_PORT="$PORT" $TIMEOUT "$TMP/wscli" 2>&1) || {
     echo "$OUT" | sed 's/^/         /'
     sed -n '1,10p' "$TMP/srv.log" | sed 's/^/    srv: /'
     fail "client exited non-zero"

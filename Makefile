@@ -1221,6 +1221,15 @@ test-windows-wine: ae stdlib
 
 # Test .ae source files - compiles and runs each test file.
 #
+# The shell tests run SERIALLY (SH_NPROC defaults to 1 below). Hardcoded ports
+# used to be the reason, and the HTTP server fixtures now bind port 0 (#1920),
+# but ports are not the only shared resource: cache_build_flags,
+# cache_libdir_invalidation and cache_subdir_entry_root_module assert cache
+# HIT/MISS against the one shared build cache, so any other test compiling at
+# the same moment makes them non-deterministic. Raising SH_NPROC was measured
+# at 10+ failures and 630s against 312s serial. Per-test cache isolation is
+# the prerequisite, not more port work.
+#
 # The recipe exports CC because several integration tests compile a C host
 # against libaether.a, and they default to `cc`. MSYS2's mingw64 ships a cc,
 # but WinLibs does not -- and WinLibs is the toolchain `ae` itself downloads

@@ -20,7 +20,9 @@ extern exit(code: int)
 
 main() {
     host = "127.0.0.1" // exercises iPAddress-SAN matching
-    port = 18447
+    // The server binds port 0 and reports the kernel's choice on its READY
+    // line; the runner passes it here.
+    port, _perr = string.to_int(os_getenv("AE_TEST_PORT"))
 
     priv = bytes.new(32)
     i = 0
