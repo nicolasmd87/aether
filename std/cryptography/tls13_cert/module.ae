@@ -528,6 +528,7 @@ fn parse_tbs_fields(tbsr: ptr, out: *LeafCert) -> string {
     v, verr = asn1.read_tlv(tbsr)
     vtag = asn1.last_tag(tbsr)
     bytes.free(v)
+    if string.equals(verr, "") != 1 { return verr }
     if vtag != 0xA0 {
         // `v` was actually serialNumber; the field after version is
         // serialNumber, so if there was no version we've now consumed
@@ -545,14 +546,17 @@ fn parse_tbs_fields(tbsr: ptr, out: *LeafCert) -> string {
     // signature AlgorithmIdentifier (SEQUENCE) — skip.
     sa, saerr = asn1.read_tlv(tbsr)
     bytes.free(sa)
+    if string.equals(saerr, "") != 1 { return saerr }
 
     // issuer Name (SEQUENCE) — capture raw DER (tag+len+content).
     iss, ierr = read_tlv_full(tbsr)
+    if string.equals(ierr, "") != 1 { return ierr }
     out.issuer = iss
     out.issuer_len = bytes.length(iss)
 
     // validity SEQUENCE { notBefore, notAfter }.
     val_content, valerr = asn1.read_tlv(tbsr)
+    if string.equals(valerr, "") != 1 { return valerr }
     vr = asn1.reader_new(val_content)
     nb, nberr = asn1.read_tlv(vr)
     if string.equals(nberr, "") == 1 { out.not_before = nb; out.not_before_len = bytes.length(nb) }
@@ -563,11 +567,13 @@ fn parse_tbs_fields(tbsr: ptr, out: *LeafCert) -> string {
 
     // subject Name (SEQUENCE) — capture raw DER.
     subj, suberr = read_tlv_full(tbsr)
+    if string.equals(suberr, "") != 1 { return suberr }
     out.subject = subj
     out.subject_len = bytes.length(subj)
 
     // subjectPublicKeyInfo SEQUENCE { algorithm AlgId, subjectPublicKey BIT }.
     spki_content, spkierr = asn1.read_tlv(tbsr)
+    if string.equals(spkierr, "") != 1 { return spkierr }
     sr = asn1.reader_new(spki_content)
     algo_body, algo_full, ae = asn1.read_sequence(sr)
     if string.equals(ae, "") == 1 {
