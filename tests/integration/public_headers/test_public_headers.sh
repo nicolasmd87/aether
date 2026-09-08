@@ -45,7 +45,7 @@ checked=0
 for h in $(cd std && find . -path './regex/pcre2' -prune -o -name '*.h' -print | sed 's|^\./||' | sort) ; do
     checked=$((checked + 1))
     printf '#include "std/%s"\nint main(void){return 0;}\n' "$h" > "$TMP/probe.c"
-    if ! cc -I. $CFLAGS_ALL -c "$TMP/probe.c" -o /dev/null 2>"$TMP/err.txt"; then
+    if ! "${CC:-cc}" -I. $CFLAGS_ALL -c "$TMP/probe.c" -o /dev/null 2>"$TMP/err.txt"; then
         echo "  [FAIL] public_headers: std/$h does not compile on its own"
         sed 's/^/        /' "$TMP/err.txt" | head -6
         fail=$((fail + 1))
@@ -57,7 +57,7 @@ for h in include/*.h; do
     [ -f "$h" ] || continue
     checked=$((checked + 1))
     printf '#include "%s"\nint main(void){return 0;}\n' "$h" > "$TMP/probe.c"
-    if ! cc -I. $CFLAGS_ALL -c "$TMP/probe.c" -o /dev/null 2>"$TMP/err.txt"; then
+    if ! "${CC:-cc}" -I. $CFLAGS_ALL -c "$TMP/probe.c" -o /dev/null 2>"$TMP/err.txt"; then
         echo "  [FAIL] public_headers: $h does not compile on its own"
         sed 's/^/        /' "$TMP/err.txt" | head -6
         fail=$((fail + 1))
@@ -75,7 +75,7 @@ for pair in "std/net/aether_http.h std/net/aether_http_server.h" \
     set -- $pair
     checked=$((checked + 1))
     printf '#include "%s"\n#include "%s"\nint main(void){return 0;}\n' "$1" "$2" > "$TMP/pair.c"
-    if ! cc -I. $CFLAGS_ALL -c "$TMP/pair.c" -o /dev/null 2>"$TMP/err.txt"; then
+    if ! "${CC:-cc}" -I. $CFLAGS_ALL -c "$TMP/pair.c" -o /dev/null 2>"$TMP/err.txt"; then
         echo "  [FAIL] public_headers: cannot include $1 and $2 together"
         sed 's/^/        /' "$TMP/err.txt" | head -6
         fail=$((fail + 1))

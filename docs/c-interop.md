@@ -189,7 +189,7 @@ struct whose layout matches the synthesized typedef, not just for
 "multiple logical values". raylib's `Image LoadImage(const char*)`
 layout `{void*, int, int, int, int}`, binds with zero glue:
 
-```aether,nolink
+```aether,fragment
 @extern("LoadImage") load_image(path: string) -> (ptr, int, int, int, int)
 
 main() {
@@ -200,6 +200,17 @@ main() {
 
 Any struct of scalar/pointer fields works this way; the field ORDER in the
 tuple is the layout contract.
+
+> **On Windows, this exact binding collides with Win32.** `windows.h` defines
+> `LoadImage` as a macro selecting `LoadImageA`/`LoadImageW`, and declares them
+> with a signature that is nothing like raylib's. The generated C then fails with
+> `conflicting types for 'LoadImageA'`. That is why the block above is marked
+> `fragment` rather than compiled — it is correct, but only where Win32 is not in
+> scope. Binding a C function whose name Windows also claims (`LoadImage`,
+> `GetObject`, `CreateWindow`, and every other A/W macro pair) needs `#undef` in
+> the surrounding C, or the explicit symbol — `@extern("LoadImageA")` if you truly
+> want the Win32 one. Worth checking any short, generic C name against the A/W
+> macro list before assuming it binds cleanly everywhere.
 
 ### Tuple parameters, by-value struct arguments
 

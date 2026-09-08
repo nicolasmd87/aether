@@ -6119,7 +6119,25 @@ static int cmd_build(int argc, char** argv) {
     if (output_name) {
         // Explicit -o: use the path as-is
         snprintf(c_file, sizeof(c_file), "%s.c", output_name);
-        snprintf(exe_file, sizeof(exe_file), "%s" EXE_EXT, output_name);
+        /* ...but only add EXE_EXT if the caller has not already written it.
+         * `ae build -o foo.exe x.ae` produced `foo.exe.exe` on Windows: the
+         * name is used as-is except for this append, which did not look at
+         * what it was appending to. The Windows CROSS path below has always
+         * guarded exactly this ("append .exe if it's not already there"); the
+         * native path never did, so the bug only showed when building ON
+         * Windows -- where naming the output `.exe` is the natural thing to
+         * do. Case-insensitive because Windows paths are.
+         *
+         * EXE_EXT is "" on POSIX, so ext_len is 0, the guard is skipped and
+         * this stays byte-for-byte the old behaviour everywhere else. */
+        const size_t ext_len = sizeof(EXE_EXT) - 1;
+        const size_t out_len = strlen(output_name);
+        if (ext_len > 0 && out_len >= ext_len &&
+            strcasecmp(output_name + out_len - ext_len, EXE_EXT) == 0) {
+            snprintf(exe_file, sizeof(exe_file), "%s", output_name);
+        } else {
+            snprintf(exe_file, sizeof(exe_file), "%s" EXE_EXT, output_name);
+        }
         /* datastar#9: create the parent directory, as `cc -o`, `go build -o`
          * and `cargo --target-dir` all effectively do. Without this,
          * `ae build -o target/foo x.ae` failed with "Error opening output

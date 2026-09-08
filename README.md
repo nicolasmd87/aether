@@ -206,7 +206,22 @@ The Aether build is GNU-make based. Use one of the two paths below, `nmake` from
    make ci   # full suite: compiler, ae, stdlib, REPL, C tests, .ae tests, examples
    ```
 
-For HTTPS to verify certs, the `mingw-w64-x86_64-ca-certificates` package above provides the bundle at `/mingw64/etc/ssl/certs/ca-bundle.crt`. The runtime auto-detects it; if your install is in a non-standard location, export `SSL_CERT_FILE` to the bundle's Windows path.
+For HTTPS to verify certs, the `mingw-w64-x86_64-ca-certificates` package above provides the bundle at `/mingw64/etc/ssl/certs/ca-bundle.crt`. Windows has no system PEM store, so that file (or another bundle) is what the runtime has to find. It auto-detects the default MSYS2 location and the one Git for Windows ships:
+
+| Toolchain | Bundle |
+|---|---|
+| MSYS2 + `mingw-w64-x86_64-ca-certificates` | `C:\msys64\mingw64\etc\ssl\certs\ca-bundle.crt` |
+| Git for Windows (already installed if you cloned with it) | `C:\Program Files\Git\mingw64\etc\ssl\certs\ca-bundle.crt` |
+
+Anywhere else — a non-default MSYS2 root, a custom bundle, a corporate CA — export `SSL_CERT_FILE` to the bundle's **native Windows** path:
+
+```bash
+export SSL_CERT_FILE="C:/Program Files/Git/mingw64/etc/ssl/certs/ca-bundle.crt"
+```
+
+An MSYS-style path (`/mingw64/...`) will not work: a compiled Aether program is a plain Win32 binary and does not inherit MSYS2's virtual mounts. A build that finds no bundle fails every HTTPS request at the handshake.
+
+Note also that a source build without OpenSSL has no TLS backend linked at all; such a program must `import std.cryptography.tls13_client` to get HTTPS. The error message says so if you forget.
 
 **Native MSVC (cl.exe / nmake):** not currently supported as a full build path, tracker [#99](https://github.com/aether-lang-dev/aether/issues/99). The MSVC matrix job in CI verifies our public headers parse under `cl.exe` so a future native MSVC port stays feasible, but `make` (the build system itself) requires GNU make. The MSYS2 MinGW build above is the supported source-build path for Windows today.
 

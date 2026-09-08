@@ -34,7 +34,7 @@ fi
 # --- C-side attribute test ---
 # pthread is required because libaether.a uses TLS + the actor scheduler.
 # -lm covers math.h symbols pulled by stdlib runtime functions.
-if ! cc -O0 -g -I"$ROOT/runtime" \
+if ! "${CC:-cc}" -O0 -g -I"$ROOT/runtime" \
         "$SCRIPT_DIR/caller_info_attrs.c" "$LIB" \
         -lpthread -lm -o "$TMPDIR/caller_info_attrs" \
         2>"$TMPDIR/cc.err"; then

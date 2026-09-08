@@ -85,7 +85,7 @@ EOF
 # helpers via the emitted prelude) still resolves cleanly against
 # libaether.a — the cap symbols within the archive are pulled in
 # once harness.c's references force the linker to load them.
-cc -O2 -I"$ROOT" -I"$ROOT/runtime" -I"$ROOT/runtime/actors" \
+"${CC:-cc}" -O2 -I"$ROOT" -I"$ROOT/runtime" -I"$ROOT/runtime/actors" \
    -I"$ROOT/runtime/scheduler" -I"$ROOT/runtime/utils" \
    -I"$ROOT/runtime/memory" -I"$ROOT/runtime/config" \
    -I"$ROOT/std" -I"$ROOT/std/string" -I"$ROOT/std/collections" \

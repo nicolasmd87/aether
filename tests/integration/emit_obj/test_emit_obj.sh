@@ -58,7 +58,7 @@ if [ ! -f "$LIB" ]; then
 fi
 DEPS=$("$AE" cflags --libs 2>/dev/null | tr ' ' '\n' \
        | grep -v '^-laether$' | tr '\n' ' ')
-if ! sh -c "cc -o \"$TMPDIR/consume\" \"$SCRIPT_DIR/consume.c\" \"$TMPDIR/lib.o\" \"$LIB\" $DEPS -lpthread -lm" \
+if ! sh -c "${CC:-cc} -o \"$TMPDIR/consume\" \"$SCRIPT_DIR/consume.c\" \"$TMPDIR/lib.o\" \"$LIB\" $DEPS -lpthread -lm" \
         >"$TMPDIR/link.log" 2>&1; then
     echo "  [FAIL] emit_obj: C consumer failed to link against the object"
     grep -v "^ld: warning" "$TMPDIR/link.log" | head -8 | sed 's/^/        /'

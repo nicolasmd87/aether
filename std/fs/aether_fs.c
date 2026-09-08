@@ -3546,7 +3546,25 @@ int fs_watch_wait(void* watch, int timeout_ms) {
     DWORD t = timeout_ms < 0 ? INFINITE : (DWORD)timeout_ms;
     DWORD r = WaitForSingleObject(w->h, t);
     if (r == WAIT_OBJECT_0) {
-        FindNextChangeNotification(w->h);   /* re-arm for the next wait */
+        /* Re-arm, then drain whatever else the burst already queued.
+         *
+         * FindNextChangeNotification only re-arms; it does not discard
+         * records the OS has queued behind the one we just consumed. A
+         * single write raises several (FILE_NAME on create, plus SIZE and
+         * LAST_WRITE on the write itself), so the next wait signalled again
+         * for a change the caller had already been told about — the other
+         * two backends promise the opposite. Linux drains the inotify fd
+         * until EAGAIN and kqueue's EV_CLEAR resets on delivery, both so one
+         * burst reports exactly once; this makes Windows agree.
+         *
+         * Bounded because, unlike a pipe that empties, this handle re-arms
+         * instantly: a process writing continuously into the directory could
+         * otherwise hold us here indefinitely. Hitting the cap is harmless —
+         * it just means the next wait returns 1 again, the old behaviour. */
+        for (int i = 0; i < 64; i++) {
+            if (!FindNextChangeNotification(w->h)) return -1;
+            if (WaitForSingleObject(w->h, 0) != WAIT_OBJECT_0) break;
+        }
         return 1;
     }
     if (r == WAIT_TIMEOUT) return 0;
