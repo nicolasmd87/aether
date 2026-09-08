@@ -15,10 +15,21 @@
 // heap-boxed attr's string field, and teardown double-freed it.
 //
 // The `owned` half proves the fix does not regress the leak it protects:
-// a genuinely-heap value (string.concat) is still freed exactly once.
+// a genuinely-heap value is still freed exactly once.
+//
+// `owned` alone is not enough, and the reason is worth stating: the compiler
+// constant-folds `string.concat("https://", "cdn.example/style.css")` into a
+// literal, so that half runs with `_heap_owned == 0` and exercises the
+// borrowed path a second time rather than the owned one. `runtime_owned` is
+// built through a call the folder cannot see through, so it is genuinely heap
+// at runtime -- and it is the shape that leaked: for a var whose value escapes
+// into a struct field, the assignment used to leave `_heap_<var>` at its stale
+// 0, and moving that 0 into the field tracker told the destructor the buffer
+// was borrowed. std.message leaked 60 allocations exactly this way.
 
 import std.io
 import std.string
+import std.strbuilder
 
 struct Attr {
     name: string
@@ -27,6 +38,15 @@ struct Attr {
 
 fn passthru(u: string) -> string {
     return u
+}
+
+// Built through a call, so the constant folder cannot reduce it to a literal:
+// the result is genuinely heap-allocated at runtime.
+fn build_owned(n: int) -> string {
+    b = strbuilder.new(16)
+    strbuilder.append(b, "https://cdn.example/")
+    strbuilder.append_int(b, n)
+    return strbuilder.finish(b)
 }
 
 main() {
@@ -47,6 +67,17 @@ main() {
     bp.value = owned
     println("owned: ${b.value}")
     heap.free(b)
+
+    // Genuinely heap at runtime, and escaping into a struct field. The field
+    // tracker must receive 1 so the destructor reclaims it exactly once:
+    // freeing nothing here is the leak, freeing twice is the crash above.
+    c = heap.new(Attr)
+    c.name = "src"
+    runtime_owned = build_owned(7)
+    cp = c as *Attr
+    cp.value = runtime_owned
+    println("runtime_owned: ${c.value}")
+    heap.free(c)
 
     println("done")
 }

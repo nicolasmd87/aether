@@ -1536,10 +1536,11 @@ static int emit_nested_field_heap_assign(CodeGenerator* gen, ASTNode* lhs,
     generate_expression(gen, obj);
     fprintf(gen->output, "; %s->%s = ", tgt, lhs->value);
     generate_expression(gen, rhs);
+    fprintf(gen->output, ";");
     /* Move the source var's runtime ownership when the RHS is a heap-var
      * identifier (it may hold a borrow); otherwise the static classification. */
     if (!emit_field_tracker_from_rhs(gen, rhs, tracker_lv)) {
-        fprintf(gen->output, "; %s = %d;", tracker_lv, rhs_is_heap ? 1 : 0);
+        fprintf(gen->output, " %s = %d;", tracker_lv, rhs_is_heap ? 1 : 0);
     }
     fprintf(gen->output, " }\n");
     return 1;
@@ -1563,7 +1564,7 @@ static int emit_field_tracker_from_rhs(CodeGenerator* gen, ASTNode* rhs,
                                        const char* tracker_lvalue) {
     if (!gen || !rhs || rhs->type != AST_IDENTIFIER || !rhs->value) return 0;
     if (!is_heap_string_var(gen, rhs->value)) return 0;
-    fprintf(gen->output, "; %s = _heap_%s; _heap_%s = 0;",
+    fprintf(gen->output, " %s = _heap_%s; _heap_%s = 0;",
             tracker_lvalue, rhs->value, rhs->value);
     return 1;
 }
@@ -1656,10 +1657,11 @@ static int emit_struct_field_heap_assign(CodeGenerator* gen, ASTNode* lhs, ASTNo
          * the caller can use heap.new to get the releasing behaviour. */
         fprintf(gen->output, "{ %s%s%s = ", obj->value, acc, lhs->value);
         generate_expression(gen, rhs);
+        fprintf(gen->output, ";");
         /* Move the source var's runtime ownership when the RHS is a heap-var
          * identifier (it may hold a borrow); otherwise the static class. */
         if (!emit_field_tracker_from_rhs(gen, rhs, tracker_lv)) {
-            fprintf(gen->output, "; %s = %d;", tracker_lv, rhs_is_heap ? 1 : 0);
+            fprintf(gen->output, " %s = %d;", tracker_lv, rhs_is_heap ? 1 : 0);
         }
         fprintf(gen->output, " }\n");
         return 1;
@@ -5025,9 +5027,25 @@ void generate_statement(CodeGenerator* gen, ASTNode* stmt) {
                             emit_unwind_track_local(gen, stmt->value);
                             fprintf(gen->output, " }\n");
                         } else {
-                            fprintf(gen->output, "%s = ", stmt->value);
+                            /* Record the value's heapness even though this
+                             * var's own frees are escape-suppressed. The
+                             * tracker used to be left at its stale value here
+                             * on the reasoning that nothing would read it: the
+                             * defer-free and the reassignment wrapper are both
+                             * suppressed for an escaped var, so the flag was
+                             * dead weight. It is not dead any more. A struct
+                             * field store now MOVES this flag into the field's
+                             * own tracker to decide whether the destructor
+                             * frees, so a stale 0 on a genuinely owned value
+                             * (`s = strbuilder.finish(b)` then `n.text = s`)
+                             * tells the destructor to leave it alone and the
+                             * buffer leaks. The flag is the ownership token;
+                             * it has to be true whether or not this scope is
+                             * the one that acts on it. */
+                            fprintf(gen->output, "{ %s = ", stmt->value);
                             generate_expression(gen, stmt->children[0]);
-                            fprintf(gen->output, ";\n");
+                            fprintf(gen->output, "; _heap_%s = %d; }\n",
+                                    stmt->value, rhs_is_heap ? 1 : 0);
                         }
                     } else if (var_is_string && stmt->child_count > 0) {
                         // Defensive: if the hoist somehow missed this

@@ -29,6 +29,18 @@ version number before tagging the release.
   borrowed value is not freed and a genuinely-owned one is still freed exactly
   once. Regression follow-up to #1866/#1879.
 
+  Reading the tracker only works if the tracker is maintained, and for one
+  shape it was not. When a heap-string var's value escapes into a container or
+  a struct field, its own frees are suppressed (the recipient may have kept the
+  pointer), and on that path the assignment left `_heap_<var>` at its stale 0
+  on the reasoning that nothing would read it. The field store now reads it, so
+  a genuinely owned value (`s = strbuilder.finish(b)` then `n.text = s`) moved
+  a 0 into the field tracker and the destructor never reclaimed the buffer.
+  `std.message` leaked 60 allocations exactly this way, caught by the macOS
+  leaks gate. The flag is the ownership token, so it is now recorded whether or
+  not this scope is the one that acts on it; the escape-suppressed frees are
+  unchanged.
+
 ## [0.647.0]
 
 ### Fixed
