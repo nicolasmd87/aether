@@ -73,6 +73,11 @@ version number before tagging the release.
   reports once; Windows only re-armed, and one write raises several change
   records.
 
+
+## [0.649.0]
+
+### Fixed
+
 - **`install.sh` piped into a shell ran `make` in the caller's directory.** The
   script begins by changing to `dirname "$0"`, and piped into a shell `$0` is
   the shell's own name, so that is `.`: it went on to build in whatever
