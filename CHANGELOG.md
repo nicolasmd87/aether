@@ -123,6 +123,19 @@ version number before tagging the release.
   not this scope is the one that acts on it; the escape-suppressed frees are
   unchanged.
 
+### Changed
+
+- **The Windows leg builds and runs the contrib series.** `contrib-check` ran on
+  Linux only, so no CI leg built any contrib module on Windows: `contrib/vulkan`
+  shipped a `_WIN32` branch opening the loader with `LoadLibraryA`, where every
+  other platform uses `dlopen`, that had never been compiled anywhere. The
+  existing Windows job now type-checks every contrib module and runs the contrib
+  series, which costs minutes on a compiler it already built rather than another
+  runner. The Vulkan entries compile there and do not execute, because the
+  runners have no Vulkan device and MSYS2 packages no CPU driver; the leg says
+  which entries ran and which skipped rather than leaving that to be found
+  later. (#1511)
+
 ## [0.648.0]
 
 ### Fixed
