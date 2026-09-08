@@ -11,6 +11,8 @@ version number before tagging the release.
 
 ## [current]
 
+## [0.647.0]
+
 ### Fixed
 
 - **Server tests wait for the port, not for a guess** (part of #1920). Every
