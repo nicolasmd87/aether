@@ -11,6 +11,38 @@ version number before tagging the release.
 
 ## [current]
 
+### Fixed
+
+- **`ae cache` reported and cleared the wrong directory when
+  `AETHER_CACHE_DIR` was set.** The override exists for runners whose `$HOME`
+  is read-only (#1032), and the build path honours it, but `cmd_cache`
+  composed `$HOME/.aether/cache` by hand. So `ae cache` counted a directory
+  `ae build` was not writing to, and `ae cache clear` deleted the contents of
+  the wrong one: on the very machines the override is for, it answered a
+  read-only problem destructively, discarding the real cache while reporting
+  it had cleared the override. Both now resolve the same directory the build
+  path uses. `cache_dir_override` gains the case; it covered the build half
+  of #1032 and nothing exercised the `cache` command.
+
+- **The cache-asserting tests no longer depend on global cache state.**
+  `cache_build_flags`, `cache_libdir_invalidation` and
+  `cache_subdir_entry_root_module` assert cache HIT and MISS against whatever
+  cache happens to be there, so a concurrent build changed what they observed.
+  Each now points `AETHER_CACHE_DIR` at its own temp directory, which is
+  correct on its own terms and not only for parallelism.
+
+### Notes
+
+- **Running the shell sweep in parallel needs more than ports or caches.**
+  Two measured rounds, recorded beside the `SH_NPROC` default: serial is 0
+  failures in 312s; `SH_NPROC=8` is 10 or more failures in 630s; and with the
+  cache tests isolated it is still 12 failures in 534s. The failures move
+  between runs and every one of them passes alone, so what remains is
+  contention rather than a single shared resource, and parallel is slower than
+  serial on an 8-core box either way. #1920's five strategies all treat ports
+  as the throttle; they are not it.
+
+
 ## [0.648.0]
 
 ### Fixed

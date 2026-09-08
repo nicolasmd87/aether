@@ -1221,14 +1221,20 @@ test-windows-wine: ae stdlib
 
 # Test .ae source files - compiles and runs each test file
 #
-# The shell tests run SERIALLY (SH_NPROC defaults to 1 below). Hardcoded ports
-# used to be the reason, and the HTTP server fixtures now bind port 0 (#1920),
-# but ports are not the only shared resource: cache_build_flags,
-# cache_libdir_invalidation and cache_subdir_entry_root_module assert cache
-# HIT/MISS against the one shared build cache, so any other test compiling at
-# the same moment makes them non-deterministic. Raising SH_NPROC was measured
-# at 10+ failures and 630s against 312s serial. Per-test cache isolation is
-# the prerequisite, not more port work.
+# The shell tests run SERIALLY (SH_NPROC defaults to 1 below), and two rounds of
+# measurement say why, so the next person does not repeat them (#1920):
+#
+#   serial                          0 failures   312s
+#   SH_NPROC=8                     10+ failures  630s
+#   SH_NPROC=8, cache tests isolated 12 failures  534s
+#
+# Hardcoded ports were a real problem and are fixed: the HTTP server fixtures
+# bind port 0 now. The cache-asserting tests were the next layer and are fixed
+# too (they set AETHER_CACHE_DIR). Neither was the binding constraint. The
+# remaining failures move around between runs and every one of them PASSES
+# ALONE, so what is left is contention rather than any single shared resource,
+# and parallel is slower than serial on an 8-core box regardless. Whatever
+# unlocks this is a bigger piece of work than raising this number.
 ifdef WINDOWS_NATIVE
 test-ae: compiler ae stdlib
 	@echo ===================================

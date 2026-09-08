@@ -68,5 +68,42 @@ case "$out3" in
        echo "$out3" | sed 's/^/        /'; exit 1 ;;
 esac
 
-echo "  [PASS] AETHER_CACHE_DIR overrides the cache location (incl. read-only \$HOME)"
+# 4. `ae cache` must mean the SAME directory `ae build` writes to. It composed
+#    "$HOME/.aether/cache" by hand and so ignored the override: it reported on
+#    a directory the build path was not using, and `ae cache clear` deleted the
+#    contents of the wrong one. On a box where the override exists precisely
+#    because $HOME is read-only, that is a destructive answer to a read-only
+#    problem: it discards the real cache while claiming to clear this one.
+entries() { sed -n 's/^Cache: *\([0-9][0-9]*\) build.*/\1/p'; }
+
+default_before=$("$AE" cache 2>/dev/null | entries)
+n=$(AETHER_CACHE_DIR="$CACHE" "$AE" cache 2>/dev/null | entries)
+if [ "${n:-0}" -lt 1 ]; then
+    echo "  [FAIL] ae cache reported ${n:-0} entries in the override after runs"
+    echo "         that populated it -- it is reading the default directory"
+    exit 1
+fi
+
+clear_out=$(AETHER_CACHE_DIR="$CACHE" "$AE" cache clear 2>&1)
+case "$clear_out" in
+    *"$CACHE"*) ;;
+    *) echo "  [FAIL] ae cache clear did not name the override directory:"
+       echo "$clear_out" | sed 's/^/        /'; exit 1 ;;
+esac
+
+after=$(AETHER_CACHE_DIR="$CACHE" "$AE" cache 2>/dev/null | entries)
+if [ "${after:-1}" -ne 0 ]; then
+    echo "  [FAIL] the override still holds ${after} entries after clear"
+    exit 1
+fi
+
+default_after=$("$AE" cache 2>/dev/null | entries)
+if [ "${default_after:-0}" -ne "${default_before:-0}" ]; then
+    echo "  [FAIL] clearing the override changed the DEFAULT cache"
+    echo "         (${default_before} -> ${default_after}) -- it cleared the wrong directory"
+    exit 1
+fi
+
+echo "  [PASS] AETHER_CACHE_DIR overrides the cache location (incl. read-only \$HOME),"
+echo "         and ae cache reports and clears that same directory"
 exit 0
