@@ -2261,6 +2261,8 @@ const char* get_cflags(void) {
 // the project's toml found automatically and `foo.ae` re-resolved
 // relative to the project root. Users with no project toml at all
 // see no behaviour change.
+static int find_bin_path_by_name(const char* bin_name, char* out, size_t out_size);
+
 static int find_and_chdir_to_aether_toml(const char** file_inout) {
     if (path_exists("aether.toml")) return 0;  /* already present */
 
@@ -2292,7 +2294,17 @@ static int find_and_chdir_to_aether_toml(const char** file_inout) {
              * becomes `ae/myprobe.ae`. */
             if (file_inout && *file_inout) {
                 const char* f = *file_inout;
-                if (f[0] != '/' && f[0] != '\\') {
+                /* #1905: the positional may be a [[bin]] NAME rather than a
+                 * path, and a name must not be rebased. `ae build widget`
+                 * from a subdirectory became `sub/widget`, which is not a
+                 * file, so it failed with "File not found: sub/widget" while
+                 * the identical command from the project root worked. The
+                 * manifest is in the directory we just chdir'd to, so the
+                 * name resolves here. */
+                char bin_probe[1024];
+                int names_a_bin =
+                    find_bin_path_by_name(f, bin_probe, sizeof(bin_probe));
+                if (!names_a_bin && f[0] != '/' && f[0] != '\\') {
                     /* relative — splice the subdir we walked out of */
                     size_t walk_len = strlen(walk);
                     if (strncmp(start_cwd, walk, walk_len) == 0 &&
@@ -2301,7 +2313,11 @@ static int find_and_chdir_to_aether_toml(const char** file_inout) {
                         const char* sub = start_cwd + walk_len + 1;
                         static char rebased[1024];
                         snprintf(rebased, sizeof(rebased), "%s/%s", sub, f);
-                        *file_inout = rebased;
+                        /* Only when it lands on something. Otherwise keep what
+                         * the user typed, so a typo is reported as the word
+                         * they wrote rather than as a path they never
+                         * mentioned. */
+                        if (path_exists(rebased)) *file_inout = rebased;
                     }
                 }
             }

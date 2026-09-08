@@ -27,6 +27,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+. "$ROOT/tests/lib/wait_port.sh"
 AE="$ROOT/build/ae"
 
 if ! command -v openssl >/dev/null 2>&1; then
@@ -96,7 +97,8 @@ if ! grep -q READY "$TMPDIR/srv.log" 2>/dev/null; then
 fi
 
 # Brief settle for the actor to bind the listen socket.
-sleep 0.3
+PORT=$(read_ready_port "$TMPDIR/srv.log") || exit 1
+wait_port "$PORT" || exit 1
 
 # Drive the HTTPS request. --cacert points curl at our self-signed
 # cert so verification succeeds; --resolve isn't needed because the
@@ -105,8 +107,8 @@ sleep 0.3
 # actually pin the host with --resolve so cert SAN/CN matches).
 ACTUAL="$TMPDIR/curl.out"
 if ! curl --silent --max-time 5 --cacert "$CERT" \
-          --resolve localhost:18102:127.0.0.1 \
-          https://localhost:18102/ -o "$ACTUAL" 2>"$TMPDIR/curl.err"; then
+          --resolve localhost:$PORT:127.0.0.1 \
+          https://localhost:$PORT/ -o "$ACTUAL" 2>"$TMPDIR/curl.err"; then
     echo "  [FAIL] curl failed:"
     cat "$TMPDIR/curl.err"
     echo "--- server log ---"
@@ -122,7 +124,7 @@ fi
 
 # Sanity: a plain-HTTP request to the same TLS port must fail (the
 # handshake is mandatory; the server should reject the plaintext).
-if curl --silent --max-time 2 http://localhost:18102/ \
+if curl --silent --max-time 2 http://localhost:$PORT/ \
         -o "$TMPDIR/plain.out" 2>/dev/null; then
     # If curl exited 0 it could be that the server responded with
     # garbage or that some proxy intercepted. Check the body.

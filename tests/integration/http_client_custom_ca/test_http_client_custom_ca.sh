@@ -20,6 +20,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+. "$ROOT/tests/lib/wait_port.sh"
 AE="$ROOT/build/ae"
 
 if ! command -v openssl >/dev/null 2>&1; then
@@ -37,9 +38,10 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# Unique port 18119 (18118 is http_client_insecure_tls). `ae run` forks the
-# server child, so the trap can't fully reap it; a distinct port keeps a
-# lingering server from starving the next test.
+# The server binds port 0, so there is no port to keep unique any more. That
+# also defuses the reason this test used to need one: `ae run` forks the server
+# child and the trap cannot fully reap it, and a lingering server used to starve
+# the next test of its fixed port. A leftover now holds a port nobody wants.
 
 # Real CA-signs-a-separate-leaf topology, mirroring a Proxmox VE endpoint
 # (private root CA `pve-root-ca.pem` that signs a distinct server cert). This
@@ -108,14 +110,15 @@ if ! grep -q READY "$TMPDIR/srv.log" 2>/dev/null; then
     exit 1
 fi
 
-sleep 0.3
+PORT=$(read_ready_port "$TMPDIR/srv.log") || exit 1
+wait_port "$PORT" || exit 1
 
 OUT="$TMPDIR/client.out"
 # GOOD_CA is the ROOT CA (not the leaf): the client pins the CA and the server
 # presents the leaf, so verification must build the chain and trust the CA —
 # the #1110 case.
 if ! AETHER_HOME="$ROOT" GOOD_CA="$CA" BAD_CA="$BADCA" \
-        "$AE" run "$SCRIPT_DIR/client.ae" >"$OUT" 2>&1; then
+        AE_TEST_PORT="$PORT" "$AE" run "$SCRIPT_DIR/client.ae" >"$OUT" 2>&1; then
     echo "  [FAIL] client exited non-zero:"
     head -10 "$OUT"
     exit 1

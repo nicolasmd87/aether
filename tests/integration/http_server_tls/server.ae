@@ -11,8 +11,8 @@ extern exit(code: int)
 // Use raw form: actor receive handlers can't cleanly discard the
 // wrapper's string return without an unused-result warning.
 extern http_server_start_raw(server: ptr) -> int
-
-const PORT = 18102
+extern http_server_bind_raw(server: ptr, host: string, port: int) -> int
+extern http_server_port(server: ptr) -> int
 
 handle_root(req: ptr, res: ptr, ud: ptr) {
     http.response_set_status(res, 200)
@@ -40,7 +40,7 @@ main() {
         exit(1)
     }
 
-    raw = http.server_create(PORT)
+    raw = http.server_create(0)
 
     http.server_set_host(raw, "127.0.0.1")
     if raw == 0 {
@@ -53,7 +53,15 @@ main() {
         println("FAIL: server_set_tls: ${tls_err}")
         exit(1)
     }
-    println("READY")
+    // #1920: bind on port 0 so the kernel picks a free one, and report it.
+    // server_start reuses a socket the caller already bound, so this also
+    // means READY is printed AFTER the listen socket exists rather than
+    // before it, which is what the fixed sleep in the runner was covering.
+    if http_server_bind_raw(raw, "127.0.0.1", 0) < 0 {
+        println("FAIL: bind")
+        exit(1)
+    }
+    println("READY ${http_server_port(raw)}")
 
     http.server_get(raw, "/", handle_root, 0)
 

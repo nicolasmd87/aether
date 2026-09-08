@@ -13,6 +13,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+. "$ROOT/tests/lib/wait_port.sh"
 AE="$ROOT/build/ae"
 
 TMPDIR="$(mktemp -d)"
@@ -46,9 +47,10 @@ grep -q READY "$TMPDIR/srv.log" 2>/dev/null || {
     head -30 "$TMPDIR/srv.log"
     exit 1
 }
-sleep 0.3
+PORT=$(read_ready_port "$TMPDIR/srv.log") || exit 1
+wait_port "$PORT" || exit 1
 
-AETHER_HOME="$ROOT" "$AE" run "$SCRIPT_DIR/client.ae" >"$TMPDIR/client.out" 2>&1 || {
+AETHER_HOME="$ROOT" AE_TEST_PORT="$PORT" "$AE" run "$SCRIPT_DIR/client.ae" >"$TMPDIR/client.out" 2>&1 || {
     echo "  [FAIL] client exited non-zero:"
     cat "$TMPDIR/client.out"
     echo "--- server log ---"

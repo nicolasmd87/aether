@@ -33,6 +33,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+. "$ROOT/tests/lib/wait_port.sh"
 AE="$ROOT/build/ae"
 
 if ! command -v curl >/dev/null 2>&1; then
@@ -65,7 +66,8 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     fi
     sleep 0.1
 done
-sleep 0.3
+PORT=$(read_ready_port "$TMPDIR/srv.log") || exit 1
+wait_port "$PORT" || exit 1
 
 # --- on_start hook fired ---
 if ! [ -f "$MARKER" ] || ! grep -q STARTED "$MARKER"; then
@@ -74,7 +76,7 @@ if ! [ -f "$MARKER" ] || ! grep -q STARTED "$MARKER"; then
     exit 1
 fi
 
-URL="http://127.0.0.1:18107"
+URL="http://127.0.0.1:$PORT"
 
 # --- /healthz always 200 ---
 status=$(curl -s -o "$TMPDIR/healthz.body" -w '%{http_code}' --max-time 5 "$URL/healthz")

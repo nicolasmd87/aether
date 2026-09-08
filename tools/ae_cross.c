@@ -642,6 +642,55 @@ int run_cross_compile_obj(const char* c_file, const char* obj_file,
     return 0;
 }
 
+/* Read the raw `// aether-link: <tokens>` header codegen emits on the first
+ * line of the generated C into `out` (space-padded, e.g. " -lssl -lcrypto ").
+ * Unlike ae.c's get_aether_link_flags(), this does NOT drop the capability-
+ * managed tokens (-lssl/-lcrypto/-lpcre2-8/...): on the cross path those are
+ * precisely the libs the CROSSBUILD_SYSROOT tier-2 probe must decide to link,
+ * so the raw set is what says "the program actually imports this". Returns 1
+ * if a header was found, 0 otherwise (in which case `out` is "" and the caller
+ * links no optional tier-2 lib). */
+static int cross_read_aether_link_raw(const char* c_file, char* out, size_t out_sz) {
+    out[0] = '\0';
+    if (!c_file) return 0;
+    FILE* f = fopen(c_file, "r");
+    if (!f) return 0;
+    char line[2048];
+    int lines_read = 0, found = 0;
+    while (lines_read < 8 && fgets(line, sizeof(line), f)) {
+        lines_read++;
+        const char* p = strstr(line, "// aether-link:");
+        if (!p) continue;
+        p += strlen("// aether-link:");
+        /* Pad with a leading+trailing space so a whole-token search
+         * (" -lz ") never matches a substring (" -lzstd "). */
+        snprintf(out, out_sz, " %s ", p);
+        /* Strip the newline that rode in from the token span. */
+        for (char* q = out; *q; q++) {
+            if (*q == '\n' || *q == '\r') { *q = ' '; }
+        }
+        found = 1;
+        break;
+    }
+    fclose(f);
+    return found;
+}
+
+/* True if `link_hdr` (a space-padded token string) requests any of the
+ * whitespace-separated `-l` names in `names` (e.g. "-lssl -lcrypto"). */
+static int cross_link_wants(const char* link_hdr, const char* names) {
+    if (!link_hdr || !link_hdr[0]) return 0;
+    char buf[256];
+    snprintf(buf, sizeof(buf), "%s", names);
+    for (char* tok = strtok(buf, " "); tok; tok = strtok(NULL, " ")) {
+        if (tok[0] != '-' || tok[1] != 'l') continue;   /* only -l names */
+        char needle[128];
+        snprintf(needle, sizeof(needle), " %s ", tok);
+        if (strstr(link_hdr, needle)) return 1;
+    }
+    return 0;
+}
+
 int run_cross_build(const char* c_file, const char* out_file,
                            bool optimize, const char* extra,
                            const char* ztriple, bool emit_lib,
@@ -835,16 +884,28 @@ int run_cross_build(const char* c_file, const char* out_file,
     {
         const char* xsr = getenv("CROSSBUILD_SYSROOT");
         if (xsr && *xsr) {
-            /* Append each -l ONLY when that lib is actually staged in the
-             * sysroot. provision.sh may build a subset (a target might have
-             * pcre2 + zlib but not openssl yet), and zig hard-errors on a
-             * requested-but-absent lib. Probing per-lib links exactly what's
-             * provisioned — the same "link what's there" discipline #1213's
-             * contrib cross mode uses. openssl is -lssl + -lcrypto (both from
-             * libssl.a/libcrypto.a); the rest are 1:1. */
+            /* Link a tier-2 lib ONLY when BOTH (a) it is staged in the sysroot
+             * AND (b) the program's resolved import closure actually requests
+             * it (the `// aether-link:` header codegen emitted). Gating on (a)
+             * alone over-links every staged archive — a sysroot provisioned
+             * with `CB_LIBS="zlib pcre2 openssl"` plus the contrib veneers
+             * stages libpcre2-8.a / libaether_host_ruby.a / ... even for a
+             * program that imports none of them. zig 0.13 tolerated the
+             * dangling `-l`s; zig 0.16 hard-errors ("unable to find dynamic
+             * system library 'pcre2-8'"), so (b) is required. openssl is the
+             * pair libssl.a + libcrypto.a; the rest are 1:1.
+             *
+             * Libs are linked BY ABSOLUTE PATH (`$xsr/lib/libNAME.a`), not
+             * `-L$xsr/lib -lNAME`: zig 0.16 resolves a bare `-L` path beneath
+             * `--sysroot`, so an absolute `-L=/abs/sysroots/...` becomes
+             * `<base-sysroot>/abs/sysroots/...` and the libs are never found
+             * (the FileNotFound the tier-2 -L produced under 0.16). An absolute
+             * archive path on the link line is a plain input file, immune to
+             * that rewriting. */
+            char link_hdr[2048];
+            cross_read_aether_link_raw(c_file, link_hdr, sizeof(link_hdr));
             size_t p = 0;
-            p += (size_t)snprintf(crossbuild_libs + p, sizeof(crossbuild_libs) - p,
-                                  "-L%s/lib", xsr);
+            crossbuild_libs[0] = '\0';
             /* The sysroot's headers (openssl/, zlib.h, pcre2.h, ...) must be on
              * the COMPILE include path too, else enabling a real path below
              * (-DAETHER_HAS_OPENSSL etc.) hits `openssl/ssl.h file not found`.
@@ -866,41 +927,52 @@ int run_cross_build(const char* c_file, const char* out_file,
              * returned "" despite a staged sysroot. Empty for libs with no
              * compile-time guard (contrib veneers link but have no AETHER_HAS_*
              * macro of their own). */
-            struct { const char* lib; const char* names; const char* defines; } t2[] = {
-                /* libssl.a present => both -l names AND the openssl compile
-                 * macro. HMAC/SHA (std.cryptography) need only libcrypto, but
-                 * the source guard is a single AETHER_HAS_OPENSSL, so staging
-                 * libssl.a (which the sysroot pairs with libcrypto.a) enables
-                 * the real crypto path; TLS (std.http) additionally needs the
-                 * libssl symbols, which the same -lssl provides. */
-                { "ssl",     "-lssl -lcrypto", "-DAETHER_HAS_OPENSSL" },
-                { "nghttp2", "-lnghttp2",      "-DAETHER_HAS_NGHTTP2" },
-                { "z",       "-lz",            "-DAETHER_HAS_ZLIB" },
-                { "pcre2-8", "-lpcre2-8",      "-DAETHER_HAS_PCRE2" },
+            /* `probe`   — the archive whose presence gates the whole entry.
+             * `names`   — the `-l` names, used ONLY to test the aether-link
+             *             header (does the program request this lib?).
+             * `archives`— the lib basenames to link BY ABSOLUTE PATH, in link
+             *             order (veneer before its backing lib).
+             * `defines` — the -D enabling the stdlib source's real path. */
+            struct { const char* probe; const char* names;
+                     const char* archives; const char* defines; } t2[] = {
+                /* openssl: libssl.a + libcrypto.a. std.cryptography's HMAC/SHA
+                 * need only libcrypto, but the source guard is a single
+                 * AETHER_HAS_OPENSSL and TLS (std.http) needs libssl too, so
+                 * both are linked together whenever either -l is requested. */
+                { "ssl",     "-lssl -lcrypto", "ssl crypto", "-DAETHER_HAS_OPENSSL" },
+                { "nghttp2", "-lnghttp2",      "nghttp2",    "-DAETHER_HAS_NGHTTP2" },
+                { "z",       "-lz",            "z",          "-DAETHER_HAS_ZLIB" },
+                { "pcre2-8", "-lpcre2-8",      "pcre2-8",    "-DAETHER_HAS_PCRE2" },
                 /* contrib.sqlite: the Aether veneer archive
-                 * (libaether_sqlite.a, from contrib_build.sh CONTRIB_TARGET
-                 * mode) BEFORE the underlying C lib (libsqlite3.a) — ld.lld's
-                 * single pass needs the veneer's sqlite3_* references resolved
-                 * by the lib that follows. Probed on the VENEER so a program
-                 * that doesn't use sqlite links nothing extra. */
-                { "aether_sqlite", "-laether_sqlite -lsqlite3", "" },
-                /* contrib.host.python: the embedded-Python bridge veneer. NO
+                 * (libaether_sqlite.a) BEFORE the underlying C lib
+                 * (libsqlite3.a) — ld.lld's single pass needs the veneer's
+                 * sqlite3_* references resolved by the lib that follows. */
+                { "aether_sqlite", "-laether_sqlite -lsqlite3",
+                  "aether_sqlite sqlite3", "" },
+                /* contrib.host.python: embedded-Python bridge veneer. NO
                  * -lpython — the bridge dlopen()s the deploy host's libpython
-                 * at runtime (AETHER_PYTHON_SONAME), so the .a has no
-                 * unresolved CPython symbols and needs no python at link. Just
-                 * the veneer archive. Probed on it so a program not embedding
-                 * python links nothing extra. */
-                { "aether_host_python", "-laether_host_python", "" },
-                /* contrib.host.ruby: same dlopen model as python (no -lruby;
-                 * the deploy host's libruby is dlopen'd at runtime). Veneer
-                 * only. */
-                { "aether_host_ruby", "-laether_host_ruby", "" },
+                 * at runtime, so the .a has no unresolved CPython symbols. */
+                { "aether_host_python", "-laether_host_python",
+                  "aether_host_python", "" },
+                /* contrib.host.ruby: same dlopen model as python. Veneer only. */
+                { "aether_host_ruby", "-laether_host_ruby",
+                  "aether_host_ruby", "" },
             };
             for (size_t i = 0; i < sizeof(t2) / sizeof(t2[0]); i++) {
-                snprintf(probe, sizeof(probe), "%s/lib/lib%s.a", xsr, t2[i].lib);
-                if (path_exists(probe) && p < sizeof(crossbuild_libs)) {
-                    p += (size_t)snprintf(crossbuild_libs + p, sizeof(crossbuild_libs) - p,
-                                          " %s", t2[i].names);
+                snprintf(probe, sizeof(probe), "%s/lib/lib%s.a", xsr, t2[i].probe);
+                /* Gate: staged AND requested by the program's import closure. */
+                if (!path_exists(probe)) continue;
+                if (!cross_link_wants(link_hdr, t2[i].names)) continue;
+                if (p < sizeof(crossbuild_libs)) {
+                    /* Link each archive by absolute path (immune to zig 0.16's
+                     * --sysroot -L rewriting), in the table's link order. */
+                    char abuf[256];
+                    snprintf(abuf, sizeof(abuf), "%s", t2[i].archives);
+                    for (char* a = strtok(abuf, " "); a; a = strtok(NULL, " ")) {
+                        p += (size_t)snprintf(crossbuild_libs + p,
+                                              sizeof(crossbuild_libs) - p,
+                                              " \"%s/lib/lib%s.a\"", xsr, a);
+                    }
                     /* Also compile the matching stdlib source's REAL path, not
                      * its stub — the fix for the "linked but stubbed" bug. */
                     if (t2[i].defines[0]) {

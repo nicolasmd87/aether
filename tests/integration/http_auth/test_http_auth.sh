@@ -37,6 +37,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+. "$ROOT/tests/lib/wait_port.sh"
 AE="$ROOT/build/ae"
 
 if ! command -v curl >/dev/null 2>&1; then
@@ -88,7 +89,8 @@ wait_ready() {
 }
 wait_ready "$SRV_BEARER_PID"  "$TMPDIR/bearer.log"  bearer
 wait_ready "$SRV_SESSION_PID" "$TMPDIR/session.log" session
-sleep 0.3
+wait_port 18273 || exit 1
+wait_port 18274 || exit 1
 
 URL_BEARER="http://127.0.0.1:18273/api/whoami"
 URL_SESSION="http://127.0.0.1:18274/app/me"

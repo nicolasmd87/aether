@@ -29,6 +29,93 @@ version number before tagging the release.
   borrowed value is not freed and a genuinely-owned one is still freed exactly
   once. Regression follow-up to #1866/#1879.
 
+## [0.647.0]
+
+### Fixed
+
+- **HTTP server tests bind an ephemeral port instead of a hardcoded one**
+  (part of #1920). Twenty-nine fixtures each owned a fixed port, which is what
+  forced the shell sweep to run serially: two of them even shared 18107, and
+  only serial execution kept that from mattering. A server left behind by an
+  earlier run also starved the next one, which is the "port already in use"
+  flake the sweep sees.
+
+  Each fixture now binds port 0, lets the kernel choose, and prints the
+  resolved port on its READY line for the runner to read. `server_start`
+  reuses a socket the caller already bound, so this also moves READY to
+  AFTER the listen socket exists rather than before it.
+
+  Demonstrated rather than argued: running the same test twice concurrently
+  used to fail one of the two on the bind, and all twenty-nine now run
+  concurrently with no failures.
+
+  Three fixtures whose companion client had the port baked in take it from
+  the environment instead, because `ae run script.ae <arg>` does not forward
+  arguments to the program. One server builds its own redirect targets from
+  its resolved port.
+
+  `SH_NPROC` is deliberately left at 1: nine server fixtures still hold fixed
+  ports, and flipping the switch while any remain would trade a slow suite
+  for a flaky one.
+
+
+### Fixed
+
+- **Server tests wait for the port, not for a guess** (part of #1920). Every
+  HTTP server test greps its log for `READY` and then slept a fixed 0.3s,
+  which proves the server PRINTED the line and nothing more: the listen socket
+  can still be a moment behind. That guess is wrong in both directions at
+  once. It waits 0.3s on a server that was ready immediately, and it gives up
+  after 0.3s on a loaded machine, which is the port-not-yet-listening flake
+  the sweep sees under load.
+
+  `tests/lib/wait_port.sh` probes the actual port instead: curl exits 7, and
+  only 7, when the connection could not be made, so any other exit proves
+  something is listening, whatever protocol runs on top (a TLS or HTTP/2 port
+  answers a plain probe with a handshake failure, which still counts). It uses
+  curl because every one of these tests already does, so there is no new
+  dependency on any platform.
+
+  Measured: the probe returns in 0.036s against a live port where the sleep
+  took 0.300s, so about 5.8s across the 22 tests converted. The correctness is
+  the point; the time is a side effect.
+
+
+### Fixed
+
+- **`ae build <bin-name>` works from a subdirectory** (#1905). The walk-up to
+  `aether.toml` rebases a relative positional argument so a file path still
+  resolves after the chdir, and it did that to a `[[bin]]` NAME as well:
+  `widget` became `sub/widget`, which is not a file, so the build failed with
+  "File not found: sub/widget" while the identical command from the project
+  root worked. The name is now resolved against the manifest first, in the
+  directory the walk-up just moved to, and only a non-bin argument is rebased.
+
+  An argument that is neither a bin name nor a file is also reported as what
+  the user typed rather than as a path they never mentioned: a typo said
+  "File not found: sub/widgett", naming a directory the user was not thinking
+  about.
+
+
+## [0.646.0]
+
+### Fixed
+
+- **FreeBSD cross-linking failed `error: libc not available` under Zig 0.13.**
+  `tools/ae_cross.c`'s FreeBSD/tier-2 wiring is written for Zig 0.16 (it relies
+  on 0.16 supplying the CRT/libc from `--sysroot` and resolving `-L` beneath
+  it); on 0.13 any FreeBSD cross-link died with `cannot find entry symbol
+  _start` / `libc not available` (reported downstream as an OpenSSL-specific
+  failure, but it hit any program that reached the final link). The toolchain
+  pin is bumped to 0.16 in aether-crossbuild and `windows.yml`, and two tier-2
+  bugs the bump exposed are fixed: (1) the CROSSBUILD_SYSROOT probe over-linked
+  every *staged* archive — even ones the program never imports — which 0.16
+  hard-errors on (`unable to find dynamic system library 'pcre2-8'`); it now
+  gates each lib on the program's resolved import closure (staged AND
+  requested). (2) Tier-2 libs were linked via `-L$CROSSBUILD_SYSROOT/lib -lNAME`,
+  but 0.16 rewrites an absolute `-L` beneath `--sysroot` so the libs were never
+  found; they are now linked by absolute archive path.
+
 ## [0.645.0]
 
 ### Added

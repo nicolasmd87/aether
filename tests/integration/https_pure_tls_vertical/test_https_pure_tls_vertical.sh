@@ -25,8 +25,8 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+. "$ROOT/tests/lib/wait_port.sh"
 AE="$ROOT/build/ae"
-PORT=18447
 
 [ -x "$AE" ] || { echo "  [SKIP] https_pure_tls_vertical: ae not built"; exit 0; }
 command -v openssl >/dev/null 2>&1 || { echo "  [SKIP] https_pure_tls_vertical: no openssl to make a cert"; exit 0; }
@@ -78,9 +78,10 @@ grep -q READY "$TMP/srv.log" 2>/dev/null || {
     sed -n '1,10p' "$TMP/srv.log"
     fail "the TLS server never became READY"
 }
+PORT=$(read_ready_port "$TMP/srv.log") || exit 1
 
 # --- Permutation 1: Pure Client -> OpenSSL Server ---
-OUT=$(SSL_CERT_FILE="$TMP/cert.pem" "$TMP/cli" 2>&1) || {
+OUT=$(SSL_CERT_FILE="$TMP/cert.pem" AE_TEST_PORT="$PORT" "$TMP/cli" 2>&1) || {
     printf '%s\n' "$OUT" | grep -vE 'warning: unresolved|-->' | sed 's/^/    cli: /'
     sed -n '1,6p' "$TMP/srv.log" | sed 's/^/    srv: /'
     fail "Permutation 1 (Pure client -> OpenSSL server) failed"
@@ -115,9 +116,10 @@ grep -q READY "$TMP/srv_pure.log" 2>/dev/null || {
     sed -n '1,10p' "$TMP/srv_pure.log"
     fail "the pure-Aether TLS server never became READY"
 }
+PORT=$(read_ready_port "$TMP/srv_pure.log") || exit 1
 
 # --- Permutation 3: Pure Client -> Pure-Aether TLS Server ---
-OUT3=$(SSL_CERT_FILE="$TMP/cert.pem" "$TMP/cli" 2>&1) || {
+OUT3=$(SSL_CERT_FILE="$TMP/cert.pem" AE_TEST_PORT="$PORT" "$TMP/cli" 2>&1) || {
     printf '%s\n' "$OUT3" | grep -vE 'warning: unresolved|-->' | sed 's/^/    cli: /'
     cat "$TMP/srv_pure.log" | sed 's/^/    srv_pure: /'
     fail "Permutation 3 (Pure client -> Pure server) failed"

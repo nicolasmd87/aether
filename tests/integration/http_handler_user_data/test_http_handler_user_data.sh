@@ -18,6 +18,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+. "$ROOT/tests/lib/wait_port.sh"
 AE="$ROOT/build/ae"
 
 if ! command -v curl >/dev/null 2>&1; then
@@ -46,9 +47,10 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     fi
     sleep 0.1
 done
-sleep 0.3
+PORT=$(read_ready_port "$TMPDIR/srv.log") || exit 1
+wait_port "$PORT" || exit 1
 
-BASE="http://127.0.0.1:18299"
+BASE="http://127.0.0.1:$PORT"
 
 # Test 1 — route /a sees its own ctx (label=alpha db_id=11).
 RESP=$(curl --silent --show-error --max-time 5 "$BASE/a") || {

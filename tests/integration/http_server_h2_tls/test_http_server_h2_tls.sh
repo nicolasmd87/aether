@@ -28,6 +28,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+. "$ROOT/tests/lib/wait_port.sh"
 AE="$ROOT/build/ae"
 
 if ! command -v openssl >/dev/null 2>&1; then
@@ -82,9 +83,10 @@ done
     echo "  [FAIL] no READY within timeout"; head -20 "$TMPDIR/srv.log"; exit 1
 }
 case "$ready" in READY-NOH2*) echo "  [SKIP] $ready"; exit 0;; esac
-sleep 0.3
+PORT=$(read_ready_port "$TMPDIR/srv.log") || exit 1
+wait_port "$PORT" || exit 1
 
-URL="https://127.0.0.1:18263/"
+URL="https://127.0.0.1:$PORT/"
 RESP="$TMPDIR/resp"
 # --insecure: self-signed cert. --http2: ask curl to negotiate
 # HTTP/2 via ALPN. -w prints the negotiated http_version.

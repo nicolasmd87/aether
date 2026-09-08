@@ -29,6 +29,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+. "$ROOT/tests/lib/wait_port.sh"
 AE="$ROOT/build/ae"
 
 if ! command -v curl >/dev/null 2>&1; then
@@ -47,9 +48,15 @@ cleanup() {
 trap cleanup EXIT
 
 AETHER_HOME="$ROOT" "$AE" run "$SCRIPT_DIR/server.ae" >"$TMPDIR/srv.log" 2>&1 &
+
+# The server binds port 0 and prints the kernel's choice on its READY line.
+for _ in $(seq 1 300); do
+    grep -q "^READY " "$TMPDIR/srv.log" 2>/dev/null && break
+    sleep 0.05
+done
+PORT=$(read_ready_port "$TMPDIR/srv.log") || exit 1
 SRV_PID=$!
 
-PORT=18109
 
 # Wait for the server to actually accept connections, not just for
 # READY to land in the log. server.ae prints READY before sending
