@@ -30,6 +30,17 @@ cleanup() { rm -rf "$TMP" || :; return 0; }
 trap cleanup EXIT
 fail() { echo "  [FAIL] $1"; exit 1; }
 
+# get_home_dir() (tools/ae_cache.c) prefers USERPROFILE on Windows and only
+# falls back to HOME, so overriding HOME alone does NOT sandbox a native
+# ae.exe -- it reads the developer's real profile. That matters more here than
+# in most tests, because two of the runs below are `version doctor --fix`, and
+# --fix WRITES: unsandboxed, it would rewrite the real ~/.aether/active_version
+# rather than the fixture's. Emit both variables, with the Windows spelling a
+# native ae.exe can resolve (it cannot follow an MSYS /tmp/... path).
+win_home() {
+    if command -v cygpath >/dev/null 2>&1; then cygpath -m "$1"; else printf '%s' "$1"; fi
+}
+
 # --- a broken pin is repaired, an installed one is not --------------------
 # The pin only governs an INSTALLED toolchain: a source tree resolves its
 # compiler next to its own binary and never reads the pin, so these cases
@@ -44,7 +55,7 @@ mkdir -p "$TMP/elsewhere"
 
 mkdir -p "$TMP/h1/.aether/versions"
 echo "0.111.0" > "$TMP/h1/.aether/active_version"
-( cd "$TMP/elsewhere" && HOME="$TMP/h1" "$NOTDEV" version doctor --fix ) >"$TMP/o1" 2>&1 || true
+( cd "$TMP/elsewhere" && HOME="$TMP/h1" USERPROFILE="$(win_home "$TMP/h1")" "$NOTDEV" version doctor --fix ) >"$TMP/o1" 2>&1 || true
 # The pin check only runs if the doctor got far enough to reach it. Where
 # there is no usable install at all -- a CI runner that never ran `make
 # install`, say -- it reports that and stops, which is the correct
@@ -60,7 +71,7 @@ grep -q 'fixed: pin now reads' "$TMP/o1" \
 # Same pin, but the version IS installed: --fix must NOT rewrite it.
 mkdir -p "$TMP/h2/.aether/versions/v0.111.0"
 echo "0.111.0" > "$TMP/h2/.aether/active_version"
-( cd "$TMP/elsewhere" && HOME="$TMP/h2" "$NOTDEV" version doctor --fix ) >"$TMP/o2" 2>&1 || true
+( cd "$TMP/elsewhere" && HOME="$TMP/h2" USERPROFILE="$(win_home "$TMP/h2")" "$NOTDEV" version doctor --fix ) >"$TMP/o2" 2>&1 || true
 if grep -q 'fixed: pin now reads' "$TMP/o2"; then
     sed 's/^/    /' "$TMP/o2"
     fail "--fix rewrote a pin whose version is installed; that is a choice, not a fault"
@@ -78,7 +89,7 @@ grep -qi 'repaired nothing' "$TMP/o2" \
 
 # The offer must also be honest in the other direction: without --fix, only
 # advertise a repair when there is actually one to make.
-( cd "$TMP/elsewhere" && HOME="$TMP/h2" "$NOTDEV" version doctor ) >"$TMP/o2b" 2>&1 || true
+( cd "$TMP/elsewhere" && HOME="$TMP/h2" USERPROFILE="$(win_home "$TMP/h2")" "$NOTDEV" version doctor ) >"$TMP/o2b" 2>&1 || true
 if grep -q 'Re-run with --fix' "$TMP/o2b"; then
     sed 's/^/    /' "$TMP/o2b"
     fail "doctor offered --fix when nothing it found was auto-repairable"
