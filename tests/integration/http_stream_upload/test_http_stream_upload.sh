@@ -52,7 +52,7 @@ if ! "$AE" build "$SCRIPT_DIR/server.ae" -o "$TMPDIR/server" >"$TMPDIR/build.log
     exit 1
 fi
 
-AETHER_HOME="$ROOT" "$TMPDIR/server" 19250 "$TMPDIR" >"$TMPDIR/srv.log" 2>&1 &
+AETHER_HOME="$ROOT" "$TMPDIR/server" "$TMPDIR" >"$TMPDIR/srv.log" 2>&1 &
 SRV_PID=$!
 
 deadline=$(($(date +%s) + 15))
@@ -61,15 +61,16 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     kill -0 "$SRV_PID" 2>/dev/null || { echo "  [FAIL] server died:"; head -30 "$TMPDIR/srv.log"; exit 1; }
     sleep 0.1
 done
-wait_port 19250 || exit 1
+PORT=$(read_ready_port "$TMPDIR/srv.log") || exit 1
+wait_port "$PORT" || exit 1
 
 # Single curl invocation: PUT the big body, then GET /ping on the SAME
 # connection (curl reuses the keep-alive socket for sequential URLs).
 RESP=$(curl --silent --show-error --max-time 30 \
             --data-binary "@$PAYLOAD" \
             -H "Content-Type: application/octet-stream" \
-            -X POST "http://127.0.0.1:19250/upload" \
-            --next "http://127.0.0.1:19250/ping" \
+            -X POST "http://127.0.0.1:$PORT/upload" \
+            --next "http://127.0.0.1:$PORT/ping" \
             2>"$TMPDIR/curl.err") || {
     echo "  [FAIL] curl failed:"; cat "$TMPDIR/curl.err"; head -20 "$TMPDIR/srv.log"; exit 1
 }
@@ -117,8 +118,8 @@ fi
 RESP2=$(curl --silent --show-error --max-time 30 \
             --data-binary "@$PAYLOAD" \
             -H "Content-Type: application/octet-stream" \
-            -X POST "http://127.0.0.1:19250/v1body" \
-            --next "http://127.0.0.1:19250/ping" \
+            -X POST "http://127.0.0.1:$PORT/v1body" \
+            --next "http://127.0.0.1:$PORT/ping" \
             2>"$TMPDIR/curl2.err") || {
     echo "  [FAIL] v1body curl failed:"; cat "$TMPDIR/curl2.err"; head -20 "$TMPDIR/srv.log"; exit 1
 }
@@ -154,7 +155,7 @@ SMALL_LEN=$(wc -c < "$SMALL" | tr -d ' ')
 RESP3=$(curl --silent --show-error --max-time 10 \
             --data-binary "@$SMALL" \
             -H "Content-Type: application/octet-stream" \
-            -X POST "http://127.0.0.1:19250/v1body" \
+            -X POST "http://127.0.0.1:$PORT/v1body" \
             2>"$TMPDIR/curl3.err") || {
     echo "  [FAIL] small v1body curl failed:"; cat "$TMPDIR/curl3.err"; exit 1
 }

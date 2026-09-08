@@ -83,9 +83,10 @@ done
     echo "  [FAIL] no READY within timeout"; head -20 "$TMPDIR/srv.log"; exit 1
 }
 case "$ready" in READY-NOH2*) echo "  [SKIP] $ready"; exit 0;; esac
-wait_port 18263 || exit 1
+PORT=$(read_ready_port "$TMPDIR/srv.log") || exit 1
+wait_port "$PORT" || exit 1
 
-URL="https://127.0.0.1:18263/"
+URL="https://127.0.0.1:$PORT/"
 RESP="$TMPDIR/resp"
 # --insecure: self-signed cert. --http2: ask curl to negotiate
 # HTTP/2 via ALPN. -w prints the negotiated http_version.

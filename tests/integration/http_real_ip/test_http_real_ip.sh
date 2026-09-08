@@ -64,9 +64,10 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     fi
     sleep 0.1
 done
-wait_port 18272 || exit 1
+PORT=$(read_ready_port "$TMPDIR/srv.log") || exit 1
+wait_port "$PORT" || exit 1
 
-URL="http://127.0.0.1:18272/whoami"
+URL="http://127.0.0.1:$PORT/whoami"
 
 # Test 1 — multi-hop X-Forwarded-For. Leftmost wins.
 RESP1=$(curl --silent --show-error --max-time 5 \

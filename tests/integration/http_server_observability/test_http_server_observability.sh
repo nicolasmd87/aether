@@ -62,9 +62,10 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     fi
     sleep 0.1
 done
-wait_port 18108 || exit 1
+PORT=$(read_ready_port "$TMPDIR/srv.log") || exit 1
+wait_port "$PORT" || exit 1
 
-URL="http://127.0.0.1:18108"
+URL="http://127.0.0.1:$PORT"
 
 # Drive a few requests across both routes.
 curl -s -o /dev/null --max-time 5 "$URL/api/data"  >/dev/null

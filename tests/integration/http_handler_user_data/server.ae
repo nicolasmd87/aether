@@ -19,8 +19,8 @@ import std.string
 extern exit(code: int)
 extern malloc(n: int) -> ptr
 extern http_server_start_raw(server: ptr) -> int
-
-const PORT = 18299
+extern http_server_bind_raw(server: ptr, host: string, port: int) -> int
+extern http_server_port(server: ptr) -> int
 
 // Per-route context the handler reads back from the user_data slot.
 // Fields stand in for "DB handle + data-dir" — same shape as the
@@ -76,7 +76,7 @@ actor SchedHelper {
 }
 
 main() {
-    raw = http.server_create(PORT)
+    raw = http.server_create(0)
     http.server_set_host(raw, "127.0.0.1")
     if raw == 0 {
         println("FAIL: server_create returned null")
@@ -99,8 +99,15 @@ main() {
     http.server_get(raw, "/a", handle_a, ctx_a)
     http.server_get(raw, "/b", handle_b, ctx_b)
     http.server_get(raw, "/n", handle_no_ctx, 0)
-
-    println("READY")
+    // #1920: bind on port 0 so the kernel picks a free one, and report it.
+    // server_start reuses a socket the caller already bound, so this also
+    // means READY is printed AFTER the listen socket exists rather than
+    // before it, which is what the fixed sleep in the runner was covering.
+    if http_server_bind_raw(raw, "127.0.0.1", 0) < 0 {
+        println("FAIL: bind")
+        exit(1)
+    }
+    println("READY ${http_server_port(raw)}")
 
     spawn(SchedHelper())
     srv_actor = spawn(SrvActor())

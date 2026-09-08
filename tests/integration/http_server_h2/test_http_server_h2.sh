@@ -82,7 +82,8 @@ done
     echo "  [FAIL] no READY within timeout"; head -20 "$TMPDIR/srv.log"; exit 1
 }
 case "$ready" in READY-NOH2*) echo "  [SKIP] $ready"; exit 0;; esac
-PORT=18260
+PORT=$PORT
+PORT=$(read_ready_port "$TMPDIR/srv.log") || exit 1
 wait_port "$PORT" || exit 1
 
 URL_BASE="http://127.0.0.1:$PORT"

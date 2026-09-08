@@ -48,9 +48,10 @@ while [ "$(date +%s)" -lt "$deadline" ]; do
     fi
     sleep 0.1
 done
-wait_port 18294 || exit 1
+PORT=$(read_ready_port "$TMPDIR/srv.log") || exit 1
+wait_port "$PORT" || exit 1
 
-URL="http://127.0.0.1:18294/whoami"
+URL="http://127.0.0.1:$PORT/whoami"
 
 RESP=$(curl --silent --show-error --max-time 5 "$URL" 2>"$TMPDIR/c.err") || {
     echo "  [FAIL] curl failed:"; cat "$TMPDIR/c.err"; exit 1
@@ -70,7 +71,7 @@ VER=$(get_field ver)
 [ "$PEER" = "127.0.0.1" ] || { echo "  [FAIL] peer expected 127.0.0.1, got '$PEER'"; echo "  raw: $RESP"; exit 1; }
 [ "$PEER_PORT_NZ" = "1" ] || { echo "  [FAIL] peer_port should be nonzero (kernel-assigned ephemeral), got '$PEER_PORT_NZ'"; echo "  raw: $RESP"; exit 1; }
 [ "$LOCAL" = "127.0.0.1" ] || { echo "  [FAIL] local expected 127.0.0.1, got '$LOCAL'"; echo "  raw: $RESP"; exit 1; }
-[ "$LOCAL_PORT" = "18294" ] || { echo "  [FAIL] local_port expected 18294, got '$LOCAL_PORT'"; echo "  raw: $RESP"; exit 1; }
+[ "$LOCAL_PORT" = "$PORT" ] || { echo "  [FAIL] local_port expected $PORT, got '$LOCAL_PORT'"; echo "  raw: $RESP"; exit 1; }
 [ "$SCHEME" = "http" ] || { echo "  [FAIL] scheme expected http (cleartext listener), got '$SCHEME'"; echo "  raw: $RESP"; exit 1; }
 [ "$IS_TLS" = "0" ] || { echo "  [FAIL] is_tls expected 0 (cleartext listener), got '$IS_TLS'"; echo "  raw: $RESP"; exit 1; }
 [ "$VER" = "HTTP/1.1" ] || { echo "  [FAIL] ver expected HTTP/1.1, got '$VER'"; echo "  raw: $RESP"; exit 1; }
@@ -103,9 +104,9 @@ MULTI_PEERS=$(echo "$MULTI" | grep -o 'peer=127\.0\.0\.1' | wc -l | tr -d '[:spa
     echo "  [FAIL] expected peer=127.0.0.1 on all 3 keep-alive requests, got $MULTI_PEERS"
     echo "  raw: $MULTI"; exit 1; }
 
-MULTI_LOCALS=$(echo "$MULTI" | grep -o 'local_port=18294' | wc -l | tr -d '[:space:]')
+MULTI_LOCALS=$(echo "$MULTI" | grep -o "local_port=$PORT" | wc -l | tr -d '[:space:]')
 [ "$MULTI_LOCALS" = "3" ] || {
-    echo "  [FAIL] expected local_port=18294 on all 3 keep-alive requests, got $MULTI_LOCALS"
+    echo "  [FAIL] expected local_port=$PORT on all 3 keep-alive requests, got $MULTI_LOCALS"
     echo "  raw: $MULTI"; exit 1; }
 
 echo "  [PASS] http_request_conn_accessors (remote_port + local_addr/port + scheme + is_tls + http_version; cached addrs survive keep-alive)"

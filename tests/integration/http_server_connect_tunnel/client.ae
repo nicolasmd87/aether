@@ -1,11 +1,17 @@
 // Aether-side driver for the #1086 CONNECT tunnel regression.
 
 import std.tcp
+import std.os
 import std.string
 
 extern exit(code: int)
 
-const PORT = 18286
+// The server binds port 0 and reports the kernel's choice, so the port
+// arrives in the environment rather than being baked in.
+get_port() -> int {
+    p, _err = string.to_int(os_getenv("AE_TEST_PORT"))
+    return p
+}
 
 fail(msg: string) {
     println("  [FAIL] ${msg}")
@@ -28,7 +34,7 @@ make_payload() -> string {
 }
 
 main() {
-    denied, derr = tcp.connect("127.0.0.1", PORT)
+    denied, derr = tcp.connect("127.0.0.1", get_port())
     if derr != "" { fail("connect denied case: ${derr}") }
     _, dwerr = tcp.write(denied,
         "CONNECT denied.example:443 HTTP/1.1\r\nHost: denied.example:443\r\n\r\n")
@@ -40,7 +46,7 @@ main() {
         fail("denied CONNECT did not return 403: ${dhead}")
     }
 
-    accepted, aerr = tcp.connect("127.0.0.1", PORT)
+    accepted, aerr = tcp.connect("127.0.0.1", get_port())
     if aerr != "" { fail("connect accepted case: ${aerr}") }
     _, awerr = tcp.write(accepted,
         "CONNECT allowed.example:443 HTTP/1.1\r\nHost: allowed.example:443\r\n\r\n")
