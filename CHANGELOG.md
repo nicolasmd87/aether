@@ -47,6 +47,41 @@ version number before tagging the release.
 
 ### Fixed
 
+- **Every `*_hex` call in `std.cryptography` leaked its result.** The C side
+  returns a `malloc`'d hex buffer the caller owns, but the extern was declared
+  without `@heap`, so the compiler classified the result as borrowed, copied it
+  into a fresh owned string at the boundary, and never freed the original. One
+  80-byte buffer per call, on the hot path of anything that hashes: `sha1_hex`,
+  `sha256_hex`, `hash_hex`, `md4_hex`, `md5_hex`, `hmac_sha256_hex` and
+  `digest_final_hex`. Measured under `leaks(1)`: a 50-round loop over four of
+  them leaked 200 allocations before, 0 after. The seven externs now carry the
+  `@heap` annotation that exists for exactly this, which is also why the fix is
+  a declaration change rather than a new copy-and-release dance in each wrapper.
+  Found while adding the streaming fallback below; it predates that work and
+  was not caused by it.
+
+### Added
+
+- **The streaming digest API works without OpenSSL.** `digest_new` /
+  `digest_update` / `digest_final_*` were libcrypto-only, so on a build without
+  it -- the default for a Windows source build -- they returned "openssl
+  unavailable" while the one-shot digests had already grown a pure-Aether
+  fallback. The gap mattered most to the caller who cannot work around it: you
+  reach for a streaming context precisely when the object is too big to hold
+  whole, so "use the one-shot form instead" is not advice that applies.
+
+  A digest handle now carries its backend, and update / final dispatch on it.
+  The pure path reuses the streaming contexts already in
+  `std.cryptography.{sha1,sha2,md5,md4}` rather than adding a second
+  implementation of anything, and covers the same algorithm set as the one-shot
+  fallback: an algorithm you can one-shot without OpenSSL is one you can stream
+  without OpenSSL.
+
+  The regression test no longer accepts a skip. It used to pass by not running
+  when there was no backend, which would have been a green tick for a fallback
+  nobody exercised. A new `ci-no-openssl` job builds with `OPENSSL=0` and runs
+  the digest suites against the pure path, because every other leg in the
+  matrix installs OpenSSL and none of them covered it.
 - **`cache_dir_override` now covers the `cache` command, not only the build
   path.** The #1032 override was fixed in `cmd_cache` without a test reaching
   it, and that is how the bug lived: the existing case proved `ae build`
