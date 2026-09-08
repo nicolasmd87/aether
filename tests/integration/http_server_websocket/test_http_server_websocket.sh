@@ -93,13 +93,17 @@ wait_port "$PORT" || exit 1
 
 # Python client sends 3 text messages and prints each echo on its
 # own line; non-zero exit on any failure.
-python3 - <<'PY' >"$TMPDIR/py.out" 2>"$TMPDIR/py.err"
+# The heredoc is QUOTED, so the shell expands nothing inside it: the port
+# has to arrive through the environment. Unquoting it instead would expand
+# every $ in the Python too.
+AE_TEST_PORT="$PORT" python3 - <<'PY' >"$TMPDIR/py.out" 2>"$TMPDIR/py.err"
+import os
 import asyncio
 import sys
 import websockets
 
 async def main():
-    async with websockets.connect("ws://127.0.0.1:$PORT/echo") as ws:
+    async with websockets.connect("ws://127.0.0.1:" + os.environ["AE_TEST_PORT"] + "/echo") as ws:
         for msg in ("hello", "world", "!"):
             await ws.send(msg)
             reply = await asyncio.wait_for(ws.recv(), timeout=2)
