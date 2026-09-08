@@ -2105,6 +2105,19 @@ fn trust_store_path() -> string {
     if fs.file_exists(fedora) == 1 { return fedora }
     bsd = "/etc/ssl/cert.pem" // *BSD / macOS (LibreSSL)
     if fs.file_exists(bsd) == 1 { return bsd }
+    // Windows ships no system PEM bundle, and every path above is POSIX-only,
+    // so without these a source build there had NO trust store at all: the
+    // handshake failed with a bare "pure TLS handshake failed" and nothing
+    // pointing at the cause. The two locations below are where the toolchains
+    // the README tells Windows users to install actually put the bundle.
+    //
+    // These must be native Windows paths. A compiled Aether program is a plain
+    // Win32 binary and does not inherit MSYS2's virtual mounts, so the
+    // /mingw64/... form that works in an MSYS2 shell does not resolve here.
+    git_win = "C:/Program Files/Git/mingw64/etc/ssl/certs/ca-bundle.crt" // Git for Windows
+    if fs.file_exists(git_win) == 1 { return git_win }
+    msys2 = "C:/msys64/mingw64/etc/ssl/certs/ca-bundle.crt" // MSYS2 ca-certificates
+    if fs.file_exists(msys2) == 1 { return msys2 }
     return debian
 }
 

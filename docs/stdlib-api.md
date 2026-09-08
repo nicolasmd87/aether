@@ -330,14 +330,21 @@ main() {
     _ = list.add(argv, "rev-parse")
     _ = list.add(argv, "HEAD")
 
-    stdout, exit_code, stderr = os.run_capture("git", argv, null)
+    out, exit_code, err_text = os.run_capture("git", argv, null)
     if exit_code != 0 {
-        println("git failed (${exit_code}): ${stderr}")
+        println("git failed (${exit_code}): ${err_text}")
         return
     }
-    println("HEAD is ${stdout}")
+    println("HEAD is ${out}")
 }
 ```
+
+**Don't name a variable `stdout` or `stderr`.** The example above deliberately uses `out` /
+`err_text`. Those names reach the generated C as-is, and on Windows the UCRT headers define
+`stdout` as a macro expanding to `__acrt_iob_func(1)` — so a variable called `stdout` becomes a
+function call mid-declaration and the translation unit fails to compile, with errors pointing at
+whatever stdlib module happens to follow. glibc defines the same names benignly, so this builds
+cleanly on Linux and only breaks on Windows.
 
 **Capabilities and Windows portability:** `os.run` / `os.run_capture` require the `--with=os` capability when building with `--emit=lib` (capability-empty by default). Windows MSYS2 / mingw-w64 currently uses POSIX-fallback shims; a native `CreateProcessW` backend is tracked separately. The function signatures and return shapes are stable across the current Windows fallback and the future native backend.
 
