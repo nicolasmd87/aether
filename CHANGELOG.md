@@ -11,6 +11,8 @@ version number before tagging the release.
 
 ## [current]
 
+## [0.648.0]
+
 ### Fixed
 
 - **Three more server fixtures bind an ephemeral port** (part of #1920):
