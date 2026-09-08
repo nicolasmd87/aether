@@ -665,6 +665,48 @@ jobs:
     - name: Run cooperative scheduler CI
       run: make ci-coop
 
+  ci-no-openssl:
+    name: Source build without OpenSSL
+    runs-on: ubuntu-22.04
+
+    # std.cryptography falls back to pure-Aether implementations when the
+    # toolchain is built without libcrypto -- the default for a Windows source
+    # build, and the configuration that leaves sha256(), std.cas and every
+    # caller that hashes either working or permanently broken. Every other leg
+    # in this matrix installs OpenSSL, so nothing exercised that fallback: it
+    # could rot to a stub and stay green everywhere. OPENSSL=0 forces the
+    # detection off regardless of what is installed on the runner.
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install toolchain
+      run: sudo apt-get update && sudo apt-get install -y gcc make bc
+
+    - name: Build without OpenSSL
+      run: make -j"$(nproc)" OPENSSL=0
+
+    - name: Confirm the build really has no libcrypto
+      run: |
+        if nm -u build/libaether.a 2>/dev/null | grep -q EVP_DigestInit; then
+          echo "OPENSSL=0 still linked libcrypto - this leg would prove nothing"
+          exit 1
+        fi
+        echo "confirmed: no OpenSSL symbols"
+
+    - name: Unit tests
+      run: make test
+
+    # The suites that must work on the pure path. They assert digests against
+    # published vectors and no longer accept a skip, so a fallback that stops
+    # answering fails here rather than reporting "skipped".
+    - name: Digest suites on the pure backend
+      run: |
+        set -e
+        for t in cryptography_digest_stream cryptography_sha cryptography_v2 \
+                 cryptography_random_hex; do
+          sh "tests/integration/$t/test_$t.sh"
+        done
+
   ci-wasm:
     name: WebAssembly (Emscripten)
     runs-on: ubuntu-22.04
