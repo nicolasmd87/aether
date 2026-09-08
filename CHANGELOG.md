@@ -11,6 +11,18 @@ version number before tagging the release.
 
 ## [current]
 
+### Fixed
+
+- **`cache_dir_override` now covers the `cache` command, not only the build
+  path.** The #1032 override was fixed in `cmd_cache` without a test reaching
+  it, and that is how the bug lived: the existing case proved `ae build`
+  honours `AETHER_CACHE_DIR`, while `ae cache` composed `$HOME/.aether/cache`
+  by hand, so it reported on a directory the build was not using and
+  `ae cache clear` deleted the contents of the wrong one. Verified against a
+  binary without the fix, where clear prints "Cleared 85 cached build(s) from
+  <the default cache>" for a request to clear an override.
+
+
 ## [0.650.0]
 
 ### Fixed
