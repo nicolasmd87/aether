@@ -16,6 +16,7 @@ set -e
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$SCRIPT_DIR/../../.." && pwd)"
+. "$ROOT/tests/lib/wait_port.sh"
 AE="$ROOT/build/ae"
 
 [ -x "$AE" ] || { echo "  [SKIP] ws_client_loopback: ae not built"; exit 0; }
@@ -66,8 +67,9 @@ grep -q READY "$TMP/srv.log" 2>/dev/null || {
     sed -n '1,10p' "$TMP/srv.log"
     fail "ws echo server never became READY"
 }
+PORT=$(read_ready_port "$TMP/srv.log") || exit 1
 
-OUT=$($TIMEOUT "$TMP/wscli" 2>&1) || {
+OUT=$(AE_TEST_PORT="$PORT" $TIMEOUT "$TMP/wscli" 2>&1) || {
     echo "$OUT" | sed 's/^/         /'
     fail "client exited non-zero"
 }

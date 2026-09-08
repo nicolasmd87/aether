@@ -40,6 +40,25 @@ version number before tagging the release.
   leaks gate. The flag is the ownership token, so it is now recorded whether or
   not this scope is the one that acts on it; the escape-suppressed frees are
   unchanged.
+- **Three more server fixtures bind an ephemeral port** (part of #1920):
+  `http_auth`, which runs two servers from one binary, and the two websocket
+  fixtures, including the python peer `ws_client_conformance` dials. Their
+  clients take the port from the environment, since `ae run script.ae <arg>`
+  does not forward arguments to the program.
+
+### Notes
+
+- **Running the shell tests in parallel is blocked by the build cache, not by
+  ports.** Raising `SH_NPROC` from 1 was measured at 10 or more failures and
+  630s against 312s serial, so it is left at 1. `cache_build_flags`,
+  `cache_libdir_invalidation` and `cache_subdir_entry_root_module` assert cache
+  HIT and MISS against the one shared cache directory, so any other test
+  compiling at the same moment makes them non-deterministic: each passes alone
+  and fails in the parallel sweep. #1920 lists five strategies and all of them
+  treat ports as the throttle. Per-test cache isolation is the prerequisite,
+  and the Makefile now records that measurement where the next person will
+  look.
+
 
 ## [0.647.0]
 
