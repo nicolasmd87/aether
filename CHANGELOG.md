@@ -11,6 +11,8 @@ version number before tagging the release.
 
 ## [current]
 
+## [0.653.0]
+
 ### Changed
 
 - **The build cache now keys on an exact dependency manifest, not whole
