@@ -22,12 +22,13 @@ if [ ! -x "$AE" ]; then
 fi
 
 TMP="$(mktemp -d)"
-# Give this test its own build cache. It asserts cache HIT and MISS, and the
-# cache is shared process-wide by default, so any other test compiling at the
-# same moment changes what this one observes: it passes alone and fails in a
-# parallel sweep. AETHER_CACHE_DIR is the per-process override (#1032).
-AETHER_CACHE_DIR="$TMP/aecache"; export AETHER_CACHE_DIR
 trap 'rm -rf "$TMP"' EXIT
+
+# This test asserts HIT and MISS, so it needs a cache no other test is writing
+# to: the shared ~/.aether/cache is keyed on content, and a sibling test
+# building the same trivial source would answer "hit" for the wrong reason.
+AETHER_CACHE_DIR="$TMP/cache"
+export AETHER_CACHE_DIR
 
 mkdir -p "$TMP/proj"
 cd "$TMP/proj" || exit 1

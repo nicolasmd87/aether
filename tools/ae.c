@@ -7813,14 +7813,11 @@ static int cmd_examples(int argc, char** argv) {
 static int cmd_cache(int argc, char** argv) {
     const char* sub = argc > 0 ? argv[0] : "info";
 
-    /* The SAME directory the build path uses. This composed
-     * "$HOME/.aether/cache" by hand and so ignored AETHER_CACHE_DIR, the
-     * per-process override for runners whose $HOME is read-only (#1032):
-     * `ae cache` reported on a directory `ae build` was not writing to, and
-     * `ae cache clear` deleted the contents of the wrong one. */
+    /* The directory the builder actually writes to, AETHER_CACHE_DIR included.
+     * Guessing "$HOME/.aether/cache" here made `ae cache` report and clear a
+     * directory the build was not using whenever that variable was set. */
     init_cache_dir();
-    char cache_path[512];
-    snprintf(cache_path, sizeof(cache_path), "%s", s_cache_dir);
+    const char* cache_path = s_cache_dir;
 
     if (strcmp(sub, "clear") == 0) {
 #ifdef _WIN32

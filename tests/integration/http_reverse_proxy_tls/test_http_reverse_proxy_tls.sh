@@ -20,6 +20,8 @@ PROXY_SRC="$SCRIPT_DIR/tls_proxy.ae"
 command -v openssl >/dev/null 2>&1 || { echo "  [SKIP] openssl not on PATH"; exit 0; }
 command -v curl    >/dev/null 2>&1 || { echo "  [SKIP] curl not on PATH"; exit 0; }
 
+. "$ROOT/tests/lib/wait_port.sh"
+
 TMPDIR="$(mktemp -d)"
 UP_PID=""; PX_PID=""
 cleanup() {
@@ -44,21 +46,36 @@ done
 
 AETHER_HOME="$ROOT" "$TMPDIR/upstream" upstream >"$TMPDIR/up.log" 2>&1 &
 UP_PID=$!
-PORT=19000 BACKENDS="http://127.0.0.1:19001" TLS_CERT="$CERT" TLS_KEY="$KEY" \
+deadline=$(($(date +%s) + 15))
+while ! grep -q '^READY ' "$TMPDIR/up.log" 2>/dev/null; do
+    kill -0 "$UP_PID" 2>/dev/null || {
+        echo "  [FAIL] upstream died:"; head -20 "$TMPDIR/up.log"; exit 1; }
+    [ "$(date +%s)" -lt "$deadline" ] || {
+        echo "  [FAIL] upstream never READY:"; head -20 "$TMPDIR/up.log"; exit 1; }
+    sleep 0.05
+done
+UP_PORT=$(read_ready_port "$TMPDIR/up.log") || exit 1
+
+# The proxy's own port is a fixed number because lb.serve_tls takes the port to
+# bind and blocks in the server, so there is no moment at which a caller could
+# read back a kernel-assigned one. No other test in the sweep uses it, so it
+# cannot collide with a sibling running at the same time.
+PROXY_PORT=19000
+PORT="$PROXY_PORT" BACKENDS="http://127.0.0.1:$UP_PORT" TLS_CERT="$CERT" TLS_KEY="$KEY" \
     AETHER_HOME="$ROOT" "$TMPDIR/proxy" >"$TMPDIR/px.log" 2>&1 &
 PX_PID=$!
 
 deadline=$(($(date +%s) + 20))
 while [ "$(date +%s)" -lt "$deadline" ]; do
-    curl -sk -o /dev/null --max-time 1 "https://127.0.0.1:19000/echo" 2>/dev/null && break
+    curl -sk -o /dev/null --max-time 1 "https://127.0.0.1:$PROXY_PORT/echo" 2>/dev/null && break
     if ! kill -0 "$PX_PID" 2>/dev/null; then
         echo "  [FAIL] the TLS proxy died while starting:"; head -20 "$TMPDIR/px.log"; exit 1
     fi
-    sleep 0.2
+    sleep 0.1
 done
 
 # 1 — a proxied round trip over TLS reaches the upstream and comes back.
-BODY=$(curl -sk --show-error --max-time 5 "https://127.0.0.1:19000/echo" 2>"$TMPDIR/c1.err") || {
+BODY=$(curl -sk --show-error --max-time 5 "https://127.0.0.1:$PROXY_PORT/echo" 2>"$TMPDIR/c1.err") || {
     echo "  [FAIL] T1 curl:"; cat "$TMPDIR/c1.err"; exit 1; }
 case "$BODY" in
     *upstream-ok*) : ;;
@@ -66,7 +83,7 @@ case "$BODY" in
 esac
 
 # 2 — the proxy's own headers are there, so it proxied rather than answered.
-HDRS=$(curl -sk -D - -o /dev/null --max-time 5 "https://127.0.0.1:19000/echo" 2>/dev/null)
+HDRS=$(curl -sk -D - -o /dev/null --max-time 5 "https://127.0.0.1:$PROXY_PORT/echo" 2>/dev/null)
 case "$HDRS" in
     *X-Upstream-Tag*) : ;;
     *) echo "  [FAIL] T2: the upstream's headers are missing"; exit 1 ;;
@@ -75,7 +92,7 @@ esac
 # 3 — a POST body survives the TLS leg byte for byte.
 yes 'tls-payload-0123456789' 2>/dev/null | head -c 4096 > "$TMPDIR/post.in"
 curl -sk --max-time 5 -X POST --data-binary "@$TMPDIR/post.in" \
-     -o "$TMPDIR/post.out" "https://127.0.0.1:19000/echo" 2>/dev/null || {
+     -o "$TMPDIR/post.out" "https://127.0.0.1:$PROXY_PORT/echo" 2>/dev/null || {
     echo "  [FAIL] T3 POST failed"; exit 1; }
 IN=$(wc -c <"$TMPDIR/post.in" | tr -d ' '); OUT=$(wc -c <"$TMPDIR/post.out" | tr -d ' ')
 [ "$IN" = "$OUT" ] || { echo "  [FAIL] T3 body length: sent $IN, got $OUT"; exit 1; }
@@ -85,7 +102,7 @@ IN=$(wc -c <"$TMPDIR/post.in" | tr -d ' '); OUT=$(wc -c <"$TMPDIR/post.out" | tr
 # from python rather than the shell: 24 background curls and a bare `wait`
 # also wait on the servers, which serve until killed.
 if command -v python3 >/dev/null 2>&1; then
-    if OUT=$(python3 "$SCRIPT_DIR/concurrent_probe.py" 19000 24 2>&1); then
+    if OUT=$(python3 "$SCRIPT_DIR/concurrent_probe.py" "$PROXY_PORT" 24 2>&1); then
         :
     else
         echo "  [FAIL] T4 concurrent TLS: $OUT"; exit 1

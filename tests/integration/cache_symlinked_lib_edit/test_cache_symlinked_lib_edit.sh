@@ -34,22 +34,14 @@ if ! command -v ln >/dev/null 2>&1; then
 fi
 
 TMP="$(mktemp -d)"
-CACHE_BACKUP=""
-cleanup() {
-    rm -rf "$TMP"
-    if [ -n "$CACHE_BACKUP" ] && [ -d "$CACHE_BACKUP" ]; then
-        rm -rf "$HOME/.aether/cache"
-        mv "$CACHE_BACKUP" "$HOME/.aether/cache" 2>/dev/null || true
-    fi
-}
-trap cleanup EXIT
+trap 'rm -rf "$TMP"' EXIT
 
-# Move any existing cache aside so the test doesn't trample real builds.
-if [ -d "$HOME/.aether/cache" ]; then
-    CACHE_BACKUP="$HOME/.aether/cache.t623bk.$$"
-    mv "$HOME/.aether/cache" "$CACHE_BACKUP"
-fi
-mkdir -p "$HOME/.aether/cache"
+# The test needs a cache with no entry for its sources, and it must not be the
+# shared one: moving ~/.aether/cache aside strands the user's cache under a
+# backup name if the test is killed, and takes the linker's output file away
+# from any other `ae` running at that moment.
+AETHER_CACHE_DIR="$TMP/cache"
+export AETHER_CACHE_DIR
 
 mkdir -p "$TMP/lib"
 cat > "$TMP/mod_real.ae" <<'AE'

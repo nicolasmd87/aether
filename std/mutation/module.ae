@@ -89,12 +89,14 @@ _ae_bin() -> string {
 //      SURVIVED. This uses the structured report rather than scraping
 //      stdout or trusting only an exit code.
 //
-// Cache is cleared first every time — an imported-module edit does not
-// invalidate ~/.aether/cache, so without this every mutant would be
-// tested against the previously compiled SUT.
+// Every sub-build gets a cache of this run's own, named after the probe
+// binary and so unique per process. It used to clear the shared one instead
+// (`rm -rf ~/.aether/cache`), which deleted the caller's build cache and, on a
+// machine compiling anything else at that moment, the output file a linker was
+// part way through writing.
 _oracle(test_path: string, incl: string, bin: string) -> int {
-    os.system("rm -rf ~/.aether/cache")
     ae = _ae_bin()
+    cache = "${bin}.cache"
 
     // (1) no-compile gate. We gate on the PRESENCE OF `error[` IN OUTPUT,
     // not the exit code: on this compiler both `ae check` and `ae build`
@@ -102,7 +104,7 @@ _oracle(test_path: string, incl: string, bin: string) -> int {
     // print the diagnostic to stderr but don't fail (#953). So we grep
     // stderr for an `error[` diagnostic; grep -q exits 0 when it finds
     // one, which means the mutant does NOT compile.
-    chk = "AETHER_LIB_DIR='${incl}' '${ae}' check '${test_path}' 2>&1 | grep -q 'error\\['"
+    chk = "AETHER_CACHE_DIR='${cache}' AETHER_LIB_DIR='${incl}' '${ae}' check '${test_path}' 2>&1 | grep -q 'error\\['"
     if os.system(chk) == 0 {
         return NOCOMPILE
     }
@@ -110,7 +112,7 @@ _oracle(test_path: string, incl: string, bin: string) -> int {
     // (2) build to a fresh binary (exit code is unreliable too; we rely
     // on the check gate above and on whether a runnable binary appears).
     os.system("rm -f '${bin}'")
-    bld = "AETHER_LIB_DIR='${incl}' '${ae}' build '${test_path}' -o '${bin}' >/dev/null 2>&1"
+    bld = "AETHER_CACHE_DIR='${cache}' AETHER_LIB_DIR='${incl}' '${ae}' build '${test_path}' -o '${bin}' >/dev/null 2>&1"
     os.system(bld)
     if os.system("test -x '${bin}'") != 0 {
         return NOCOMPILE
@@ -560,6 +562,7 @@ run(sut_path: string, test_path: string, lib_dir: string) -> int {
     // after the last mutant via the loop, make it explicit.
     fs.write(sut_path, original)
     os.system("rm -f '${bin}'")
+    os.system("rm -rf '${bin}.cache'")
 
     k = ref_get(killed)
     s = ref_get(survived)
