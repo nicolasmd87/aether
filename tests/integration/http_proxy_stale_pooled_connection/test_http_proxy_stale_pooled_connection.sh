@@ -49,7 +49,7 @@ fi
 
 # The probe is the upstream: it binds port 0 and names the port it landed on,
 # which is what the proxy has to be told.
-python3 "$SCRIPT_DIR/stale_probe.py" upstream "$TMPDIR/up.port" >"$TMPDIR/up.log" 2>&1 &
+$PY "$SCRIPT_DIR/stale_probe.py" upstream "$TMPDIR/up.port" >"$TMPDIR/up.log" 2>&1 &
 UP_PID=$!
 deadline=$(($(date +%s) + 15))
 while [ ! -f "$TMPDIR/up.port" ]; do

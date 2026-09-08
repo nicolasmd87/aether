@@ -56,7 +56,7 @@ fi
 # Testing only whichever happens to be active would leave the other unguarded.
 # The hostile upstream, once: it binds port 0 and names the port it landed on,
 # which is what the proxy has to be told.
-python3 "$SCRIPT_DIR/injection_probe.py" upstream "$TMPDIR/up.port" \
+$PY "$SCRIPT_DIR/injection_probe.py" upstream "$TMPDIR/up.port" \
     >"$TMPDIR/up.log" 2>&1 &
 UP_PID=$!
 deadline=$(($(date +%s) + 15))
