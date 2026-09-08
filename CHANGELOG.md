@@ -11,6 +11,8 @@ version number before tagging the release.
 
 ## [current]
 
+## [0.649.0]
+
 ### Fixed
 
 - **`install.sh` piped into a shell ran `make` in the caller's directory.** The
