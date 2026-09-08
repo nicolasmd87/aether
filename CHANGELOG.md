@@ -11,6 +11,21 @@ version number before tagging the release.
 
 ## [current]
 
+### Fixed
+
+- **Every `*_hex` call in `std.cryptography` leaked its result.** The C side
+  returns a `malloc`'d hex buffer the caller owns, but the extern was declared
+  without `@heap`, so the compiler classified the result as borrowed, copied it
+  into a fresh owned string at the boundary, and never freed the original. One
+  80-byte buffer per call, on the hot path of anything that hashes: `sha1_hex`,
+  `sha256_hex`, `hash_hex`, `md4_hex`, `md5_hex`, `hmac_sha256_hex` and
+  `digest_final_hex`. Measured under `leaks(1)`: a 50-round loop over four of
+  them leaked 200 allocations before, 0 after. The seven externs now carry the
+  `@heap` annotation that exists for exactly this, which is also why the fix is
+  a declaration change rather than a new copy-and-release dance in each wrapper.
+  Found while adding the streaming fallback below; it predates that work and
+  was not caused by it.
+
 ### Added
 
 - **The streaming digest API works without OpenSSL.** `digest_new` /

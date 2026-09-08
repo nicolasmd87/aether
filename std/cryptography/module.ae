@@ -62,9 +62,9 @@ exports(
     digest_free
 )
 
-extern cryptography_sha1_hex_raw(data: string, length: int) -> string
-extern cryptography_sha256_hex_raw(data: string, length: int) -> string
-extern cryptography_hash_hex_raw(algo: string, data: string, length: int) -> string
+extern cryptography_sha1_hex_raw(data: string, length: int) -> string @heap
+extern cryptography_sha256_hex_raw(data: string, length: int) -> string @heap
+extern cryptography_hash_hex_raw(algo: string, data: string, length: int) -> string @heap
 // Bound under a _raw name like its siblings. The module function below is
 // called `hash_supported`, which mangles to `cryptography_hash_supported` --
 // exactly this C symbol. The two collided, and the extern won, so every
@@ -72,10 +72,10 @@ extern cryptography_hash_hex_raw(algo: string, data: string, length: int) -> str
 // the source read as though it worked. Invisible until the body did more than
 // forward to the extern, which is why it survived this long.
 extern cryptography_hash_supported_raw(algo: string) -> int
-extern cryptography_md4_hex_raw(data: string, length: int) -> string
-extern cryptography_md5_hex_raw(data: string, length: int) -> string
+extern cryptography_md4_hex_raw(data: string, length: int) -> string @heap
+extern cryptography_md5_hex_raw(data: string, length: int) -> string @heap
 extern cryptography_hmac_sha256_hex_raw(key: string, key_len: int,
-    msg: string, msg_len: int) -> string
+    msg: string, msg_len: int) -> string @heap
 extern cryptography_hmac_sha256_bytes_raw(key: string, key_len: int,
     msg: string, msg_len: int) -> int
 extern cryptography_md4_bytes_raw(data: string, length: int) -> int
@@ -93,7 +93,7 @@ extern cryptography_release_random_bytes()
 
 extern cryptography_digest_new_raw(algo: string) -> ptr
 extern cryptography_digest_update_raw(handle: ptr, data: string, length: int) -> int
-extern cryptography_digest_final_hex_raw(handle: ptr) -> string
+extern cryptography_digest_final_hex_raw(handle: ptr) -> string @heap
 extern cryptography_digest_final_bytes_raw(handle: ptr) -> int
 extern cryptography_digest_free_raw(handle: ptr)
 extern malloc(size: int) -> ptr
