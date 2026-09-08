@@ -2718,12 +2718,12 @@ static const char* opt_flags(bool optimize) {
      * extern calls; #line directives map its warning to the user's .ae
      * source. User cflags from aether.toml append after these flags, so
      * -Wno-format remains available to opt out. */
-    if (g_coverage) return "-O0 -g --coverage -Wformat";
+    if (g_coverage) return "-O0 -g --coverage -Wformat" AETHER_WRAP_CFLAGS;
     /* --profile keeps -O2 so the profile describes the code that ships,
      * and adds what a sampling profiler needs to attribute it. Checked
      * after coverage because --coverage's -O0 is a correctness
      * requirement for gcov, not a preference. */
-    if (g_profile) return "-O2 -g -fno-omit-frame-pointer -Wformat";
+    if (g_profile) return "-O2 -g -fno-omit-frame-pointer -Wformat" AETHER_WRAP_CFLAGS;
     /* --size optimises for bytes: -Os over -O2, and -g0 to suppress debug
      * info the compiler would otherwise emit. Checked after --profile
      * because asking for both is contradictory and the debug-oriented mode
@@ -2734,8 +2734,9 @@ static const char* opt_flags(bool optimize) {
      * -Os is supported by every gcc and clang we target and gives nearly the
      * same result. The CROSS path can and does use -Oz, because zig bundles
      * its own clang and the version is not the host's to vary. */
-    if (g_size) return "-Os -g0 -Wformat";
-    return optimize ? "-O2 -Wformat" : "-O0 -g -Wformat";
+    if (g_size) return "-Os -g0 -Wformat" AETHER_WRAP_CFLAGS;
+    return optimize ? "-O2 -Wformat" AETHER_WRAP_CFLAGS
+                    : "-O0 -g -Wformat" AETHER_WRAP_CFLAGS;
 }
 
 void build_gcc_cmd(char* cmd, size_t size,
@@ -2981,7 +2982,8 @@ void build_gcc_cmd(char* cmd, size_t size,
     // remains an opt-out.
     const char* base_opt = (g_coverage || g_profile || g_size)
                           ? opt_flags(optimize)
-                          : (optimize ? "-O2 -pipe -Wformat" : "-O0 -g -pipe -Wformat");
+                          : (optimize ? "-O2 -pipe -Wformat" AETHER_WRAP_CFLAGS
+                                      : "-O0 -g -pipe -Wformat" AETHER_WRAP_CFLAGS);
     const char* trace_def = g_trace ? " -DAETHER_TRACE" : "";
     /* The link-side flags ride in the same blob: gcc accepts -Wl,... anywhere
      * on the line, and threading them through four separate link-command
@@ -3291,8 +3293,12 @@ static int build_wasm_cmd(char* cmd, size_t size,
         }
     }
 
+    /* AETHER_WRAP_CFLAGS: emcc is clang, and the wasm build compiles the same
+     * generated C as every other target, so it owes the same `int` semantics
+     * (#1957). */
     snprintf(cmd, size,
-        "emcc -O2 -DAETHER_NO_THREADING -DAETHER_NO_FILESYSTEM -DAETHER_NO_NETWORKING "
+        "emcc -O2" AETHER_WRAP_CFLAGS
+        " -DAETHER_NO_THREADING -DAETHER_NO_FILESYSTEM -DAETHER_NO_NETWORKING "
         "%s %s \"%s\" %s -o \"%s\" -lm "
         "-Wall -Wextra -Wno-unused-parameter -Wno-unused-function "
         "-Wno-unused-variable -Wno-missing-field-initializers -Wno-unused-label",
@@ -8045,9 +8051,23 @@ static int cmd_cflags(int argc, char** argv) {
 
     int wrote_anything = 0;
 
-    if (want_cflags && tc.include_flags[0]) {
-        fputs(tc.include_flags, stdout);
+    if (want_cflags) {
+        /* Semantics before paths. -fwrapv is what makes the generated C
+         * implement Aether's wrapping `int` (#1957); a build system that
+         * compiles `aetherc` output without it gets a different program from
+         * -O2 upward, which is how ae3d's black_hole example came to draw a
+         * black window on Windows. Emitted unconditionally, so the documented
+         * `gcc your.c $(ae cflags)` recipe is right even on an install whose
+         * include list came back empty.
+         *
+         * +1 skips the macro's leading space: it is written to be appended to
+         * an existing flag string, and here it starts the line. */
+        fputs(AETHER_WRAP_CFLAGS + 1, stdout);
         wrote_anything = 1;
+        if (tc.include_flags[0]) {
+            fputc(' ', stdout);
+            fputs(tc.include_flags, stdout);
+        }
     }
 
     if (want_libs) {
