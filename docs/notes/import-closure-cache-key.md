@@ -141,3 +141,35 @@ safety posture as the spike — failure means rebuild.
 
 - The spike branch is merged up to current `main` and builds clean; the flag is
   off by default, so `main`'s behaviour is untouched with it present.
+
+## Decision (Nic, 2026-09-08)
+
+**Go with (3), the depfile.** It is the only one of the three that cannot
+drift, and the cold-build-writes / warm-run-reads shape is exactly right.
+
+**One addition, load-bearing:** the depfile must record not just the files
+`aetherc` *opened*, but also **the paths it looked for and did not find** — the
+negative probes. Otherwise a module dropped in at a path an earlier `Try`
+probed-and-missed shadows the one that resolved, resolution flips, but the
+opened-files set is unchanged, so the cache wrongly holds and serves a stale
+build.
+
+This is real against the current resolver: `module_resolve_*_path` in
+`compiler/aether_module.c` probes higher-priority roots first (Try 1 = CWD,
+Try 2 = `AETHER_HOME`, Try 3 = next to the `aetherc` binary, …) and stops at the
+first hit. A module that resolves at, say, Try 5 has *already* probed-and-missed
+Try 1–4. Drop a file at the Try-3 path afterwards and the next resolve picks it
+— but a depfile of opened files alone is byte-identical, so the warm key does
+not change. Recording the misses (each probed path + "absent") makes that
+insertion invalidate the entry, which is the whole point.
+
+So the depfile is two lists: **read** (path + content hash — a changed file
+busts it) and **probed-absent** (path — a newly-*present* file busts it). Warm
+key = hash over both. Missing/unreadable depfile → today's tree hash → rebuild
+(unchanged safety posture).
+
+**Still not proposed for merge from this branch** — the spike's flag path
+duplicates the resolver and is not the shipping vehicle; option (3) is a fresh
+implementation in `aetherc` (emit the depfile) + `ae`'s `ae_cache.c` (read it).
+This note records the direction; the spike stays as the measured evidence
+behind it.
