@@ -29,6 +29,29 @@ version number before tagging the release.
   or unreadable manifest → rebuild), so behaviour is unchanged on the first
   build and strictly more precise thereafter. Implements the direction ratified
   in `docs/notes/import-closure-cache-key.md`.
+
+### Fixed
+
+- **`int` did not wrap at runtime: generated C was compiled with signed
+  overflow left undefined (#1957).** Aether's `int` wraps, and the constant
+  folder already wrapped to match (W1003) precisely so that a literal and the
+  same expression over variables could not disagree. The runtime broke that
+  promise: `int` is emitted as C `int`, signed overflow is undefined in C, and
+  nothing on the compile line said otherwise. GCC 15.2 at `-O2` folded
+  `g_seed = (g_seed * 1103515245 + 12345) & 0x7FFFFFFF` down to a three-value
+  cycle — the mask proves `g_seed >= 0`, "a signed multiply does not overflow"
+  then proves `g_seed <= 2^31 / 1103515245`, and value-range propagation
+  finishes it. Any LCG, hash or checksum written in Aether could compute
+  different values in a shipped build than under `ae run`, which compiles at
+  `-O0` and was unaffected. Every command line that compiles generated C now
+  carries `-fwrapv`: all five `opt_flags` modes and the `-pipe` mainline in
+  `ae build`, both `zig cc` cross paths, the wasm/emcc backend, and `ae cflags`
+  so external build systems compiling `aetherc` output inherit the same
+  semantics. Found as a black window in ae3d's `black_hole` example on Windows,
+  where all 200,000 particles were seeded from the collapsed generator and
+  landed on one pixel; macOS looked correct only because Apple Clang does not
+  make the same deduction for that loop.
+
 ## [0.652.0]
 
 ### Fixed
