@@ -610,7 +610,7 @@ encode_oid(dotted: string) -> ptr {
     arc1 = -1
     arc2 = -1
     cur = 0
-    have = 0
+    _have = 0
     arccount = 0
     i = 0
     while i <= n {
@@ -634,10 +634,10 @@ encode_oid(dotted: string) -> ptr {
             }
             arccount = arccount + 1
             cur = 0
-            have = 0
+            _have = 0
         } else {
             cur = (cur * 10) + (ch - 48)
-            have = 1
+            _have = 1
         }
         i = i + 1
     }

@@ -349,7 +349,7 @@ pt_decode(b: ptr, p: ptr, d: ptr) -> *EdPt {
 // ---- hashing helpers ----
 // SHA-512 of a bytes buffer -> 64-byte bytes.
 sha512(b: ptr, len: int) -> ptr {
-    ctx, err = sha2.new("sha512")
+    ctx, _err = sha2.new("sha512")
     sha2.update_bytes(ctx, b, len)
     return sha2.final_bytes(ctx)
 }
