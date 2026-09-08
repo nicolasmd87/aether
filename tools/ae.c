@@ -414,6 +414,11 @@ static bool g_profile = false;
 static bool g_size = false;
 
 // Build an aetherc command string with optional --lib flag
+/* #1882: when a cached build is in flight, ae points aetherc's --emit-deps at
+ * the source's stable depfile slot so the NEXT run can key on it. Set by the
+ * build/run sites right before build_aetherc_cmd; empty (skip) otherwise. */
+static char g_emit_deps_path[1200] = "";
+
 void build_aetherc_cmd(char* cmd, size_t cmd_size, const char* input, const char* output) {
     const char* emit_flag = "";
     if (g_emit_csrc)                   emit_flag = " --emit=csrc";
@@ -474,9 +479,14 @@ void build_aetherc_cmd(char* cmd, size_t cmd_size, const char* input, const char
         if (w < 0 || (size_t)w >= sizeof(lib_flags) - lf_off) break;
         lf_off += (size_t)w;
     }
-    snprintf(cmd, cmd_size, "\"%s\"%s%s%s%s%s%s \"%s\" \"%s\"",
+    char deps_flag[1240] = "";
+    if (g_emit_deps_path[0]) {
+        snprintf(deps_flag, sizeof(deps_flag), " --emit-deps=%s", g_emit_deps_path);
+    }
+
+    snprintf(cmd, cmd_size, "\"%s\"%s%s%s%s%s%s%s \"%s\" \"%s\"",
              tc.compiler, emit_flag, csrc_hdr_flag, csrc_json_flag, with_flag,
-             g_defines, lib_flags, input, output);
+             g_defines, lib_flags, deps_flag, input, output);
 }
 
 // --------------------------------------------------------------------------
@@ -3922,6 +3932,10 @@ static int cmd_run(int argc, char** argv) {
         }
         if (tc.verbose) fprintf(stderr, "[cache] miss: %016llx\n", cache_key);
         using_cache = true;
+        /* #1882: on this (cold) build, have aetherc write the dependency
+         * manifest to the source's stable depfile slot, so the next run keys
+         * on exact deps rather than the conservative tree walk. */
+        cache_depfile_path(file, g_emit_deps_path, sizeof(g_emit_deps_path));
     }
 
     // Determine temp .c file path and exe path
@@ -3974,6 +3988,22 @@ static int cmd_run(int argc, char** argv) {
         return 1;
     }
     remove(clog);
+
+    /* #1882: aetherc has now written the depfile, so recompute the cache key —
+     * this time compute_cache_key folds the exact deps and yields the SAME key
+     * the next run will compute. Publish the artifact under THAT key, not the
+     * cold tree-walk key, or every warm run would miss (the artifact would sit
+     * under a key nobody computes again). Only when we were already caching and
+     * the recompute succeeds; otherwise keep the original slot. */
+    if (using_cache && g_emit_deps_path[0]) {
+        unsigned long long dk = compute_cache_key(file, extra_files, "O0",
+                                    ae_define_salt("run", run_salt, sizeof(run_salt)));
+        if (dk != 0) {
+            cache_key = dk;
+            snprintf(cached_exe, sizeof(cached_exe), "%s/%016llx" EXE_EXT, s_cache_dir, cache_key);
+            snprintf(exe_file, sizeof(exe_file), "%s.tmp.%d", cached_exe, (int)getpid());
+        }
+    }
 
     // Step 2: Compile .c to executable with runtime (-O0 for fast dev builds).
     // toml [[bin]] extra_sources were already merged into extra_files above
@@ -6530,6 +6560,10 @@ static int cmd_build(int argc, char** argv) {
             } else if (tc.verbose) {
                 fprintf(stderr, "[cache] miss: %016llx\n", cache_key);
             }
+            /* #1882: cold build — aetherc writes the dep manifest to the
+             * source's stable slot for the next run's exact key. Set whether
+             * or not the copy above failed; a rebuild still wants the deps. */
+            cache_depfile_path(file, g_emit_deps_path, sizeof(g_emit_deps_path));
         }
     }
 
