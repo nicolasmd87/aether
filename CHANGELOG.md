@@ -11,6 +11,8 @@ version number before tagging the release.
 
 ## [current]
 
+## [0.654.0]
+
 ### Fixed
 
 - **A warning from an imported module named the importing file** (#1946), and
