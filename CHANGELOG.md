@@ -11,6 +11,24 @@ version number before tagging the release.
 
 ## [current]
 
+### Changed
+
+- **The build cache now keys on an exact dependency manifest, not whole
+  directory-tree hashes (#1882).** `compute_cache_key` used to hash every `.ae`
+  under the entry directory, the working directory, and each `--lib` dir — a
+  conservative over-approximation that both invalidated on edits to files a
+  build never imported (slow) and kept missing resolution roots nobody
+  remembered to hash (five bugs of the same shape: #623, #1025, #1421, #1882).
+  `aetherc --emit-deps=<path>` now writes, for each build, the files it read and
+  the paths it probed-and-did-not-find; a warm run hashes that manifest and
+  skips the tree walk. Editing an *imported* module invalidates; editing an
+  unimported sibling does not. Recording the negative probes is load-bearing: a
+  module dropped in at a path an earlier resolver `Try` missed shadows the one
+  that resolved, and only the recorded miss makes that insertion bust the cache.
+  Cold build writes the manifest and today's tree hash is the fallback (missing
+  or unreadable manifest → rebuild), so behaviour is unchanged on the first
+  build and strictly more precise thereafter. Implements the direction ratified
+  in `docs/notes/import-closure-cache-key.md`.
 ## [0.652.0]
 
 ### Fixed
