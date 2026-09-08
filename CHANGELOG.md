@@ -31,18 +31,30 @@ version number before tagging the release.
   is every imported module after its parse, has that one line read from the
   file itself.
 
-## [0.653.0]
+
+## [0.654.0]
 
 ### Fixed
 
-- **`cache_dir_override` now covers the `cache` command, not only the build
-  path.** The #1032 override was fixed in `cmd_cache` without a test reaching
-  it, and that is how the bug lived: the existing case proved `ae build`
-  honours `AETHER_CACHE_DIR`, while `ae cache` composed `$HOME/.aether/cache`
-  by hand, so it reported on a directory the build was not using and
-  `ae cache clear` deleted the contents of the wrong one. Verified against a
-  binary without the fix, where clear prints "Cleared 85 cached build(s) from
-  <the default cache>" for a request to clear an override.
+- **A warning from an imported module named the importing file** (#1946), and
+  printed that file's line N underneath as the snippet. A module's AST is
+  merged into the importing program before the unused-variable pass runs, and
+  that pass built its diagnostic with no filename, so the renderer fell back to
+  the active source context, which by then is the entry file again. The reader
+  was shown a line with no such variable on it and told to prefix a name that
+  is not there. When the module's line was past the entry file's end there was
+  no snippet at all: `asn1/module.ae:613` was reported against a 175-line test
+  file. It is also why the 56 stdlib warnings in #1942 were unactionable, four
+  of their five files never being named.
+
+  The pass now carries the declaring node's own `source_file`, which the nodes
+  already hold for codegen's `#line`. The fallback buffer is used only when the
+  diagnostic names the file that buffer belongs to, so a buffer never renders
+  another file's line. A diagnostic naming a file whose buffer is gone, which
+  is every imported module after its parse, has that one line read from the
+  file itself.
+
+## [0.653.0]
 
 ### Changed
 
