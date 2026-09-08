@@ -11,6 +11,8 @@ version number before tagging the release.
 
 ## [current]
 
+## [0.650.0]
+
 ### Fixed
 
 - **`std.mutation` deleted the caller's build cache.** Its per-mutant oracle ran
