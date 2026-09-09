@@ -632,7 +632,7 @@ encode_oid(dotted: string) -> ptr {
         }
         if ch == 46 {
             if have == 0 {
-                return null            // empty arc: "", "1..2", "1.2.", ".1.2"
+                return null // empty arc: "", "1..2", "1.2.", ".1.2"
             }
             if arccount == 0 {
                 arc1 = cur
@@ -664,7 +664,7 @@ encode_oid(dotted: string) -> ptr {
             have = 0
         } else {
             if ch < 48 || ch > 57 {
-                return null            // not a digit: "1.2.x", "1.2-3"
+                return null // not a digit: "1.2.x", "1.2-3"
             }
             cur = (cur * 10) + (ch - 48)
             have = 1

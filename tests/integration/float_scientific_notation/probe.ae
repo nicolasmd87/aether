@@ -44,7 +44,7 @@ main() {
 
     // Comparison position: the report's original repro.
     v = 2.0
-    if v < 1.0e30 { } else { fail("2.0 < 1.0e30 was false") }
+    if v >= 1.0e30 { fail("2.0 < 1.0e30 was false") }
 
     // The statement AFTER a scientific literal must survive. When the
     // exponent lexed as an identifier this line was swallowed into the
