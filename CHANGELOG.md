@@ -15,6 +15,21 @@ version number before tagging the release.
 
 ### Fixed
 
+- **`ae run prog.ae -- args` dropped the arguments on every run after the
+  first.** `ae run` runs the cached exe when it has one, and that path ran it
+  bare: the arguments reached the program on the cold build and silently
+  vanished from then on, which is exactly the shape a config-is-code entry
+  point (`ae run supervisor.ae -- make -j8`) runs in. The cache-hit path now
+  builds the same command as the cold path, through one shared helper, so it
+  also regains the signal forwarding and the `AE_TEST_RUNNER` prefix it was
+  missing. The integration test now covers the cached run, not just the cold
+  one.
+
+- **A test that timed out under load reported a startup that had succeeded.**
+  The script-gateway integration test waited 5s for its host to print `READY`
+  while the rest of the suite waits 15s, so the parallel sweep could load the
+  box past its deadline. Raised to the suite's deadline.
+
 - **Float literals in scientific notation were lexed as a number followed by
   an identifier** (#1954). `1.0e30` became the float `1.0` and the identifier
   `e30`. In expression position that surfaced as "undefined variable 'e30'";
