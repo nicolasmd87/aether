@@ -11,6 +11,8 @@ version number before tagging the release.
 
 ## [current]
 
+## [0.655.0]
+
 ### Fixed
 
 - **Float literals in scientific notation were lexed as a number followed by
