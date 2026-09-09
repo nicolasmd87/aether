@@ -11,6 +11,8 @@ version number before tagging the release.
 
 ## [current]
 
+## [0.657.0]
+
 ### Fixed
 
 - **A variable a callback mutates, declared inside a builder block, did not
