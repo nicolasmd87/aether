@@ -11,6 +11,18 @@ version number before tagging the release.
 
 ## [current]
 
+### Fixed
+
+- **The Windows CI suite's timeout was killing healthy runs.** The step's cap
+  is meant to be a hang detector sitting well above the natural runtime, but
+  the suite has grown into it twice now: the cap was 30 when the step took
+  ~32 min, then 45 when it was recorded as ~32-36 min. It takes 42 min on main
+  today, so 45 left three minutes of headroom on a shared runner, and a PR
+  adding a single `.ae` test tipped it over, timing out 39 seconds into the
+  last of ten phases with everything green behind it. Raised to 70, which
+  still catches a hang (a hang runs unbounded) while surviving a slow runner
+  and the suite's ordinary growth.
+
 ## [0.655.0]
 
 ### Fixed
