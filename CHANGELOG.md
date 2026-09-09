@@ -138,11 +138,12 @@ version number before tagging the release.
   bare "cannot load trust store" for a missing file, an unreadable one, and one
   nothing parsed out of. The reason is now included.
 
-- **56 unused-variable warnings across the stdlib are gone** (#1942), 48
+- **56 unused-variable warnings across the crypto stdlib are gone** (#1942), 48
   distinct sites in `tls13_cert`, `tls13_client`, `pem` and `tls13_server`.
   They were invisible until warnings gained a location, because a warning
   raised inside an imported module was reported against the importing file.
-  `ae check` over every stdlib module now reports zero.
+  Those four modules now report zero; the sweep of the remaining non-crypto
+  modules follows in 0.656.0.
 
 - **The `ae cflags` build emitted a `-Wstring-plus-int` warning.** The
   intentional `AETHER_WRAP_CFLAGS + 1` that skips the macro's leading space is
