@@ -33,6 +33,60 @@ version number before tagging the release.
   callback still writes through is not. The drain's own soundness gate is now a
   single shared helper rather than two copies that could drift apart.
 
+- **Float literals in scientific notation were lexed as a number followed by
+  an identifier** (#1954). `1.0e30` became the float `1.0` and the identifier
+  `e30`. In expression position that surfaced as "undefined variable 'e30'";
+  in statement position it silently swallowed the FOLLOWING line into the
+  expression, so a program lost a statement, reported only an unused-variable
+  warning for the swallowed call, and produced no binary. Two halves had to
+  agree: the lexer now consumes `e`/`E` with an optional sign and at least one
+  digit, and the literal classifier treats an exponent as making the number a
+  float, without which `1e30` was not classified as a number at all. The full
+  shape is required before anything is consumed, so a bare `e`, hex (`0x1E`),
+  durations (`500ms`) and ranges (`1..4`) lex exactly as before.
+
+- **`asn1.encode_oid` encoded strings that are not OIDs** (#1947). `""`, `"1"`,
+  `"1..2"`, `"1.2."`, `".1.2"` and `"1.2.x"` all produced well-formed DER that
+  decodes as a *different* identifier than the caller named, which is worse
+  than refusing them, and this is a function reached with strings from
+  configuration. The `have` flag that catches the empty-arc cases was already
+  there, set and cleared and never read. It now rejects a non-digit, an empty
+  arc, a first arc outside 0..2, a second arc over 39 under arcs 0 and 1, and
+  input with fewer than two arcs. The folded first subidentifier is also
+  emitted base128 rather than as a single byte: under arc 2 it exceeds 127
+  (`2.999` folds to 1079) and a one-byte store truncated it into another OID.
+
+- **The X.509 parser accepted certificates it could not read** (#1942).
+  `parse_tbs_fields` dropped the error from six TBSCertificate reads --
+  version, signature algorithm, issuer, validity, subject and
+  subjectPublicKeyInfo -- and stored whatever the failed read returned. A
+  truncated or malformed certificate therefore parsed "successfully" into a
+  `LeafCert` whose issuer, subject, validity or SPKI came from a read that did
+  not succeed, while the neighbouring serialNumber and notBefore/notAfter
+  reads in the same function did check. All six now return the error.
+
+- **Three digest wrappers used a context whose constructor had failed**
+  (#1947, #1942). `ed25519.sha512`, `ed448.shake` and `rsa.sha256b` dropped the
+  error from `sha2.new` / `sha3.new`, which answer `(null, "allocation
+  failed")`, and passed the null context to `update_bytes`. The rest of the
+  family checked; these three did not.
+
+- **A trust-store failure reported no reason** (#1942).
+  `tls13_client` discarded the error from `trust_store_load` and reported a
+  bare "cannot load trust store" for a missing file, an unreadable one, and one
+  nothing parsed out of. The reason is now included.
+
+- **56 unused-variable warnings across the stdlib are gone** (#1942), 48
+  distinct sites in `tls13_cert`, `tls13_client`, `pem` and `tls13_server`.
+  They were invisible until warnings gained a location, because a warning
+  raised inside an imported module was reported against the importing file.
+  `ae check` over every stdlib module now reports zero.
+
+- **The `ae cflags` build emitted a `-Wstring-plus-int` warning.** The
+  intentional `AETHER_WRAP_CFLAGS + 1` that skips the macro's leading space is
+  written `&AETHER_WRAP_CFLAGS[1]`, which states the same intent in a spelling
+  clang does not read as the string-plus-integer mistake.
+
 ## [0.654.0]
 
 ### Fixed
