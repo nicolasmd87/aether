@@ -11,6 +11,27 @@ version number before tagging the release.
 
 ## [current]
 
+### Fixed
+
+- **`ae run prog.ae -- args` dropped the arguments on every run after the
+  first.** `ae run` runs the cached exe when it has one, and that path ran it
+  bare: the arguments reached the program on the cold build and silently
+  vanished from then on, which is exactly the shape a config-is-code entry
+  point (`ae run supervisor.ae -- make -j8`) runs in. The cache-hit path now
+  builds the same command as the cold path, through one shared helper, so it
+  also regains the signal forwarding and the `AE_TEST_RUNNER` prefix it was
+  missing. The integration test now covers the cached run, not just the cold
+  one.
+
+- **A test that timed out under load reported a startup that had succeeded.**
+  The script-gateway integration test waited 5s for its host to print `READY`
+  while the rest of the suite waits 15s, so the parallel sweep could load the
+  box past its deadline. Raised to the suite's deadline.
+
+- One pre-existing `-Wstring-plus-int` warning in `ae cflags`, where a leading
+  space is skipped with pointer arithmetic on a string literal. Written as an
+  array index instead, which says the same thing unambiguously.
+
 ## [0.654.0]
 
 ### Fixed

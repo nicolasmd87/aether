@@ -3809,6 +3809,34 @@ static void prepare_host_bridge_imports(const char* main_file) {
 // Commands
 // --------------------------------------------------------------------------
 
+/* Build the command that runs a program `ae run` just produced or found in
+ * the cache: the exe, then every post-`--` argument, each double-quoted so an
+ * argument containing spaces stays one token through run_cmd's tokenizer
+ * (posix_run / win_run). Arguments containing a literal double-quote are not
+ * representable through this path, rare for a build command line; build the
+ * binary and invoke it directly if you need that.
+ *
+ * AE_TEST_RUNNER, when set, is spliced in ahead of the exe so the program runs
+ * under a wrapper (wine, qemu-user, ...). Empty by default, see
+ * test_runner_prefix().
+ *
+ * CRITICAL: the cache-hit and cache-miss paths must both go through this. A
+ * cache hit that ran the exe bare dropped every forwarded argument, so
+ * `ae run supervisor.ae -- make -j8` worked once and then silently ran with an
+ * empty argv on every later invocation. */
+static void build_run_cmd(char* cmd, size_t cap, const char* exe,
+                          int argc, char** argv, int prog_args_start) {
+    const char* runner = test_runner_prefix();
+    snprintf(cmd, cap, "%s%s\"%s\"", runner, *runner ? " " : "", exe);
+    if (prog_args_start < 0) return;
+    size_t off = strlen(cmd);
+    for (int i = prog_args_start; i < argc && off < cap - 1; i++) {
+        int w = snprintf(cmd + off, cap - off, " \"%s\"", argv[i]);
+        if (w < 0 || (size_t)w >= cap - off) break;  /* truncated, stop cleanly */
+        off += (size_t)w;
+    }
+}
+
 static int cmd_run(int argc, char** argv) {
     const char* file = NULL;
     /* 8 KiB matches toml_extra below + the fgets line buffer in
@@ -3926,8 +3954,8 @@ static int cmd_run(int argc, char** argv) {
         snprintf(cached_exe, sizeof(cached_exe), "%s/%016llx" EXE_EXT, s_cache_dir, cache_key);
         if (path_exists(cached_exe)) {
             if (tc.verbose) fprintf(stderr, "[cache] hit: %016llx\n", cache_key);
-            snprintf(cmd, sizeof(cmd), "%s", cached_exe);
-            int rc = run_cmd(cmd);
+            build_run_cmd(cmd, sizeof(cmd), cached_exe, argc, argv, prog_args_start);
+            int rc = run_cmd_forwarding(cmd);
             if (rc < 0) {
                 fprintf(stderr, "Program crashed (signal %d", -rc);
                 if (-rc == 11) fprintf(stderr, ": segmentation fault");
@@ -4053,29 +4081,8 @@ static int cmd_run(int argc, char** argv) {
         }
     }
 
-    // Step 3: Run, forwarding any post-`--` args to the program. Each is
-    // wrapped in double quotes so a single arg with spaces stays one
-    // token through run_cmd's tokenizer (posix_run / win_run). Args
-    // containing a literal double-quote aren't representable through this
-    // path — rare for a build command line; build the binary and invoke
-    // it directly if you need that.
-    //
-    // AE_TEST_RUNNER, when set, is spliced in ahead of the exe so the
-    // program runs under a wrapper (wine, qemu-user, ...). Empty by
-    // default — see test_runner_prefix().
-    {
-        const char* runner = test_runner_prefix();
-        snprintf(cmd, sizeof(cmd), "%s%s\"%s\"",
-                 runner, *runner ? " " : "", exe_file);
-    }
-    if (prog_args_start >= 0) {
-        size_t off = strlen(cmd);
-        for (int i = prog_args_start; i < argc && off < sizeof(cmd) - 1; i++) {
-            int w = snprintf(cmd + off, sizeof(cmd) - off, " \"%s\"", argv[i]);
-            if (w < 0 || (size_t)w >= sizeof(cmd) - off) break;  /* truncated — stop cleanly */
-            off += (size_t)w;
-        }
-    }
+    // Step 3: run it, forwarding any post-`--` args (see build_run_cmd).
+    build_run_cmd(cmd, sizeof(cmd), exe_file, argc, argv, prog_args_start);
     int rc = run_cmd_forwarding(cmd);
 
     if (rc < 0) {
@@ -8062,7 +8069,7 @@ static int cmd_cflags(int argc, char** argv) {
          *
          * +1 skips the macro's leading space: it is written to be appended to
          * an existing flag string, and here it starts the line. */
-        fputs(AETHER_WRAP_CFLAGS + 1, stdout);
+        fputs(&AETHER_WRAP_CFLAGS[1], stdout);
         wrote_anything = 1;
         if (tc.include_flags[0]) {
             fputc(' ', stdout);
