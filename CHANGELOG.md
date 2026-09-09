@@ -11,6 +11,8 @@ version number before tagging the release.
 
 ## [current]
 
+## [0.658.0]
+
 ### Fixed
 
 - **The Windows CI suite's timeout was killing healthy runs.** The step's cap
