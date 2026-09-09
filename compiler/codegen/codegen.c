@@ -518,6 +518,8 @@ CodeGenerator* create_code_generator(FILE* output) {
     gen->heap_string_var_count = 0;
     gen->escaped_string_vars = NULL;
     gen->escaped_string_var_count = 0;
+    gen->escaped_capture_boxes = NULL;
+    gen->escaped_capture_box_count = 0;
     gen->return_escaped_string_vars = NULL;
     gen->return_escaped_string_var_count = 0;
     gen->return_escaped_struct_vars = NULL;
@@ -743,6 +745,40 @@ void clear_declared_vars(CodeGenerator* gen) {
     }
     gen->heap_box_vars = NULL;
     gen->heap_box_var_count = 0;
+    clear_escaped_capture_boxes(gen);
+}
+
+/* A closure-capture box outliving its scope: see the field comment in
+ * codegen.h and mark_escaped_capture_boxes in codegen_stmt.c. */
+int is_escaped_capture_box(CodeGenerator* gen, const char* var_name) {
+    if (!gen || !var_name) return 0;
+    for (int i = 0; i < gen->escaped_capture_box_count; i++) {
+        if (strcmp(gen->escaped_capture_boxes[i], var_name) == 0) return 1;
+    }
+    return 0;
+}
+
+void mark_escaped_capture_box(CodeGenerator* gen, const char* var_name) {
+    if (!gen || !var_name) return;
+    if (is_escaped_capture_box(gen, var_name)) return;
+    char** nv = realloc(gen->escaped_capture_boxes,
+                        sizeof(char*) * (gen->escaped_capture_box_count + 1));
+    if (!nv) return;
+    gen->escaped_capture_boxes = nv;
+    gen->escaped_capture_boxes[gen->escaped_capture_box_count] = strdup(var_name);
+    gen->escaped_capture_box_count++;
+}
+
+void clear_escaped_capture_boxes(CodeGenerator* gen) {
+    if (!gen) return;
+    if (gen->escaped_capture_boxes) {
+        for (int i = 0; i < gen->escaped_capture_box_count; i++) {
+            free(gen->escaped_capture_boxes[i]);
+        }
+        free(gen->escaped_capture_boxes);
+    }
+    gen->escaped_capture_boxes = NULL;
+    gen->escaped_capture_box_count = 0;
 }
 
 // #790: is `var_name` currently bound to a heap.new(T) box?
@@ -3842,6 +3878,7 @@ void generate_main_function(CodeGenerator* gen, ASTNode* main) {
             hoist_seq_trackers(gen, main->children[0]);
             hoist_opt_str_trackers(gen, main->children[0]);
             mark_escaped_heap_string_vars(gen, main->children[0]);
+            mark_escaped_capture_boxes(gen, main->children[0]);
             mark_escaped_seq_vars(gen, main->children[0]);
             mark_escaped_opt_str_vars(gen, main->children[0]);
             /* Mirror the regular-function path in

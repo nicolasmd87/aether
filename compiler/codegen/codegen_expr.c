@@ -2050,6 +2050,7 @@ void emit_closure_definitions(CodeGenerator* gen) {
             enter_scope(gen);
             hoist_heap_string_trackers(gen, body);
             mark_escaped_heap_string_vars(gen, body);
+            mark_escaped_capture_boxes(gen, body);
             push_heap_string_exit_free_defers(gen, body);
             for (int i = 0; i < body->child_count; i++) {
                 generate_statement(gen, body->children[i]);
