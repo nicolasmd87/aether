@@ -23,9 +23,49 @@ version number before tagging the release.
   still catches a hang (a hang runs unbounded) while surviving a slow runner
   and the suite's ordinary growth.
 
+### Changed
+
+- **The stdlib really is warning-clean under `ae check` now** (#1942). 0.655.0
+  swept `tls13_cert`, `tls13_client`, `pem` and `tls13_server` and reported
+  zero, but the sweep had only visited the crypto modules: seven
+  unused-variable warnings were still live in `cbor`, `sm3`, `number` (two),
+  `tar`, `worker` and one remaining `tls13_client` site. Each is a genuinely
+  unread binding — an unread tuple slot, a `w as *Writer` cast nothing uses, an
+  error from a `list.get` that is in bounds by construction — and is prefixed
+  with the documented `_`, except `tar`'s `ext_err`, a `var` no longer assigned
+  anywhere, which is removed. `ae check` over all 74 stdlib modules now reports
+  zero for real, so the next genuine unused variable, or the next dropped
+  error, has nothing to hide behind.
+
+### Fixed
+
+- **The X.509 truncation fix had no test that a valid certificate still
+  parses** (#1942). The regression added in 0.655.0 asserts only that a
+  certificate whose TBS ends after `serialNumber` is refused, and every other
+  `parse_certificate` call in the `crypto_tls13_cert` suite discards the error
+  string it returns — so a change that refused *every* certificate would have
+  passed the whole suite. The suite now asserts a real leaf DER parses cleanly
+  alongside the refusal, which is the half that pins the six new error returns
+  to rejecting only what is actually malformed.
+
 ## [0.655.0]
 
 ### Fixed
+
+- **`ae run prog.ae -- args` dropped the arguments on every run after the
+  first.** `ae run` runs the cached exe when it has one, and that path ran it
+  bare: the arguments reached the program on the cold build and silently
+  vanished from then on, which is exactly the shape a config-is-code entry
+  point (`ae run supervisor.ae -- make -j8`) runs in. The cache-hit path now
+  builds the same command as the cold path, through one shared helper, so it
+  also regains the signal forwarding and the `AE_TEST_RUNNER` prefix it was
+  missing. The integration test now covers the cached run, not just the cold
+  one.
+
+- **A test that timed out under load reported a startup that had succeeded.**
+  The script-gateway integration test waited 5s for its host to print `READY`
+  while the rest of the suite waits 15s, so the parallel sweep could load the
+  box past its deadline. Raised to the suite's deadline.
 
 - **Float literals in scientific notation were lexed as a number followed by
   an identifier** (#1954). `1.0e30` became the float `1.0` and the identifier
