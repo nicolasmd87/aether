@@ -8067,8 +8067,11 @@ static int cmd_cflags(int argc, char** argv) {
          * `gcc your.c $(ae cflags)` recipe is right even on an install whose
          * include list came back empty.
          *
-         * +1 skips the macro's leading space: it is written to be appended to
-         * an existing flag string, and here it starts the line. */
+         * &[1] skips the macro's leading space: it is written to be appended
+         * to an existing flag string, and here it starts the line. Indexed
+         * rather than `+ 1`, which clang reads as the string-plus-integer
+         * mistake and warns about (-Wstring-plus-int); the intent is the same
+         * and this spelling states it. */
         fputs(&AETHER_WRAP_CFLAGS[1], stdout);
         wrote_anything = 1;
         if (tc.include_flags[0]) {
