@@ -1022,10 +1022,13 @@ fn run_handshake_tail(sock: ptr, rio: ptr, tr: ptr, host: string,
             if string.equals(cafile, "") != 1 { store = cafile }
             anchors, tsErr = tls13_cert.trust_store_load(store)
             if anchors == null {
+                // Say WHY. trust_store_load reports the reason (missing file,
+                // unreadable, nothing parsed out of it) and that was dropped,
+                // leaving an operator with a bare "cannot load trust store"
+                // for every one of those causes (#1942).
+                auth_err = "cannot load trust store"
                 if string.equals(tsErr, "") != 1 {
                     auth_err = "cannot load trust store: ${tsErr}"
-                } else {
-                    auth_err = "cannot load trust store"
                 }
             } else {
                 auth_err = authenticate_server(fl, fllen, th_through_cert, hash_len, host, anchors)

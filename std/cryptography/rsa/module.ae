@@ -324,7 +324,13 @@ build_emsa(di: ptr, klen: int) -> ptr {
 // hLen for SHA-256.
 oaep_hlen() -> int { return 32 }
 sha256b(data: ptr, len: int) -> ptr {
-    ctx, _err = sha2.new("sha256")
+    ctx, err = sha2.new("sha256")
+    // Same shape as ed25519.sha512 was: sha2.new answers
+    // (null, "allocation failed") and update_bytes cannot take a null
+    // context (#1942).
+    if err != "" {
+        return null
+    }
     sha2.update_bytes(ctx, data, len)
     return sha2.final_bytes(ctx)
 }

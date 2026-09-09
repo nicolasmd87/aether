@@ -396,12 +396,14 @@ main() {
     } else { println("FAIL malformed OCSP accepted"); total_ok = 0 }
     bytes.free(ocsp_good); bytes.free(ocsp_rev); bytes.free(ocsp_bad)
 
-    // --- malformed-cert parse must be REFUSED, not accepted (#1942 class 2) ---
+    // --- malformed-cert parse must be REFUSED, not accepted (#1942) ---
     // parse_tbs_fields dropped the error half of six TBS field reads (version,
     // signature algId, issuer, validity, subject, SPKI), so a certificate
     // truncated mid-TBS parsed "successfully" into a LeafCert built from a read
-    // that failed. Take the valid leaf DER and truncate it at a series of
-    // offsets that fall inside the TBS; every one must return a non-empty error.
+    // that failed. Two assertions, and the pair is the point: a real
+    // certificate must still parse, and a truncated one must not. Every other
+    // parse_certificate call in this file discards the error it returns, so on
+    // its own the refusal check would also pass a fix that refused everything.
     good_der = from_hex("308201af30820155a0030201020214795024acd1f59d13ea26ee4bba4c458593d6f63b300a06082a8648ce3d040302302c3115301306035504030c0c4543205465737420526f6f7431133011060355040a0c0a41657468657254657374301e170d3236303732383231333633325a170d3237303732383231333633325a30293112301006035504030c096c6f63616c686f737431133011060355040a0c0a416574686572546573743059301306072a8648ce3d020106082a8648ce3d030107034200042b3e0fe701f9228fee88ca310d6b4ccde616ad50d7be20f226738027d49f9b691db45e3360408187f8d4e117773919fbc4821ebe52298e8144057d2dda935cc5a358305630140603551d11040d300b82096c6f63616c686f7374301d0603551d0e041604149d72e1349a900b4c8b972c2f2699c448425be1d2301f0603551d230418301680140096d04dcc2db8b08fb4a70f34d2431d03fe10b9300a06082a8648ce3d0403020348003045022100c3ed2bce214ebe239a7f3728b4d527751fb6e727a24ae305777c1ea66fbc7fbe022066eabc2c915a2de69eb7fe673beeb4875bd2c579299178fe8c1cd8b1a40e5d8a")
     good_len = bytes.length(good_der)
     // Sanity: the untruncated cert parses cleanly, so a later failure is the
@@ -411,7 +413,6 @@ main() {
         println("ok   full leaf DER parses (baseline)")
     } else { println("FAIL baseline leaf DER did not parse"); total_ok = 0 }
     tls13_cert.free_leaf(&base)
-
     bytes.free(good_der)
 
     // A Certificate whose TBS content stops after version + serialNumber. The

@@ -160,6 +160,13 @@ Type* infer_from_literal(const char* value) {
     for (const char* p = value; *p; p++) {
         if (*p == '.') {
             is_float = 1;
+        } else if (*p == 'e' || *p == 'E') {
+            /* An exponent makes it a float, and it has to be recognised here
+             * or `1e30` is not classified as a number at all: the letter fell
+             * to the `else` below, which clears is_number and breaks (#1954).
+             * Prefixed 0x / 0o / 0b literals return before this loop, so the
+             * `E` in `0x1E` never reaches it. */
+            is_float = 1;
         } else if (isdigit((unsigned char)*p)) {
             is_number = 1;
         } else if (*p != '-' && *p != '+') {
