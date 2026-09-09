@@ -11,6 +11,8 @@ version number before tagging the release.
 
 ## [current]
 
+## [0.656.0]
+
 ### Changed
 
 - **The stdlib really is warning-clean under `ae check` now** (#1942). 0.655.0
