@@ -11,6 +11,31 @@ version number before tagging the release.
 
 ## [current]
 
+### Changed
+
+- **The stdlib really is warning-clean under `ae check` now** (#1942). 0.655.0
+  swept `tls13_cert`, `tls13_client`, `pem` and `tls13_server` and reported
+  zero, but the sweep had only visited the crypto modules: seven
+  unused-variable warnings were still live in `cbor`, `sm3`, `number` (two),
+  `tar`, `worker` and one remaining `tls13_client` site. Each is a genuinely
+  unread binding — an unread tuple slot, a `w as *Writer` cast nothing uses, an
+  error from a `list.get` that is in bounds by construction — and is prefixed
+  with the documented `_`, except `tar`'s `ext_err`, a `var` no longer assigned
+  anywhere, which is removed. `ae check` over all 74 stdlib modules now reports
+  zero for real, so the next genuine unused variable, or the next dropped
+  error, has nothing to hide behind.
+
+### Fixed
+
+- **The X.509 truncation fix had no test that a valid certificate still
+  parses** (#1942). The regression added in 0.655.0 asserts only that a
+  certificate whose TBS ends after `serialNumber` is refused, and every other
+  `parse_certificate` call in the `crypto_tls13_cert` suite discards the error
+  string it returns — so a change that refused *every* certificate would have
+  passed the whole suite. The suite now asserts a real leaf DER parses cleanly
+  alongside the refusal, which is the half that pins the six new error returns
+  to rejecting only what is actually malformed.
+
 ## [0.655.0]
 
 ### Fixed
