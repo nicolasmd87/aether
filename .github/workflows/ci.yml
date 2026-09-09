@@ -597,17 +597,26 @@ jobs:
         Write-Host "Windows Defender exclusions applied (best-effort)."
 
     - name: Run CI suite
-      # 45-min backstop — a true safety net, not a tuning knob. The suite
-      # runs ~32-36 min on this runner (a handful of HTTP tests that
-      # statically link openssl/nghttp2/zlib/pcre2 dominate the .ae phase),
-      # so the cap sits above the natural runtime and only fires on a real
-      # hang, never on a slow-but-progressing run. (An earlier 30-min cap
-      # killed a healthy ~32-min run.) NPROC is left at the runner default
-      # (nproc=4): oversubscribing to 8 made it WORSE, because 8 of those
-      # heavy static links running at once thrash the 4-vCPU runner's RAM
-      # (one link ballooned to 11 min). Meaningfully cutting this needs a
-      # faster linker / fewer per-test relinks, tracked separately.
-      timeout-minutes: 45
+      # 70-min backstop — a true safety net, not a tuning knob. It must sit
+      # well ABOVE the natural runtime so it only fires on a real hang, never
+      # on a slow-but-progressing run, and the natural runtime keeps growing
+      # with the suite: the cap was 30 when the step took ~32 min and killed a
+      # healthy run, then 45 when the comment here recorded ~32-36 min. The
+      # step now takes 42 min on main, so 45 left three minutes of headroom on
+      # a shared runner and started killing healthy runs again (a PR adding one
+      # .ae test tipped it over, 39 seconds into the last of ten phases).
+      #
+      # A cap set just above the current measurement is a cap that expires. 70
+      # is chosen to still catch a hang, which runs unbounded, while surviving
+      # both a slow runner and the suite's ordinary growth.
+      #
+      # NPROC is left at the runner default (nproc=4): oversubscribing to 8
+      # made it WORSE, because 8 of the heavy static links (openssl/nghttp2/
+      # zlib/pcre2, which dominate the .ae phase) running at once thrash the
+      # 4-vCPU runner's RAM (one link ballooned to 11 min). Meaningfully
+      # cutting the 42 min needs a faster linker / fewer per-test relinks,
+      # tracked separately.
+      timeout-minutes: 70
       # The hardcoded `C:\msys64\...` probe in aether_http.c::load_windows_ca_bundle
       # doesn't match the GitHub runner's MSYS2 path (it's installed under a
       # temp dir, not C:\msys64). Export SSL_CERT_FILE explicitly using
