@@ -11,6 +11,30 @@ version number before tagging the release.
 
 ## [current]
 
+### Fixed
+
+- **A variable a callback mutates, declared inside a builder block, did not
+  compile.** A mutated capture is promoted to a heap cell and its `free` is
+  queued as a scope-exit defer, but a builder block (`window(...) { ... }`)
+  opened a C `{ ... }` without opening a matching defer scope. The free was
+  emitted after the closing brace, naming a variable the generated C had just
+  scoped out: `error: use of undeclared identifier`. Builder blocks now carry
+  their own defer scope, so cleanup queued inside one lands inside it. The same
+  omission also let a block-local heap string outlive its block in the
+  generated C.
+
+- **A cell shared with a stored callback was freed when its scope ended.**
+  Independent of where the free landed, freeing the cell at scope exit dangles
+  it for every callback that outlives the scope, a widget handler, a timer, any
+  callee whose body the escape walk cannot see. The scope-exit free is now
+  suppressed for those, and kept only where codegen already proves the closure
+  dead after the call, the transient-callback shape the closure-env drain fires
+  on. Leaking one cell is the fail-safe direction; freeing a cell a live
+  callback still writes through is not. The drain's own soundness gate is now a
+  single shared helper rather than two copies that could drift apart.
+
+## [0.656.0]
+
 ### Changed
 
 - **The stdlib really is warning-clean under `ae check` now** (#1942). 0.655.0
@@ -35,26 +59,6 @@ version number before tagging the release.
   passed the whole suite. The suite now asserts a real leaf DER parses cleanly
   alongside the refusal, which is the half that pins the six new error returns
   to rejecting only what is actually malformed.
-
-- **A variable a callback mutates, declared inside a builder block, did not
-  compile.** A mutated capture is promoted to a heap cell and its `free` is
-  queued as a scope-exit defer, but a builder block (`window(...) { ... }`)
-  opened a C `{ ... }` without opening a matching defer scope. The free was
-  emitted after the closing brace, naming a variable the generated C had just
-  scoped out: `error: use of undeclared identifier`. Builder blocks now carry
-  their own defer scope, so cleanup queued inside one lands inside it. The same
-  omission also let a block-local heap string outlive its block in the
-  generated C.
-
-- **A cell shared with a stored callback was freed when its scope ended.**
-  Independent of where the free landed, freeing the cell at scope exit dangles
-  it for every callback that outlives the scope, a widget handler, a timer, any
-  callee whose body the escape walk cannot see. The scope-exit free is now
-  suppressed for those, and kept only where codegen already proves the closure
-  dead after the call, the transient-callback shape the closure-env drain fires
-  on. Leaking one cell is the fail-safe direction; freeing a cell a live
-  callback still writes through is not. The drain's own soundness gate is now a
-  single shared helper rather than two copies that could drift apart.
 
 ## [0.655.0]
 
